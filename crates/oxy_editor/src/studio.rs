@@ -49,6 +49,7 @@ impl Default for Studio {
 }
 impl Editor {
     pub fn studio_ui(&mut self, ui: &mut egui::Ui, dt: f32) {
+        let previous = self.studio.tab;
         ui.horizontal_wrapped(|ui| {
             ui.heading("Estúdio");
             ui.separator();
@@ -56,6 +57,9 @@ impl Editor {
             ui.selectable_value(&mut self.studio.tab, StudioTab::Paint, "Pintura");
             ui.selectable_value(&mut self.studio.tab, StudioTab::Animation, "Animação");
         });
+        if previous != self.studio.tab {
+            self.set_spatial_tool(crate::app::Tool::Object);
+        }
         if self.selected.is_none() {
             ui.label("Selecione uma peça ou use + Objeto na hierarquia. Todas as peças continuam editáveis.");
         }

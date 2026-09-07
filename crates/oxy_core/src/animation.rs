@@ -73,7 +73,7 @@ impl Clip {
                     || !key.transform.finite()
                 {
                     return Err(format!(
-                        "Keyframes inválidos ou fora de ordem no clip {}",
+                        "Quadros-chave inválidos ou fora de ordem na animação {}",
                         self.name
                     ));
                 }

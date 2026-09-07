@@ -71,24 +71,55 @@ impl Editor {
         self.last_object_click = if plain { id } else { None };
     }
     pub fn viewport(&mut self, ui: &mut egui::Ui, painting: bool) {
+        let compact_tools = ui.available_width() < 550.;
         if !painting {
             ui.horizontal_wrapped(|ui| {
-                ui.selectable_value(&mut self.gizmo, Gizmo::Move, "Mover (W)").on_hover_text("Mova a seleção pelos eixos. W alterna para esta ferramenta.");
-                ui.selectable_value(&mut self.gizmo, Gizmo::Rotate, "Girar (E)").on_hover_text("Gire em torno do pivô. Vários objetos usam o centro do conjunto.");
-                ui.selectable_value(&mut self.gizmo, Gizmo::Scale, "Escalar (R)").on_hover_text("Altere o tamanho. A seleção múltipla escala proporcionalmente em torno do centro.");
-                ui.separator();
+                for (tool,label) in [(Gizmo::Move,"Mover (W)"),(Gizmo::Rotate,"Girar (E)"),(Gizmo::Scale,"Escalar (R)")] { if ui.selectable_label(self.spatial.mode==Tool::Object&&self.gizmo==tool,label).clicked(){self.set_spatial_tool(Tool::Object);self.gizmo=tool;} }
+                if ui.selectable_label(self.spatial.mode==Tool::Collider,"Editar colisor (C)").on_hover_text("Arraste bordas para ajustar a caixa real; o centro desloca apenas o colisor. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.").clicked(){self.set_spatial_tool(Tool::Collider);}
+                if ui.selectable_label(self.spatial.mode==Tool::Pivot,"Editar pivô (P)").on_hover_text("Reposiciona o ponto de giro sem mover a peça e seus filhos. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.").clicked(){self.set_spatial_tool(Tool::Pivot);}
+                if !compact_tools {ui.separator();
                 ui.checkbox(&mut self.grid, "Grade");
                 ui.add(
                     egui::DragValue::new(&mut self.grid_size)
                         .range(0.01..=10.)
                         .speed(0.01)
                         .prefix("Encaixe "),
-                );
+                );}
                 ui.checkbox(&mut self.debug, "Colisores");
+                if self.debug && !compact_tools { ui.checkbox(&mut self.show_disabled_colliders,"Mostrar desativados"); }
                 if ui.button("Enquadrar").clicked() {
                     self.frame_selection();
                 }
+                if self.spatial.mode!=Tool::Object || compact_tools {ui.menu_button(if compact_tools{"Opções"}else{"Valores da ferramenta"},|ui|{
+                    if compact_tools {ui.checkbox(&mut self.grid,"Grade");ui.add(egui::DragValue::new(&mut self.grid_size).range(0.01..=10.).speed(0.01).prefix("Encaixe "));ui.checkbox(&mut self.show_disabled_colliders,"Mostrar desativados");ui.separator();}
+                    if let Some(id)=self.selected.clone() && let Some(entity)=self.scene().entity(&id).cloned() {
+                        if self.spatial.mode==Tool::Pivot {
+                            let mut pivot=entity.transform.pivot;vector3(ui,"Pivô — ponto de giro",&mut pivot,0.05,false);
+                            if pivot!=entity.transform.pivot && let Err(error)=oxy_core::spatial::move_pivot(self.scene_mut(),&id,Vec3::from(pivot)){self.log(error);self.console=true;}
+                        }else if self.spatial.mode==Tool::Collider && let Some(mut collider)=entity.collider.clone(){
+                            vector3(ui,"Tamanho da caixa",&mut collider.size,0.05,true);vector3(ui,"Deslocamento",&mut collider.offset,0.05,false);
+                            if Some(&collider)!=entity.collider.as_ref(){let mut candidate=self.scene().clone();candidate.entity_mut(&id).unwrap().collider=Some(collider);match oxy_core::spatial::collider_bounds(&candidate,&id){Ok(_)=>*self.scene_mut()=candidate,Err(e)=>self.log(e)}}
+                        }
+                    }
+                });}
             });
+            if self.spatial.mode == Tool::Pivot {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Mover pivô sem mover a peça");
+                    if ui.button("Centralizar na peça").clicked() {
+                        self.center_pivot(false);
+                    }
+                    if ui.button("Centralizar no conjunto").clicked() {
+                        self.center_pivot(true);
+                    }
+                });
+            }
+            if self.spatial.base_pose {
+                ui.colored_label(
+                    Color32::LIGHT_YELLOW,
+                    "Editando a pose-base · W/E/R ou Esc retorna à animação",
+                );
+            }
         }
         let scene = if self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation {
             self.animation_preview()
@@ -101,6 +132,20 @@ impl Editor {
         );
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
         self.editor_size = size;
+        if response.hovered() && !self.spatial_active_drag() {
+            self.camera.zoom(ui.input(|i| i.smooth_scroll_delta.y));
+        }
+        if response.dragged_by(egui::PointerButton::Middle) && !self.spatial_active_drag() {
+            let d = ui.input(|i| i.pointer.delta());
+            self.camera.pan([d.x, d.y], size);
+        }
+        if self.scene().kind == SceneKind::ThreeD
+            && response.dragged_by(egui::PointerButton::Secondary)
+            && !self.spatial_active_drag()
+        {
+            let d = ui.input(|i| i.pointer.delta());
+            self.camera.orbit([d.x, d.y]);
+        }
         let physical = [
             (rect.width() * ui.ctx().pixels_per_point()).max(1.) as u32,
             (rect.height() * ui.ctx().pixels_per_point()).max(1.) as u32,
@@ -122,19 +167,6 @@ impl Editor {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
             Color32::WHITE,
         );
-        if response.hovered() {
-            self.camera.zoom(ui.input(|i| i.smooth_scroll_delta.y));
-        }
-        if response.dragged_by(egui::PointerButton::Middle) {
-            let d = ui.input(|i| i.pointer.delta());
-            self.camera.pan([d.x, d.y], size);
-        }
-        if self.scene().kind == SceneKind::ThreeD
-            && response.dragged_by(egui::PointerButton::Secondary)
-        {
-            let d = ui.input(|i| i.pointer.delta());
-            self.camera.orbit([d.x, d.y]);
-        }
         let point = ui
             .input(|i| i.pointer.interact_pos())
             .filter(|p| rect.contains(*p));
@@ -147,6 +179,16 @@ impl Editor {
             )
         });
         let ui_pick = point.and_then(|p| oxy_render::pick_ui(&scene, rect, p));
+        let overlays = self.renderer.draw_colliders(
+            ui,
+            &scene,
+            &self.camera,
+            rect,
+            &self.selection.ids,
+            self.show_disabled_colliders,
+        );
+        let contour_pick = point.and_then(|p| overlays.pick(p, &self.selection.ids));
+        let handle_owned = !painting && self.spatial_handles(ui, &scene, rect);
         if painting {
             if (response.dragged_by(egui::PointerButton::Primary) || response.clicked())
                 && let Some(hit) = pick.as_ref()
@@ -167,15 +209,17 @@ impl Editor {
                 }
             }
         } else {
-            if response.clicked() {
-                let id = ui_pick
+            if response.clicked() && !handle_owned {
+                let id = contour_pick.clone().or(ui_pick
                     .clone()
-                    .or_else(|| pick.as_ref().map(|h| h.entity.clone()));
+                    .or_else(|| pick.as_ref().map(|h| h.entity.clone())));
                 self.select_click(id.clone(), ui.input(|i| i.modifiers), false);
                 self.focus_object_click(id, response.double_clicked(), ui.input(|i| i.modifiers));
             }
             if response.secondary_clicked() {
-                self.context_target = ui_pick.or_else(|| pick.as_ref().map(|h| h.entity.clone()));
+                self.context_target = contour_pick
+                    .or(ui_pick)
+                    .or_else(|| pick.as_ref().map(|h| h.entity.clone()));
             }
             response.context_menu(|ui| {
                 if let Some(id) = self.context_target.clone() {
@@ -185,7 +229,9 @@ impl Editor {
                 }
             });
             self.selection_outlines(ui, &scene, rect, size);
-            self.gizmo_ui(ui, rect, size);
+            if self.spatial.mode == Tool::Object {
+                self.gizmo_ui(ui, rect, size);
+            }
             let clicks = self
                 .game_ui
                 .draw(ui, &self.state.project, &scene, &self.root(), rect);
@@ -207,20 +253,35 @@ impl Editor {
                 );
             }
         }
-        let hint = if painting {
+        for error in overlays.errors {
+            if self.messages.last() != Some(&error) {
+                self.log(error);
+            }
+        }
+        let hint = if rect.width() < 550. {
+            if self.spatial.mode != Tool::Object {
+                "Alt: sem encaixe · Esc: cancelar"
+            } else {
+                "Pan: central · Zoom: roda"
+            }
+        } else if !painting && self.spatial.mode != Tool::Object {
+            "Alças: arrastar · centro: plano da câmera · Alt: sem encaixe · Esc: cancelar"
+        } else if painting {
             "Pincel: esquerdo · órbita: direito · pan: central · zoom: roda"
         } else if self.scene().kind == SceneKind::TwoD {
             "Selecionar: esquerdo · pan: central · zoom: roda · arraste os eixos para transformar"
         } else {
             "Selecionar: esquerdo · órbita: direito · pan: central · zoom: roda"
         };
-        ui.painter().text(
-            rect.left_bottom() + Vec2::new(12., -14.),
-            egui::Align2::LEFT_BOTTOM,
-            hint,
-            egui::FontId::proportional(12.),
-            Color32::from_gray(170),
-        );
+        if rect.height() > 240. {
+            ui.painter().text(
+                rect.left_bottom() + Vec2::new(12., -14.),
+                egui::Align2::LEFT_BOTTOM,
+                hint,
+                egui::FontId::proportional(12.),
+                Color32::from_gray(170),
+            );
+        }
     }
     pub(super) fn gizmo_ui(&mut self, ui: &mut egui::Ui, rect: Rect, size: [u32; 2]) {
         let Some(id) = self.selected.clone() else {

@@ -12,6 +12,40 @@ use std::collections::{BTreeMap, HashSet};
 
 const EPSILON: f32 = 0.00001;
 
+fn record_drafts(
+    state: &mut AnimationState,
+    clip: &mut Clip,
+    scope: &[Id],
+) -> Result<usize, String> {
+    let time = state.draft_time.unwrap_or(state.time);
+    if (time - state.time).abs() > EPSILON || time > clip.duration {
+        return Err("Retorne ao tempo da pose provisória antes de gravar.".into());
+    }
+    let targets: Vec<_> = state
+        .drafts
+        .keys()
+        .filter(|id| scope.contains(id))
+        .cloned()
+        .collect();
+    let count = targets.len();
+    for target in targets {
+        let transform = state.drafts.remove(&target).unwrap();
+        clip.insert_key(
+            &target,
+            Keyframe {
+                time,
+                transform,
+                interpolation: Interpolation::Linear,
+            },
+        );
+    }
+    if state.drafts.is_empty() {
+        state.draft_time = None;
+    }
+    state.preview = true;
+    Ok(count)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum TimelineSelection {
     None,
@@ -30,6 +64,7 @@ pub struct AnimationState {
     pub time: f32,
     pub preview: bool,
     pub drafts: BTreeMap<Id, Transform>,
+    pub draft_time: Option<f32>,
     manual_model: Option<Id>,
     selection: TimelineSelection,
     expanded: HashSet<Id>,
@@ -49,6 +84,7 @@ impl Default for AnimationState {
             time: 0.0,
             preview: false,
             drafts: BTreeMap::new(),
+            draft_time: None,
             manual_model: None,
             selection: TimelineSelection::None,
             expanded: HashSet::new(),
@@ -209,6 +245,9 @@ impl Editor {
             })
     }
     pub fn animation_preview(&self) -> Scene {
+        if self.spatial.base_pose {
+            return self.scene().clone();
+        }
         preview_scene(
             self.scene(),
             self.chosen_animation(),
@@ -222,6 +261,19 @@ impl Editor {
     }
     pub fn set_animation_draft_transform(&mut self, id: &str, transform: Transform) {
         if !transform.finite() || self.scene().entity(id).is_none() {
+            return;
+        }
+        if self.studio.animation.drafts.is_empty() {
+            self.studio.animation.draft_time = Some(self.studio.animation.time);
+        }
+        if self
+            .studio
+            .animation
+            .draft_time
+            .is_some_and(|time| (time - self.studio.animation.time).abs() > EPSILON)
+        {
+            self.studio.animation.message =
+                "Retorne ao tempo da pose provisória antes de editá-la.".into();
             return;
         }
         self.studio.animation.drafts.insert(id.into(), transform);
@@ -413,7 +465,7 @@ impl Editor {
                     });
                 }
                 if clips.is_empty() {
-                    ui.small("Crie uma animação e grave a primeira pose com + Keyframe.");
+                    ui.small("Crie uma animação e grave a primeira pose com + Quadro-chave.");
                 }
             });
         if let Some((id, name)) = rename_commit {
@@ -483,6 +535,15 @@ impl Editor {
         }
     }
     pub(super) fn animation_ui(&mut self, ui: &mut egui::Ui, dt: f32) {
+        if self.spatial.base_pose {
+            self.viewport(ui, false);
+            return;
+        }
+        if self.studio.animation.drafts.is_empty() {
+            self.studio.animation.draft_time = None;
+        } else if let Some(time) = self.studio.animation.draft_time {
+            self.studio.animation.time = time;
+        }
         self.sync_animation_model();
         let compact = ui.available_width() < 850.0 || ui.available_height() < 450.0;
         ui.horizontal_wrapped(|ui| {
@@ -547,6 +608,7 @@ impl Editor {
                 );
                 if ui.button("Descartar pose provisória").clicked() {
                     self.studio.animation.drafts.clear();
+                    self.studio.animation.draft_time = None;
                     self.studio.animation.message.clear();
                 }
             }
@@ -637,6 +699,14 @@ impl Editor {
                 track.keyframes.sort_by(|a, b| a.time.total_cmp(&b.time));
             }
         }
+        if !self.studio.animation.drafts.is_empty()
+            && let Some(time) = self.studio.animation.draft_time
+            && (time - self.studio.animation.time).abs() > EPSILON
+        {
+            self.studio.animation.time = time;
+            self.studio.animation.message =
+                "Grave ou descarte as poses alteradas antes de mudar o cursor.".into();
+        }
         if clip != old_clip
             && let Some(owner) = self.studio.owner.clone()
             && let Some(existing) = self.scene_mut().entity_mut(&owner).and_then(|entity| {
@@ -665,7 +735,10 @@ impl Editor {
                 .iter()
                 .flat_map(|track| track.keyframes.iter().map(|key| key.time))
                 .chain(clip.events.iter().map(|event| event.time))
-                .fold(0.1, f32::max);
+                .fold(
+                    self.studio.animation.draft_time.unwrap_or(0.1).max(0.1),
+                    f32::max,
+                );
             ui.label("Duração");
             ui.add(
                 egui::DragValue::new(&mut clip.duration)
@@ -685,12 +758,13 @@ impl Editor {
                 self.studio.playing = !self.studio.playing; self.studio.animation.preview = true;
                 if self.studio.animation.time >= clip.duration { self.studio.animation.time = 0.0; }
             }
-            if ui.button(if compact { "■" } else { "■ Início" }).on_hover_text("Voltar ao início da animação.").clicked() { self.studio.playing = false; self.studio.animation.time = 0.0; self.studio.animation.preview = true; }
+            if ui.add_enabled(self.studio.animation.drafts.is_empty(),egui::Button::new(if compact { "■" } else { "■ Início" })).on_hover_text("Grave ou descarte as poses alteradas antes de mudar o cursor.").clicked() { self.studio.playing = false; self.studio.animation.time = 0.0; self.studio.animation.preview = true; }
             ui.label("Cursor");
-            if ui.add(egui::DragValue::new(&mut self.studio.animation.time).range(0.0..=clip.duration).speed(1.0 / 60.0).suffix(" s")).changed() { self.studio.playing = false; self.studio.animation.preview = true; }
+            if ui.add_enabled(self.studio.animation.drafts.is_empty(),egui::DragValue::new(&mut self.studio.animation.time).range(0.0..=clip.duration).speed(1.0 / 60.0).suffix(" s")).on_hover_text("O cursor fica preso ao tempo da pose provisória até gravar ou descartar.").changed() { self.studio.playing = false; self.studio.animation.preview = true; }
             let scope = self.studio.owner.as_deref().map(|id| self.scene().descendants(id)).unwrap_or_default();
             let selected = self.selected.clone().filter(|id| scope.contains(id));
-            if ui.add_enabled(selected.is_some(), egui::Button::new("+ Keyframe")).on_hover_text("Grava posição, rotação e escala da peça selecionada no cursor, incluindo a pose provisória.").clicked()
+            if ui.add_enabled(!self.studio.animation.drafts.is_empty(),egui::Button::new("Gravar poses alteradas")).on_hover_text("Grava todas as peças e grupos alterados no tempo da pose provisória, em uma operação de desfazer.").clicked() && let Err(e)=record_drafts(&mut self.studio.animation,clip,&scope){self.studio.animation.message=e;}
+            if ui.add_enabled(selected.is_some(), egui::Button::new("+ Quadro-chave")).on_hover_text("Grava posição, rotação e escala da peça selecionada no cursor, incluindo a pose provisória.").clicked()
                 && let Some(target) = &selected && let Some(transform) = self.animation_draft_transform(target) {
                 clip.insert_key(target, Keyframe { time: self.studio.animation.time, transform, interpolation: Interpolation::Linear });
                 self.studio.animation.drafts.remove(target); self.studio.animation.selection = TimelineSelection::Key { target: target.clone(), time: self.studio.animation.time };
@@ -743,7 +817,11 @@ impl Editor {
         let Some(owner) = self.studio.owner.clone() else {
             return;
         };
-        let ids = self.scene().descendants(&owner);
+        let scope = self.scene().descendants(&owner);
+        let ids: Vec<_> = oxy_core::editing::hierarchy_order(self.scene())
+            .into_iter()
+            .filter(|id| scope.contains(id))
+            .collect();
         let entities: Vec<_> = ids
             .iter()
             .filter_map(|id| self.scene().entity(id).cloned())
@@ -794,7 +872,11 @@ impl Editor {
                             .interact(
                                 Rect::from_center_size(center, Vec2::splat(17.0)),
                                 ui.id().with(("animation_event", index)),
-                                Sense::click_and_drag(),
+                                if self.studio.animation.drafts.is_empty() {
+                                    Sense::click_and_drag()
+                                } else {
+                                    Sense::hover()
+                                },
                             )
                             .on_hover_text(format!("{} · {:.3} s", event.name, event.time));
                         if response.clicked() || response.drag_started() {
@@ -900,6 +982,7 @@ impl Editor {
             egui::Stroke::new(1.5, Color32::from_rgb(104, 220, 194)),
         );
         if response.clicked()
+            && self.studio.animation.drafts.is_empty()
             && let Some(pointer) = response.interact_pointer_pos()
         {
             self.studio.animation.time = timeline_time(pointer.x, rect, duration);
@@ -940,7 +1023,11 @@ impl Editor {
                 .interact(
                     Rect::from_center_size(center, Vec2::splat(16.0)),
                     ui.id().with(("animation_key", target, channel, index)),
-                    Sense::click_and_drag(),
+                    if self.studio.animation.drafts.is_empty() {
+                        Sense::click_and_drag()
+                    } else {
+                        Sense::hover()
+                    },
                 )
                 .on_hover_text(format!("Quadro completo · {:.3} s", key.time));
             if response.clicked() || response.drag_started() {
@@ -1129,7 +1216,7 @@ impl Editor {
             }
             TimelineSelection::None => {
                 ui.strong("POSE PROVISÓRIA");
-                ui.small("Ajuste a peça e grave com + Keyframe. A pose-base do modelo permanece preservada.");
+                ui.small("Ajuste a peça e grave com + Quadro-chave. A pose-base do modelo permanece preservada.");
                 ui.separator();
                 if let Some(id) = self.selected.clone()
                     && let Some(mut transform) = self.animation_draft_transform(&id)
@@ -1207,6 +1294,50 @@ fn draw_diamond(painter: &egui::Painter, center: Pos2, radius: f32, color: Color
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn collective_drafts_are_time_bound_and_one_reversible_delta() {
+        use super::*;
+        use oxy_core::{edit_history::CommandHistory, texture_cache::TextureCache};
+        let mut project = Project::new("Animação segura");
+        let root = Entity::new("Grupo", None);
+        let mut child = Entity::new("Peça", Some(Primitive::Rectangle));
+        child.parent = Some(root.id.clone());
+        let ids = vec![root.id.clone(), child.id.clone()];
+        project.scenes[0].entities.extend([root, child]);
+        let mut clip = Clip::new("Ataque");
+        let id = clip.id.clone();
+        project.scenes[0].entities[0].clips.push(clip.clone());
+        let base = project.clone();
+        let mut state = AnimationState {
+            time: 0.5,
+            draft_time: Some(0.5),
+            ..Default::default()
+        };
+        for target in &ids {
+            let mut t = Transform::default();
+            t.rotation[2] = 0.75;
+            state.drafts.insert(target.clone(), t);
+        }
+        state.time = 0.8;
+        assert!(record_drafts(&mut state, &mut clip, &ids).is_err());
+        assert!(clip.tracks.is_empty());
+        assert_eq!(state.drafts.len(), 2);
+        state.time = 0.5;
+        let mut history = CommandHistory::new();
+        let mut images = TextureCache::default();
+        history.begin("Gravar poses", &project, &images);
+        assert_eq!(record_drafts(&mut state, &mut clip, &ids).unwrap(), 2);
+        assert!(state.drafts.is_empty());
+        assert_eq!(clip.id, id);
+        project.scenes[0].entities[0].clips[0] = clip;
+        history.commit(&project, &mut images).unwrap();
+        let recorded = project.clone();
+        assert_eq!(history.undo_len(), 1);
+        history.undo(&mut project, &mut images).unwrap();
+        assert_eq!(project, base);
+        history.redo(&mut project, &mut images).unwrap();
+        assert_eq!(project, recorded);
+    }
     use super::*;
     use glam::Vec3;
     use oxy_core::graph::Node;

@@ -878,14 +878,7 @@ pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {
     if !collider.enabled {
         return None;
     }
-    let matrix = scene.world_matrix(id).ok()?;
-    let (scale, _, _) = matrix.to_scale_rotation_translation();
-    // Explicit AABB approximation: offsets follow hierarchy; orientation does not rotate its size.
-    let center = matrix.transform_point3(Vec3::from(collider.offset));
-    Some(Aabb::from_center_half(
-        center,
-        Vec3::from(collider.size) * scale.abs() * 0.5,
-    ))
+    crate::spatial::collider_bounds(scene, id).ok()
 }
 
 fn is_related(scene: &Scene, a: &str, b: &str) -> bool {

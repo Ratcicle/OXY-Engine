@@ -1,0 +1,1182 @@
+{
+  "schema_version": 1,
+  "id": "dd8090c7-13b2-40ba-a2a5-8a0d45169bcc",
+  "name": "Articulações editáveis",
+  "start_scene": "f27b0fc1-4b82-40d7-bf98-dc19fc0d1af6",
+  "scenes": [
+    {
+      "id": "f27b0fc1-4b82-40d7-bf98-dc19fc0d1af6",
+      "name": "Cena 2D",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+          "name": "Personagem",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              3.0,
+              3.8500001,
+              0.001
+            ],
+            "offset": [
+              0.5,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "speed": 5.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [
+            {
+              "id": "9575a047-5027-4513-9b67-3b9040b49a10",
+              "name": "Ataque",
+              "duration": 1.0,
+              "looping": false,
+              "tracks": [
+                {
+                  "target": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "transform": {
+                        "position": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.5,
+                      "transform": {
+                        "position": [
+                          1.25,
+                          0.0,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    }
+                  ]
+                },
+                {
+                  "target": "3d4de61c-7c23-474c-b3c5-4f65702f9139",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "transform": {
+                        "position": [
+                          0.75,
+                          0.75,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          -0.050000012,
+                          0.75,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.5,
+                      "transform": {
+                        "position": [
+                          0.75,
+                          0.75,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.84000003
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          -0.050000012,
+                          0.75,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    }
+                  ]
+                }
+              ],
+              "events": []
+            }
+          ],
+          "model_source": null
+        },
+        {
+          "id": "1c637d19-6a69-4982-a7e3-3021f7a0e188",
+          "name": "Tronco",
+          "parent": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            1.0,
+            1.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "f4000bbf-0ee7-4128-b167-52594fddb5a9",
+          "name": "Cabeça",
+          "parent": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+          "transform": {
+            "position": [
+              0.0,
+              1.2,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.8,
+            0.8,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "3d4de61c-7c23-474c-b3c5-4f65702f9139",
+          "name": "Braço",
+          "parent": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+          "transform": {
+            "position": [
+              0.75,
+              0.75,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              -0.050000012,
+              0.75,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.4,
+            1.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "e943c1b7-4cc6-46a3-a7f1-1f0a5a84f603",
+          "name": "Braço esquerdo",
+          "parent": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+          "transform": {
+            "position": [
+              -0.8,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.4,
+            1.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "0622dfba-5a00-4b22-9bda-05d9bd97ff93",
+          "name": "Perna",
+          "parent": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+          "transform": {
+            "position": [
+              -0.3,
+              -1.3,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.4,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "ff1b0d18-6b19-41c8-b856-24875ec768f3",
+          "name": "Perna direita",
+          "parent": "7b45ae4e-14a0-453b-9d44-f88fa5c8fc7c",
+          "transform": {
+            "position": [
+              0.3,
+              -1.3,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.4,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "5fed4e6d-1df4-4ccd-9b25-bbe25ca8e2ee",
+          "name": "Chão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -3.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            12.0,
+            0.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              12.0,
+              0.5,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    },
+    {
+      "id": "69261e31-4202-4d8c-96a7-153db2ef9bcc",
+      "name": "Montagem 3D",
+      "kind": "ThreeD",
+      "entities": [
+        {
+          "id": "cdb52dae-7c42-4d0b-b2ce-0f21b9d7fbce",
+          "name": "Personagem",
+          "parent": "aef51acf-ce65-4ba1-94bf-a42956d5dbfd",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              -1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              2.3674753,
+              3.4797878,
+              2.2778535
+            ],
+            "offset": [
+              -0.14052236,
+              -0.10083807,
+              0.09738958
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "aa3f58b3-9fa9-4782-8f4d-58de045e6c69",
+          "name": "Tronco",
+          "parent": "cdb52dae-7c42-4d0b-b2ce-0f21b9d7fbce",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            1.0,
+            1.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "7778d039-9783-4af2-a901-4d84ad5a989c",
+          "name": "Cabeça",
+          "parent": "cdb52dae-7c42-4d0b-b2ce-0f21b9d7fbce",
+          "transform": {
+            "position": [
+              0.0,
+              1.2,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.8,
+            0.8,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "69143af7-fbf1-4074-b654-b2f9f3f0c250",
+          "name": "Braço",
+          "parent": "cdb52dae-7c42-4d0b-b2ce-0f21b9d7fbce",
+          "transform": {
+            "position": [
+              0.8205354,
+              1.0572612,
+              -0.3137219
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.020535462,
+              1.0572612,
+              -0.3137219
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.4,
+            1.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "c4eca6d8-12d9-4b45-8d16-38c02343ee37",
+          "name": "Braço esquerdo",
+          "parent": "cdb52dae-7c42-4d0b-b2ce-0f21b9d7fbce",
+          "transform": {
+            "position": [
+              -0.8,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.4,
+            1.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "bf22bfa2-2f54-4349-b72d-c82539611e6e",
+          "name": "Perna",
+          "parent": "cdb52dae-7c42-4d0b-b2ce-0f21b9d7fbce",
+          "transform": {
+            "position": [
+              -0.3,
+              -1.3,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.4,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "d13bc5dc-6d43-4dc7-b152-128fba74a145",
+          "name": "Perna direita",
+          "parent": "cdb52dae-7c42-4d0b-b2ce-0f21b9d7fbce",
+          "transform": {
+            "position": [
+              0.3,
+              -1.3,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.4,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.4,
+              0.6,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "2a9fff4c-b8e2-4c2d-88ff-77da4b4c05b1",
+          "name": "Chão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -3.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            12.0,
+            0.5,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              12.0,
+              0.5,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "aef51acf-ce65-4ba1-94bf-a42956d5dbfd",
+          "name": "Pai transformado",
+          "parent": null,
+          "transform": {
+            "position": [
+              1.0,
+              0.0,
+              -1.0
+            ],
+            "rotation": [
+              0.1,
+              0.3,
+              0.0
+            ],
+            "scale": [
+              1.5,
+              1.2,
+              0.8
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {
+    "atacar": "J",
+    "interagir": "E",
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "mover_frente": "W",
+    "mover_tras": "S",
+    "pular": "Space"
+  }
+}

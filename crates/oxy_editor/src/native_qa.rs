@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
+mod spatial;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use oxy_core::document::{Id, SceneKind, new_id};
 use std::{
@@ -34,7 +35,18 @@ enum Action {
     ConnectPorts,
     Paint,
     GizmoX,
+    GizmoZ,
     GizmoDelta(f32),
+    SpatialDrag {
+        face: Option<usize>,
+        delta: [f32; 3],
+        cancel: bool,
+    },
+    Spatial3D,
+    InterfaceScale(f32),
+    PanZoom,
+    CollapseEntity(&'static str),
+    ReopenProject,
     Idle,
 }
 
@@ -57,6 +69,7 @@ struct Surface {
     native_viewport: Option<Rect>,
     ports: Vec<Pos2>,
     gizmo_x: Option<Pos2>,
+    gizmo_z: Option<Pos2>,
 }
 
 struct IdleProbe {
@@ -197,13 +210,13 @@ impl NativeQa {
             Action::Click("Enquadrar"),
             Action::Screenshot("animation-small.png"),
             Action::Check("animation_small_layout"),
-            Action::Click("+ Keyframe"),
+            Action::Click("+ Quadro-chave"),
             Action::Check("key_created"),
             Action::Key(Key::Z, true),
             Action::Check("animation_preview"),
             Action::Resize(Vec2::new(1440., 900.)),
             Action::Click("Pose-base"),
-            Action::Click("+ Keyframe"),
+            Action::Click("+ Quadro-chave"),
             Action::Check("key_created"),
             Action::Scroll("QUADRO-CHAVE", -460.),
             Action::Click("Copiar quadro"),
@@ -304,15 +317,15 @@ impl NativeQa {
             Action::Key(Key::A, true),
             Action::Text("Parado"),
             Action::Key(Key::Enter, false),
-            Action::Click("+ Keyframe"),
+            Action::Click("+ Quadro-chave"),
             Action::SelectEntity("Peça A"),
-            Action::Click("+ Keyframe"),
+            Action::Click("+ Quadro-chave"),
             Action::SelectEntity("Articulação"),
             Action::Click("+ Nova animação"),
             Action::Key(Key::A, true),
             Action::Text("Ataque"),
             Action::Key(Key::Enter, false),
-            Action::Click("+ Keyframe"),
+            Action::Click("+ Quadro-chave"),
             Action::Check("authored_clips"),
             Action::EditValue("Cursor", "0.5"),
             Action::Click("Mover (W)"),
@@ -325,7 +338,7 @@ impl NativeQa {
             Action::Click("A · Sala de plataforma 2D"),
             Action::Check("draft_scene_refused"),
             Action::Click("Console"),
-            Action::Click("+ Keyframe"),
+            Action::Click("+ Quadro-chave"),
             Action::Check("group_key"),
             Action::Screenshot("group-animation.png"),
             Action::Context("Ataque"),
@@ -482,6 +495,21 @@ impl NativeQa {
             }
         };
         match label {
+            "selected_group_collider" => {
+                ensure(
+                    self.surface.texts.iter().any(|t| {
+                        t.text.contains("Colisor sólido") && t.text.contains("Personagem")
+                    }),
+                    "Caixa do grupo não tem identificação visível",
+                )?;
+                let id = self.editor.selected.as_deref().ok_or("Sem seleção")?;
+                ensure(
+                    oxy_core::runtime::collider_box(self.editor.scene(), id)
+                        == Some(oxy_core::spatial::collider_bounds(self.editor.scene(), id)?),
+                    "Depuração diverge da física",
+                )?;
+                Ok(())
+            }
             "animation_small_layout" => {
                 let viewport = self
                     .surface
@@ -502,7 +530,7 @@ impl NativeQa {
                 )?;
                 ensure(
                     self.find("LINHA DO TEMPO", false).is_some()
-                        && self.find("+ Keyframe", false).is_some()
+                        && self.find("+ Quadro-chave", false).is_some()
                         && self.find("Cursor", false).is_some(),
                     "Linha do tempo, cursor e criação de quadro devem permanecer acessíveis em 920×600",
                 )
@@ -1050,7 +1078,7 @@ impl NativeQa {
                 let added = if label == "key_created" { 1 } else { 2 };
                 ensure(
                     count(current) >= count(previous) + added,
-                    "Inserir/copiar/colar keyframes deve alterar dados normais do clip",
+                    "Inserir/copiar/colar quadros-chave deve alterar dados normais do clip",
                 )
             }
             "card_one" | "card_two" | "card_three" | "card_four" => {
@@ -1194,7 +1222,7 @@ impl NativeQa {
                 }
                 Ok(())
             }
-            _ => Err(format!("Verificação desconhecida: {label}")),
+            _ => self.check_spatial(label),
         }
     }
 
@@ -1204,6 +1232,102 @@ impl NativeQa {
         };
         let description;
         match action {
+            Action::ReopenProject => {
+                let before = self.editor.state.project.clone();
+                self.editor
+                    .open(self.editor.path.clone().ok_or("Projeto sem arquivo")?);
+                if self.editor.state.project != before {
+                    return Err("Reabertura perdeu os dados editados".into());
+                }
+                description = "Reabrir projeto no editor e comparar todos os documentos".into();
+            }
+            Action::PanZoom => {
+                let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
+                self.drag(rect.center(), rect.center() + Vec2::new(27., -18.));
+                for events in &mut self.events {
+                    for event in events {
+                        if let Event::PointerButton { button, .. } = event {
+                            *button = PointerButton::Middle;
+                        }
+                    }
+                }
+                self.events.push_back(vec![Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0., 90.),
+                    modifiers: Modifiers::NONE,
+                }]);
+                description = "Pan e zoom reais no viewport".into();
+            }
+            Action::CollapseEntity(label) => {
+                let at = self
+                    .entity_position(label)
+                    .ok_or("Grupo fora da hierarquia")?;
+                let button = self
+                    .surface
+                    .texts
+                    .iter()
+                    .find(|t| {
+                        matches!(t.text.as_str(), "▾" | "▸")
+                            && (t.rect.center().y - at.y).abs() < 10.
+                            && t.rect.center().x < at.x
+                    })
+                    .ok_or("Controle de expansão ausente")?
+                    .rect
+                    .center();
+                self.click(button);
+                description = format!("Recolher/expandir {label}");
+            }
+            Action::SpatialDrag {
+                face,
+                delta,
+                cancel,
+            } => {
+                let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
+                let id = self.editor.selected.as_deref().ok_or("Seleção ausente")?;
+                let scene = self.editor.scene();
+                let pivot = self.editor.spatial.mode == crate::app::Tool::Pivot;
+                let from = if pivot {
+                    scene.world_matrix(id)?.transform_point3(glam::Vec3::from(
+                        scene.entity(id).unwrap().transform.pivot,
+                    ))
+                } else {
+                    let b = oxy_core::spatial::collider_bounds(scene, id)?;
+                    let mut p = (b.min + b.max) * 0.5;
+                    if let Some(face) = face {
+                        let axis = face / 2;
+                        p[axis] = if face % 2 == 0 {
+                            b.min[axis]
+                        } else {
+                            b.max[axis]
+                        };
+                    }
+                    p
+                };
+                let start = oxy_render::collider_debug::project(&self.editor.camera, rect, from)
+                    .ok_or("Alça fora da câmera")?;
+                let end = oxy_render::collider_debug::project(
+                    &self.editor.camera,
+                    rect,
+                    from + glam::Vec3::from(delta),
+                )
+                .ok_or("Destino fora da câmera")?;
+                self.base = Some(self.editor.state.clone());
+                self.drag(start, end);
+                if cancel {
+                    let release = self.events.pop_back().unwrap();
+                    self.key(Key::Escape, false);
+                    self.events.push_back(release);
+                }
+                description = "Arrastar alça espacial por projeção da câmera".into();
+            }
+            Action::Spatial3D => {
+                self.setup_spatial_3d()?;
+                description = "Abrir montagem 3D transformada de validação".into();
+            }
+            Action::InterfaceScale(scale) => {
+                self.editor.scale = scale;
+                description = format!("Escala de interface {scale}");
+            }
             Action::SelectEntity(label)
             | Action::ControlSelect(label)
             | Action::DoubleEntity(label) => {
@@ -1422,6 +1546,11 @@ impl NativeQa {
                 self.drag(rect.min + rect.size() * 0.33, rect.min + rect.size() * 0.63);
                 description = "Pincelada real no PNG".into();
             }
+            Action::GizmoZ => {
+                let from = self.surface.gizmo_z.ok_or("Controle Z não encontrado")?;
+                self.drag(from, from + Vec2::new(50., -50.));
+                description = "Girar braço pelo eixo Z".into();
+            }
             Action::GizmoX | Action::GizmoDelta(_) => {
                 let from = self
                     .surface
@@ -1613,6 +1742,12 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                 surface.ports.push(circle.center)
             }
             egui::Shape::Circle(circle)
+                if circle.fill == Color32::from_rgb(122, 169, 240)
+                    && (circle.radius - 6.).abs() < 0.1 =>
+            {
+                surface.gizmo_z = Some(circle.center)
+            }
+            egui::Shape::Circle(circle)
                 if circle.fill == Color32::from_rgb(239, 113, 117)
                     && (circle.radius - 6.).abs() < 0.1 =>
             {
@@ -1669,7 +1804,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 fn native_editor_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.1.1");
+    let output = workspace.join("qa/v0.1.2/regression");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-native-qa-{}", new_id()));
     copy_directory(&workspace.join("examples/validacao"), &fixture).unwrap();

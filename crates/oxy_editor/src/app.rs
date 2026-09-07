@@ -2,9 +2,12 @@ mod diagnostics;
 mod hierarchy;
 mod library;
 mod properties;
+mod spatial_tools;
 mod textures;
 mod toolbar;
 mod viewport;
+use spatial_tools::SpatialTools;
+pub(crate) use spatial_tools::Tool;
 
 use crate::{
     graph_ui::{GraphView, object_picker, value_editor},
@@ -77,6 +80,8 @@ pub struct Editor {
     rename: Option<Rename>,
     pub(crate) hierarchy_focus: bool,
     last_object_click: Option<Id>,
+    collapsed: std::collections::HashSet<Id>,
+    reveal_scroll: Option<Id>,
     pub tab: Tab,
     pub studio: Studio,
     graph: GraphView,
@@ -93,13 +98,15 @@ pub struct Editor {
     pub messages: Vec<String>,
     console: bool,
     debug: bool,
+    show_disabled_colliders: bool,
     grid: bool,
     grid_size: f32,
     gizmo: Gizmo,
     gizmo_drag: Option<GizmoDrag>,
+    pub(crate) spatial: SpatialTools,
     pending: Option<Transition>,
     allow_close: bool,
-    scale: f32,
+    pub(crate) scale: f32,
     attribute_name: String,
     attribute_type: u8,
     asset_search: String,
@@ -155,6 +162,8 @@ impl Editor {
             rename: None,
             hierarchy_focus: false,
             last_object_click: None,
+            collapsed: Default::default(),
+            reveal_scroll: None,
             tab: Tab::Scene,
             studio: Studio::default(),
             graph: GraphView::default(),
@@ -171,10 +180,12 @@ impl Editor {
             messages: vec!["OXY Engine · editor nativo · documentos locais".into()],
             console: false,
             debug: false,
+            show_disabled_colliders: false,
             grid: true,
             grid_size: 0.25,
             gizmo: Gizmo::Move,
             gizmo_drag: None,
+            spatial: SpatialTools::default(),
             pending: None,
             allow_close: false,
             scale: 1.,
@@ -246,6 +257,10 @@ impl Editor {
             || self.state.images.has_dirty()
     }
     fn reset_context(&mut self) {
+        self.spatial = SpatialTools::default();
+        self.gizmo_drag = None;
+        self.collapsed.clear();
+        self.reveal_scroll = None;
         self.runtime = None;
         self.capture = false;
         self.selected = None;
@@ -303,7 +318,7 @@ impl Editor {
             }
         }
         if !self.studio.animation.drafts.is_empty() {
-            self.log("Há uma pose provisória na Animação. Grave-a com + Keyframe ou use Descartar pose provisória antes de salvar.");
+            self.log("Há uma pose provisória na Animação. Grave-a com + Quadro-chave ou use Descartar pose provisória antes de salvar.");
             self.console = true;
             return false;
         }
@@ -437,6 +452,7 @@ impl Editor {
         }
     }
     fn undo(&mut self, redo: bool) {
+        self.cancel_spatial_drag();
         self.finish_history(true);
         let result = if redo {
             self.history
@@ -476,6 +492,7 @@ impl Editor {
         }
     }
     fn start(&mut self) {
+        self.set_spatial_tool(Tool::Object);
         self.finish_history(true);
         match Runtime::new(&self.state.project, &self.scene_id) {
             Ok(runtime) => {
@@ -510,6 +527,10 @@ impl Editor {
         }
     }
     pub fn select(&mut self, id: Option<Id>) {
+        if self.selected != id {
+            self.reveal_scroll = id.clone();
+        }
+        self.reveal_selection(id.as_deref());
         self.selection_rotation = [0.; 3];
         self.selection_scale = 1.;
         self.selection.single(id.clone());
@@ -528,7 +549,11 @@ impl Editor {
         self.selection_scale = 1.;
         self.hierarchy_focus = hierarchy;
         if let Some(id) = id {
-            let order = editing::hierarchy_order(self.scene());
+            if !hierarchy {
+                self.reveal_scroll = Some(id.clone());
+            }
+            self.reveal_selection(Some(&id));
+            let order = self.visible_hierarchy_order();
             self.selection.click(
                 id.clone(),
                 modifiers.ctrl || modifiers.command,
@@ -595,9 +620,11 @@ impl Editor {
         }
     }
     fn set_scene(&mut self, id: Id) {
+        self.set_spatial_tool(Tool::Object);
+        self.spatial.fit = None;
         if !self.studio.animation.drafts.is_empty() {
             self.log(
-                "Grave a pose com + Keyframe ou descarte a pose provisória antes de mudar de cena.",
+                "Grave a pose com + Quadro-chave ou descarte a pose provisória antes de mudar de cena.",
             );
             self.console = true;
             return;
@@ -698,6 +725,11 @@ impl Editor {
         } else {
             ui.label("EM EXECUÇÃO · Escape pausa e libera a entrada");
         }
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.debug, "Colisores");
+            ui.checkbox(&mut self.show_disabled_colliders, "Mostrar desativados");
+            ui.label("Somente leitura · mudanças na cena exigem Parar e Jogar novamente.");
+        });
         if !ui.ctx().input(|i| i.focused) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.pause();
         }
@@ -740,6 +772,8 @@ impl Editor {
         let clicks = self
             .game_ui
             .draw(ui, &self.state.project, &scene, &self.root(), rect);
+        self.renderer
+            .draw_colliders(ui, &scene, &camera, rect, &[], self.show_disabled_colliders);
         if self.capture {
             let mut targets = clicks;
             if targets.is_empty()
@@ -888,13 +922,25 @@ impl eframe::App for Editor {
             if matches!(self.tab, Tab::Scene | Tab::Studio)
                 && !ctx.input(|i| i.modifiers.ctrl || i.modifiers.alt || i.modifiers.command)
             {
+                if ctx.input(|i| i.key_pressed(egui::Key::C)) {
+                    self.set_spatial_tool(Tool::Collider);
+                }
+                if ctx.input(|i| i.key_pressed(egui::Key::P)) {
+                    self.set_spatial_tool(Tool::Pivot);
+                }
+                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.cancel_spatial_drag() {
+                    self.set_spatial_tool(Tool::Object);
+                }
                 if ctx.input(|i| i.key_pressed(egui::Key::W)) {
+                    self.set_spatial_tool(Tool::Object);
                     self.gizmo = Gizmo::Move;
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::E)) {
+                    self.set_spatial_tool(Tool::Object);
                     self.gizmo = Gizmo::Rotate;
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::R)) {
+                    self.set_spatial_tool(Tool::Object);
                     self.gizmo = Gizmo::Scale;
                 }
             }
@@ -969,12 +1015,13 @@ impl eframe::App for Editor {
             }
         }
         self.asset_delete_dialog(ctx);
+        self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);
         if self.pending.is_some() {
             self.pause();
             egui::Window::new("Alterações não salvas").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,Vec2::ZERO).show(ctx,|ui|{
             ui.label("Há alterações no projeto, nas texturas ou uma pose provisória. Salve antes de continuar ou descarte explicitamente.");
-            if !self.studio.animation.drafts.is_empty() { ui.label("A pose provisória precisa ser gravada com + Keyframe na Animação antes de salvar. Cancele esta janela para voltar à edição."); }
+            if !self.studio.animation.drafts.is_empty() { ui.label("A pose provisória precisa ser gravada com + Quadro-chave na Animação antes de salvar. Cancele esta janela para voltar à edição."); }
             ui.horizontal(|ui|{if ui.button("Salvar e continuar").clicked()&&self.save()&& let Some(t)=self.pending.take(){self.apply_transition(t)}
 if ui.button("Descartar alterações").clicked()&& let Some(t)=self.pending.take(){self.apply_transition(t)}
 if ui.button("Cancelar").clicked(){self.pending=None;}});

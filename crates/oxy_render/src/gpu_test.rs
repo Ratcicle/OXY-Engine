@@ -205,7 +205,7 @@ fn native_gpu_depth_texture_and_resize() {
         renderer.stats().instance_uploads,
         first_stats.instance_uploads + 1
     );
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/native-depth-proof.png");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.1.2/native-depth-proof.png");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     image::save_buffer(&path, &pixels, 512, 256, image::ColorType::Rgba8).unwrap();
     println!("GPU depth readback evidence: {}", path.display());

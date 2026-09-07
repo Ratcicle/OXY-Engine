@@ -332,6 +332,7 @@ impl Scene {
                 return Err("O parentesco criaria um ciclo".into());
             }
         }
+        crate::spatial::check_reparent_animation(self, id, parent.as_deref())?;
         let new_local = if preserve_world {
             let world = self.world_matrix(id)?;
             let pm = match &parent {

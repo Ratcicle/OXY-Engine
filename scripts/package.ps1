@@ -42,6 +42,8 @@ $destinationParent = Split-Path $destinationPath -Parent
 New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
 $stagingPath = Join-Path $destinationParent ('.oxy-package-' + [Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $stagingPath | Out-Null
+$packageVersion = [regex]::Match((Get-Content -LiteralPath (Join-Path $workspace 'Cargo.toml') -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+[IO.File]::WriteAllText((Join-Path $stagingPath 'VERSAO.txt'), "OXY Engine $packageVersion`r`n", [Text.Encoding]::UTF8)
 $packageData = Join-Path $stagingPath 'data'
 New-Item -ItemType Directory -Path $packageData -Force | Out-Null
 foreach ($file in $files) {

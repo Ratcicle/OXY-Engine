@@ -9,4 +9,5 @@ pub mod history;
 pub mod painting;
 pub mod persistence;
 pub mod runtime;
+pub mod spatial;
 pub mod texture_cache;

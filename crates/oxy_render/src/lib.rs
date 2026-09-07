@@ -2,6 +2,7 @@
 //! No editor state is read here. Meshes use real perspective/depth and stable UVs.
 mod cache;
 pub mod camera;
+pub mod collider_debug;
 pub mod game_ui;
 pub mod input;
 pub mod labels;
@@ -115,6 +116,7 @@ pub struct Renderer {
     errors: Vec<String>,
     /// Grid is normally visible for editing and disabled for gameplay.
     pub show_grid: bool,
+    debug_colliders: bool,
 }
 
 impl Renderer {
@@ -204,6 +206,7 @@ impl Renderer {
             project_root: PathBuf::new(),
             errors: Vec::new(),
             show_grid: true,
+            debug_colliders: false,
         }
     }
 
@@ -380,6 +383,7 @@ impl Renderer {
         selected: Option<Id>,
         debug_colliders: bool,
     ) -> egui::TextureId {
+        self.debug_colliders = debug_colliders;
         if self.project_root != root {
             self.textures.clear();
             self.project_root = root.to_owned();
@@ -500,30 +504,6 @@ impl Renderer {
                 }
             }
         }
-        if debug_colliders {
-            for entity in &scene.entities {
-                if let Some(collider) = &entity.collider {
-                    if !collider.enabled {
-                        continue;
-                    }
-                    if let Some(bounds) = oxy_core::runtime::collider_box(scene, &entity.id) {
-                        let color = if collider.is_trigger {
-                            [0.9, 0.4, 1., 0.9]
-                        } else {
-                            [0.2, 1., 0.5, 0.9]
-                        };
-                        box_lines(
-                            &mut overlays,
-                            bounds.min,
-                            bounds.max,
-                            Mat4::IDENTITY,
-                            color,
-                            scene.kind == SceneKind::TwoD,
-                        );
-                    }
-                }
-            }
-        }
         let (allocated, uploaded) = self.instances.update(rs, bytemuck::cast_slice(&instances));
         self.stats.buffer_allocations += u64::from(allocated);
         self.stats.instance_uploads += u64::from(uploaded);
@@ -605,6 +585,27 @@ impl Renderer {
         }
         rs.queue.submit([encoder.finish()]);
         self.target.id
+    }
+    /// Complete the debug_colliders path after the viewport image/game UI is drawn.
+    /// Stroke widths are logical screen points, independent of zoom and scene depth.
+    pub fn draw_colliders(
+        &self,
+        ui: &egui::Ui,
+        scene: &Scene,
+        camera: &CameraState,
+        rect: egui::Rect,
+        selected: &[Id],
+        show_disabled: bool,
+    ) -> collider_debug::OverlayFrame {
+        collider_debug::draw(
+            ui,
+            scene,
+            camera,
+            rect,
+            self.debug_colliders,
+            selected,
+            show_disabled,
+        )
     }
 }
 

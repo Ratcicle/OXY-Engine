@@ -105,6 +105,9 @@ impl Editor {
                 };
                 if self.selection.ids.len() > 1 { self.multiple_properties(ui); return; }
                 let Some(mut entity)=self.scene().entity(&id).cloned() else{return};
+                let mut requested_pivot=None;
+                let mut requested_tool=None;
+                let mut requested_fit=None;
                 let objects:Vec<_>=self.scene().entities.iter().map(|e|(e.id.clone(),e.name.clone())).collect();
                 let textures:Vec<_>=self.state.project.assets.iter().filter(|a|a.kind==AssetKind::Texture).map(|a|(a.id.clone(),a.name.clone())).collect();
                 ui.text_edit_singleline(&mut entity.name);
@@ -121,7 +124,13 @@ impl Editor {
                     vector3(ui,"Posição",&mut transform.position,0.05,false);
                     let mut degrees=transform.rotation.map(f32::to_degrees);let original_degrees=degrees;vector3(ui,"Rotação °",&mut degrees,0.5,false);if degrees!=original_degrees{transform.rotation=degrees.map(f32::to_radians);}
                     vector3(ui,"Escala",&mut transform.scale,0.02,true);
-                    if !self.view_global{vector3(ui,"Pivô local",&mut transform.pivot,0.05,false);}
+                    if !self.view_global{
+                        let mut pivot=transform.pivot;
+                        ui.label("Pivô — ponto de giro").on_hover_text("Ponto em torno do qual a peça gira e escala. Mudar este ponto preserva a montagem na pose-base.");
+                        vector3(ui,"Pivô local",&mut pivot,0.05,false);
+                        if pivot!=transform.pivot {requested_pivot=Some(pivot);}
+                        if ui.button("Editar pivô (P)").clicked(){requested_tool=Some(Tool::Pivot);}
+                    }
                     if transform!=before {
                         if self.view_global {
                             let parent=entity.parent.as_deref().and_then(|p|self.scene().world_matrix(p).ok()).unwrap_or(glam::Mat4::IDENTITY);
@@ -153,6 +162,14 @@ impl Editor {
                 ui.collapsing("Componentes",|ui| {
                     component_switch(ui,"Colisão / área",&mut entity.collider,Collider{size:entity.dimensions,..Default::default()});
                     if let Some(c)=&mut entity.collider{ui.checkbox(&mut c.enabled,"Colisor ativo");ui.checkbox(&mut c.is_trigger,"Área de detecção").on_hover_text("Área detecta entradas sem bloquear movimento. Desativada, esta caixa é um colisor sólido.");vector3(ui,"Tamanho da caixa",&mut c.size,0.05,true);c.size=c.size.map(|v|v.max(0.0001));vector3(ui,"Deslocamento",&mut c.offset,0.05,false);ui.small("Caixa alinhada aos eixos").on_hover_text("Girar a aparência não gira a caixa física. Não é uma colisão precisa da malha.");}
+                    if entity.collider.is_some(){
+                        if ui.button("Editar colisor (C)").clicked(){requested_tool=Some(Tool::Collider);}
+                        ui.horizontal_wrapped(|ui|{
+                            if ui.button("Ajustar ao objeto").clicked(){requested_fit=Some(false);}
+                            if ui.button("Ajustar ao grupo/filhos").clicked(){requested_fit=Some(true);}
+                        });
+                        if entity.controller.is_some()&&entity.collider.as_ref().is_some_and(|c|c.is_trigger){ui.colored_label(Color32::YELLOW,"Personagem com área de detecção: esta caixa detecta entradas; um colisor sólido representa bloqueios. A configuração não foi alterada.");}
+                    }
                     ui.separator();component_switch(ui,"Controlador de movimento",&mut entity.controller,Controller::default());
                     if let Some(c)=&mut entity.controller{ui.checkbox(&mut c.enabled,"Controlador ativo");ui.add(egui::DragValue::new(&mut c.speed).range(0.0..=100.0).prefix("Velocidade "));ui.add(egui::DragValue::new(&mut c.jump).range(0.0..=100.0).prefix("Pulo "));ui.add(egui::DragValue::new(&mut c.gravity).range(0.0..=200.0).prefix("Gravidade "));}
                     ui.separator();component_switch(ui,"Câmera de jogo",&mut entity.camera,Camera::default());
@@ -177,8 +194,15 @@ impl Editor {
                     let label=element.texture.as_ref().and_then(|id|textures.iter().find(|(i,_)|i==id).map(|(_,n)|n.as_str())).unwrap_or("Sem imagem");
                     egui::ComboBox::from_id_salt("ui_image").selected_text(label).show_ui(ui,|ui|{ui.selectable_value(&mut element.texture,None,"Sem imagem");for (id,name) in &textures{ui.selectable_value(&mut element.texture,Some(id.clone()),name);}});
                 }); self.texture_controls(ui,&mut entity,true);}
+                if self.scene().entity(&id).is_some_and(|e|e.collider!=entity.collider) && entity.collider.is_some(){
+                    let mut candidate=self.scene().clone();candidate.entity_mut(&id).unwrap().collider=entity.collider.clone();
+                    if let Err(error)=oxy_core::spatial::collider_bounds(&candidate,&id){entity.collider=self.scene().entity(&id).unwrap().collider.clone();self.log(error);self.console=true;}
+                }
                 if let Some(original)=self.scene_mut().entity_mut(&id){*original=entity;}
-                if new_parent!=old_parent&& let Err(e)=self.scene_mut().reparent(&id,new_parent,true){self.log(e);self.console=true;}
+                if let Some(pivot)=requested_pivot && self.structural_ready() && let Err(e)=oxy_core::spatial::move_pivot(self.scene_mut(),&id,Vec3::from(pivot)){self.log(e);self.console=true;}
+                if let Some(tool)=requested_tool{self.set_spatial_tool(tool);}
+                if let Some(children)=requested_fit{self.start_fit(children);}
+                if new_parent!=old_parent&&self.structural_ready()&& let Err(e)=self.scene_mut().reparent(&id,new_parent,true){self.log(e);self.console=true;}
                 ui.separator();
                 ui.horizontal(|ui|{if ui.button("Lógica").clicked(){self.tab=Tab::Logic;}
 if ui.button("Animação").clicked(){self.open_animation_for(&id);}});

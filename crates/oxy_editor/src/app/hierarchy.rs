@@ -1,6 +1,34 @@
 use super::*;
 
 impl Editor {
+    pub(super) fn reveal_selection(&mut self, id: Option<&str>) {
+        let mut parent = id
+            .and_then(|id| self.scene().entity(id))
+            .and_then(|e| e.parent.clone());
+        let mut visited = std::collections::HashSet::new();
+        while let Some(id) = parent {
+            if !visited.insert(id.clone()) {
+                break;
+            }
+            self.collapsed.remove(&id);
+            parent = self.scene().entity(&id).and_then(|e| e.parent.clone());
+        }
+    }
+    pub(super) fn visible_hierarchy_order(&self) -> Vec<Id> {
+        editing::hierarchy_order(self.scene())
+            .into_iter()
+            .filter(|id| {
+                let mut parent = self.scene().entity(id).and_then(|e| e.parent.as_deref());
+                while let Some(id) = parent {
+                    if self.collapsed.contains(id) {
+                        return false;
+                    }
+                    parent = self.scene().entity(id).and_then(|e| e.parent.as_deref());
+                }
+                true
+            })
+            .collect()
+    }
     pub(super) fn creation_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("+ Objeto", |ui| {
             let primitives: Vec<_> = if self.scene().kind == SceneKind::TwoD {
@@ -106,6 +134,24 @@ impl Editor {
         ui.push_id(id, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(depth as f32 * 12.);
+                if scene
+                    .entities
+                    .iter()
+                    .any(|e| e.parent.as_deref() == Some(id))
+                {
+                    let collapsed = self.collapsed.contains(id);
+                    if ui
+                        .small_button(if collapsed { "▸" } else { "▾" })
+                        .on_hover_text("Recolher ou expandir os filhos")
+                        .clicked()
+                    {
+                        if collapsed {
+                            self.collapsed.remove(id);
+                        } else {
+                            self.collapsed.insert(id.into());
+                        }
+                    }
+                }
                 let icon = if e.camera.is_some() {
                     "◉"
                 } else if e.ui.is_some() {
@@ -151,6 +197,12 @@ impl Editor {
                         .sense(Sense::click_and_drag()),
                     )
                     .on_hover_text(&e.name);
+                if self.reveal_scroll.as_deref() == Some(id) {
+                    if !ui.clip_rect().contains_rect(response.rect) {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    self.reveal_scroll = None;
+                }
                 if response.clicked() {
                     self.select_click(Some(id.into()), ui.input(|i| i.modifiers), true);
                     self.focus_object_click(
@@ -176,6 +228,9 @@ impl Editor {
                 });
             });
         });
+        if self.collapsed.contains(id) {
+            return;
+        }
         for child in scene
             .entities
             .iter()
@@ -216,6 +271,19 @@ impl Editor {
             self.duplicate();
             ui.close();
         }
+        if ui.button("Editar pivô (P)").clicked() {
+            self.set_spatial_tool(Tool::Pivot);
+            ui.close();
+        }
+        if self
+            .scene()
+            .entity(id)
+            .is_some_and(|e| e.collider.is_some())
+            && ui.button("Editar colisor (C)").clicked()
+        {
+            self.set_spatial_tool(Tool::Collider);
+            ui.close();
+        }
         if ui.button("Agrupar").clicked() {
             self.group();
             ui.close();
@@ -246,6 +314,7 @@ impl Editor {
             }
         }
         if let Some(ids) = response.dnd_release_payload::<Vec<Id>>()
+            && self.structural_ready()
             && let Err(error) = editing::reparent_selection(self.scene_mut(), &ids, parent)
         {
             self.log(error);

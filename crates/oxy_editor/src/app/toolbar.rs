@@ -10,7 +10,11 @@ impl Editor {
                         .strong()
                         .color(Color32::from_rgb(131, 224, 207)),
                 );
-                ui.label(egui::RichText::new("ENGINE").size(15.).strong());
+                ui.label(
+                    egui::RichText::new(concat!("ENGINE\n", env!("CARGO_PKG_VERSION")))
+                        .size(12.)
+                        .strong(),
+                );
                 ui.separator();
                 ui.menu_button("Projeto", |ui| {
                     if ui.button("Novo projeto").clicked() {
@@ -91,7 +95,12 @@ impl Editor {
                     } else {
                         "Salvo"
                     });
-                    ui.label(&self.state.project.name);
+                    if ui.available_width() > 60. {
+                        ui.add_sized(
+                            [ui.available_width(), 20.],
+                            egui::Label::new(&self.state.project.name).truncate(),
+                        );
+                    }
                 });
             });
             ui.horizontal(|ui| {
@@ -106,6 +115,10 @@ impl Editor {
                 }
                 if old == Tab::Game && self.tab != Tab::Game {
                     self.pause();
+                }
+                if old != self.tab {
+                    self.set_spatial_tool(Tool::Object);
+                    self.spatial.fit = None;
                 }
                 ui.separator();
                 let mut scene_id = self.scene_id.clone();
