@@ -1,8 +1,10 @@
 //! Shared native WGPU rendering for OXY Engine, Studio and the standalone player.
 //! No editor state is read here. Meshes use real perspective/depth and stable UVs.
+mod cache;
 pub mod camera;
 pub mod game_ui;
 pub mod input;
+pub mod labels;
 pub mod mesh;
 pub use camera::CameraState;
 pub use game_ui::GameUi;
@@ -10,13 +12,16 @@ pub use game_ui::pick_ui;
 #[cfg(test)]
 mod gpu_test;
 
+use cache::{DynamicBuffer, GeometryCache, GpuMesh, InstanceData, MeshVertex};
 use egui_wgpu::{RenderState, wgpu};
 use glam::{Mat4, Vec2, Vec3};
-use oxy_core::document::{Entity, Id, Primitive, Project, Scene, SceneKind};
+#[cfg(test)]
+use oxy_core::document::Primitive;
+use oxy_core::document::{Entity, Id, Project, Scene, SceneKind};
 use std::{
     collections::HashMap,
-    ops::Range,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use wgpu::util::DeviceExt;
 
@@ -60,8 +65,33 @@ struct Target {
     id: egui::TextureId,
 }
 struct Draw {
-    range: Range<u32>,
+    mesh: Arc<GpuMesh>,
+    instance: u32,
     texture: wgpu::BindGroup,
+}
+
+/// Frame counts describe actual submitted draws, including non-empty debug line batches.
+/// Upload/hit/allocation counters are cumulative since this renderer was created.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RendererStats {
+    pub visible_objects: u64,
+    pub draw_calls: u64,
+    pub vertices: u64,
+    pub triangles: u64,
+    pub meshes: usize,
+    /// Asset texture resources; distinct filtering modes each occupy one cache entry.
+    pub textures: usize,
+    pub cached_vertices: u64,
+    pub cached_triangles: u64,
+    pub mesh_cache_hits: u64,
+    pub mesh_uploads: u64,
+    pub texture_cache_hits: u64,
+    pub texture_uploads: u64,
+    pub instance_uploads: u64,
+    pub line_uploads: u64,
+    pub uniform_uploads: u64,
+    /// Vertex, index, instance, line and camera buffers; excludes egui and readback buffers.
+    pub buffer_allocations: u64,
 }
 
 pub struct Renderer {
@@ -69,7 +99,13 @@ pub struct Renderer {
     pipeline_2d: wgpu::RenderPipeline,
     pipeline_lines: wgpu::RenderPipeline,
     uniform: wgpu::Buffer,
+    last_view: [f32; 16],
     uniform_group: wgpu::BindGroup,
+    geometry: GeometryCache,
+    instances: DynamicBuffer,
+    grid: DynamicBuffer,
+    overlays: DynamicBuffer,
+    stats: RendererStats,
     texture_layout: wgpu::BindGroupLayout,
     textures: HashMap<(Id, bool), TextureEntry>,
     overrides: HashMap<Id, TextureOverride>,
@@ -150,7 +186,16 @@ impl Renderer {
             pipeline_2d,
             pipeline_lines,
             uniform,
+            last_view: Mat4::IDENTITY.to_cols_array(),
             uniform_group,
+            geometry: GeometryCache::default(),
+            instances: DynamicBuffer::new(device, "OXY object instance stream"),
+            grid: DynamicBuffer::new(device, "OXY persistent grid vertices"),
+            overlays: DynamicBuffer::new(device, "OXY persistent overlay vertices"),
+            stats: RendererStats {
+                buffer_allocations: 4,
+                ..Default::default()
+            },
             texture_layout,
             textures: HashMap::new(),
             overrides: HashMap::new(),
@@ -162,6 +207,17 @@ impl Renderer {
         }
     }
 
+    pub fn stats(&self) -> RendererStats {
+        let (meshes, cached_vertices, cached_triangles) = self.geometry.counts();
+        RendererStats {
+            meshes,
+            textures: self.textures.len(),
+            cached_vertices,
+            cached_triangles,
+            ..self.stats
+        }
+    }
+
     pub fn invalidate_texture(&mut self, id: &str) {
         self.textures.retain(|(key, _), _| key != id);
     }
@@ -169,6 +225,22 @@ impl Renderer {
     pub fn clear_texture_override(&mut self, id: &str) {
         self.overrides.remove(id);
         self.invalidate_texture(id);
+    }
+
+    /// Call only after the entire project save succeeds. Cached GPU textures stay
+    /// intact; a later cache miss reads the now-current PNG from the project.
+    pub fn release_saved_texture_pixels(&mut self) -> usize {
+        let released = self.texture_override_bytes();
+        self.overrides.clear();
+        released
+    }
+
+    /// CPU RGBA allocations retained for unsaved painting, excluding GPU resources.
+    pub fn texture_override_bytes(&self) -> usize {
+        self.overrides
+            .values()
+            .map(|entry| entry.pixels.capacity())
+            .sum()
     }
 
     pub fn clear_textures(&mut self) {
@@ -195,19 +267,35 @@ impl Renderer {
         {
             return Err("Dimensões ou pixels da textura inválidos para a GPU".into());
         }
-        self.invalidate_texture(id);
-        self.overrides.insert(
-            id.to_owned(),
-            TextureOverride {
-                width,
-                height,
-                pixels: rgba.to_vec(),
-            },
-        );
-        self.textures.insert(
-            (id.to_owned(), nearest),
-            upload_texture(rs, &self.texture_layout, width, height, rgba, nearest),
-        );
+        let unchanged = self.overrides.get(id).is_some_and(|pixels| {
+            pixels.width == width && pixels.height == height && pixels.pixels == rgba
+        });
+        if !unchanged {
+            // Brush strokes update existing allocations, including both cached sampling modes.
+            self.textures.retain(|(key, _), entry| {
+                key != id || (entry._texture.width() == width && entry._texture.height() == height)
+            });
+            for ((key, _), entry) in &self.textures {
+                if key == id {
+                    write_texture_pixels(rs, &entry._texture, width, height, rgba);
+                    self.stats.texture_uploads += 1;
+                }
+            }
+            self.overrides.insert(
+                id.to_owned(),
+                TextureOverride {
+                    width,
+                    height,
+                    pixels: rgba.to_vec(),
+                },
+            );
+        }
+        self.textures
+            .entry((id.to_owned(), nearest))
+            .or_insert_with(|| {
+                self.stats.texture_uploads += 1;
+                upload_texture(rs, &self.texture_layout, width, height, rgba, nearest)
+            });
         Ok(())
     }
 
@@ -272,6 +360,9 @@ impl Renderer {
                 }
             };
             self.textures.insert(key.clone(), entry);
+            self.stats.texture_uploads += 1;
+        } else {
+            self.stats.texture_cache_hits += 1;
         }
         self.textures[&key].bind_group.clone()
     }
@@ -302,12 +393,18 @@ impl Renderer {
         if self.target.size != size {
             self.target = make_target(rs, size, Some(self.target.id));
         }
-        rs.queue.write_buffer(
-            &self.uniform,
-            0,
-            bytemuck::cast_slice(&camera.matrix(size).to_cols_array()),
-        );
-        let mut vertices = Vec::new();
+        let view = camera.matrix(size).to_cols_array();
+        if self.last_view != view {
+            rs.queue
+                .write_buffer(&self.uniform, 0, bytemuck::cast_slice(&view));
+            self.last_view = view;
+            self.stats.uniform_uploads += 1;
+        }
+        self.stats.visible_objects = 0;
+        self.stats.draw_calls = 0;
+        self.stats.vertices = 0;
+        self.stats.triangles = 0;
+        let mut instances = Vec::new();
         let mut draws = Vec::new();
         let mut entities: Vec<_> = scene
             .entities
@@ -345,29 +442,33 @@ impl Renderer {
                 continue;
             };
             let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
-            let normal_matrix = world.inverse().transpose();
-            let mesh = entity_mesh(entity);
-            let start = vertices.len() as u32;
-            for &index in &mesh.indices {
-                let local = &mesh.vertices[index as usize];
-                let position = world.transform_point3(local.position);
-                vertices.push(Vertex {
-                    position: position.to_array(),
-                    normal: normal_matrix
-                        .transform_vector3(local.normal)
-                        .normalize_or_zero()
-                        .to_array(),
-                    uv: local.uv.to_array(),
-                    color: entity.material.color,
-                    lit: if scene.kind == SceneKind::ThreeD {
+            let key = mesh::MeshKey::for_entity(entity).expect("Filtered primitive");
+            let (mesh, hit) = self.geometry.get(&rs.device, key);
+            self.stats.mesh_cache_hits += u64::from(hit);
+            self.stats.mesh_uploads += u64::from(!hit);
+            self.stats.buffer_allocations += 2 * u64::from(!hit);
+            self.stats.visible_objects += 1;
+            self.stats.vertices += u64::from(mesh.vertex_count);
+            self.stats.triangles += u64::from(mesh.index_count / 3);
+            let instance = instances.len() as u32;
+            instances.push(InstanceData {
+                world: world.to_cols_array_2d(),
+                normal: world.inverse().transpose().to_cols_array_2d(),
+                color: entity.material.color,
+                parameters: [
+                    if scene.kind == SceneKind::ThreeD {
                         1.
                     } else {
                         0.
                     },
-                });
-            }
+                    0.,
+                    0.,
+                    0.,
+                ],
+            });
             draws.push(Draw {
-                range: start..vertices.len() as u32,
+                mesh,
+                instance,
                 texture: self.texture(
                     rs,
                     project,
@@ -423,9 +524,19 @@ impl Renderer {
                 }
             }
         }
-        let geometry_buffer = vertex_buffer(&rs.device, &vertices);
-        let grid_buffer = vertex_buffer(&rs.device, &grid);
-        let overlay_buffer = vertex_buffer(&rs.device, &overlays);
+        let (allocated, uploaded) = self.instances.update(rs, bytemuck::cast_slice(&instances));
+        self.stats.buffer_allocations += u64::from(allocated);
+        self.stats.instance_uploads += u64::from(uploaded);
+        for (buffer, vertices) in [(&mut self.grid, &grid), (&mut self.overlays, &overlays)] {
+            let (allocated, uploaded) = buffer.update(rs, bytemuck::cast_slice(vertices));
+            self.stats.buffer_allocations += u64::from(allocated);
+            self.stats.line_uploads += u64::from(uploaded);
+            if !vertices.is_empty() {
+                self.stats.draw_calls += 1;
+                self.stats.vertices += vertices.len() as u64;
+            }
+        }
+        self.stats.draw_calls += draws.len() as u64;
         let mut encoder = rs
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -462,23 +573,35 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.uniform_group, &[]);
             pass.set_bind_group(1, &self.white.bind_group, &[]);
-            pass.set_pipeline(&self.pipeline_lines);
-            pass.set_vertex_buffer(0, grid_buffer.slice(..));
-            pass.draw(0..grid.len() as u32, 0..1);
+            if !grid.is_empty() {
+                pass.set_pipeline(&self.pipeline_lines);
+                pass.set_vertex_buffer(0, self.grid.buffer.slice(..));
+                pass.draw(0..grid.len() as u32, 0..1);
+            }
             pass.set_pipeline(if scene.kind == SceneKind::ThreeD {
                 &self.pipeline_3d
             } else {
                 &self.pipeline_2d
             });
-            pass.set_vertex_buffer(0, geometry_buffer.slice(..));
+            pass.set_vertex_buffer(1, self.instances.buffer.slice(..));
             for draw in &draws {
+                pass.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
+                pass.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_bind_group(1, &draw.texture, &[]);
-                pass.draw(draw.range.clone(), 0..1);
+                // Keep material/layer ordering. Adjacent compatible draws can later be batched
+                // simply by widening this instance range, without another vertex format change.
+                pass.draw_indexed(
+                    0..draw.mesh.index_count,
+                    0,
+                    draw.instance..draw.instance + 1,
+                );
             }
-            pass.set_pipeline(&self.pipeline_lines);
-            pass.set_bind_group(1, &self.white.bind_group, &[]);
-            pass.set_vertex_buffer(0, overlay_buffer.slice(..));
-            pass.draw(0..overlays.len() as u32, 0..1);
+            if !overlays.is_empty() {
+                pass.set_pipeline(&self.pipeline_lines);
+                pass.set_bind_group(1, &self.white.bind_group, &[]);
+                pass.set_vertex_buffer(0, self.overlays.buffer.slice(..));
+                pass.draw(0..overlays.len() as u32, 0..1);
+            }
         }
         rs.queue.submit([encoder.finish()]);
         self.target.id
@@ -492,27 +615,73 @@ fn make_pipeline(
     depth: bool,
     lines: bool,
 ) -> wgpu::RenderPipeline {
+    const MESH_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
+    const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
+        3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4,
+        7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4,
+        11 => Float32x4, 12 => Float32x4
+    ];
+    const LINE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4, 4 => Float32];
+    let mesh_layouts = [
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MeshVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &MESH_ATTRIBUTES,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<InstanceData>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &INSTANCE_ATTRIBUTES,
+        },
+    ];
+    let line_layouts = [wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Vertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &LINE_ATTRIBUTES,
+    }];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("OXY primitive pipeline"), layout: Some(layout),
-        vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_main"), compilation_options: Default::default(),
-            buffers: &[wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Vertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4, 4 => Float32] }] },
-        primitive: wgpu::PrimitiveState { topology: if lines { wgpu::PrimitiveTopology::LineList } else { wgpu::PrimitiveTopology::TriangleList }, cull_mode: None, ..Default::default() },
-        depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: depth,
-            depth_compare: if depth { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always }, stencil: Default::default(), bias: Default::default() }),
+        label: Some("OXY primitive pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some(if lines { "vs_line" } else { "vs_main" }),
+            compilation_options: Default::default(),
+            buffers: if lines { &line_layouts } else { &mesh_layouts },
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: if lines {
+                wgpu::PrimitiveTopology::LineList
+            } else {
+                wgpu::PrimitiveTopology::TriangleList
+            },
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: depth,
+            depth_compare: if depth {
+                wgpu::CompareFunction::LessEqual
+            } else {
+                wgpu::CompareFunction::Always
+            },
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
         multisample: Default::default(),
-        fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some("fs_main"), compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Unorm, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }),
-        multiview: None, cache: None,
-    })
-}
-
-fn vertex_buffer(device: &wgpu::Device, vertices: &[Vertex]) -> wgpu::Buffer {
-    let bytes = bytemuck::cast_slice(vertices);
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("OXY primitive vertices"),
-        contents: if bytes.is_empty() { &[0; 4] } else { bytes },
-        usage: wgpu::BufferUsages::VERTEX,
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview: None,
+        cache: None,
     })
 }
 
@@ -539,21 +708,7 @@ fn upload_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    rs.queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        rgba,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(width * 4),
-            rows_per_image: Some(height),
-        },
-        size,
-    );
+    write_texture_pixels(rs, &texture, width, height, rgba);
     let view = texture.create_view(&Default::default());
     let filter = if nearest {
         wgpu::FilterMode::Nearest
@@ -584,6 +739,34 @@ fn upload_texture(
         _texture: texture,
         bind_group,
     }
+}
+
+fn write_texture_pixels(
+    rs: &RenderState,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) {
+    rs.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 fn make_target(rs: &RenderState, size: [u32; 2], id: Option<egui::TextureId>) -> Target {
@@ -639,15 +822,9 @@ fn make_target(rs: &RenderState, size: [u32; 2], id: Option<egui::TextureId>) ->
 }
 
 pub fn entity_mesh(entity: &Entity) -> mesh::Mesh {
-    match entity.primitive {
-        Some(Primitive::Cube) => mesh::cube(),
-        Some(Primitive::Sphere) => mesh::sphere(entity.segments),
-        Some(Primitive::Cylinder) => mesh::cylinder(entity.segments),
-        Some(Primitive::Plane) => mesh::plane(),
-        Some(Primitive::Circle) => mesh::circle(entity.segments),
-        Some(Primitive::Rectangle | Primitive::Sprite) => mesh::rectangle(),
-        None => mesh::Mesh::default(),
-    }
+    mesh::MeshKey::for_entity(entity)
+        .map(|key| (*mesh::cached_primitive(key)).clone())
+        .unwrap_or_default()
 }
 
 fn is_visible(scene: &Scene, entity: &Entity) -> bool {
@@ -688,7 +865,7 @@ pub fn pick(
             continue;
         };
         let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
-        let mesh = entity_mesh(entity);
+        let mesh = mesh::cached_primitive(mesh::MeshKey::for_entity(entity)?);
         for triangle in mesh.indices.chunks_exact(3) {
             let vertices = triangle.map_indices(&mesh.vertices);
             let points = vertices.map(|vertex| world.transform_point3(vertex.position));

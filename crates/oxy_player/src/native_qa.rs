@@ -370,7 +370,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 fn native_player_portable_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa");
+    let output = workspace.join("qa/v0.1.1");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-player-native-{}", new_id()));
     copy_directory(&workspace.join("examples/validacao"), &fixture).unwrap();

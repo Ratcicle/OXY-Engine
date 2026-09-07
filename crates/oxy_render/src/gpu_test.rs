@@ -137,6 +137,44 @@ fn native_gpu_depth_texture_and_resize() {
         "Front green cube must occlude red back cube: {:?}",
         &pixels[center..center + 4]
     );
+    let first_stats = renderer.stats();
+    assert_eq!(
+        first_stats.meshes, 1,
+        "Both cubes share the same GPU buffers"
+    );
+    assert_eq!(first_stats.mesh_uploads, 1);
+    assert_eq!(first_stats.mesh_cache_hits, 1);
+    assert_eq!(first_stats.visible_objects, 2);
+    assert_eq!(first_stats.draw_calls, 2);
+    assert_eq!(first_stats.vertices, 48);
+    assert_eq!(first_stats.triangles, 24);
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [256, 256],
+        None,
+        false,
+    );
+    assert_eq!(
+        read_pixels(&renderer, &rs),
+        pixels,
+        "Cached redraw preserves pixels"
+    );
+    let repeat_stats = renderer.stats();
+    assert_eq!(
+        repeat_stats.buffer_allocations,
+        first_stats.buffer_allocations
+    );
+    assert_eq!(repeat_stats.mesh_uploads, first_stats.mesh_uploads);
+    assert_eq!(repeat_stats.instance_uploads, first_stats.instance_uploads);
+    assert_eq!(repeat_stats.uniform_uploads, first_stats.uniform_uploads);
+    assert_eq!(
+        repeat_stats.mesh_cache_hits,
+        first_stats.mesh_cache_hits + 2
+    );
     project.scenes[0].entities[0].material.texture = Some("painted-in-memory".into());
     project.scenes[0].entities[0].material.color = [1.; 4];
     renderer
@@ -158,10 +196,95 @@ fn native_gpu_depth_texture_and_resize() {
         pixels[center + 2] > 100 && pixels[center] < 5 && pixels[center + 1] < 5,
         "Live PNG override must be blue"
     );
+    assert_eq!(
+        renderer.stats().mesh_uploads,
+        first_stats.mesh_uploads,
+        "Changing material and resizing never regenerate geometry"
+    );
+    assert_eq!(
+        renderer.stats().instance_uploads,
+        first_stats.instance_uploads + 1
+    );
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/native-depth-proof.png");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     image::save_buffer(&path, &pixels, 512, 256, image::ColorType::Rgba8).unwrap();
     println!("GPU depth readback evidence: {}", path.display());
+    let key = ("painted-in-memory".to_owned(), true);
+    let texture = renderer.textures[&key]._texture.clone();
+    let uploads = renderer.stats().texture_uploads;
+    renderer
+        .set_texture_pixels(&rs, &key.0, 1, 1, &[0, 0, 255, 255], true)
+        .unwrap();
+    assert_eq!(
+        renderer.stats().texture_uploads,
+        uploads,
+        "Identical pixels skip upload"
+    );
+    renderer
+        .set_texture_pixels(&rs, &key.0, 1, 1, &[0, 0, 255, 255], false)
+        .unwrap();
+    let smooth_texture = renderer.textures[&(key.0.clone(), false)]._texture.clone();
+    renderer
+        .set_texture_pixels(&rs, &key.0, 1, 1, &[0, 255, 0, 255], true)
+        .unwrap();
+    assert_eq!(
+        texture, renderer.textures[&key]._texture,
+        "A brush reuses texture storage"
+    );
+    assert_eq!(
+        smooth_texture,
+        renderer.textures[&(key.0.clone(), false)]._texture
+    );
+    assert_eq!(
+        renderer.stats().texture_uploads,
+        uploads + 3,
+        "Both sampling modes receive painted pixels"
+    );
+    project.scenes[0].entities[0].material.nearest = false;
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [512, 256],
+        None,
+        false,
+    );
+    let painted = read_pixels(&renderer, &rs);
+    assert!(
+        painted[center + 1] > 100 && painted[center + 2] < 5,
+        "The reused smooth texture reflects new pixels"
+    );
+    let before_release = renderer.stats();
+    assert_eq!(renderer.texture_override_bytes(), 4);
+    assert_eq!(renderer.release_saved_texture_pixels(), 4);
+    assert_eq!(renderer.texture_override_bytes(), 0);
+    assert_eq!(texture, renderer.textures[&key]._texture);
+    assert_eq!(
+        smooth_texture,
+        renderer.textures[&(key.0.clone(), false)]._texture
+    );
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [512, 256],
+        None,
+        false,
+    );
+    assert_eq!(
+        read_pixels(&renderer, &rs),
+        painted,
+        "Releasing saved CPU copies must preserve the rendered pixels"
+    );
+    assert_eq!(
+        renderer.stats().texture_uploads,
+        before_release.texture_uploads
+    );
+    project.scenes[0].entities[0].material.nearest = true;
     let mut atlas = vec![255; 96 * 64 * 4];
     let colors = [
         [190, 65, 65, 255],
@@ -213,5 +336,114 @@ fn native_gpu_depth_texture_and_resize() {
     let path = path.with_file_name("native-gpu.png");
     image::save_buffer(&path, &pixels, 768, 512, image::ColorType::Rgba8).unwrap();
     println!("GPU primitive/UV readback evidence: {}", path.display());
+    let before = renderer.stats();
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [768, 512],
+        None,
+        false,
+    );
+    assert_eq!(read_pixels(&renderer, &rs), pixels);
+    let after = renderer.stats();
+    assert_eq!(before.meshes, 4);
+    assert_eq!(
+        before.draw_calls, 5,
+        "Four objects plus one non-empty grid draw"
+    );
+    assert_eq!(after.buffer_allocations, before.buffer_allocations);
+    assert_eq!(after.line_uploads, before.line_uploads);
+    assert_eq!(after.instance_uploads, before.instance_uploads);
+    assert_eq!(after.texture_uploads, before.texture_uploads);
+    println!("Cached render stats: {after:?}");
+
+    // Many independent entities vary transform/dimensions/material, while retaining one cube
+    // topology. This exercises the indexed per-instance stream beyond a single object.
+    let scene = &mut project.scenes[0];
+    scene.entities.clear();
+    for index in 0..128 {
+        let mut entity = Entity::new("Independent cube", Some(Primitive::Cube));
+        entity.transform.position = [(index % 16) as f32 - 8., (index / 16) as f32 - 4., 0.];
+        entity.dimensions = [0.5 + index as f32 * 0.001, 0.5, 0.5];
+        entity.transform.rotation = [0.1, index as f32 * 0.1, 0.];
+        entity.material.color = [0.3, 0.7, 0.8, 1.];
+        scene.entities.push(entity);
+    }
+    renderer.show_grid = false;
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [768, 512],
+        None,
+        false,
+    );
+    let many_stats = renderer.stats();
+    assert_eq!(many_stats.mesh_uploads, after.mesh_uploads);
+    assert_eq!(many_stats.mesh_cache_hits, after.mesh_cache_hits + 128);
+    assert_eq!(many_stats.draw_calls, 128);
+    assert_eq!(many_stats.triangles, 128 * 12);
+    assert_eq!(many_stats.vertices, 128 * 24);
+    project.scenes[0].entities[0].primitive = Some(Primitive::Sphere);
+    project.scenes[0].entities[0].segments = 31;
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [768, 512],
+        None,
+        false,
+    );
+    assert_eq!(
+        renderer.stats().mesh_uploads,
+        many_stats.mesh_uploads + 1,
+        "A new segment count uploads exactly one new primitive"
+    );
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    let mut front = Entity::new("Alpha foreground", Some(Primitive::Rectangle));
+    front.layer = 1;
+    front.material.color = [1., 0., 0., 0.5];
+    let mut back = Entity::new("Sprite background", Some(Primitive::Sprite));
+    back.material.color = [0., 1., 0., 1.];
+    let mut hidden = Entity::new("Hidden circle", Some(Primitive::Circle));
+    hidden.visible = false;
+    scene.entities = vec![front, back, hidden];
+    camera = CameraState::for_scene(scene);
+    camera.target = Vec3::ZERO;
+    camera.orthographic_size = 2.;
+    let uploads = renderer.stats().mesh_uploads;
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [128, 128],
+        None,
+        false,
+    );
+    let pixels = read_pixels(&renderer, &rs);
+    let center = (64 * 128 + 64) * 4;
+    assert!(
+        (126..=129).contains(&pixels[center]) && (126..=129).contains(&pixels[center + 1]),
+        "2D layer order and alpha blending survive mesh reuse: {:?}",
+        &pixels[center..center + 4]
+    );
+    assert_eq!(
+        renderer.stats().mesh_uploads,
+        uploads + 1,
+        "Sprite and rectangle share one quad; hidden geometry is skipped"
+    );
+    assert_eq!(renderer.stats().draw_calls, 2);
+    assert_eq!(renderer.stats().visible_objects, 2);
+    assert_eq!(renderer.stats().triangles, 4);
     assert!(renderer.take_errors().is_empty());
 }

@@ -13,6 +13,18 @@ pub enum PortType {
     Object,
     Any,
 }
+impl PortType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Exec => "Execução",
+            Self::Number => "Número",
+            Self::Text => "Texto",
+            Self::Bool => "Booleano",
+            Self::Object => "Objeto",
+            Self::Any => "Qualquer dado",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PortDef {
@@ -258,7 +270,7 @@ pub fn registry() -> Vec<OperationDef> {
         outputs: exec(),
         params: vec![
             self_param(),
-            text("clip", "ID do clip", ""),
+            text("clip", "Animação", ""),
             param("restart", "Reiniciar", Value::Bool(true)),
         ],
     });
@@ -269,7 +281,7 @@ pub fn registry() -> Vec<OperationDef> {
         inputs: exec(),
         outputs: exec(),
         params: vec![
-            text("asset", "ID do áudio", ""),
+            text("asset", "Áudio", ""),
             number("volume", "Volume (0 a 1)", 1.0),
         ],
     });
@@ -305,11 +317,7 @@ pub fn registry() -> Vec<OperationDef> {
         outputs: exec(),
         params: vec![
             self_param(),
-            text(
-                "component",
-                "Componente (collider/controller/visible/behavior/animation)",
-                "collider",
-            ),
+            text("component", "Componente", "collider"),
             param("enabled", "Ativo", Value::Bool(true)),
         ],
     });
@@ -319,7 +327,7 @@ pub fn registry() -> Vec<OperationDef> {
         category: "Ações",
         inputs: exec(),
         outputs: vec![],
-        params: vec![text("scene", "ID da cena", "")],
+        params: vec![text("scene", "Cena de destino", "")],
     });
     result.push(OperationDef {
         id: "control.sequence",
@@ -481,8 +489,10 @@ impl Graph {
                 })?;
             if !compatible(output.kind, input.kind) {
                 return Err(format!(
-                    "Conexão incompatível: {:?} → {:?} (nó {})",
-                    output.kind, input.kind, to.id
+                    "Conexão incompatível: {} → {} (nó {})",
+                    output.kind.label(),
+                    input.kind.label(),
+                    to.id
                 ));
             }
             if input.kind != PortType::Exec
@@ -573,7 +583,7 @@ mod tests {
             graph
                 .connect(&edge, &HashSet::new())
                 .unwrap_err()
-                .contains("incompatível")
+                .contains("Conexão incompatível: Número → Execução")
         );
         edge.from_node = event.id;
         edge.from_port = "exec".into();

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app;
 mod graph_ui;
+mod labels;
 #[cfg(test)]
 mod native_qa;
 mod studio;

@@ -33,6 +33,21 @@ impl GameUi {
         self.invalidate_texture(id);
     }
 
+    /// After a successful project save, release CPU painting copies while keeping
+    /// egui texture handles alive. Failed saves must retain these overrides.
+    pub fn release_saved_texture_pixels(&mut self) -> usize {
+        let released = self.texture_override_bytes();
+        self.overrides.clear();
+        released
+    }
+
+    pub fn texture_override_bytes(&self) -> usize {
+        self.overrides
+            .values()
+            .map(|(_, _, pixels, _)| pixels.capacity())
+            .sum()
+    }
+
     pub fn set_texture_pixels(
         &mut self,
         ctx: &egui::Context,
@@ -107,7 +122,7 @@ impl GameUi {
             let value = scene
                 .entity(element.binding_object.as_deref().unwrap_or(&entity.id))
                 .and_then(|bound| bound.attributes.get(&element.binding_attribute));
-            let text = display_text(element, value);
+            let text = display_text(element, value, scene);
             let texture = element.texture.as_deref().and_then(|id| {
                 if !self.textures.contains_key(id) && !self.failed.iter().any(|failed| failed == id)
                 {
@@ -298,7 +313,7 @@ pub fn pick_ui(scene: &Scene, viewport: Rect, pointer: Pos2) -> Option<Id> {
         .map(|entity| entity.id.clone())
 }
 
-fn display_text(element: &UiElement, value: Option<&Value>) -> String {
+fn display_text(element: &UiElement, value: Option<&Value>, scene: &Scene) -> String {
     let Some(value) = value else {
         return element.text.clone();
     };
@@ -318,7 +333,10 @@ fn display_text(element: &UiElement, value: Option<&Value>) -> String {
                 "não".into()
             }
         }
-        Value::Object(id) => id.clone().unwrap_or_else(|| "nenhum".into()),
+        Value::Object(Some(id)) => scene
+            .entity(id)
+            .map_or_else(|| "objeto ausente".into(), |entity| entity.name.clone()),
+        Value::Object(None) => "nenhum".into(),
     };
     if element.text.contains("{value}") || element.text.contains("{valor}") {
         element
@@ -351,13 +369,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn object_binding_follows_live_names_and_never_displays_raw_identifiers() {
+        use oxy_core::document::Entity;
+        let mut project = Project::new("Referência na interface");
+        let scene = &mut project.scenes[0];
+        let target = Entity::new("Alvo de treino", None);
+        let target_id = target.id.clone();
+        let value = Value::Object(Some(target_id.clone()));
+        scene.entities.push(target);
+        let element = UiElement {
+            text: "Selecionado: {valor}".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            display_text(&element, Some(&value), scene),
+            "Selecionado: Alvo de treino"
+        );
+        scene.entity_mut(&target_id).unwrap().name = "Alvo renomeado".into();
+        assert_eq!(
+            display_text(&element, Some(&value), scene),
+            "Selecionado: Alvo renomeado"
+        );
+        assert_eq!(
+            value,
+            Value::Object(Some(target_id.clone())),
+            "The persisted reference remains stable after renaming"
+        );
+        scene.entities.clear();
+        let missing = display_text(&element, Some(&value), scene);
+        assert_eq!(missing, "Selecionado: objeto ausente");
+        assert!(!missing.contains(&target_id));
+        assert_eq!(
+            display_text(&element, Some(&Value::Object(None)), scene),
+            "Selecionado: nenhum"
+        );
+    }
+
+    #[test]
     fn portuguese_attribute_binding_and_unsaved_pixels_survive_first_game_draw() {
         use oxy_core::document::Entity;
         let element = UiElement {
             text: "Vida {valor}".into(),
             ..Default::default()
         };
-        assert_eq!(display_text(&element, Some(&Value::Number(42.))), "Vida 42");
+        assert_eq!(
+            display_text(
+                &element,
+                Some(&Value::Number(42.)),
+                &Project::new("Vínculo").scenes[0]
+            ),
+            "Vida 42"
+        );
         let ctx = egui::Context::default();
         let mut overlay = GameUi::new();
         overlay
@@ -383,6 +445,30 @@ mod tests {
             });
         });
         assert!(overlay.textures.contains_key("temporary-paint"));
+        assert!(overlay.take_errors().is_empty());
+        let texture_id = overlay.textures["temporary-paint"].id();
+        assert_eq!(overlay.texture_override_bytes(), 4);
+        assert_eq!(overlay.release_saved_texture_pixels(), 4);
+        assert_eq!(overlay.texture_override_bytes(), 0);
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                overlay.draw(
+                    ui,
+                    &project,
+                    &project.scenes[0],
+                    Path::new("new-project-root"),
+                    ui.max_rect(),
+                );
+            });
+        });
+        assert_eq!(overlay.textures["temporary-paint"].id(), texture_id);
+        assert!(
+            !output
+                .textures_delta
+                .set
+                .iter()
+                .any(|(id, _)| *id == texture_id)
+        );
         assert!(overlay.take_errors().is_empty());
     }
 

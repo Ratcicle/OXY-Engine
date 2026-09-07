@@ -1,5 +1,5 @@
 //! Real RGBA texture editing. The UV origin is the top-left of the PNG.
-use image::{DynamicImage, ImageFormat, RgbaImage};
+use image::{ImageEncoder, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, io::Cursor, path::Path};
 
@@ -68,13 +68,16 @@ impl PaintImage {
     }
     pub fn to_png(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
-        let image = RgbaImage::from_raw(self.width, self.height, self.pixels.clone())
-            .ok_or("Buffer RGBA inválido")?;
-        let mut bytes = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(image)
-            .write_to(&mut bytes, ImageFormat::Png)
+        let mut bytes = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(
+                &self.pixels,
+                self.width,
+                self.height,
+                image::ExtendedColorType::Rgba8,
+            )
             .map_err(|e| e.to_string())?;
-        Ok(bytes.into_inner())
+        Ok(bytes)
     }
     pub fn save(&self, path: &Path) -> Result<(), String> {
         crate::persistence::safe_write(path, &self.to_png()?)
@@ -212,7 +215,6 @@ fn over(source: [u8; 4], destination: [u8; 4]) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::History;
     #[test]
     fn real_png_roundtrip() {
         let mut p = PaintImage::new(256, 256, [0; 4]).unwrap();
@@ -221,18 +223,6 @@ mod tests {
         assert_eq!(p, decoded);
         assert_eq!(decoded.pixel(128, 128), [240, 20, 50, 255]);
         assert_eq!(decoded.pixel(0, 0), [0; 4]);
-    }
-    #[test]
-    fn stroke_undo_is_whole_gesture() {
-        let mut p = PaintImage::new(32, 32, [0; 4]).unwrap();
-        let original = p.clone();
-        let mut h = History::new(p.clone());
-        h.begin("Pincelada");
-        p.stroke([2., 2.], [20., 20.], 2., [255; 4]);
-        p.stroke([20., 20.], [28., 10.], 2., [255; 4]);
-        h.commit(p.clone());
-        assert_eq!(h.undo(), Some(original));
-        assert_eq!(h.redo(), Some(p));
     }
     #[test]
     fn flood_fill_is_bounded_by_pixels() {

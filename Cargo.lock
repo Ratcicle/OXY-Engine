@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "hound",
@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_editor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -2124,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_player"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -2135,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "eframe",

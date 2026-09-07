@@ -25,13 +25,13 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
-            .with_title("OXY Engine — Player")
+            .with_title("OXY Engine — Jogo")
             .with_inner_size([1280., 720.])
             .with_min_inner_size([640., 360.]),
         ..Default::default()
     };
     eframe::run_native(
-        "OXY Engine — Player",
+        "OXY Engine — Jogo",
         options,
         Box::new(move |cc| Ok(Box::new(Player::new(cc, project_path)))),
     )
@@ -73,8 +73,9 @@ impl Player {
         if let Some(renderer) = &mut player.renderer {
             renderer.show_grid = false;
         } else {
-            player.error =
-                Some("O backend wgpu não foi inicializado. Verifique o driver gráfico.".into());
+            player.error = Some(
+                "O renderizador wgpu não foi inicializado. Verifique o driver gráfico.".into(),
+            );
             return player;
         }
         player.reload();
@@ -219,7 +220,7 @@ impl eframe::App for Player {
                     let result = runtime
                         .project
                         .asset(&request.asset)
-                        .ok_or_else(|| format!("Asset de áudio ausente: {}", request.asset))
+                        .ok_or_else(|| format!("Recurso de áudio ausente: {}", request.asset))
                         .and_then(|asset| persistence::resolve_asset_path(&self.root, &asset.path))
                         .and_then(|path| audio::play_wav(&path, request.volume));
                     if let Err(error) = result {
@@ -249,10 +250,10 @@ impl eframe::App for Player {
                     ui.label("Controles configurados no projeto:");
                     if let Some(runtime) = &self.runtime {
                         for (action, key) in &runtime.project.input_bindings {
-                            ui.label(format!("{action}: {key}"));
+                            ui.label(format!("{action}: {}", oxy_render::labels::key(key)));
                         }
                     }
-                    ui.label("Escape: pausar · F3: diagnóstico");
+                    ui.label("Esc: pausar · F3: diagnóstico");
                     if ui.button("Sair").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }

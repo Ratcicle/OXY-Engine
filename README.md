@@ -1,23 +1,12 @@
-# OXY Engine
+# OXY Engine 0.1.1
 
-Editor e runtime desktop próprios em Rust, com Windows como primeiro alvo. A versão 0.1 reúne cenas 2D/3D, montagem por peças, pintura de pixels, keyframes, atributos, lógica visual e um player independente. O projeto de validação é um documento normal e pode ser editado.
+Editor e runtime desktop próprios em Rust, com cenas 2D/3D, montagem por peças, pintura PNG, animação, atributos, lógica visual e execução independente. Interface e renderização compartilham egui/eframe 0.33.3 com wgpu 27.0.1; nenhuma engine pronta é usada como núcleo. Dependências fixadas e `Cargo.lock` mantido.
 
-## Requisitos e execução
+## Abrir e compilar
 
-Para usar um pacote pronto, abra `Abrir OXY Engine.cmd` ou `oxy_player.exe` na pasta distribuída. Mantenha `data` ao lado dos executáveis. **Não é necessário instalar Rust, compilador ou editor externo para executar o pacote.**
+Windows 10/11 x64, driver atualizado e GPU compatível com wgpu. Um pacote pronto funciona sem Rust: abra `Abrir OXY Engine.cmd` para editar ou `oxy_player.exe` para jogar, mantendo a pasta `data` ao lado dos executáveis.
 
-Windows 10/11 x64, driver gráfico atualizado e GPU compatível com um backend nativo do wgpu. Somente para desenvolver: Rust **1.92.0**, `rustfmt`, `clippy` e um compilador/linker Windows. A configuração usual usa MSVC com ferramentas C++ e Windows SDK; veja os [pré-requisitos oficiais do Rust](https://rust-lang.github.io/rustup/installation/windows-msvc.html). Também é possível usar Rust GNU com uma distribuição **completa** de MinGW-w64, incluindo bibliotecas e arquivos de inicialização.
-
-As dependências diretas estão fixadas em `Cargo.toml`; `Cargo.lock` fixa também as transitivas. A interface usa [eframe/egui 0.33.3 com backend wgpu](https://github.com/emilk/egui/tree/0.33.3/crates/eframe), compartilhando [wgpu 27.0.1](https://docs.rs/wgpu/27.0.1/wgpu/) com o renderizador da OXY. Nenhuma engine pronta é usada no núcleo.
-
-Na máquina preparada durante o desenvolvimento, execute em PowerShell, na raiz do repositório:
-
-```powershell
-$a = @('run','--locked','-p','oxy_editor','--','examples/validacao/project.oxy.json')
-& .\scripts\cargo.ps1 @a
-```
-
-O script encontra o Cargo e a instalação GNU preparada. Em outra máquina com Rust/MSVC configurado, use diretamente:
+Para desenvolver, instale Rust **1.92.0**, rustfmt, Clippy e o linker MSVC com ferramentas C++/Windows SDK, ou MinGW-w64 completo. Na raiz do repositório, em PowerShell:
 
 ```powershell
 cargo run --locked -p oxy_editor -- examples/validacao/project.oxy.json
@@ -25,80 +14,57 @@ cargo run --locked -p oxy_player -- examples/validacao/project.oxy.json
 cargo build --workspace --release --locked
 ```
 
-O editor aceita o caminho do projeto como primeiro argumento. Sem argumento, abre a validação se ela estiver disponível no diretório atual; caso contrário, inicia um projeto vazio. O player aceita arquivo ou pasta. Sem argumento, procura `data/project.oxy.json` **ao lado do próprio executável**.
-
-## Fluxo de uso
-
-1. Use **Projeto → Novo projeto** e **Salvar** para escolher uma pasta. **+ Cena** cria cenas 2D ou 3D; **Definir inicial** escolhe a cena do player.
-2. Em **Cena**, use **+ Objeto** ou importe PNG. A biblioteca permite criar/aplicar sprites e colocar modelos. Hierarquia e viewport selecionam o mesmo objeto; propriedades editam aparência, pivô, transformações, parentesco e componentes.
-3. Abra **Estúdio** pelo botão direito. Em **Modelagem**, novas peças recebem a seleção como pai. **Salvar hierarquia como modelo** preserva as peças editáveis na biblioteca.
-4. Em **Pintura**, crie uma textura 256×256/512×512 ou importe PNG. Pinte a imagem ou a superfície selecionada; há pincel, preenchimento, conta-gotas, paleta e exportação PNG. Texturas compartilhadas exigem escolher editar todas as referências ou criar uma cópia.
-5. Em **Animação**, escolha o objeto dono, crie um clip, insira keyframes das peças e edite suas poses. A linha do tempo permite mover/copiar/excluir quadros, definir duração, repetir e inserir marcadores. **Pose-base** encerra a prévia sem gravá-la no modelo.
-6. Adicione atributos nas propriedades e abra **Lógica**. Busque operações, conecte portas de execução/dados e configure os parâmetros. Os mesmos atributos alimentam texto, botões e barras da interface de jogo. Um nome como `Vida` não cria regras automaticamente.
-7. **Jogar** cria uma instância isolada na aba **Jogo**. **Pausar** suspende a simulação; **Parar** descarta o teste. Saia da aba ou pressione Escape para liberar a entrada; retome explicitamente.
-8. Salve, feche e reabra o projeto. O indicador de alterações inclui documentos e pixels; salvar usa arquivos temporários e recuperação da versão anterior se houver erro.
-
-## Controles
-
-| Contexto | Controle |
-|---|---|
-| Cena / Estúdio | Esquerdo seleciona; central arrasta a câmera; roda amplia/reduz; direito orbita no 3D ou abre contexto |
-| Transformações | Arraste as extremidades dos eixos; escolha Mover/Girar/Escalar; Alt suspende o encaixe durante movimento |
-| Edição | Ctrl+S salva; Ctrl+Z desfaz; Ctrl+Y/Ctrl+Shift+Z refaz; Ctrl+D duplica; Delete exclui a hierarquia selecionada |
-| Lógica | Arraste cabeçalhos dos nós; conecte portas; pan com botão central e zoom com roda; parâmetros no painel do nó |
-| Jogo padrão | A/D movem; Espaço pula; J ataca; E interage; W/S movem em profundidade no 3D |
-| Player | Escape pausa; Retomar continua; F3 abre diagnóstico |
-
-As teclas de jogo podem ser remapeadas nas propriedades do projeto, ao limpar a seleção. Os atalhos de edição ficam separados da captura de gameplay. Unidades em metros; +Y para cima, sistema 3D destro e câmera mirando -Z local. Rotações aparecem em graus na interface e são armazenadas em radianos.
-
-## Validação e distribuição
-
-`examples/validacao/project.oxy.json` contém três cenas: sala 2D com coleta/porta/ataque, boneco 3D articulado com textura pintável e interação de carta com custo/energia/dano. Todos os comportamentos estão em componentes, atributos, clips e grafos do documento. Os sprites/texturas/áudio são placeholders locais; nenhum asset externo do Metroidvania foi usado.
+O editor aceita o arquivo do projeto como argumento; sem argumento, abre a validação disponível na pasta atual ou um projeto vazio. O player aceita arquivo/pasta e, sem argumento, procura `data/project.oxy.json` ao lado do próprio executável. Nesta máquina, o auxiliar `scripts/cargo.ps1` configura o compilador GNU preparado:
 
 ```powershell
-.\scripts\cargo.ps1 fmt --all --check
-.\scripts\cargo.ps1 build --workspace --locked
-.\scripts\cargo.ps1 test --workspace --locked
-$a = @('clippy','--workspace','--all-targets','--locked','--','-D','warnings')
-& .\scripts\cargo.ps1 @a
-# Opcional: gerar e testar uma nova cópia dos dados de validação.
-$a = @('run','--locked','-p','oxy_core','--example','create_demos','--','artifacts/validacao-regenerada')
-& .\scripts\cargo.ps1 @a
+$oxyArgs = @('run','--locked','-p','oxy_editor','--','examples/validacao/project.oxy.json')
+& .\scripts\cargo.ps1 @oxyArgs
 ```
 
-Os testes cobrem serialização/referências, ciclos e duplicação de hierarquias, isolamento de execução, desfazer/refazer, keyframes/marcadores, grafos/esperas/cancelamento, colisões e pixels/vínculos após salvar/reabrir. Incluem falha real de substituição por arquivo bloqueado no Windows, falha parcial de substituição e preservação dos backups durante recuperação.
+## Criar → editar → testar → salvar
 
-Verificação desta entrega: **58 testes automatizados passaram**, além de **3 testes nativos explícitos** do editor, player e GPU. Formatação, build release e Clippy com `-D warnings` passaram. As janelas reais usam wgpu; os testes de interface injetam eventos somente no próprio egui, sem disputar o teclado/mouse do desktop. Foram exercitados gizmo, nós, entrada, pausa/retomada, isolamento, pintura/desfazer/refazer, keyframes, salvamento/reabertura e os quatro cliques da carta. Capturas e relatórios estão em `qa/`; o renderizador foi verificado na Radeon RX 6600/Vulkan, incluindo leitura de profundidade e textura da GPU.
+1. Em **Projeto**, crie e salve um projeto local. **+ Cena** adiciona uma cena 2D/3D; **Definir inicial** escolhe a cena do player. **+ Objeto** cria formas, grupos, câmeras e elementos de interface; a biblioteca importa cópias de PNG/WAV e guarda modelos compostos.
+2. Selecione na hierarquia ou no viewport. **Ctrl+clique** adiciona/remove objetos; **Shift+clique** seleciona um intervalo na hierarquia. **F2** renomeia, Enter confirma e Escape cancela. Arraste sobre outro objeto para mudar o pai, ou sobre **Raiz da cena** para removê-lo, mantendo a transformação global. **Agrupar**, duplicar e excluir trabalham com a seleção e suas hierarquias.
+3. **W/E/R** escolhem mover/girar/escalar; arraste os eixos ou use valores numéricos. A seleção múltipla gira/escala em torno do centro do conjunto. Duplo clique no mesmo objeto enquadra a seleção. Botão central move a câmera, roda amplia/reduz e arraste direito orbita no 3D; Alt suspende o encaixe durante o movimento.
+4. Botão direito → **Abrir no Estúdio** preserva o objeto escolhido. Em Modelagem, novas peças usam a seleção como pai. **Salvar hierarquia como modelo** mantém peças, grupos e pivôs editáveis.
+5. Em Pintura, crie 256×256/512×512 ou importe PNG. Pincel, preenchimento, conta-gotas e paleta alteram pixels na imagem ou na superfície. **Exportar PNG** salva a imagem; **Remover textura** retira apenas o vínculo. **Substituir**, **Editar no Estúdio** e **Localizar na biblioteca** ficam junto à miniatura. Antes de pintar uma textura compartilhada, escolha editar o original ou criar uma cópia independente.
+6. Em Animação, o modelo vem da raiz/grupo selecionado ou do ancestral animado; **Modelo** permite escolha manual. Use **+ Nova animação**, F2 e o menu da lista para renomear/duplicar/excluir. Exclusões referenciadas pela lógica são bloqueadas e listadas. Ajuste a **pose provisória** de uma peça/grupo e use **+ Keyframe** no cursor: a pose-base permanece intacta. Grave ou descarte poses provisórias antes de trocar animação/modelo ou reproduzir. A linha do tempo oferece posição/rotação/escala, quadros movíveis, copiar/colar/excluir, duração, repetição e eventos; as propriedades editam a seleção.
+7. Edite atributos nas propriedades e configure **Lógica** pelo catálogo pesquisável. Conecte execução/dados e escolha parâmetros por nomes. Texto, imagem, botão e barra compõem a interface do jogo; use `{valor}` para exibir um atributo vinculado. Atributos como `Vida` não impõem regras por conta própria.
+8. **Jogar** abre uma cópia isolada na aba Jogo. Sair da aba, pausar ou pressionar Esc libera a entrada; **Retomar** é explícito e **Parar** descarta o teste. **Ctrl+S** salva; **Ctrl+Z** desfaz; **Ctrl+Y/Ctrl+Shift+Z** refaz. Arrastos e pinceladas são um gesto de histórico. **Ctrl+D/Delete** duplicam/excluem objetos ou nós conforme a ferramenta ativa.
 
-Para repetir os testes nativos em Windows com GPU disponível:
+Os controles de jogo são remapeáveis nas propriedades do projeto, com a seleção limpa. Padrão: A/D movem, Espaço pula, J ataca, E interage e W/S movem em profundidade no 3D. No player, Esc pausa e F3 mostra diagnóstico. Unidades em metros, +Y para cima, sistema 3D destro; a interface mostra graus e os documentos guardam radianos.
+
+## Verificar e distribuir
 
 ```powershell
-$a = @('test','--workspace','--locked','--','--ignored','--nocapture')
-& .\scripts\cargo.ps1 @a
+cargo fmt --all --check
+cargo build --workspace --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+# Testes com janela nativa: Windows e GPU disponíveis.
+cargo test --workspace --locked -- --ignored --nocapture
+# Pacote com editor e player; omita -IncludeEditor para distribuir só o jogo.
+.\scripts\package.ps1 -Project 'examples/validacao' -Destination 'dist/OXY-Engine-0.1.1' -IncludeEditor
+.\dist\OXY-Engine-0.1.1\oxy_player.exe
 ```
 
-A reprodução audível em alto-falantes e a execução em uma segunda máquina Windows permanecem verificações manuais; os testes nativos não certificam todo hardware nem cada combinação possível de edição.
+Para usar o auxiliar com argumentos após `--`, passe um vetor, como no exemplo de execução. O empacotador inclui executáveis e dados locais, prepara uma pasta temporária e preserva o pacote anterior. `-DebugBuild` escolhe desenvolvimento; `-SkipBuild` usa binários já compilados do perfil escolhido. O pacote independe do diretório-fonte.
 
-Para distribuir um jogo desktop:
+`examples/validacao/project.oxy.json` contém sala 2D, boneco 3D articulado e interação de carta. São cenas editáveis normais com comportamentos em componentes/grafos e placeholders locais. Para gerar outra cópia: `cargo run --locked -p oxy_core --example create_demos -- artifacts/validacao-regenerada`.
 
-```powershell
-.\scripts\package.ps1 -Project 'examples/validacao' -Destination 'dist/OXY-Player'
-.\dist\OXY-Player\oxy_player.exe
-# Para incluir também o editor nativo:
-.\scripts\package.ps1 -Project 'examples/validacao' -Destination 'dist/OXY-Engine' -IncludeEditor
-```
+Os testes cobrem persistência segura e falhas de escrita, referências/hierarquias, seleção e transformações, isolamento de execução, histórico de documentos/pixels, animação/eventos, grafos/esperas/cancelamento, colisões, caches e interação egui. Testes nativos exercitam editor, player e GPU; evidências desta revisão ficam em `qa/v0.1.1/`. A configuração em `.github/workflows/ci.yml` executa formatação, build, testes sem janela e Clippy no Windows; **a execução no GitHub ainda não foi verificada**.
 
-O pacote padrão contém player e pasta `data`, com apenas os assets referenciados; não precisa do editor nem do diretório-fonte. `-IncludeEditor` acrescenta `oxy_editor.exe` e o atalho `Abrir OXY Engine.cmd` para abrir os dados incluídos. O script monta uma pasta temporária antes de substituir o destino e preserva um pacote anterior. `-DebugBuild` gera pacote de desenvolvimento; `-SkipBuild` usa os executáveis já compilados do perfil escolhido.
+Verificado nesta entrega em Windows/GNU: **82 testes automatizados e 3 testes nativos passaram**, além de fmt, builds de desenvolvimento/release e Clippy com `-D warnings`. A QA usa janelas wgpu reais e entrada isolada no egui, sem controlar outros aplicativos. Foram inspecionadas capturas do editor e player. Em repouso, houve 1 atualização espontânea em 500 ms após estabilização; não é uma medição de consumo total de CPU/GPU. Quarenta transformações com PNG de 2048×2048 retiveram 27.840 bytes de histórico, sem duplicar o buffer da imagem por comando.
 
 ## Estrutura e limites
 
-`oxy_core` contém documentos, persistência, histórico, pintura, animação, colisões, ações/grafos e simulação; `oxy_render` contém geometria, UVs, câmera, renderização e interface do jogo; `oxy_editor` e `oxy_player` são hosts nativos independentes. PNG e WAV importados são copiados, e modelos compostos ficam estruturados no JSON versionado.
+`oxy_core` separa documentos, simulação, ações, persistência e histórico; `oxy_render` compartilha renderização, entrada e interface de jogo; `oxy_editor` e `oxy_player` são hosts independentes. A v0.1.1 mantém **schema_version 1**, compatível com os documentos da v0.1.
 
-- Colisões usam AABBs e áreas; girar a malha não gira o colisor. Não há física de malhas, roll, parry ou lock-on.
-- Transformações são posição/rotação/escala com pivô. Operações globais ou de parentesco que exigiriam cisalhamento são recusadas com diagnóstico; ajuste a escala do pai ou edite em coordenadas locais.
-- Animação usa peças rígidas e interpolação linear/manutenção de pose, com slerp de rotações; não há pesos, IK ou mistura avançada.
-- Modelos são estruturas reutilizáveis copiadas para a cena. Salvar uma edição cria outro asset; não há herança de templates nem propagação automática para instâncias.
-- Pintura trabalha em um único canal RGBA, sem camadas ou mapas de relevo. Geometria vem das primitivas; não há importação/edição de malhas arbitrárias, escultura ou extrusão.
-- Lua é a linguagem planejada; nesta versão as operações são nativas, registradas por identificadores estáveis. Não há plugins públicos nem scripts personalizados.
-- Excluir um objeto referenciado por nós preserva a referência quebrada para diagnóstico. Corrija ou remova o nó indicado antes de salvar/jogar; uma ação nunca é redirecionada silenciosamente para outro objeto.
-- Áudio simples WAV mono/estéreo no Windows, sem mixer ou áudio espacial. Limites de trabalho por atualização protegem a simulação de grafos excessivos; dados de versões incompatíveis são rejeitados.
+O histórico armazena deltas de documentos e pixels. Imagens CPU são carregadas sob demanda, com orçamento de **128 MiB**; pixels alterados/em uso são preservados e podem ultrapassá-lo até serem liberados. Caches de malhas CPU/GPU usam LRU de **64 entradas/64 MiB** cada. O editor ocioso redesenha sob demanda; jogo, animação, interação e diagnóstico têm atualizações próprias. Esses mecanismos não representam medições de desempenho nem um limite total de memória. Em janelas estreitas, a Animação usa o botão **Propriedades** para abrir a edição da pose/quadro/evento, deixando espaço para o viewport e a timeline.
+
+- Escala múltipla é uniforme; operações que exigiriam cisalhamento são recusadas. Colisões são AABBs/áreas: girar a malha não gira o colisor.
+- Modelos preservam peças rígidas e grupos; não há edição livre de malha, pesos, IK, mistura avançada, PBR ou sombras sofisticadas. Pintura usa RGBA sem camadas.
+- Modelos instanciados são cópias independentes, sem herança de variantes. Excluir um recurso retira seu registro da biblioteca, preservando o arquivo no disco para desfazer; referências em uso impedem essa exclusão.
+- Referências quebradas de objetos são diagnosticadas e precisam ser corrigidas antes de salvar/jogar. Escrita segura preserva o arquivo anterior se falhar; versões incompatíveis são rejeitadas.
+- Lua permanece planejada: ações atuais são nativas com IDs estáveis. Não há scripts/plugins públicos, gêneros completos, instalador ou exportação web/mobile.
+- Áudio WAV simples no Windows, sem mixer/áudio espacial. Reprodução audível e uso em uma segunda máquina Windows **não foram validados manualmente**.

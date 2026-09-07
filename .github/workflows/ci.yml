@@ -1,0 +1,31 @@
+name: Validação Rust
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows · Rust 1.92.0
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Instalar ferramentas Rust
+        run: rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy
+      - name: Formatação
+        run: cargo fmt --all --check
+      - name: Compilação
+        run: cargo build --workspace --locked
+      - name: Testes sem janela
+        run: cargo test --workspace --locked
+      - name: Análise estática
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings

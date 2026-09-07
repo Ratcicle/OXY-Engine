@@ -1,6 +1,89 @@
 //! Predictable, editable primitive meshes. Unit dimensions, +Y up, right handed.
 //! Texture coordinates use a top-left image origin (V grows down).
 use glam::{Vec2, Vec3};
+use oxy_core::document::{Entity, Primitive};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex, OnceLock},
+};
+
+/// Only topology belongs in this key. Dimensions, pivots and materials remain per object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MeshKey {
+    Quad,
+    Circle(u32),
+    Cube,
+    Sphere(u32),
+    Cylinder(u32),
+    Plane,
+}
+
+impl MeshKey {
+    pub fn for_entity(entity: &Entity) -> Option<Self> {
+        let segments = entity.segments.clamp(3, 256);
+        Some(match entity.primitive? {
+            Primitive::Rectangle | Primitive::Sprite => Self::Quad,
+            Primitive::Circle => Self::Circle(segments),
+            Primitive::Cube => Self::Cube,
+            Primitive::Sphere => Self::Sphere(segments),
+            Primitive::Cylinder => Self::Cylinder(segments),
+            Primitive::Plane => Self::Plane,
+        })
+    }
+
+    fn generate(self) -> Mesh {
+        match self {
+            Self::Quad => rectangle(),
+            Self::Circle(segments) => circle(segments),
+            Self::Cube => cube(),
+            Self::Sphere(segments) => sphere(segments),
+            Self::Cylinder(segments) => cylinder(segments),
+            Self::Plane => plane(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct CpuMeshCache {
+    entries: VecDeque<(MeshKey, Arc<Mesh>)>,
+    bytes: usize,
+}
+
+impl CpuMeshCache {
+    fn get(&mut self, key: MeshKey) -> Arc<Mesh> {
+        if let Some(index) = self.entries.iter().position(|(stored, _)| *stored == key) {
+            let entry = self.entries.remove(index).expect("Known cache entry");
+            let mesh = Arc::clone(&entry.1);
+            self.entries.push_back(entry);
+            return mesh;
+        }
+        let mesh = Arc::new(key.generate());
+        let bytes = mesh.byte_size();
+        while !self.entries.is_empty()
+            && (self.entries.len() >= 64 || self.bytes + bytes > 64 * 1024 * 1024)
+        {
+            self.bytes -= self
+                .entries
+                .pop_front()
+                .expect("Non-empty cache")
+                .1
+                .byte_size();
+        }
+        self.entries.push_back((key, Arc::clone(&mesh)));
+        self.bytes += bytes;
+        mesh
+    }
+}
+
+/// Shared by GPU upload and CPU ray picking. No entity/document state is held in this cache.
+pub(crate) fn cached_primitive(key: MeshKey) -> Arc<Mesh> {
+    static CACHE: OnceLock<Mutex<CpuMeshCache>> = OnceLock::new();
+    CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(key)
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
@@ -16,6 +99,11 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    fn byte_size(&self) -> usize {
+        std::mem::size_of_val(self.vertices.as_slice())
+            + std::mem::size_of_val(self.indices.as_slice())
+    }
+
     fn vertex(&mut self, position: Vec3, normal: Vec3, uv: Vec2) -> u32 {
         let index = self.vertices.len() as u32;
         self.vertices.push(MeshVertex {
@@ -259,6 +347,48 @@ pub fn ray_triangle(origin: Vec3, direction: Vec3, points: [Vec3; 3]) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_key_ignores_object_state_but_keeps_curved_topology() {
+        let mut first = Entity::new("Original", Some(Primitive::Cube));
+        let key = MeshKey::for_entity(&first);
+        first.dimensions = [8., 0.4, 3.];
+        first.transform.position = [100., -3., 4.];
+        first.transform.rotation = [0.2, 0.6, 0.1];
+        first.transform.scale = [-1., 2., 3.];
+        first.transform.pivot = [0.3, 0.1, 0.];
+        first.material.color = [0.2, 0.4, 0.8, 0.5];
+        first.material.texture = Some("texture-stable-id".into());
+        first.segments = 80;
+        assert_eq!(key, MeshKey::for_entity(&first));
+        first.primitive = Some(Primitive::Sphere);
+        let sphere = MeshKey::for_entity(&first);
+        first.segments = 81;
+        assert_ne!(sphere, MeshKey::for_entity(&first));
+        first.segments = 0;
+        assert_eq!(MeshKey::for_entity(&first), Some(MeshKey::Sphere(3)));
+        first.segments = 999;
+        assert_eq!(MeshKey::for_entity(&first), Some(MeshKey::Sphere(256)));
+        first.primitive = Some(Primitive::Sprite);
+        let sprite = MeshKey::for_entity(&first);
+        first.primitive = Some(Primitive::Rectangle);
+        assert_eq!(sprite, MeshKey::for_entity(&first));
+    }
+
+    #[test]
+    fn cpu_cache_reuses_geometry_and_evicts_without_invalidating_references() {
+        let mut cache = CpuMeshCache::default();
+        let first = cache.get(MeshKey::Sphere(24));
+        assert!(Arc::ptr_eq(&first, &cache.get(MeshKey::Sphere(24))));
+        let triangle_count = first.indices.len();
+        for segments in 32..100 {
+            cache.get(MeshKey::Circle(segments));
+        }
+        assert!(cache.entries.len() <= 64);
+        assert!(cache.bytes <= 64 * 1024 * 1024);
+        assert_eq!(first.indices.len(), triangle_count);
+        assert!(!Arc::ptr_eq(&first, &cache.get(MeshKey::Sphere(24))));
+    }
 
     #[test]
     fn primitives_have_valid_meshes_and_uvs() {

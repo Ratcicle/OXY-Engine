@@ -2,6 +2,7 @@
 use crate::{
     document::{Asset, AssetKind, Id, Project, new_id, validate_project},
     painting::PaintImage,
+    texture_cache::TextureCache,
 };
 use std::{
     collections::HashMap,
@@ -12,6 +13,14 @@ use std::{
 
 pub const PROJECT_FILE: &str = "project.oxy.json";
 pub fn load_project(path: &Path) -> Result<Project, String> {
+    load_project_with(path, false)
+}
+/// Validates document, relative paths and asset headers without decoding PNG pixels.
+/// A damaged pixel stream is diagnosed when the texture is first requested.
+pub fn load_project_lazy(path: &Path) -> Result<Project, String> {
+    load_project_with(path, true)
+}
+fn load_project_with(path: &Path, lazy: bool) -> Result<Project, String> {
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
     } else {
@@ -27,7 +36,15 @@ pub fn load_project(path: &Path) -> Result<Project, String> {
         serde_json::from_slice(&bytes).map_err(|e| format!("Documento OXY inválido: {e}"))?;
     validate_project(&project)?;
     let root = path.parent().unwrap_or(Path::new("."));
-    validate_asset_files(&project, root)?;
+    if lazy {
+        for asset in &project.assets {
+            if asset.kind != AssetKind::Model {
+                validate_asset_header(asset, &resolve_asset_path(root, &asset.path)?)?;
+            }
+        }
+    } else {
+        validate_asset_files(&project, root)?;
+    }
     Ok(project)
 }
 pub fn save_project(path: &Path, project: &Project) -> Result<(), String> {
@@ -82,6 +99,61 @@ pub fn save_bundle(
     let bytes = serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?;
     writes.push((path, bytes));
     transaction_write(writes)
+}
+/// Writes dirty texture buffers and the manifest in the same recoverable transaction.
+/// Clean texture files are checked without decoding or copying their pixel buffers.
+/// Dirty cache entries stay pinned if any staging/replacement step fails.
+pub fn save_cached_bundle(
+    path: &Path,
+    project: &Project,
+    images: &mut TextureCache,
+) -> Result<(), String> {
+    validate_project(project)?;
+    for (id, _) in images.dirty_images() {
+        if !project
+            .asset(id)
+            .is_some_and(|asset| asset.kind == AssetKind::Texture)
+        {
+            return Err(format!("Textura alterada sem asset correspondente: {id}"));
+        }
+    }
+    let path = if path.is_dir() {
+        path.join(PROJECT_FILE)
+    } else {
+        path.to_owned()
+    };
+    let root = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(root)
+        .map_err(|e| format!("Não foi possível criar pasta do projeto: {e}"))?;
+    let mut writes = Vec::new();
+    for asset in &project.assets {
+        if asset.kind == AssetKind::Model {
+            continue;
+        }
+        let target = resolve_asset_path(root, &asset.path)?;
+        if images.is_dirty(&asset.id) {
+            if asset.kind != AssetKind::Texture {
+                return Err(format!(
+                    "Pixels associados a asset não-textura: {}",
+                    asset.name
+                ));
+            }
+            let image = images
+                .get(&asset.id)
+                .ok_or("Textura alterada não está residente")?;
+            writes.push((target, image.to_png()?));
+        } else {
+            validate_asset_header(asset, &target)?;
+        }
+    }
+    writes.push((
+        path.clone(),
+        serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?,
+    ));
+    transaction_write(writes)?;
+    images.configure(root, project);
+    images.mark_saved();
+    Ok(())
 }
 pub fn load_paint_images(
     project: &Project,
@@ -220,6 +292,48 @@ fn validate_asset_file(asset: &Asset, path: &Path) -> Result<(), String> {
             PaintImage::from_png(&bytes).map_err(|e| format!("{}: {e}", asset.name))?;
         }
         AssetKind::Audio => validate_wav(&bytes).map_err(|e| format!("{}: {e}", asset.name))?,
+        AssetKind::Model => {}
+    }
+    Ok(())
+}
+fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), String> {
+    let meta = fs::metadata(path)
+        .map_err(|e| format!("Asset ausente ou inacessível '{}': {e}", asset.name))?;
+    if !meta.is_file() || meta.len() > 300_000_000 {
+        return Err(format!(
+            "Arquivo de asset inválido ou maior que 300 MB: {}",
+            asset.name
+        ));
+    }
+    match asset.kind {
+        AssetKind::Texture => {
+            let reader = image::ImageReader::with_format(
+                std::io::BufReader::new(File::open(path).map_err(|e| e.to_string())?),
+                image::ImageFormat::Png,
+            );
+            let (width, height) = reader
+                .into_dimensions()
+                .map_err(|e| format!("{}: PNG inválido: {e}", asset.name))?;
+            if width == 0
+                || height == 0
+                || width > 16384
+                || height > 16384
+                || u64::from(width) * u64::from(height) > 67_108_864
+            {
+                return Err(format!("{}: dimensões de textura inválidas", asset.name));
+            }
+        }
+        AssetKind::Audio => {
+            let reader = hound::WavReader::open(path)
+                .map_err(|e| format!("{}: WAV inválido: {e}", asset.name))?;
+            let spec = reader.spec();
+            if spec.channels == 0 || spec.channels > 2 || spec.sample_rate == 0 {
+                return Err(format!(
+                    "{}: WAV deve ser mono/estéreo com frequência válida",
+                    asset.name
+                ));
+            }
+        }
         AssetKind::Model => {}
     }
     Ok(())
@@ -450,6 +564,75 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("oxy-test-{}", new_id()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+    #[test]
+    fn cached_bundle_is_lazy_keeps_dirty_on_failure_and_reopens_real_pixels() {
+        let dir = temp();
+        let path = dir.join(PROJECT_FILE);
+        let mut project = Project::new("Cache");
+        let mut cache = TextureCache::new(1);
+        for name in ["paint", "clean"] {
+            let id = new_id();
+            project.assets.push(Asset {
+                id: id.clone(),
+                name: name.into(),
+                path: format!("{name}.png"),
+                kind: AssetKind::Texture,
+                model: None,
+            });
+            cache.insert(id, PaintImage::new(256, 256, [255; 4]).unwrap());
+        }
+        save_cached_bundle(&path, &project, &mut cache).unwrap();
+        assert!(!cache.has_dirty());
+        assert_eq!(cache.len(), 0);
+        let reopened = load_project_lazy(&path).unwrap();
+        cache.configure(&dir, &reopened);
+        assert_eq!(cache.decode_count(), 0);
+        let painted = project.assets[0].id.clone();
+        let before_manifest = fs::read(&path).unwrap();
+        let before_png = fs::read(dir.join("paint.png")).unwrap();
+        let clean_png = fs::read(dir.join("clean.png")).unwrap();
+        cache.ensure(&painted).unwrap();
+        cache
+            .get_mut(&painted)
+            .unwrap()
+            .brush([50., 50.], 4., [255, 0, 0, 255]);
+        project.assets.push(Asset {
+            id: new_id(),
+            name: "Ausente".into(),
+            path: "absent.png".into(),
+            kind: AssetKind::Texture,
+            model: None,
+        });
+        assert!(save_cached_bundle(&path, &project, &mut cache).is_err());
+        assert!(cache.has_dirty());
+        assert_eq!(cache.evict_clean(), 0);
+        assert_eq!(fs::read(&path).unwrap(), before_manifest);
+        assert_eq!(fs::read(dir.join("paint.png")).unwrap(), before_png);
+        project.assets.pop();
+        save_cached_bundle(&path, &project, &mut cache).unwrap();
+        assert!(!cache.has_dirty());
+        assert!(cache.is_empty());
+        assert_eq!(fs::read(dir.join("clean.png")).unwrap(), clean_png);
+        assert_eq!(load_project(&path).unwrap(), project);
+        cache.ensure(&painted).unwrap();
+        assert_eq!(cache[&painted].pixel(50, 50), [255, 0, 0, 255]);
+        assert_eq!(cache.decode_count(), 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn cached_save_refuses_to_discard_orphan_dirty_pixels() {
+        let dir = temp();
+        let mut cache = TextureCache::new(1);
+        let id = new_id();
+        cache.insert(id.clone(), PaintImage::new(16, 16, [255; 4]).unwrap());
+        assert!(
+            save_cached_bundle(&dir.join(PROJECT_FILE), &Project::new("Orphan"), &mut cache)
+                .is_err()
+        );
+        assert!(cache.is_dirty(&id));
+        assert!(cache.contains_key(&id));
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn save_load_and_invalid_version_preserves_document() {
