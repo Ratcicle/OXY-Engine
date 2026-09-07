@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
+mod portable;
 mod spatial;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use oxy_core::document::{Id, SceneKind, new_id};
@@ -495,6 +496,77 @@ impl NativeQa {
             }
         };
         match label {
+            "home_start" => {
+                ensure(
+                    self.editor.path.is_none(),
+                    "Inicialização abriu projeto implicitamente",
+                )?;
+                for label in [
+                    "Novo projeto",
+                    "Abrir projeto",
+                    "Projetos recentes",
+                    "Projeto de exemplo",
+                ] {
+                    ensure(
+                        self.surface.texts.iter().any(|t| t.text == label),
+                        "Comando ausente na tela inicial",
+                    )?;
+                }
+                Ok(())
+            }
+            "home_new" => {
+                ensure(
+                    self.editor.scene().entities.is_empty() && self.editor.path.is_none(),
+                    "Novo projeto não abriu uma cena vazia",
+                )?;
+                ensure(
+                    self.surface.texts.iter().any(|t| t.text == "Projeto"),
+                    "Editor não está acessível",
+                )
+            }
+            "home_example" => {
+                ensure(
+                    self.editor.state.project.scenes.len() == 3,
+                    "Exemplos não abriram",
+                )?;
+                let root = self.editor.root();
+                let original =
+                    std::fs::read(root.join("project.oxy.json")).map_err(|e| e.to_string())?;
+                let target = std::env::temp_dir()
+                    .join(format!("oxy-portable-{}", new_id()))
+                    .join("Minha cópia OXY/project.oxy.json");
+                oxy_core::persistence::save_cached_copy(
+                    &target,
+                    &self.editor.state.project,
+                    &mut self.editor.state.images,
+                    &root,
+                )?;
+                ensure(
+                    std::fs::read(root.join("project.oxy.json")).unwrap() == original,
+                    "Exemplo original foi alterado",
+                )?;
+                self.editor.open(target);
+                ensure(
+                    self.editor.state.project.scenes.len() == 3,
+                    "Cópia perdeu cenas",
+                )
+            }
+            "home_recent" => ensure(
+                self.editor
+                    .path
+                    .as_ref()
+                    .is_some_and(|p| p.parent().unwrap().ends_with("Minha cópia OXY")),
+                "Clique no projeto recente não reabriu a cópia",
+            ),
+            "home_bad_open" => {
+                let before = self.editor.state.project.clone();
+                self.editor
+                    .open(self.output.join("arquivo-inexistente.oxy.json"));
+                ensure(
+                    self.editor.state.project == before,
+                    "Abertura inválida substituiu o documento",
+                )
+            }
             "selected_group_collider" => {
                 ensure(
                     self.surface.texts.iter().any(|t| {

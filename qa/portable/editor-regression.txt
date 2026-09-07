@@ -1,0 +1,249 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.27s
+     Running unittests src\main.rs (target\debug\deps\oxy_editor-fa34e8f330f29f18.exe)
+
+running 1 test
+Concluído: true
+Erro: None
+
+Verificado: lazy_open
+Captura GPU da janela: editor-scene.png
+Clique: + Objeto
+Clique: Retângulo
+Verificado: created
+Verificado: gizmo_baseline
+Arrastar eixo X pelo controle visual
+Verificado: gizmo_moved
+Tecla Z, Ctrl=true
+Verificado: gizmo_undo
+Clique: Lógica
+Clique: Ao iniciar cena
+Clique: Pesquisar ação…
+Digitar: Mensagem
+Clique: Mensagem de diagnóstico
+Arrastar nó pelo título
+Conectar saída e entrada pelas portas visuais
+Verificado: graph_connected
+Captura GPU da janela: graph.png
+Tecla Delete, Ctrl=false
+Verificado: node_deleted
+Tecla Z, Ctrl=true
+Verificado: node_undo
+Clique: Cena
+Verificado: play_baseline
+Clique: ▶ Jogar
+Verificado: playing
+Manter D por 24 quadros
+Verificado: game_moved
+Captura GPU da janela: game.png
+Clique: Cena
+Verificado: left_game_paused
+Clique: Jogo
+Verificado: return_still_paused
+Clique: ▶ Retomar
+Verificado: playing
+Tecla Escape, Ctrl=false
+Verificado: escape_paused
+Clique: ■ Parar
+Verificado: stop_isolated
+Redimensionar: [920.0 600.0]
+Captura GPU da janela: editor-small.png
+Redimensionar: [1440.0 900.0]
+Clique: A · Sala de plataforma 2D
+Clique: B · Oficina 3D e golpe articulado
+Verificado: scene_3d
+Selecionar hierarquia: Tronco · textura pintável
+Clique: Estúdio
+Clique: Pintura
+Clique: Enquadrar peça
+Verificado: texture_copy_baseline
+Clique: Criar cópia independente
+Verificado: texture_copied
+Verificado: paint_baseline
+Pincelada real no PNG
+Verificado: paint_changed
+Captura GPU da janela: studio-paint.png
+Tecla Z, Ctrl=true
+Verificado: paint_undo
+Tecla Y, Ctrl=true
+Verificado: paint_redo
+Tecla S, Ctrl=true
+Verificado: saved_roundtrip
+Verificado: texture_controls_baseline
+Clique: Localizar na biblioteca
+Excluir recurso pelo cartão de sua própria textura
+Verificado: texture_reference_blocked
+Captura GPU da janela: texture-reference.png
+Clique: Cancelar
+Clique: Remover textura
+Verificado: texture_unlinked
+Tecla Z, Ctrl=true
+Verificado: texture_unlink_undo
+Clique: Modelagem
+Captura GPU da janela: studio-3d.png
+Selecionar hierarquia: Boneco · modelo por peças
+Clique: Animação
+Verificado: animation_baseline
+Clique: ▶ Reproduzir
+Reproduzir 16 quadros sem entrada
+Verificado: animation_preview
+Captura GPU da janela: animation.png
+Redimensionar: [920.0 600.0]
+Clique: Enquadrar
+Captura GPU da janela: animation-small.png
+Animação 920×600: viewport 524×176 pontos
+Verificado: animation_small_layout
+Clique: + Quadro-chave
+Verificado: key_created
+Tecla Z, Ctrl=true
+Verificado: animation_preview
+Redimensionar: [1440.0 900.0]
+Clique: Pose-base
+Clique: + Quadro-chave
+Verificado: key_created
+Rolar painel QUADRO-CHAVE
+Clique: Copiar quadro
+Selecionar hierarquia: Cabeça
+Clique: Colar quadro
+Verificado: key_pasted
+Tecla S, Ctrl=true
+Verificado: saved_roundtrip
+Clique: Cena
+Clique: B · Oficina 3D e golpe articulado
+Clique: C · Carta, custo, energia e alvo
+Verificado: play_baseline
+Clique: ▶ Jogar
+Verificado: playing
+Clique real no botão da carta
+Verificado: card_one
+Clique real no botão da carta
+Verificado: card_two
+Clique real no botão da carta
+Verificado: card_three
+Clique real no botão da carta
+Verificado: card_four
+Captura GPU da janela: card.png
+Clique: ■ Parar
+Verificado: stop_isolated
+Clique: + Cena
+Clique: 3D
+Clique: + Cena
+Clique: Criar cena
+Clique: + Objeto
+Clique: Cubo
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Peça A
+Tecla S, Ctrl=true
+Verificado: rename_saved_inline
+Tecla Enter, Ctrl=false
+Verificado: renamed_a
+Tecla Z, Ctrl=true
+Verificado: rename_undo
+Tecla Y, Ctrl=true
+Verificado: renamed_a
+Arrastar eixo X pelo controle visual
+Clique: + Objeto
+Clique: Cubo
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Peça B
+Tecla Enter, Ctrl=false
+Arrastar eixo X pelo controle visual
+Clique: + Objeto
+Clique: Grupo vazio
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Articulação
+Tecla Enter, Ctrl=false
+Clique: + Objeto
+Clique: Grupo vazio
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Montagem
+Tecla Enter, Ctrl=false
+Verificado: hierarchy_baseline
+Arrastar hierarquia: Peça A → Articulação
+Arrastar hierarquia: Peça B → Articulação
+Verificado: pieces_parented
+Arrastar hierarquia: Articulação → Montagem
+Verificado: group_parented
+Arrastar hierarquia: Articulação → Raiz da cena · solte aqui
+Verificado: group_root
+Selecionar hierarquia: Peça A
+Selecionar hierarquia: Peça B
+Verificado: multi_baseline
+Tecla W, Ctrl=false
+Arrastar eixo X pelo controle visual
+Verificado: multi_move
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Tecla E, Ctrl=false
+Arrastar eixo X pelo controle visual
+Verificado: multi_rotate
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Tecla R, Ctrl=false
+Arrastar eixo X pelo controle visual
+Verificado: multi_scale
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Captura GPU da janela: multi-selection.png
+Verificado: focus_baseline
+Selecionar hierarquia: Articulação
+Verificado: focused_group
+Clique: Estúdio
+Clique: Animação
+Clique: + Nova animação
+Tecla A, Ctrl=true
+Digitar: Parado
+Tecla Enter, Ctrl=false
+Clique: + Quadro-chave
+Selecionar hierarquia: Peça A
+Clique: + Quadro-chave
+Selecionar hierarquia: Articulação
+Clique: + Nova animação
+Tecla A, Ctrl=true
+Digitar: Ataque
+Tecla Enter, Ctrl=false
+Clique: + Quadro-chave
+Verificado: authored_clips
+Editar campo visível: Cursor = 0.5
+Clique: Mover (W)
+Verificado: draft_baseline
+Arrastar eixo X pelo controle visual
+Verificado: group_draft
+Tecla S, Ctrl=true
+Verificado: draft_save_refused
+Clique: Nova cena 3D
+Clique: A · Sala de plataforma 2D
+Verificado: draft_scene_refused
+Clique: Console
+Clique: + Quadro-chave
+Verificado: group_key
+Captura GPU da janela: group-animation.png
+Abrir menu de contexto: Ataque
+Clique: Duplicar animação
+Verificado: clip_duplicated
+Tecla S, Ctrl=true
+Verificado: saved_roundtrip
+Clique: Cena
+Clique: Nova cena 3D
+Clique: B · Oficina 3D e golpe articulado
+Selecionar hierarquia: Boneco · modelo por peças
+Clique: Estúdio
+Clique: Animação
+Verificado: clip_reference_baseline
+Abrir menu de contexto: Ataque
+Clique: Excluir animação
+Verificado: clip_reference_blocked
+Captura GPU da janela: animation-reference.png
+Clique: Entendi
+Clique: Cena
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Repouso medido: 1 atualizações espontâneas em 500 ms
+
+Capturas: ["editor-scene.png", "graph.png", "game.png", "editor-small.png", "studio-paint.png", "texture-reference.png", "studio-3d.png", "animation.png", "animation-small.png", "card.png", "multi-selection.png", "group-animation.png", "animation-reference.png"]
+
+test native_qa::native_editor_workflow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 15.18s

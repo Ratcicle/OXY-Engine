@@ -17,6 +17,11 @@ impl Editor {
                 );
                 ui.separator();
                 ui.menu_button("Projeto", |ui| {
+                    if ui.button("Tela inicial").clicked() {
+                        self.pause();
+                        self.transition(Transition::Home);
+                        ui.close();
+                    }
                     if ui.button("Novo projeto").clicked() {
                         self.transition(Transition::New);
                         ui.close();

@@ -3,7 +3,8 @@ param(
     [string]$Destination = 'dist/OXY-Player',
     [switch]$SkipBuild,
     [switch]$DebugBuild,
-    [switch]$IncludeEditor
+    [switch]$IncludeEditor,
+    [string]$BinaryDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
@@ -34,9 +35,10 @@ if (!$SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw 'Build do pacote falhou; pacote anterior preservado.' }
 }
 $profile = if ($DebugBuild) { 'debug' } else { 'release' }
-$executable = Join-Path $workspace "target/$profile/oxy_player.exe"
+$binaryRoot = if ($BinaryDirectory) { [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($BinaryDirectory)) { $BinaryDirectory } else { Join-Path $workspace $BinaryDirectory })) } else { Join-Path $workspace "target/$profile" }
+$executable = Join-Path $binaryRoot 'oxy_player.exe'
 if (!(Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Executável não encontrado: $executable" }
-$editorExecutable = Join-Path $workspace "target/$profile/oxy_editor.exe"
+$editorExecutable = Join-Path $binaryRoot 'oxy_editor.exe'
 if ($IncludeEditor -and !(Test-Path -LiteralPath $editorExecutable -PathType Leaf)) { throw "Editor não encontrado: $editorExecutable" }
 $destinationParent = Split-Path $destinationPath -Parent
 New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
@@ -55,9 +57,7 @@ foreach ($file in $files) {
 Copy-Item -LiteralPath $executable -Destination (Join-Path $stagingPath 'oxy_player.exe') -Force
 Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $packageData 'project.oxy.json') -Force
 if ($IncludeEditor) {
-    Copy-Item -LiteralPath $editorExecutable -Destination (Join-Path $stagingPath 'oxy_editor.exe') -Force
-    $launcher = '@echo off' + "`r`n" + 'start "OXY Engine" "%~dp0oxy_editor.exe" "%~dp0data\project.oxy.json"' + "`r`n"
-    [IO.File]::WriteAllText((Join-Path $stagingPath 'Abrir OXY Engine.cmd'), $launcher, [Text.Encoding]::ASCII)
+    Copy-Item -LiteralPath $editorExecutable -Destination (Join-Path $stagingPath 'OXY Engine.exe') -Force
 }
 # GNU builds may require runtime DLLs. Copy only those shipped by this compiler.
 $compilerBin = Join-Path $env:USERPROFILE '.cargo/oxy-native-toolchain/bin'
@@ -84,5 +84,5 @@ catch {
 }
 Write-Host "Pacote desktop pronto: $destinationPath"
 Write-Host 'Abra oxy_player.exe. A pasta data precisa permanecer ao lado do executável.'
-if ($IncludeEditor) { Write-Host 'Para editar o projeto incluído, abra Abrir OXY Engine.cmd.' }
+if ($IncludeEditor) { Write-Host 'Abra OXY Engine.exe diretamente e escolha Projeto de exemplo para editar uma cópia dos dados incluídos.' }
 if ($previousPath) { Write-Host "Pacote anterior preservado: $previousPath" }

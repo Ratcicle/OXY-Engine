@@ -1,5 +1,6 @@
 mod diagnostics;
 mod hierarchy;
+mod home;
 mod library;
 mod properties;
 mod spatial_tools;
@@ -65,12 +66,14 @@ struct Rename {
     focus: bool,
 }
 enum Transition {
+    Home,
     New,
     Open(PathBuf),
     Close,
 }
 
 pub struct Editor {
+    home: home::Home,
     pub state: Snapshot,
     history: CommandHistory,
     pub path: Option<PathBuf>,
@@ -153,6 +156,7 @@ impl Editor {
             images: TextureCache::default(),
         };
         let mut this = Self {
+            home: home::Home::load(&cc.egui_ctx),
             history: CommandHistory::new(),
             state,
             path: None,
@@ -212,14 +216,7 @@ impl Editor {
         } else {
             std::env::args_os().nth(1).map(PathBuf::from)
         };
-        let mut candidates = vec![PathBuf::from("examples/validacao/project.oxy.json")];
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent()
-        {
-            candidates.push(dir.join("data/project.oxy.json"));
-            candidates.push(dir.join("../../examples/validacao/project.oxy.json"));
-        }
-        if let Some(path) = arg.or_else(|| candidates.into_iter().find(|p| p.exists())) {
+        if let Some(path) = arg {
             this.open(path);
         }
         this
@@ -278,6 +275,9 @@ impl Editor {
         self.sync_textures();
     }
     pub(crate) fn open(&mut self, path: PathBuf) {
+        self.open_with_recent(path, true);
+    }
+    fn open_with_recent(&mut self, path: PathBuf, add_recent: bool) {
         let path = if path.is_dir() {
             path.join(persistence::PROJECT_FILE)
         } else {
@@ -291,6 +291,11 @@ impl Editor {
                 self.state = Snapshot { project, images };
                 self.path = Some(path);
                 self.reset_context();
+                self.home.visible = false;
+                self.home.example_copy = false;
+                if add_recent {
+                    self.remember_project();
+                }
                 self.log("Projeto aberto e validado.");
             }
             Err(e) => {
@@ -329,7 +334,7 @@ impl Editor {
         }
         self.finish_history(true);
         let previous_path = self.path.clone();
-        if self.path.is_none() {
+        if self.path.is_none() || self.home.example_copy {
             let Some(folder) = rfd::FileDialog::new()
                 .set_title("Escolha a pasta do novo projeto OXY")
                 .pick_folder()
@@ -345,9 +350,24 @@ impl Editor {
             self.path = Some(path);
         }
         let path = self.path.as_ref().unwrap().clone();
-        match persistence::save_cached_bundle(&path, &self.state.project, &mut self.state.images) {
+        let result = if self.home.example_copy {
+            persistence::save_cached_copy(
+                &path,
+                &self.state.project,
+                &mut self.state.images,
+                previous_path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .expect("Exemplo com pasta de origem"),
+            )
+        } else {
+            persistence::save_cached_bundle(&path, &self.state.project, &mut self.state.images)
+        };
+        match result {
             Ok(()) => {
+                self.home.example_copy = false;
                 self.history.mark_saved();
+                self.remember_project();
                 self.renderer.release_saved_texture_pixels();
                 self.game_ui.release_saved_texture_pixels();
                 self.log(format!("Salvo: {}", path.display()));
@@ -372,7 +392,13 @@ impl Editor {
     }
     fn apply_transition(&mut self, t: Transition) {
         match t {
+            Transition::Home => {
+                self.apply_transition(Transition::New);
+                self.home.visible = true;
+            }
             Transition::New => {
+                self.home.visible = false;
+                self.home.example_copy = false;
                 self.state = Snapshot {
                     project: Project::new("Meu projeto OXY"),
                     images: TextureCache::default(),
@@ -860,6 +886,10 @@ impl eframe::App for Editor {
         let dt = (self.frame_interval_ms / 1000.).min(0.1);
         self.last_time = Instant::now();
         ctx.set_zoom_factor(self.scale);
+        if self.home.visible {
+            self.home_ui(ctx);
+            return;
+        }
         let edit_event = ctx.input(|i| {
             i.events.iter().any(|e| {
                 matches!(

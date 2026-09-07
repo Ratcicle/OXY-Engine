@@ -1,0 +1,25 @@
+Concluído: true
+Erro: None
+Verificado: home_start
+Captura GPU da janela: home.png
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Clique: Novo projeto
+Verificado: home_new
+Clique: Projeto
+Clique: Tela inicial
+Clique: Projeto de exemplo
+Verificado: home_example
+Verificado: play_baseline
+Clique: ▶ Jogar
+Verificado: playing
+Captura GPU da janela: example-game.png
+Clique: ■ Parar
+Verificado: stop_isolated
+Clique: Projeto
+Clique: Tela inicial
+Captura GPU da janela: recent-project.png
+Clique: Minha cópia OXY
+Verificado: home_recent
+Verificado: home_bad_open
+Capturas: ["home.png", "example-game.png", "recent-project.png"]

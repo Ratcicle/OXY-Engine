@@ -4,7 +4,7 @@ Editor e runtime desktop próprios em Rust, com cenas 2D/3D, montagem por peças
 
 ## Abrir e compilar
 
-Windows 10/11 x64, driver atualizado e GPU compatível com wgpu. Um pacote pronto funciona sem Rust: abra `Abrir OXY Engine.cmd` para editar ou `oxy_player.exe` para jogar, mantendo a pasta `data` ao lado dos executáveis.
+Windows 10/11 x64, driver atualizado e GPU compatível com DirectX 12 ou Vulkan. Extraia o ZIP inteiro em uma pasta gravável e abra **`OXY Engine.exe`** diretamente. O pacote inclui ícone, metadados de versão e **`oxy_player.exe`** separado. Mantenha `data` e as DLLs junto dos executáveis; Rust/Cargo são necessários apenas para desenvolver/compilar.
 
 Para desenvolver, instale Rust **1.92.0**, rustfmt, Clippy e o linker MSVC com ferramentas C++/Windows SDK, ou MinGW-w64 completo. Na raiz do repositório, em PowerShell:
 
@@ -14,7 +14,7 @@ cargo run --locked -p oxy_player -- examples/validacao/project.oxy.json
 cargo build --workspace --release --locked
 ```
 
-O editor aceita o arquivo do projeto como argumento; sem argumento, abre a validação disponível na pasta atual ou um projeto vazio. O player aceita arquivo/pasta e, sem argumento, procura `data/project.oxy.json` ao lado do próprio executável. Nesta máquina, o auxiliar `scripts/cargo.ps1` configura o compilador GNU preparado:
+Sem argumentos, o editor mostra **Novo projeto**, **Abrir projeto**, **Projetos recentes** e **Projeto de exemplo**. O exemplo abre uma cópia temporária das três cenas; Salvar pede uma nova pasta e copia seus assets, preservando o original. **Projeto → Tela inicial** retorna ao início com confirmação de alterações pendentes. Recentes ficam em `%LOCALAPPDATA%/OXY Engine/recent-projects.json`; remover da lista não exclui arquivos. O editor também aceita o arquivo do projeto como argumento. O player aceita arquivo/pasta e, sem argumento, procura `data/project.oxy.json` ao lado do próprio executável. Nesta máquina, o auxiliar `scripts/cargo.ps1` configura o compilador GNU preparado:
 
 ```powershell
 $oxyArgs = @('run','--locked','-p','oxy_editor','--','examples/validacao/project.oxy.json')
@@ -52,18 +52,27 @@ cargo test -p oxy_editor native_spatial_workflow --locked -- --ignored --nocaptu
 cargo test -p oxy_editor native_editor_workflow --locked -- --ignored --nocapture
 cargo test -p oxy_player native_player_portable_workflow --locked -- --ignored --nocapture
 cargo test -p oxy_render native_gpu_depth_texture_and_resize --locked -- --ignored --nocapture
-# Pacote com editor e player; omita -IncludeEditor para distribuir só o jogo.
-.\scripts\package.ps1 -Project 'examples/validacao' -Destination 'dist/OXY-Engine-0.1.2' -IncludeEditor
-.\dist\OXY-Engine-0.1.2\oxy_player.exe
+cargo test -p oxy_editor native_portable_home_workflow --locked -- --ignored --nocapture
+# ZIP da engine, com player e exemplos; -SkipBuild reutiliza release já compilado.
+.\scripts\package-engine.ps1
+& '.\dist\OXY-Engine-0.1.2-windows-x64\OXY Engine.exe'
+.\scripts\test-portable.ps1 -Zip '.\dist\OXY-Engine-0.1.2-windows-x64.zip'
+# O fluxo de jogos permanece separado (apenas runtime + dados do seu projeto).
+.\scripts\package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
+.\dist\Meu-Jogo\oxy_player.exe
 ```
 
 Para usar o auxiliar com argumentos após `--`, passe um vetor, como no exemplo de execução. O empacotador inclui executáveis e dados locais, prepara uma pasta temporária e preserva o pacote anterior. `-DebugBuild` escolhe desenvolvimento; `-SkipBuild` usa binários já compilados do perfil escolhido. O pacote independe do diretório-fonte.
+
+**Distribuição automática:** `.github/workflows/portable-windows.yml` gera ZIP Windows x64 e SHA-256, disponibiliza artifact por 14 dias em pushes para `main` e anexa ambos a GitHub Releases em tags `v*`. A tag deve corresponder à versão do workspace (por exemplo, `v0.1.2`); atualize `Cargo.toml`/`Cargo.lock` antes de uma nova versão. O build usa MSVC com runtime C estático. `ci.yml` continua verificando fmt/build/test/Clippy. Binários, ZIPs e DLLs permanecem em `target/` e `dist/`, ignorados pelo Git. Nenhum instalador, updater ou assinatura foi acrescentado.
+
+`test-portable.ps1` extrai em um caminho temporário com espaços, confere arquitetura x64, ícone/metadados, DLLs importadas e assets, e abre o editor sem argumentos a partir de outro diretório, com Rust/Cargo removidos do PATH. `-ContentOnly` omite a janela para runners sem GPU. Para a aceitação em Windows realmente limpo, execute esse mesmo script e ZIP em outra máquina/Windows Sandbox sem Rust, confirme os quatro comandos da tela inicial, abra o exemplo, teste Jogar e salve/reabra uma cópia. **Windows Sandbox não está disponível neste ambiente; o teste em outra máquina e a execução do novo workflow no GitHub ainda não foram verificados.**
 
 `examples/validacao/project.oxy.json` contém sala 2D, boneco 3D articulado e interação de carta. São cenas editáveis normais com comportamentos em componentes/grafos e placeholders locais. Para gerar outra cópia: `cargo run --locked -p oxy_core --example create_demos -- artifacts/validacao-regenerada`.
 
 Os testes cobrem persistência segura e falhas de escrita, referências/hierarquias, seleção e transformações, isolamento de execução, histórico de documentos/pixels, animação/eventos, grafos/esperas/cancelamento, colisões, caches e interação egui. Testes nativos exercitam editor, player e GPU; evidências desta revisão ficam em `qa/v0.1.2/`. A configuração em `.github/workflows/ci.yml` executa formatação, build, testes sem janela e Clippy no Windows; **a execução no GitHub ainda não foi verificada**.
 
-Verificado nesta entrega em Windows/GNU: **92 testes automatizados e 4 testes nativos passaram**, além de fmt, builds de desenvolvimento/release e Clippy com `-D warnings`. A QA usa janelas wgpu reais e entrada isolada no egui, sem controlar outros aplicativos. Foram inspecionadas capturas do editor e player. Em repouso, houve 1 atualização espontânea em 500 ms após estabilização; não é uma medição de consumo total de CPU/GPU.
+Verificado na atualização portátil em Windows/GNU: **95 testes automatizados e 3 testes nativos passaram** (tela inicial, regressão do editor e player), além de fmt, builds de desenvolvimento/release e Clippy com `-D warnings`. O executável do ZIP abriu fora do repositório e sem Rust/Cargo no PATH; o pacote passou na inspeção de arquitetura, recursos e DLLs. Evidências novas ficam em `qa/portable/`. A QA usa janelas wgpu reais e entrada isolada no egui. Na tela inicial, houve 1 atualização espontânea em 500 ms após estabilização; não é uma medição de consumo total de CPU/GPU.
 
 ## Estrutura e limites
 

@@ -1,0 +1,102 @@
+libgcc_s_seh-1.dll -> KERNEL32.dll
+libgcc_s_seh-1.dll -> api-ms-win-crt-heap-l1-1-0.dll
+libgcc_s_seh-1.dll -> api-ms-win-crt-private-l1-1-0.dll
+libgcc_s_seh-1.dll -> api-ms-win-crt-runtime-l1-1-0.dll
+libgcc_s_seh-1.dll -> api-ms-win-crt-stdio-l1-1-0.dll
+libgcc_s_seh-1.dll -> api-ms-win-crt-string-l1-1-0.dll
+libgcc_s_seh-1.dll -> libwinpthread-1.dll
+libstdc++-6.dll -> libgcc_s_seh-1.dll
+libstdc++-6.dll -> KERNEL32.dll
+libstdc++-6.dll -> api-ms-win-crt-convert-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-environment-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-filesystem-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-heap-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-locale-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-math-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-private-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-runtime-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-stdio-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-string-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-time-l1-1-0.dll
+libstdc++-6.dll -> api-ms-win-crt-utility-l1-1-0.dll
+libstdc++-6.dll -> libwinpthread-1.dll
+libwinpthread-1.dll -> KERNEL32.dll
+libwinpthread-1.dll -> api-ms-win-crt-convert-l1-1-0.dll
+libwinpthread-1.dll -> api-ms-win-crt-heap-l1-1-0.dll
+libwinpthread-1.dll -> api-ms-win-crt-private-l1-1-0.dll
+libwinpthread-1.dll -> api-ms-win-crt-runtime-l1-1-0.dll
+libwinpthread-1.dll -> api-ms-win-crt-stdio-l1-1-0.dll
+libwinpthread-1.dll -> api-ms-win-crt-string-l1-1-0.dll
+OXY Engine.exe -> ADVAPI32.dll
+OXY Engine.exe -> GDI32.dll
+OXY Engine.exe -> KERNEL32.dll
+OXY Engine.exe -> api-ms-win-crt-environment-l1-1-0.dll
+OXY Engine.exe -> api-ms-win-crt-heap-l1-1-0.dll
+OXY Engine.exe -> api-ms-win-crt-locale-l1-1-0.dll
+OXY Engine.exe -> api-ms-win-crt-math-l1-1-0.dll
+OXY Engine.exe -> api-ms-win-crt-private-l1-1-0.dll
+OXY Engine.exe -> api-ms-win-crt-runtime-l1-1-0.dll
+OXY Engine.exe -> api-ms-win-crt-stdio-l1-1-0.dll
+OXY Engine.exe -> api-ms-win-crt-string-l1-1-0.dll
+OXY Engine.exe -> ntdll.dll
+OXY Engine.exe -> SHELL32.dll
+OXY Engine.exe -> USER32.dll
+OXY Engine.exe -> api-ms-win-core-winrt-error-l1-1-0.dll
+OXY Engine.exe -> dwmapi.dll
+OXY Engine.exe -> imm32.dll
+OXY Engine.exe -> ntdll.dll
+OXY Engine.exe -> ole32.dll
+OXY Engine.exe -> oleaut32.dll
+OXY Engine.exe -> opengl32.dll
+OXY Engine.exe -> propsys.dll
+OXY Engine.exe -> userenv.dll
+OXY Engine.exe -> uxtheme.dll
+OXY Engine.exe -> winmm.dll
+OXY Engine.exe -> ws2_32.dll
+OXY Engine.exe -> api-ms-win-core-synch-l1-2-0.dll
+OXY Engine.exe -> bcryptprimitives.dll
+OXY Engine.exe -> kernel32.dll
+OXY Engine.exe -> kernel32.dll
+OXY Engine.exe -> api-ms-win-core-path-l1-1-0.dll
+OXY Engine.exe -> kernel32.dll
+OXY Engine.exe -> shell32.dll
+OXY Engine.exe -> shlwapi.dll
+OXY Engine.exe -> user32.dll
+oxy_player.exe -> ADVAPI32.dll
+oxy_player.exe -> GDI32.dll
+oxy_player.exe -> KERNEL32.dll
+oxy_player.exe -> api-ms-win-crt-environment-l1-1-0.dll
+oxy_player.exe -> api-ms-win-crt-heap-l1-1-0.dll
+oxy_player.exe -> api-ms-win-crt-locale-l1-1-0.dll
+oxy_player.exe -> api-ms-win-crt-math-l1-1-0.dll
+oxy_player.exe -> api-ms-win-crt-private-l1-1-0.dll
+oxy_player.exe -> api-ms-win-crt-runtime-l1-1-0.dll
+oxy_player.exe -> api-ms-win-crt-stdio-l1-1-0.dll
+oxy_player.exe -> api-ms-win-crt-string-l1-1-0.dll
+oxy_player.exe -> ntdll.dll
+oxy_player.exe -> SHELL32.dll
+oxy_player.exe -> USER32.dll
+oxy_player.exe -> api-ms-win-core-winrt-error-l1-1-0.dll
+oxy_player.exe -> dwmapi.dll
+oxy_player.exe -> imm32.dll
+oxy_player.exe -> ntdll.dll
+oxy_player.exe -> ole32.dll
+oxy_player.exe -> oleaut32.dll
+oxy_player.exe -> opengl32.dll
+oxy_player.exe -> propsys.dll
+oxy_player.exe -> userenv.dll
+oxy_player.exe -> uxtheme.dll
+oxy_player.exe -> winmm.dll
+oxy_player.exe -> ws2_32.dll
+oxy_player.exe -> api-ms-win-core-synch-l1-2-0.dll
+oxy_player.exe -> bcryptprimitives.dll
+oxy_player.exe -> kernel32.dll
+oxy_player.exe -> kernel32.dll
+oxy_player.exe -> api-ms-win-core-path-l1-1-0.dll
+oxy_player.exe -> kernel32.dll
+oxy_player.exe -> shell32.dll
+oxy_player.exe -> shlwapi.dll
+oxy_player.exe -> user32.dll
+Janela aberta sem argumentos, fora do repositório e sem Rust/Cargo no PATH: OXY Engine 0.1.2
+Validado: OXY Engine 0.1.2. Extração preservada em C:\Users\Gabriel\AppData\Local\Temp\OXY portable test 67e27a3a-fb72-476f-9c99-65d06d4a0613
+A checagem de PATH não substitui o teste em outra máquina limpa/Windows Sandbox.

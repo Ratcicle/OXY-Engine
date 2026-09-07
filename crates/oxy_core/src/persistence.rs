@@ -108,6 +108,26 @@ pub fn save_cached_bundle(
     project: &Project,
     images: &mut TextureCache,
 ) -> Result<(), String> {
+    save_cached_bundle_from(path, project, images, None)
+}
+
+/// Save an independent copy, including lazily loaded PNG/WAV resources.
+/// Source files are only read. All destination writes share one transaction.
+pub fn save_cached_copy(
+    path: &Path,
+    project: &Project,
+    images: &mut TextureCache,
+    source_root: &Path,
+) -> Result<(), String> {
+    save_cached_bundle_from(path, project, images, Some(source_root))
+}
+
+fn save_cached_bundle_from(
+    path: &Path,
+    project: &Project,
+    images: &mut TextureCache,
+    source_root: Option<&Path>,
+) -> Result<(), String> {
     validate_project(project)?;
     for (id, _) in images.dirty_images() {
         if !project
@@ -141,7 +161,29 @@ pub fn save_cached_bundle(
             let image = images
                 .get(&asset.id)
                 .ok_or("Textura alterada não está residente")?;
-            writes.push((target, image.to_png()?));
+            let bytes = image.to_png()?;
+            if source_root.is_some()
+                && target.exists()
+                && fs::read(&target).map_err(|e| e.to_string())? != bytes
+            {
+                return Err(format!(
+                    "A pasta escolhida já contém um asset diferente: {}. Escolha uma pasta vazia.",
+                    asset.path
+                ));
+            }
+            writes.push((target, bytes));
+        } else if let Some(source_root) = source_root {
+            let source = resolve_asset_path(source_root, &asset.path)?;
+            validate_asset_header(asset, &source)?;
+            let bytes = fs::read(&source)
+                .map_err(|e| format!("Não foi possível copiar {}: {e}", asset.name))?;
+            if target.exists() && fs::read(&target).map_err(|e| e.to_string())? != bytes {
+                return Err(format!(
+                    "A pasta escolhida já contém um asset diferente: {}. Escolha uma pasta vazia.",
+                    asset.path
+                ));
+            }
+            writes.push((target, bytes));
         } else {
             validate_asset_header(asset, &target)?;
         }

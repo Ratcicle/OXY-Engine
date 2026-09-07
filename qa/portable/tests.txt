@@ -1,0 +1,149 @@
+   Compiling oxy_core v0.1.2 (C:\Users\Gabriel\Documents\OXY Engine\crates\oxy_core)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.25s
+     Running unittests src\lib.rs (target\debug\deps\oxy_core-5acdf483d5755be4.exe)
+
+running 58 tests
+test animation::tests::hold_and_linear_sampling ... ok
+test animation::tests::markers_cross_once_including_loops ... ok
+test animation::tests::preview_clone_does_not_write_base ... ok
+test animation::tests::rotation_uses_shortest_quaternion_arc ... ok
+test animation::tests::zero_marker_and_pause ... ok
+test collision::tests::cannot_tunnel_through_floor_or_wall ... ok
+test document::tests::cycles_are_rejected_and_world_is_preserved ... ok
+test collision::tests::three_dimensions_and_parallel_motion ... ok
+test document::tests::duplicate_remaps_animation_action_to_duplicate_clip ... ok
+test document::tests::duplicate_remaps_children_and_attributes ... ok
+test document::tests::duplicate_offsets_root_keyframes_and_preserves_original ... ok
+test audio::tests::invalid_wav_is_a_recoverable_error ... ok
+test document::tests::unsafe_asset_path_and_missing_reference_rejected ... ok
+test document::tests::round_trip_and_stable_ids ... ok
+test document::tests::editable_model_roundtrip_and_instantiation ... ok
+test document::tests::saved_model_normalizes_all_root_tracks_without_touching_scene ... ok
+test edit_history::tests::immutable_cache_loads_and_unchanged_mutations_are_not_commands ... ok
+test edit_history::tests::branch_save_marker_and_pending_cancel_are_consistent ... ok
+test edit_history::tests::creation_deletion_graph_and_array_order_roundtrip ... ok
+test editing::tests::drop_reparent_preserves_world_and_rejects_cycles_atomically ... ok
+test edit_history::tests::failed_undo_leaves_document_pixels_and_stacks_unchanged ... ok
+test editing::tests::multi_select_toggle_range_and_clear ... ok
+test editing::tests::group_duplicate_and_transform_do_not_transform_children_twice ... ok
+test editing::tests::rename_keeps_id_and_texture_unlink_keeps_asset ... ok
+test graph::tests::references_are_checked_and_remapped_without_changing_labels ... ok
+test painting::tests::flood_fill_is_bounded_by_pixels ... ok
+test graph::tests::rejects_port_mismatch_and_cycles ... ok
+test persistence::tests::cached_save_refuses_to_discard_orphan_dirty_pixels ... ok
+test painting::tests::real_png_roundtrip ... ok
+test edit_history::tests::repeated_transform_edits_never_store_project_or_texture_snapshots ... ok
+test persistence::tests::save_load_and_invalid_version_preserves_document ... ok
+test persistence::tests::broken_asset_rejected_without_replacing_caller_state ... ok
+test runtime::tests::area_hit_is_once_per_activation_and_target ... ok
+test runtime::tests::controller_falls_lands_and_jump_does_not_tunnel ... ok
+test runtime::tests::data_type_failure_identifies_owner_and_stops_only_affected_behavior ... ok
+test runtime::tests::deletion_scene_change_and_pause_cancel_or_suspend_waits ... ok
+test persistence::tests::failed_recovery_keeps_the_original_backup ... ok
+test runtime::tests::spawned_root_translation_animation_retains_configured_spawn_offset ... ok
+test runtime::tests::waits_nonblocking_play_isolated_and_stop_cancels ... ok
+test spatial::tests::animated_structural_edits_and_singular_transforms_are_atomic ... ok
+test persistence::tests::replacement_writes_new_content_after_backup_sync ... ok
+test spatial::tests::collider_pivot_and_fit_commands_roundtrip_as_deltas ... ok
+test spatial::tests::empty_invisible_group_uses_runtime_box_including_pivot_and_mirror ... ok
+test spatial::tests::fit_nested_geometry_uses_extents_and_can_exclude_weapon ... ok
+test spatial::tests::pivot_preserves_matrices_children_colliders_and_static_animation_intervals ... ok
+test spatial::tests::resize_opposite_edge_and_move_center_preserve_entities_and_flags ... ok
+test persistence::tests::painted_model_animation_and_instanced_graph_survive_bundle ... ok
+test texture_cache::tests::dirty_is_pinned_and_clones_share_until_a_mutation ... ok
+test persistence::tests::staging_failure_does_not_replace_previous_files ... ok
+test persistence::tests::imported_png_and_paint_link_survive ... ok
+test persistence::tests::locked_second_file_rolls_back_first_file ... ok
+test persistence::tests::partially_failed_replace_restores_current_and_previous_files ... ok
+test texture_cache::tests::registration_is_lazy_and_clean_residency_is_bounded ... ok
+test persistence::tests::cached_bundle_is_lazy_keeps_dirty_on_failure_and_reopens_real_pixels ... ok
+test edit_history::tests::whole_paint_gesture_is_compact_and_reversible ... ok
+test edit_history::tests::graph_parameters_tracks_attributes_and_subtree_deletion_store_only_changes ... ok
+test edit_history::tests::lazy_loaded_paint_gesture_and_dirty_deletion_remain_undoable ... ok
+test runtime::tests::task_budget_bounds_large_graph_without_blocking_fixed_steps ... ok
+
+test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests\portable_copy.rs (target\debug\deps\portable_copy-63c0ac1d6a291322.exe)
+
+running 1 test
+test example_copy_keeps_lazy_png_audio_and_ids_without_writing_source ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests\saved_validation_projects.rs (target\debug\deps\saved_validation_projects-677a593b1bd257ff.exe)
+
+running 3 tests
+test saved_card_graph_checks_cost_and_preserves_edit_document ... ok
+test saved_textured_3d_hierarchy_uses_same_runtime_and_hit_rules ... ok
+test saved_2d_project_collects_opens_door_and_hits_through_marker ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src\main.rs (target\debug\deps\oxy_editor-fa34e8f330f29f18.exe)
+
+running 18 tests
+test app::diagnostics::tests::idle_editor_has_no_continuous_repaint ... ok
+test native_qa::native_editor_workflow ... ignored, Opens an inactive native WGPU window; injects input only into this app
+test native_qa::portable::native_portable_home_workflow ... ignored, Opens the native home screen; input remains isolated in egui
+test app::home::tests::recents_are_bounded_deduplicated_and_reordered ... ok
+test graph_ui::tests::curved_connection_can_be_picked_away_from_its_midpoint ... ok
+test app::viewport::tests::focus_frames_hierarchy_in_portrait_and_landscape_2d_and_3d ... ok
+test native_qa::spatial::native_spatial_workflow ... ignored, Native WGPU overlay regression; isolated application input
+test graph_ui::tests::deleting_or_duplicating_graph_selection_never_changes_an_entity ... ok
+test app::spatial_tools::tests::ray_plane_drag_tracks_camera_pan_zoom_resizing_and_logical_dpi ... ok
+test studio::animation::tests::automatic_model_resolves_roots_groups_and_animated_ancestors_without_names ... ok
+test studio::animation::tests::duplication_and_rename_keep_targets_events_and_original_references_stable ... ok
+test studio::animation::tests::draft_group_pose_moves_descendants_and_recording_never_overwrites_model_base ... ok
+test studio::animation::tests::referenced_animation_deletion_lists_scene_and_asset_uses_and_preserves_document ... ok
+test studio::animation::tests::collective_drafts_are_time_bound_and_one_reversible_delta ... ok
+test graph_ui::tests::node_and_connection_panels_show_descriptions_and_port_labels_instead_of_ids ... ok
+test graph_ui::tests::named_parameters_are_editable_through_real_egui_clicks_and_keep_stable_ids ... ok
+test graph_ui::tests::focused_buttons_allow_quick_shortcuts_but_focused_text_edits_protect_typing ... ok
+test app::home::tests::recent_settings_roundtrip_and_invalid_version ... ok
+
+test result: ok. 15 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src\main.rs (target\debug\deps\oxy_player-288a802e35109e0d.exe)
+
+running 1 test
+test native_qa::native_player_portable_workflow ... ignored, Opens an inactive native WGPU player; inputs stay inside its RawInput
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\oxy_render-32bc58bac3bb23eb.exe)
+
+running 19 tests
+test gpu_test::native_gpu_depth_texture_and_resize ... ignored, Requires a native WGPU adapter; run explicitly for graphics validation
+test camera::tests::orthographic_scale_is_uniform ... ok
+test camera::tests::resized_projection_and_ray_stay_aligned ... ok
+test game_ui::tests::overlay_picking_matches_layers_and_hidden_hierarchy ... ok
+test game_ui::tests::object_binding_follows_live_names_and_never_displays_raw_identifiers ... ok
+test collider_debug::tests::overlapping_contours_prefer_selection_and_fill_is_not_a_target ... ok
+test labels::tests::visible_enum_labels_are_portuguese ... ok
+test game_ui::tests::right_anchor_keeps_margin_on_resize ... ok
+test mesh::tests::cache_key_ignores_object_state_but_keeps_curved_topology ... ok
+test input::tests::ordinary_gameplay_returns_after_resume_without_replaying_paused_keys ... ok
+test input::tests::complete_chord_in_one_frame_and_reserved_host_keys_are_filtered ... ok
+test tests::picking_obeys_2d_layers_and_returns_texture_coordinates ... ok
+test mesh::tests::ray_reports_barycentric_uv ... ok
+test game_ui::tests::portuguese_attribute_binding_and_unsaved_pixels_survive_first_game_draw ... ok
+test input::tests::quick_command_chords_do_not_emit_pressed_or_later_held_actions ... ok
+test mesh::tests::primitives_have_valid_meshes_and_uvs ... ok
+test mesh::tests::cpu_cache_reuses_geometry_and_evicts_without_invalidating_references ... ok
+test collider_debug::tests::invisible_group_is_drawn_when_selected_and_disabled_never_enables_physics ... ok
+test input::tests::focused_resume_button_allows_gameplay_and_focused_text_suppresses_it ... ok
+
+test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests oxy_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests oxy_render
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
