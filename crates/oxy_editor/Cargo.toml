@@ -1,0 +1,19 @@
+[package]
+name = "oxy_editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+oxy_core.workspace = true
+oxy_render.workspace = true
+eframe.workspace = true
+egui.workspace = true
+glam.workspace = true
+image.workspace = true
+serde_json.workspace = true
+rfd.workspace = true
+
+[dev-dependencies]
+winit = "=0.30.13"

@@ -1,0 +1,9 @@
+Concluído: true
+Erro: None
+Captura GPU: true
+Projeto e assets carregados da pasta temporária; câmera e interface presentes
+Movimento por entrada nativa isolada confirmado
+Escape pausou e liberou a entrada
+Clique no Retomar localizado pelo texto efetivamente desenhado
+Retomar reativou a simulação
+Movimento após Retomar confirmado; captura GPU solicitada

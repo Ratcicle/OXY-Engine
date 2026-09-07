@@ -1,0 +1,32 @@
+[workspace]
+members = ["crates/oxy_core", "crates/oxy_render", "crates/oxy_editor", "crates/oxy_player"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+uuid = { version = "=1.18.1", features = ["v4", "serde"] }
+glam = { version = "=0.30.9", features = ["serde"] }
+image = { version = "=0.25.9", default-features = false, features = ["png"] }
+thiserror = "=2.0.17"
+eframe = { version = "=0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui = "=0.33.3"
+egui-wgpu = "=0.33.3"
+bytemuck = { version = "=1.24.0", features = ["derive"] }
+rfd = "=0.15.4"
+hound = "=3.5.1"
+oxy_core = { path = "crates/oxy_core" }
+oxy_render = { path = "crates/oxy_render" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 2
+

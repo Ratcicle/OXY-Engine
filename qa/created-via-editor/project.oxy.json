@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "0995202e-9072-419a-b0a3-8053fce502b5",
+  "name": "Meu projeto OXY",
+  "start_scene": "148697c6-a9bf-4525-8435-16d76005ff91",
+  "scenes": [
+    {
+      "id": "148697c6-a9bf-4525-8435-16d76005ff91",
+      "name": "Cena 2D",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "c4316a7b-4738-437a-9c07-88f0d92d5f30",
+          "name": "Retângulo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": "d23bc743-a0ce-4aa9-bcbb-5485a99a071a",
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "d23bc743-a0ce-4aa9-bcbb-5485a99a071a",
+      "name": "Pintura 256 · Retângulo",
+      "path": "assets/d23bc743-a0ce-4aa9-bcbb-5485a99a071a.png",
+      "kind": "Texture",
+      "model": null
+    }
+  ],
+  "input_bindings": {
+    "atacar": "J",
+    "interagir": "E",
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "mover_frente": "W",
+    "mover_tras": "S",
+    "pular": "Space"
+  }
+}

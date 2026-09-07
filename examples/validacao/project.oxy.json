@@ -1,0 +1,4501 @@
+{
+  "schema_version": 1,
+  "id": "ffe26d59-c650-4688-a1e0-c22155f00cb1",
+  "name": "OXY Engine · validação v0.1",
+  "start_scene": "d6f66a12-2202-445b-96ae-06a2b6d421e9",
+  "scenes": [
+    {
+      "id": "d6f66a12-2202-445b-96ae-06a2b6d421e9",
+      "name": "A · Sala de plataforma 2D",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "2d07d67f-daae-4fc8-9727-226bbc3e67f2",
+          "name": "Chão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            20.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.13,
+              0.2,
+              0.24,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              20.0,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "3685b4a2-59d1-4fa1-9a02-7f6163ef24af",
+          "name": "Plataforma editável",
+          "parent": null,
+          "transform": {
+            "position": [
+              -6.0,
+              1.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            2.0,
+            0.25,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.24,
+              0.43,
+              0.45,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              2.0,
+              0.25,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "5fddb07d-6024-46f6-9d2d-bff8089dccb9",
+          "name": "Plataforma editável",
+          "parent": null,
+          "transform": {
+            "position": [
+              -3.5,
+              2.7,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            2.0,
+            0.25,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.24,
+              0.43,
+              0.45,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              2.0,
+              0.25,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "a38436d2-3eb6-4869-a3fd-74a2a36cfb87",
+          "name": "Plataforma editável",
+          "parent": null,
+          "transform": {
+            "position": [
+              6.0,
+              2.8,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            2.5,
+            0.25,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.24,
+              0.43,
+              0.45,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              2.5,
+              0.25,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "db17dfd3-4a49-4e55-b0c4-0c5168c7e8be",
+          "name": "Vida do personagem",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Bar",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              56.0
+            ],
+            "size": [
+              220.0,
+              28.0
+            ],
+            "text": "Vida do personagem",
+            "color": [
+              0.22,
+              0.8,
+              0.67,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "93f26b6f-1c8a-41ec-99bf-c36489419e52",
+            "binding_attribute": "Vida",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "894f6468-19a6-44b1-a6e2-a4228d485989",
+          "name": "Vida do alvo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Bar",
+            "anchor": "TopLeft",
+            "position": [
+              270.0,
+              56.0
+            ],
+            "size": [
+              220.0,
+              28.0
+            ],
+            "text": "Vida do alvo",
+            "color": [
+              0.22,
+              0.8,
+              0.67,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "ee13f7e1-13c3-4f15-933d-7307a34bab69",
+            "binding_attribute": "Vida",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "fcdd449e-3c81-41b0-91a2-db44c171e1e8",
+          "name": "Instruções",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              16.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "SALA 2D · A/D mover · Espaço pular · J atacar à direita · E abrir porta",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "ed432416-9183-4649-8dcd-fbdbd7052748",
+          "name": "Objetivo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              98.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "Colete o círculo amarelo. Aproxime-se do alvo vermelho e ataque com J.",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "93f26b6f-1c8a-41ec-99bf-c36489419e52",
+          "name": "Personagem · placeholder local",
+          "parent": null,
+          "transform": {
+            "position": [
+              -4.6,
+              0.55,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Sprite",
+          "dimensions": [
+            0.65,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": "517d4a4b-db88-47df-a635-51f49ea5ffec",
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Chave": {
+              "Bool": false
+            },
+            "Vida": {
+              "Number": 100.0
+            }
+          },
+          "collider": {
+            "size": [
+              0.65,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "speed": 5.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "3966b840-70be-4be6-88ac-8ea68f9907f4",
+                "operation": "event.input",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "atacar"
+                  }
+                }
+              },
+              {
+                "id": "108ca68e-aaa4-4883-b001-3386fa551d8d",
+                "operation": "action.animation",
+                "position": [
+                  280.0,
+                  20.0
+                ],
+                "params": {
+                  "clip": {
+                    "Text": "d603afeb-25bd-4ed6-a334-93006f24471b"
+                  },
+                  "restart": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "3e889c9b-2537-4e3c-9791-007c363c7c02",
+                "operation": "event.animation",
+                "position": [
+                  20.0,
+                  210.0
+                ],
+                "params": {
+                  "marker": {
+                    "Text": "Impacto"
+                  }
+                }
+              },
+              {
+                "id": "a66dcd32-2a8e-4b67-bc94-819914e66447",
+                "operation": "action.component",
+                "position": [
+                  280.0,
+                  210.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "87bb641d-3424-430e-82fd-abc55be72344"
+                  }
+                }
+              },
+              {
+                "id": "216cd362-bb22-41b4-a5ec-0288de45aba0",
+                "operation": "control.wait",
+                "position": [
+                  560.0,
+                  210.0
+                ],
+                "params": {
+                  "seconds": {
+                    "Number": 0.1
+                  }
+                }
+              },
+              {
+                "id": "830c6828-48cd-438a-8a03-fbf9a89f1122",
+                "operation": "action.component",
+                "position": [
+                  830.0,
+                  210.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "87bb641d-3424-430e-82fd-abc55be72344"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "3966b840-70be-4be6-88ac-8ea68f9907f4",
+                "from_port": "exec",
+                "to_node": "108ca68e-aaa4-4883-b001-3386fa551d8d",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "3e889c9b-2537-4e3c-9791-007c363c7c02",
+                "from_port": "exec",
+                "to_node": "a66dcd32-2a8e-4b67-bc94-819914e66447",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "a66dcd32-2a8e-4b67-bc94-819914e66447",
+                "from_port": "exec",
+                "to_node": "216cd362-bb22-41b4-a5ec-0288de45aba0",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "216cd362-bb22-41b4-a5ec-0288de45aba0",
+                "from_port": "exec",
+                "to_node": "830c6828-48cd-438a-8a03-fbf9a89f1122",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [
+            {
+              "id": "d603afeb-25bd-4ed6-a334-93006f24471b",
+              "name": "Ataque",
+              "duration": 0.5,
+              "looping": false,
+              "tracks": [
+                {
+                  "target": "be17c2ce-b207-46eb-8162-82dd3247f692",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "transform": {
+                        "position": [
+                          0.24,
+                          0.1,
+                          0.05
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -0.65
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          -0.3,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.12,
+                      "transform": {
+                        "position": [
+                          0.24,
+                          0.1,
+                          0.05
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -1.1
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          -0.3,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.22,
+                      "transform": {
+                        "position": [
+                          0.24,
+                          0.1,
+                          0.05
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.8
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          -0.3,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.5,
+                      "transform": {
+                        "position": [
+                          0.24,
+                          0.1,
+                          0.05
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -0.65
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          -0.3,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    }
+                  ]
+                }
+              ],
+              "events": [
+                {
+                  "time": 0.2,
+                  "name": "Impacto"
+                }
+              ]
+            }
+          ],
+          "model_source": null
+        },
+        {
+          "id": "be17c2ce-b207-46eb-8162-82dd3247f692",
+          "name": "Braço articulado",
+          "parent": "93f26b6f-1c8a-41ec-99bf-c36489419e52",
+          "transform": {
+            "position": [
+              0.24,
+              0.1,
+              0.05
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              -0.3,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.65,
+            0.15,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              1.0,
+              0.78,
+              0.32,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 2,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "87bb641d-3424-430e-82fd-abc55be72344",
+          "name": "Região de acerto · ativação por marcador",
+          "parent": "93f26b6f-1c8a-41ec-99bf-c36489419e52",
+          "transform": {
+            "position": [
+              0.92,
+              0.1,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              1.15,
+              0.65,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": true,
+            "enabled": false
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "dd2aac49-6c6b-4ad0-808a-ef606a893dbf",
+                "operation": "event.area_enter",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "4a9136c7-9902-4a08-936c-2f2600168575",
+                "operation": "action.damage",
+                "position": [
+                  290.0,
+                  20.0
+                ],
+                "params": {
+                  "amount": {
+                    "Number": 25.0
+                  },
+                  "attribute": {
+                    "Text": "Vida"
+                  },
+                  "once": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "17c73e7d-d39e-4faa-aa3f-702a8e341413",
+                "operation": "action.sound",
+                "position": [
+                  580.0,
+                  20.0
+                ],
+                "params": {
+                  "asset": {
+                    "Text": "74919aec-43ac-4387-b687-81e95df22fa4"
+                  },
+                  "volume": {
+                    "Number": 0.25
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "dd2aac49-6c6b-4ad0-808a-ef606a893dbf",
+                "from_port": "exec",
+                "to_node": "4a9136c7-9902-4a08-936c-2f2600168575",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "dd2aac49-6c6b-4ad0-808a-ef606a893dbf",
+                "from_port": "context",
+                "to_node": "4a9136c7-9902-4a08-936c-2f2600168575",
+                "to_port": "target"
+              },
+              {
+                "from_node": "4a9136c7-9902-4a08-936c-2f2600168575",
+                "from_port": "exec",
+                "to_node": "17c73e7d-d39e-4faa-aa3f-702a8e341413",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "ee13f7e1-13c3-4f15-933d-7307a34bab69",
+          "name": "Alvo · Vida configurável",
+          "parent": null,
+          "transform": {
+            "position": [
+              3.0,
+              0.7,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.8,
+            1.4,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.78,
+              0.31,
+              0.35,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Vida": {
+              "Number": 100.0
+            }
+          },
+          "collider": {
+            "size": [
+              0.8,
+              1.4,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "2e54117c-4945-4c1e-94fc-f96d28cd67b6",
+          "name": "Coletável · habilita Chave",
+          "parent": null,
+          "transform": {
+            "position": [
+              -1.3,
+              0.7,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Circle",
+          "dimensions": [
+            0.45,
+            0.45,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              1.0,
+              0.8,
+              0.28,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.6,
+              0.7,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": true,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "55cb839b-0e19-4c6c-adfd-c06dac7e10b8",
+                "operation": "event.area_enter",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "b93ad0ac-e43d-45bd-9823-5214a5a57454",
+                "operation": "attribute.set",
+                "position": [
+                  290.0,
+                  20.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Chave"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "3a1a4911-47e4-4616-9bcc-5ec835480c02",
+                "operation": "debug.message",
+                "position": [
+                  570.0,
+                  20.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Chave coletada: pressione E para abrir a porta."
+                  }
+                }
+              },
+              {
+                "id": "eb0d4a53-650a-447f-ac43-b0ddc1902152",
+                "operation": "action.remove",
+                "position": [
+                  850.0,
+                  20.0
+                ],
+                "params": {
+                  "target": {
+                    "Object": null
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "55cb839b-0e19-4c6c-adfd-c06dac7e10b8",
+                "from_port": "exec",
+                "to_node": "b93ad0ac-e43d-45bd-9823-5214a5a57454",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "55cb839b-0e19-4c6c-adfd-c06dac7e10b8",
+                "from_port": "context",
+                "to_node": "b93ad0ac-e43d-45bd-9823-5214a5a57454",
+                "to_port": "target"
+              },
+              {
+                "from_node": "b93ad0ac-e43d-45bd-9823-5214a5a57454",
+                "from_port": "exec",
+                "to_node": "3a1a4911-47e4-4616-9bcc-5ec835480c02",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "3a1a4911-47e4-4616-9bcc-5ec835480c02",
+                "from_port": "exec",
+                "to_node": "eb0d4a53-650a-447f-ac43-b0ddc1902152",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "afb6005d-a777-47f8-b849-9e5d2c194b42",
+          "name": "Porta · condição por nós",
+          "parent": null,
+          "transform": {
+            "position": [
+              6.8,
+              1.2,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.6,
+            2.4,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.38,
+              0.3,
+              0.52,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.6,
+              2.4,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "8054999b-0549-4d6c-82ef-ec9deb3cf21f",
+                "operation": "event.input",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "interagir"
+                  }
+                }
+              },
+              {
+                "id": "a2b35ae7-97f3-42cd-9474-075dcdc20849",
+                "operation": "attribute.get",
+                "position": [
+                  20.0,
+                  220.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Chave"
+                  },
+                  "target": {
+                    "Object": "93f26b6f-1c8a-41ec-99bf-c36489419e52"
+                  }
+                }
+              },
+              {
+                "id": "9ff5415a-f2ff-48cb-ad12-8e306ced5d55",
+                "operation": "condition.branch",
+                "position": [
+                  290.0,
+                  20.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "24fff9bb-1c7d-451d-a50b-3051645d8267",
+                "operation": "action.component",
+                "position": [
+                  580.0,
+                  20.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "d064bb76-71a5-405a-a82d-93a6ae28bf6e",
+                "operation": "action.component",
+                "position": [
+                  850.0,
+                  20.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "6068a207-deb0-41e1-b2fd-24186deac51f",
+                "operation": "debug.message",
+                "position": [
+                  570.0,
+                  220.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "A porta precisa da chave amarela."
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "8054999b-0549-4d6c-82ef-ec9deb3cf21f",
+                "from_port": "exec",
+                "to_node": "9ff5415a-f2ff-48cb-ad12-8e306ced5d55",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "a2b35ae7-97f3-42cd-9474-075dcdc20849",
+                "from_port": "value",
+                "to_node": "9ff5415a-f2ff-48cb-ad12-8e306ced5d55",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "9ff5415a-f2ff-48cb-ad12-8e306ced5d55",
+                "from_port": "then",
+                "to_node": "24fff9bb-1c7d-451d-a50b-3051645d8267",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "24fff9bb-1c7d-451d-a50b-3051645d8267",
+                "from_port": "exec",
+                "to_node": "d064bb76-71a5-405a-a82d-93a6ae28bf6e",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "9ff5415a-f2ff-48cb-ad12-8e306ced5d55",
+                "from_port": "else",
+                "to_node": "6068a207-deb0-41e1-b2fd-24186deac51f",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "936d1eba-87eb-40df-b350-3369d30a979f",
+          "name": "Câmera de jogo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              2.5,
+              12.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": {
+            "active": true,
+            "orthographic_size": 6.5,
+            "fov": 60.0
+          },
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    },
+    {
+      "id": "339748b2-d956-4ad3-955d-f3f058494f1c",
+      "name": "B · Oficina 3D e golpe articulado",
+      "kind": "ThreeD",
+      "entities": [
+        {
+          "id": "1505bbd9-5056-4d9c-83e3-dc3fd0deb618",
+          "name": "Chão 3D",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -0.3,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            16.0,
+            0.6,
+            14.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.16,
+              0.22,
+              0.26,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              16.0,
+              0.6,
+              14.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "b2d5a07c-37f0-4c6a-b688-ab26ccae4e13",
+          "name": "Vida do alvo 3D",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Bar",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              56.0
+            ],
+            "size": [
+              220.0,
+              28.0
+            ],
+            "text": "Vida do alvo 3D",
+            "color": [
+              0.22,
+              0.8,
+              0.67,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "08ee87e0-a0cd-4b3f-941b-a3a3cae6ace4",
+            "binding_attribute": "Vida",
+            "max_value": 150.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "9bad6d45-640d-471e-ac8c-fa70ed7023a7",
+          "name": "Instruções 3D",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              16.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "OFICINA 3D · A/D/W/S mover · J ataque à direita · peças, UV e clip editáveis",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "name": "Boneco · modelo por peças",
+          "parent": null,
+          "transform": {
+            "position": [
+              -1.1,
+              1.05,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Vida": {
+              "Number": 100.0
+            }
+          },
+          "collider": {
+            "size": [
+              0.8,
+              2.1,
+              0.6
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "speed": 3.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "e3586c09-7d11-40a7-8cad-b5408f4f18cb",
+                "operation": "event.input",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "atacar"
+                  }
+                }
+              },
+              {
+                "id": "05df7125-4bc1-40a3-8e62-b80d6d539f6b",
+                "operation": "action.animation",
+                "position": [
+                  280.0,
+                  20.0
+                ],
+                "params": {
+                  "clip": {
+                    "Text": "98082a3b-705a-4e42-bc88-4a8ec0fdfa33"
+                  },
+                  "restart": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "48331410-7664-4040-a22d-de9b84f6f8f9",
+                "operation": "event.animation",
+                "position": [
+                  20.0,
+                  210.0
+                ],
+                "params": {
+                  "marker": {
+                    "Text": "Impacto"
+                  }
+                }
+              },
+              {
+                "id": "f311b5c1-2a49-4fb3-949f-7435fb7710bb",
+                "operation": "action.component",
+                "position": [
+                  280.0,
+                  210.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "199f3800-93fc-435d-8e16-00fa4a114931"
+                  }
+                }
+              },
+              {
+                "id": "ed125daa-ad2e-4b8b-8c9a-10643baab9b5",
+                "operation": "control.wait",
+                "position": [
+                  560.0,
+                  210.0
+                ],
+                "params": {
+                  "seconds": {
+                    "Number": 0.1
+                  }
+                }
+              },
+              {
+                "id": "ac18010b-88e4-4178-87c4-5da0b928f459",
+                "operation": "action.component",
+                "position": [
+                  830.0,
+                  210.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "199f3800-93fc-435d-8e16-00fa4a114931"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "e3586c09-7d11-40a7-8cad-b5408f4f18cb",
+                "from_port": "exec",
+                "to_node": "05df7125-4bc1-40a3-8e62-b80d6d539f6b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "48331410-7664-4040-a22d-de9b84f6f8f9",
+                "from_port": "exec",
+                "to_node": "f311b5c1-2a49-4fb3-949f-7435fb7710bb",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f311b5c1-2a49-4fb3-949f-7435fb7710bb",
+                "from_port": "exec",
+                "to_node": "ed125daa-ad2e-4b8b-8c9a-10643baab9b5",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "ed125daa-ad2e-4b8b-8c9a-10643baab9b5",
+                "from_port": "exec",
+                "to_node": "ac18010b-88e4-4178-87c4-5da0b928f459",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [
+            {
+              "id": "98082a3b-705a-4e42-bc88-4a8ec0fdfa33",
+              "name": "Ataque",
+              "duration": 0.5,
+              "looping": false,
+              "tracks": [
+                {
+                  "target": "f71a3371-df28-4c82-b911-136a1942bd24",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -0.65
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.12,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -1.1
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.22,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.8
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.5,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -0.65
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    }
+                  ]
+                }
+              ],
+              "events": [
+                {
+                  "time": 0.2,
+                  "name": "Impacto"
+                }
+              ]
+            }
+          ],
+          "model_source": null
+        },
+        {
+          "id": "2c273087-5dba-4cf6-a61f-703aba7cfbe9",
+          "name": "Espada · lâmina",
+          "parent": "f71a3371-df28-4c82-b911-136a1942bd24",
+          "transform": {
+            "position": [
+              0.0,
+              -0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.14,
+            0.9,
+            0.07
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.82,
+              0.9,
+              0.93,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "199f3800-93fc-435d-8e16-00fa4a114931",
+          "name": "Região de acerto 3D",
+          "parent": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "transform": {
+            "position": [
+              1.15,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              1.5,
+              1.35,
+              1.2
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": true,
+            "enabled": false
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "08df582e-5dc2-4499-840b-f7874de25770",
+                "operation": "event.area_enter",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "6761d3bc-6068-473d-b657-365582e0c5ae",
+                "operation": "action.damage",
+                "position": [
+                  290.0,
+                  20.0
+                ],
+                "params": {
+                  "amount": {
+                    "Number": 25.0
+                  },
+                  "attribute": {
+                    "Text": "Vida"
+                  },
+                  "once": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "44c76028-35af-47e6-a182-8d629113dda0",
+                "operation": "action.sound",
+                "position": [
+                  580.0,
+                  20.0
+                ],
+                "params": {
+                  "asset": {
+                    "Text": "74919aec-43ac-4387-b687-81e95df22fa4"
+                  },
+                  "volume": {
+                    "Number": 0.25
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "08df582e-5dc2-4499-840b-f7874de25770",
+                "from_port": "exec",
+                "to_node": "6761d3bc-6068-473d-b657-365582e0c5ae",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "08df582e-5dc2-4499-840b-f7874de25770",
+                "from_port": "context",
+                "to_node": "6761d3bc-6068-473d-b657-365582e0c5ae",
+                "to_port": "target"
+              },
+              {
+                "from_node": "6761d3bc-6068-473d-b657-365582e0c5ae",
+                "from_port": "exec",
+                "to_node": "44c76028-35af-47e6-a182-8d629113dda0",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "08ee87e0-a0cd-4b3f-941b-a3a3cae6ace4",
+          "name": "Alvo 3D · Vida",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.65,
+              0.8,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.85,
+            1.6,
+            0.85
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.74,
+              0.32,
+              0.36,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Vida": {
+              "Number": 150.0
+            }
+          },
+          "collider": {
+            "size": [
+              0.85,
+              1.6,
+              0.85
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "256669ae-f837-492b-a6c1-7b2f6dd288a6",
+          "name": "Tronco · textura pintável",
+          "parent": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "transform": {
+            "position": [
+              0.0,
+              0.2,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.7,
+            0.8,
+            0.4
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": "48e8bc75-63b7-4af3-a8c7-19f1a36ce915",
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "1f60d82c-55a1-4ee4-9b70-d738252edc94",
+          "name": "Cabeça",
+          "parent": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "transform": {
+            "position": [
+              0.0,
+              0.92,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Sphere",
+          "dimensions": [
+            0.52,
+            0.52,
+            0.52
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.91,
+              0.72,
+              0.48,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "2261b46b-5b4d-4713-86b4-1919551013b3",
+          "name": "Braço esquerdo",
+          "parent": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "transform": {
+            "position": [
+              -0.48,
+              0.22,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cylinder",
+          "dimensions": [
+            0.2,
+            0.7,
+            0.2
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.33,
+              0.62,
+              0.63,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "f71a3371-df28-4c82-b911-136a1942bd24",
+          "name": "Braço direito · pivô no ombro",
+          "parent": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "transform": {
+            "position": [
+              0.48,
+              0.55,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.35,
+              0.0
+            ]
+          },
+          "primitive": "Cylinder",
+          "dimensions": [
+            0.22,
+            0.78,
+            0.22
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.33,
+              0.62,
+              0.63,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "6258cb24-55e0-4818-8420-220ed095c58b",
+          "name": "Perna esquerda",
+          "parent": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "transform": {
+            "position": [
+              -0.21,
+              -0.66,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.25,
+            0.78,
+            0.3
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.25,
+              0.37,
+              0.47,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "08b3864f-39c8-46d2-8978-7b6a1cd1e7e9",
+          "name": "Perna direita",
+          "parent": "d8a77347-9288-46a0-b8ab-e0b25e9a2abf",
+          "transform": {
+            "position": [
+              0.21,
+              -0.66,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.25,
+            0.78,
+            0.3
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.25,
+              0.37,
+              0.47,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "61c4e16e-6cb9-4267-9ca5-35960c0fa7d5",
+          "name": "Câmera de jogo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              4.5,
+              9.0
+            ],
+            "rotation": [
+              -0.32,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": {
+            "active": true,
+            "orthographic_size": 7.5,
+            "fov": 60.0
+          },
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    },
+    {
+      "id": "8bbb5f1b-6c4a-42c2-957f-2eb3ac72b082",
+      "name": "C · Carta, custo, energia e alvo",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "af57171d-4955-4a3c-87d1-aa33dd7fb7c2",
+          "name": "Energia",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Bar",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              56.0
+            ],
+            "size": [
+              220.0,
+              28.0
+            ],
+            "text": "Energia",
+            "color": [
+              0.22,
+              0.8,
+              0.67,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "06c8b20f-f880-4183-b03e-9f525b98801d",
+            "binding_attribute": "Energia",
+            "max_value": 3.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "7ac22bd4-1074-4478-b2c4-6ab440d80222",
+          "name": "Vida do alvo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Bar",
+            "anchor": "TopLeft",
+            "position": [
+              290.0,
+              56.0
+            ],
+            "size": [
+              220.0,
+              28.0
+            ],
+            "text": "Vida do alvo",
+            "color": [
+              0.22,
+              0.8,
+              0.67,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "2aad34e7-58fc-4a9f-9022-705f5efd0b6e",
+            "binding_attribute": "Vida",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "653e7895-214c-4477-82d0-266208df0ad1",
+          "name": "Instruções carta",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              16.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "INTERAÇÃO DE CARTA · três usos; o quarto clique informa energia insuficiente",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "06c8b20f-f880-4183-b03e-9f525b98801d",
+          "name": "Estado editável da interação",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Energia": {
+              "Number": 3.0
+            }
+          },
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "2aad34e7-58fc-4a9f-9022-705f5efd0b6e",
+          "name": "Alvo da carta",
+          "parent": null,
+          "transform": {
+            "position": [
+              2.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Circle",
+          "dimensions": [
+            1.6,
+            1.6,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.73,
+              0.32,
+              0.38,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Vida": {
+              "Number": 100.0
+            }
+          },
+          "collider": {
+            "size": [
+              1.6,
+              1.6,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "00e5e6c0-2e96-4d42-a4b6-2f3e6bdeb249",
+          "name": "Carta · clique executa o grafo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Custo": {
+              "Number": 1.0
+            },
+            "Dano": {
+              "Number": 25.0
+            }
+          },
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Button",
+            "anchor": "TopLeft",
+            "position": [
+              32.0,
+              150.0
+            ],
+            "size": [
+              240.0,
+              260.0
+            ],
+            "text": "FAÍSCA\nCusto: 1 energia\nDano: 25\nClique para jogar",
+            "color": [
+              0.95,
+              0.96,
+              0.98,
+              1.0
+            ],
+            "texture": "48e8bc75-63b7-4af3-a8c7-19f1a36ce915",
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [
+              {
+                "id": "6f3466f9-bbd2-4a0d-ad79-c2b141b03c70",
+                "operation": "event.click",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "f06323c2-3583-4bbc-8a71-d1d3e5e47bf3",
+                "operation": "attribute.get",
+                "position": [
+                  20.0,
+                  220.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Energia"
+                  },
+                  "target": {
+                    "Object": "06c8b20f-f880-4183-b03e-9f525b98801d"
+                  }
+                }
+              },
+              {
+                "id": "65bc9fe4-9031-4c96-9cc9-80127b2218f2",
+                "operation": "attribute.get",
+                "position": [
+                  20.0,
+                  410.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Custo"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "d78d86ec-f064-4857-9dde-027a9b1c890c",
+                "operation": "condition.compare",
+                "position": [
+                  280.0,
+                  220.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 0.0
+                  },
+                  "operator": {
+                    "Text": ">="
+                  }
+                }
+              },
+              {
+                "id": "cb783ed7-1f6c-45cd-a2ea-782d981b3cb4",
+                "operation": "condition.branch",
+                "position": [
+                  540.0,
+                  20.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "47e362ff-2492-40e4-9e93-9819c38a3951",
+                "operation": "math.binary",
+                "position": [
+                  540.0,
+                  260.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 1.0
+                  },
+                  "operator": {
+                    "Text": "-"
+                  }
+                }
+              },
+              {
+                "id": "69b43487-3582-4b76-8abb-2529318e6a56",
+                "operation": "attribute.set",
+                "position": [
+                  820.0,
+                  20.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Energia"
+                  },
+                  "target": {
+                    "Object": "06c8b20f-f880-4183-b03e-9f525b98801d"
+                  },
+                  "value": {
+                    "Number": 100.0
+                  }
+                }
+              },
+              {
+                "id": "cd489e55-2d12-425e-a514-7a660f976c05",
+                "operation": "attribute.get",
+                "position": [
+                  820.0,
+                  260.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Dano"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "90e42b51-a6e6-458d-b5ca-835a7b052a6d",
+                "operation": "action.damage",
+                "position": [
+                  1110.0,
+                  20.0
+                ],
+                "params": {
+                  "amount": {
+                    "Number": 10.0
+                  },
+                  "attribute": {
+                    "Text": "Vida"
+                  },
+                  "once": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "2aad34e7-58fc-4a9f-9022-705f5efd0b6e"
+                  }
+                }
+              },
+              {
+                "id": "b4126fc4-4e9b-4680-8733-f54c40418fcb",
+                "operation": "debug.message",
+                "position": [
+                  820.0,
+                  460.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Energia insuficiente; o custo e o dano são atributos editáveis da carta."
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "6f3466f9-bbd2-4a0d-ad79-c2b141b03c70",
+                "from_port": "exec",
+                "to_node": "cb783ed7-1f6c-45cd-a2ea-782d981b3cb4",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f06323c2-3583-4bbc-8a71-d1d3e5e47bf3",
+                "from_port": "value",
+                "to_node": "d78d86ec-f064-4857-9dde-027a9b1c890c",
+                "to_port": "a"
+              },
+              {
+                "from_node": "65bc9fe4-9031-4c96-9cc9-80127b2218f2",
+                "from_port": "value",
+                "to_node": "d78d86ec-f064-4857-9dde-027a9b1c890c",
+                "to_port": "b"
+              },
+              {
+                "from_node": "d78d86ec-f064-4857-9dde-027a9b1c890c",
+                "from_port": "result",
+                "to_node": "cb783ed7-1f6c-45cd-a2ea-782d981b3cb4",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "cb783ed7-1f6c-45cd-a2ea-782d981b3cb4",
+                "from_port": "then",
+                "to_node": "69b43487-3582-4b76-8abb-2529318e6a56",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "cb783ed7-1f6c-45cd-a2ea-782d981b3cb4",
+                "from_port": "else",
+                "to_node": "b4126fc4-4e9b-4680-8733-f54c40418fcb",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f06323c2-3583-4bbc-8a71-d1d3e5e47bf3",
+                "from_port": "value",
+                "to_node": "47e362ff-2492-40e4-9e93-9819c38a3951",
+                "to_port": "a"
+              },
+              {
+                "from_node": "65bc9fe4-9031-4c96-9cc9-80127b2218f2",
+                "from_port": "value",
+                "to_node": "47e362ff-2492-40e4-9e93-9819c38a3951",
+                "to_port": "b"
+              },
+              {
+                "from_node": "47e362ff-2492-40e4-9e93-9819c38a3951",
+                "from_port": "value",
+                "to_node": "69b43487-3582-4b76-8abb-2529318e6a56",
+                "to_port": "value"
+              },
+              {
+                "from_node": "69b43487-3582-4b76-8abb-2529318e6a56",
+                "from_port": "exec",
+                "to_node": "90e42b51-a6e6-458d-b5ca-835a7b052a6d",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "cd489e55-2d12-425e-a514-7a660f976c05",
+                "from_port": "value",
+                "to_node": "90e42b51-a6e6-458d-b5ca-835a7b052a6d",
+                "to_port": "amount"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "46871269-88e2-4c21-8880-ffa5006a77ef",
+          "name": "Câmera de jogo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              10.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": {
+            "active": true,
+            "orthographic_size": 5.0,
+            "fov": 60.0
+          },
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "48e8bc75-63b7-4af3-a8c7-19f1a36ce915",
+      "name": "Pintura local · pixels editáveis",
+      "path": "assets/pintura_local.png",
+      "kind": "Texture",
+      "model": null
+    },
+    {
+      "id": "517d4a4b-db88-47df-a635-51f49ea5ffec",
+      "name": "Sprite placeholder local",
+      "path": "assets/sprite_placeholder_local.png",
+      "kind": "Texture",
+      "model": null
+    },
+    {
+      "id": "74919aec-43ac-4387-b687-81e95df22fa4",
+      "name": "Impacto sintetizado local",
+      "path": "assets/impacto_local.wav",
+      "kind": "Audio",
+      "model": null
+    },
+    {
+      "id": "ed048625-ec9a-4829-97d1-b6e228f84f6b",
+      "name": "Boneco editável por peças",
+      "path": "",
+      "kind": "Model",
+      "model": [
+        {
+          "id": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "name": "Boneco · modelo por peças",
+          "parent": null,
+          "transform": {
+            "position": [
+              -1.1,
+              1.05,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Vida": {
+              "Number": 100.0
+            }
+          },
+          "collider": {
+            "size": [
+              0.8,
+              2.1,
+              0.6
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "speed": 3.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "1f1a9ecd-1a29-4e0c-8f65-dbbc8c755d94",
+                "operation": "event.input",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "atacar"
+                  }
+                }
+              },
+              {
+                "id": "2dedc036-4e22-4bc2-b9ba-13b11ebacd03",
+                "operation": "action.animation",
+                "position": [
+                  280.0,
+                  20.0
+                ],
+                "params": {
+                  "clip": {
+                    "Text": "48684203-552d-40e3-a6d3-02d72a1a4d95"
+                  },
+                  "restart": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "0a9f4eab-e77f-44ad-a92c-ec43dd891a6e",
+                "operation": "event.animation",
+                "position": [
+                  20.0,
+                  210.0
+                ],
+                "params": {
+                  "marker": {
+                    "Text": "Impacto"
+                  }
+                }
+              },
+              {
+                "id": "54be43eb-8ab0-4283-be64-4efe1b056ddf",
+                "operation": "action.component",
+                "position": [
+                  280.0,
+                  210.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "ba8fdcb9-4cda-47d5-b07d-288056808457"
+                  }
+                }
+              },
+              {
+                "id": "89995cff-0158-4a93-98e9-511a6a40c50b",
+                "operation": "control.wait",
+                "position": [
+                  560.0,
+                  210.0
+                ],
+                "params": {
+                  "seconds": {
+                    "Number": 0.1
+                  }
+                }
+              },
+              {
+                "id": "64851a31-b5f1-4b76-974a-e84e0447a61a",
+                "operation": "action.component",
+                "position": [
+                  830.0,
+                  210.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "ba8fdcb9-4cda-47d5-b07d-288056808457"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "1f1a9ecd-1a29-4e0c-8f65-dbbc8c755d94",
+                "from_port": "exec",
+                "to_node": "2dedc036-4e22-4bc2-b9ba-13b11ebacd03",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "0a9f4eab-e77f-44ad-a92c-ec43dd891a6e",
+                "from_port": "exec",
+                "to_node": "54be43eb-8ab0-4283-be64-4efe1b056ddf",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "54be43eb-8ab0-4283-be64-4efe1b056ddf",
+                "from_port": "exec",
+                "to_node": "89995cff-0158-4a93-98e9-511a6a40c50b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "89995cff-0158-4a93-98e9-511a6a40c50b",
+                "from_port": "exec",
+                "to_node": "64851a31-b5f1-4b76-974a-e84e0447a61a",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [
+            {
+              "id": "48684203-552d-40e3-a6d3-02d72a1a4d95",
+              "name": "Ataque",
+              "duration": 0.5,
+              "looping": false,
+              "tracks": [
+                {
+                  "target": "5396d7fb-02f9-43ce-bc53-254f8df002e6",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -0.65
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.12,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -1.1
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.22,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.8
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 0.5,
+                      "transform": {
+                        "position": [
+                          0.48,
+                          0.55,
+                          0.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          -0.65
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.35,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    }
+                  ]
+                }
+              ],
+              "events": [
+                {
+                  "time": 0.2,
+                  "name": "Impacto"
+                }
+              ]
+            }
+          ],
+          "model_source": null
+        },
+        {
+          "id": "fd6daa10-bde7-417d-b4d4-a21a1834de9f",
+          "name": "Espada · lâmina",
+          "parent": "5396d7fb-02f9-43ce-bc53-254f8df002e6",
+          "transform": {
+            "position": [
+              0.0,
+              -0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.14,
+            0.9,
+            0.07
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.82,
+              0.9,
+              0.93,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "ba8fdcb9-4cda-47d5-b07d-288056808457",
+          "name": "Região de acerto 3D",
+          "parent": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "transform": {
+            "position": [
+              1.15,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              1.5,
+              1.35,
+              1.2
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": true,
+            "enabled": false
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "167247cc-a569-4051-be5e-7e735bafad61",
+                "operation": "event.area_enter",
+                "position": [
+                  20.0,
+                  20.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "0dd4ae1a-ae10-4b7d-b05e-f09264a053a1",
+                "operation": "action.damage",
+                "position": [
+                  290.0,
+                  20.0
+                ],
+                "params": {
+                  "amount": {
+                    "Number": 25.0
+                  },
+                  "attribute": {
+                    "Text": "Vida"
+                  },
+                  "once": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "f72d9d7a-3a09-489b-80c9-2da2cc104252",
+                "operation": "action.sound",
+                "position": [
+                  580.0,
+                  20.0
+                ],
+                "params": {
+                  "asset": {
+                    "Text": "74919aec-43ac-4387-b687-81e95df22fa4"
+                  },
+                  "volume": {
+                    "Number": 0.25
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "167247cc-a569-4051-be5e-7e735bafad61",
+                "from_port": "exec",
+                "to_node": "0dd4ae1a-ae10-4b7d-b05e-f09264a053a1",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "167247cc-a569-4051-be5e-7e735bafad61",
+                "from_port": "context",
+                "to_node": "0dd4ae1a-ae10-4b7d-b05e-f09264a053a1",
+                "to_port": "target"
+              },
+              {
+                "from_node": "0dd4ae1a-ae10-4b7d-b05e-f09264a053a1",
+                "from_port": "exec",
+                "to_node": "f72d9d7a-3a09-489b-80c9-2da2cc104252",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "e1971f39-dd73-4d61-b7a9-40201ad8b9dd",
+          "name": "Tronco · textura pintável",
+          "parent": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "transform": {
+            "position": [
+              0.0,
+              0.2,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.7,
+            0.8,
+            0.4
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": "48e8bc75-63b7-4af3-a8c7-19f1a36ce915",
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "23d6fcdf-c6fa-43d6-a262-29165a160ba8",
+          "name": "Cabeça",
+          "parent": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "transform": {
+            "position": [
+              0.0,
+              0.92,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Sphere",
+          "dimensions": [
+            0.52,
+            0.52,
+            0.52
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.91,
+              0.72,
+              0.48,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "e117e358-1720-4cb2-b74a-7d3217f225d6",
+          "name": "Braço esquerdo",
+          "parent": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "transform": {
+            "position": [
+              -0.48,
+              0.22,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cylinder",
+          "dimensions": [
+            0.2,
+            0.7,
+            0.2
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.33,
+              0.62,
+              0.63,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "5396d7fb-02f9-43ce-bc53-254f8df002e6",
+          "name": "Braço direito · pivô no ombro",
+          "parent": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "transform": {
+            "position": [
+              0.48,
+              0.55,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.35,
+              0.0
+            ]
+          },
+          "primitive": "Cylinder",
+          "dimensions": [
+            0.22,
+            0.78,
+            0.22
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.33,
+              0.62,
+              0.63,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "8640a2d8-5fb6-4e9f-a57c-c6aa51a8a7f9",
+          "name": "Perna esquerda",
+          "parent": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "transform": {
+            "position": [
+              -0.21,
+              -0.66,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.25,
+            0.78,
+            0.3
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.25,
+              0.37,
+              0.47,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "709e5ab3-3fba-4f74-b34d-5ba22e1c91b1",
+          "name": "Perna direita",
+          "parent": "bdf87fb7-680d-4ee6-819d-52c5f98d32be",
+          "transform": {
+            "position": [
+              0.21,
+              -0.66,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.25,
+            0.78,
+            0.3
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.25,
+              0.37,
+              0.47,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "input_bindings": {
+    "atacar": "J",
+    "interagir": "E",
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "mover_frente": "W",
+    "mover_tras": "S",
+    "pular": "Space"
+  }
+}
