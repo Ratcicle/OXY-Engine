@@ -248,7 +248,7 @@ impl GraphView {
                 );
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     let mut category = "";
-                    for op in &definitions {
+                    for op in definitions {
                         if !format!("{} {} {}", op.id, op.label, op.category)
                             .to_lowercase()
                             .contains(&self.search.to_lowercase())
@@ -312,13 +312,13 @@ impl GraphView {
                     ui.strong("Conexão selecionada");
                     let source = graph.node(&edge.from_node).and_then(|node| definitions.iter().find(|op| op.id == node.operation)).map_or("Nó ausente", |op| op.label);
                     let target = graph.node(&edge.to_node).and_then(|node| definitions.iter().find(|op| op.id == node.operation)).map_or("Nó ausente", |op| op.label);
-                    let source_port = port_label(&definitions, graph, &edge.from_node, &edge.from_port, true);
-                    let target_port = port_label(&definitions, graph, &edge.to_node, &edge.to_port, false);
+                    let source_port = port_label(definitions, graph, &edge.from_node, &edge.from_port, true);
+                    let target_port = port_label(definitions, graph, &edge.to_node, &edge.to_port, false);
                     ui.label(format!("{source} · {source_port} → {target} · {target_port}"));
                     if ui.button("Excluir conexão").clicked() { delete=true; }
                 } else { ui.label("Selecione um nó para configurar seus parâmetros."); }
                 ui.separator();
-                if let Some((node,port))=&self.connecting {ui.label(format!("Conectando: {}", port_label(&definitions, graph, node, port, true)));if ui.button("Cancelar conexão").clicked(){self.connecting=None;}}
+                if let Some((node,port))=&self.connecting {ui.label(format!("Conectando: {}", port_label(definitions, graph, node, port, true)));if ui.button("Cancelar conexão").clicked(){self.connecting=None;}}
             });
             if delete { self.delete_selected(graph); }
             if duplicate { self.duplicate_selected(graph); }
@@ -686,10 +686,7 @@ mod tests {
         ] {
             let ctx = egui::Context::default();
             let mut node = Node::new(operation, [0.0; 2]);
-            let definition = registry()
-                .into_iter()
-                .find(|op| op.id == operation)
-                .unwrap();
+            let definition = registry().iter().find(|op| op.id == operation).unwrap();
             let param = definition
                 .params
                 .iter()

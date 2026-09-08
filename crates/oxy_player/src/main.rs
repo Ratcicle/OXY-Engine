@@ -183,7 +183,7 @@ impl eframe::App for Player {
                 ];
                 let texture = renderer.render(
                     rs,
-                    &runtime.project(),
+                    runtime.project(),
                     runtime.scene(),
                     &self.root,
                     &camera,
@@ -199,7 +199,7 @@ impl eframe::App for Player {
                 );
                 let clicks =
                     self.game_ui
-                        .draw(ui, &runtime.project(), runtime.scene(), &self.root, rect);
+                        .draw(ui, runtime.project(), runtime.scene(), &self.root, rect);
                 if !runtime.paused {
                     if clicks.is_empty()
                         && response.clicked()

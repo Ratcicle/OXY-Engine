@@ -86,6 +86,54 @@ pub struct SceneView<'a> {
     pub index: Result<SceneIndex, String>,
     matrices: RefCell<Vec<Option<Mat4>>>,
 }
+
+/// Owned data for the sequential controller phase. Every moved subtree is
+/// refreshed before the next controller sees it. No structural edits in this phase.
+pub struct SceneEvaluation {
+    pub index: SceneIndex,
+    pub worlds: Vec<Option<Mat4>>,
+    pub boxes: Vec<Option<crate::collision::Aabb>>,
+}
+impl SceneEvaluation {
+    pub fn new(scene: &Scene) -> Result<Self, String> {
+        let view = SceneView::new(scene);
+        let worlds: Vec<_> = scene
+            .entities
+            .iter()
+            .map(|e| view.world_matrix(&e.id).ok())
+            .collect();
+        let boxes = scene
+            .entities
+            .iter()
+            .zip(&worlds)
+            .map(|(e, w)| Self::bounds(e, *w))
+            .collect();
+        Ok(Self {
+            index: view.index?,
+            worlds,
+            boxes,
+        })
+    }
+    fn bounds(entity: &Entity, world: Option<Mat4>) -> Option<crate::collision::Aabb> {
+        let collider = entity.collider.as_ref().filter(|c| c.enabled)?;
+        crate::spatial::bounds_from_world(collider, world?).ok()
+    }
+    pub fn refresh_subtree(&mut self, scene: &Scene, id: &str) {
+        for id in self.index.descendants(scene, id) {
+            let Some(i) = self.index.position(&id) else {
+                continue;
+            };
+            let e = &scene.entities[i];
+            let parent = match &e.parent {
+                Some(id) => self.index.position(id).and_then(|p| self.worlds[p]),
+                None => Some(Mat4::IDENTITY),
+            };
+            crate::metrics::count(|c| c.matrices += 1);
+            self.worlds[i] = parent.map(|p| p * e.transform.matrix());
+            self.boxes[i] = Self::bounds(e, self.worlds[i]);
+        }
+    }
+}
 impl<'a> SceneView<'a> {
     pub fn new(scene: &'a Scene) -> Self {
         Self {

@@ -1,15 +1,17 @@
 //! Fixed-step, editor-independent execution of ordinary project documents.
-use crate::scene_view::SceneIndex;
+use crate::scene_view::{SceneEvaluation, SceneIndex, SceneView};
 use crate::{
     animation::AnimationPlayer,
     audio::SoundRequest,
     collision::{Aabb, move_and_slide},
     document::{Id, Project, Scene, SceneKind, Value, validate_project},
-    graph::{Graph, Node},
+    graph::Node,
 };
 use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+type HitLease = Arc<Mutex<HashSet<Id>>>;
+use crate::prepared_graph::PreparedGraph;
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
@@ -56,7 +58,8 @@ struct Context {
     owner: Id,
     other: Option<Id>,
     activation: u64,
-    outputs: BTreeMap<(Id, String), Value>,
+    outputs: Arc<BTreeMap<(Id, String), Value>>,
+    hits: Option<HitLease>,
 }
 #[derive(Clone, Debug)]
 struct Task {
@@ -75,6 +78,7 @@ pub struct Runtime {
     project: Project,
     scene_id: Id,
     index: OnceLock<Result<SceneIndex, String>>,
+    graphs: HashMap<Id, Arc<PreparedGraph>>,
     pub paused: bool,
     pub logs: Vec<String>,
     pub traces: Vec<NodeTrace>,
@@ -90,7 +94,8 @@ pub struct Runtime {
     disabled_behaviors: HashSet<Id>,
     overlap_pairs: HashSet<(Id, Id)>,
     area_activations: HashMap<Id, u64>,
-    damage_hits: HashSet<(Id, u64, Id)>,
+    damage_hits: HashMap<(Id, u64), Weak<Mutex<HashSet<Id>>>>,
+    area_hits: HashMap<Id, HitLease>,
     serial: u64,
     stopped: bool,
 }
@@ -103,6 +108,7 @@ impl Runtime {
         }
         let mut runtime = Self {
             index: OnceLock::new(),
+            graphs: HashMap::new(),
             project: project.clone(),
             scene_id: scene_id.into(),
             paused: false,
@@ -120,7 +126,8 @@ impl Runtime {
             disabled_behaviors: HashSet::new(),
             overlap_pairs: HashSet::new(),
             area_activations: HashMap::new(),
-            damage_hits: HashSet::new(),
+            damage_hits: HashMap::new(),
+            area_hits: HashMap::new(),
             serial: 0,
             stopped: false,
         };
@@ -157,6 +164,7 @@ impl Runtime {
     }
     pub fn scene_mut(&mut self) -> &mut Scene {
         self.index.take();
+        self.graphs.clear();
         self.scene_mut_internal()
     }
     fn scene_mut_internal(&mut self) -> &mut Scene {
@@ -170,7 +178,11 @@ impl Runtime {
     /// Logical live-state counts, not resident RAM or allocator capacity.
     pub fn retained_counts(&self) -> [usize; 4] {
         [
-            self.damage_hits.len(),
+            self.damage_hits
+                .values()
+                .filter_map(Weak::upgrade)
+                .map(|hits| hits.lock().unwrap().len())
+                .sum(),
             self.area_activations.len(),
             self.ready.len(),
             self.waiting.len(),
@@ -188,6 +200,11 @@ impl Runtime {
         self.waiting.clear();
         self.sounds.clear();
         self.animations.clear();
+        self.area_hits.clear();
+        self.area_activations.clear();
+        self.damage_hits.clear();
+        self.overlap_pairs.clear();
+        self.bodies.clear();
     }
     pub fn click(&mut self, entity: &str) {
         if !self.paused && !self.stopped {
@@ -218,6 +235,7 @@ impl Runtime {
         }
     }
     fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
+        self.collect_activations();
         crate::metrics::count(|c| c.steps += 1);
         self.time += f64::from(FIXED_DT);
         for action in &input.pressed {
@@ -228,6 +246,7 @@ impl Runtime {
         crate::metrics::timed(|| self.advance_animations(), |c, ns| c.animation_ns += ns);
         crate::metrics::timed(|| self.detect_areas(), |c, ns| c.areas_ns += ns);
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
+        self.collect_activations();
     }
     fn log(&mut self, message: String) {
         self.logs.push(message);
@@ -238,6 +257,42 @@ impl Runtime {
     fn next_serial(&mut self) -> u64 {
         self.serial = self.serial.wrapping_add(1).max(1);
         self.serial
+    }
+    fn lease(&mut self, owner: &str, activation: u64) -> HitLease {
+        let key = (owner.to_owned(), activation);
+        if let Some(hits) = self.damage_hits.get(&key).and_then(Weak::upgrade) {
+            return hits;
+        }
+        let hits = Arc::new(Mutex::new(HashSet::new()));
+        self.damage_hits.insert(key, Arc::downgrade(&hits));
+        hits
+    }
+    fn activate_area(&mut self, id: &str) -> u64 {
+        let serial = self.next_serial();
+        let hits = self.lease(id, serial);
+        self.area_activations.insert(id.into(), serial);
+        self.area_hits.insert(id.into(), hits);
+        serial
+    }
+    fn collect_activations(&mut self) {
+        let ended: Vec<_> = self
+            .area_activations
+            .keys()
+            .filter(|id| {
+                !self
+                    .entity(id)
+                    .and_then(|e| e.collider.as_ref())
+                    .is_some_and(|c| c.enabled && c.is_trigger)
+            })
+            .cloned()
+            .collect();
+        for id in ended {
+            self.area_activations.remove(&id);
+            self.area_hits.remove(&id);
+        }
+        // Once per phase, never per action. Waiting/ready tasks and active areas
+        // own strong leases; completed activations cannot accumulate here.
+        self.damage_hits.retain(|_, hits| hits.strong_count() > 0);
     }
     pub fn emit(&mut self, event: RuntimeEvent) {
         if self.stopped {
@@ -284,11 +339,15 @@ impl Runtime {
                             owner: entity.id.clone(),
                             other,
                             activation,
-                            outputs: BTreeMap::new(),
+                            outputs: Arc::new(BTreeMap::new()),
+                            hits: None,
                         },
                     });
                 }
             }
+        }
+        for task in &mut found {
+            task.context.hits = Some(self.lease(&task.owner, task.context.activation));
         }
         self.ready.extend(found);
         if self.ready.len() + self.waiting.len() > 16384 {
@@ -317,15 +376,17 @@ impl Runtime {
             if self.disabled_behaviors.contains(&task.owner) || self.entity(&task.owner).is_none() {
                 continue;
             }
-            let result = self.execute(task.clone(), budget);
+            let owner = task.owner.clone();
+            let node = task.node.clone();
+            let result = self.execute(task, budget);
             if let Err(error) = result {
                 self.log(format!(
                     "Objeto {} / nó {}: {error}. Comportamento interrompido.",
-                    task.owner, task.node
+                    owner, node
                 ));
-                self.disabled_behaviors.insert(task.owner.clone());
-                self.ready.retain(|queued| queued.owner != task.owner);
-                self.waiting.retain(|queued| queued.owner != task.owner);
+                self.disabled_behaviors.insert(owner.clone());
+                self.ready.retain(|queued| queued.owner != owner);
+                self.waiting.retain(|queued| queued.owner != owner);
             }
             if *budget == 0 {
                 if !self.ready.is_empty() {
@@ -346,7 +407,7 @@ impl Runtime {
     }
     fn input_value(
         &self,
-        graph: &Graph,
+        graph: &PreparedGraph,
         node: &Node,
         input: &str,
         context: &Context,
@@ -356,11 +417,7 @@ impl Runtime {
         if depth > 64 {
             return Err("Profundidade de dados excede 64 nós".into());
         }
-        if let Some(edge) = graph
-            .edges
-            .iter()
-            .find(|edge| edge.to_node == node.id && edge.to_port == input)
-        {
+        if let Some(edge) = graph.input(&node.id, input) {
             return self.output_value(
                 graph,
                 &edge.from_node,
@@ -377,7 +434,7 @@ impl Runtime {
     }
     fn target(
         &self,
-        graph: &Graph,
+        graph: &PreparedGraph,
         node: &Node,
         context: &Context,
         budget: &mut usize,
@@ -390,7 +447,7 @@ impl Runtime {
     }
     fn output_value(
         &self,
-        graph: &Graph,
+        graph: &PreparedGraph,
         id: &str,
         output: &str,
         context: &Context,
@@ -478,7 +535,7 @@ impl Runtime {
     }
     fn outputs(
         &mut self,
-        graph: &Graph,
+        graph: &PreparedGraph,
         node: &Node,
         ports: &[&str],
         context: Context,
@@ -486,11 +543,7 @@ impl Runtime {
     ) {
         let mut tasks = Vec::new();
         for port in ports {
-            for edge in graph
-                .edges
-                .iter()
-                .filter(|edge| edge.from_node == node.id && edge.from_port == *port)
-            {
+            for edge in graph.outputs(&node.id, port) {
                 tasks.push(Task {
                     due: self.time + delay,
                     owner: context.owner.clone(),
@@ -510,13 +563,19 @@ impl Runtime {
     fn execute(&mut self, task: Task, budget: &mut usize) -> Result<(), String> {
         crate::metrics::count(|c| c.actions += 1);
         Self::spend(budget)?;
-        let graph = self
-            .entity(&task.owner)
-            .ok_or("Objeto removido")?
-            .graph
-            .clone();
-        let node = graph.node(&task.node).ok_or("Nó não encontrado")?.clone();
-        crate::metrics::count(|c| c.graph_nodes_copied += graph.nodes.len() as u64);
+        let graph = if let Some(graph) = self.graphs.get(&task.owner) {
+            graph.clone()
+        } else {
+            let graph = Arc::new(PreparedGraph::new(
+                self.entity(&task.owner)
+                    .ok_or("Objeto removido")?
+                    .graph
+                    .clone(),
+            ));
+            self.graphs.insert(task.owner.clone(), graph.clone());
+            graph
+        };
+        let node = graph.node(&task.node).ok_or("Nó não encontrado")?;
         let mut context = task.context;
         self.traces.push(NodeTrace {
             object: task.owner.clone(),
@@ -533,7 +592,7 @@ impl Runtime {
             operation if operation.starts_with("event.") => {}
             "condition.branch" => {
                 let condition = self
-                    .input_value(&graph, &node, "condition", &context, budget, 0)?
+                    .input_value(&graph, node, "condition", &context, budget, 0)?
                     .boolean()
                     .ok_or("Condição precisa ser booleana")?;
                 ports = vec![if condition { "then" } else { "else" }];
@@ -541,7 +600,7 @@ impl Runtime {
             "control.sequence" => ports = vec!["first", "second", "third"],
             "control.wait" => {
                 delay = self
-                    .input_value(&graph, &node, "seconds", &context, budget, 0)?
+                    .input_value(&graph, node, "seconds", &context, budget, 0)?
                     .number()
                     .ok_or("Espera precisa de segundos numéricos")?;
                 if !delay.is_finite() || !(0.0..=86400.0).contains(&delay) {
@@ -556,8 +615,8 @@ impl Runtime {
                 node.text("message")
             )),
             "attribute.set" => {
-                let target = self.target(&graph, &node, &context, budget, 0)?;
-                let value = self.input_value(&graph, &node, "value", &context, budget, 0)?;
+                let target = self.target(&graph, node, &context, budget, 0)?;
+                let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
                 if let Value::Object(Some(id)) = &value
                     && self.entity(id).is_none()
                 {
@@ -578,16 +637,19 @@ impl Runtime {
                     .insert(node.text("attribute").into(), value);
             }
             "action.damage" => {
-                let target = self.target(&graph, &node, &context, budget, 0)?;
+                let target = self.target(&graph, node, &context, budget, 0)?;
                 let amount = self
-                    .input_value(&graph, &node, "amount", &context, budget, 0)?
+                    .input_value(&graph, node, "amount", &context, budget, 0)?
                     .number()
                     .ok_or("Dano precisa ser numérico")?;
                 if !amount.is_finite() || amount < 0.0 {
                     return Err("Dano deve ser um número não negativo".into());
                 }
-                let key = (context.owner.clone(), context.activation, target.clone());
-                if !node.boolean("once", true) || !self.damage_hits.contains(&key) {
+                let hits = context
+                    .hits
+                    .as_ref()
+                    .ok_or("Ativação sem contexto de acerto")?;
+                if !node.boolean("once", true) || !hits.lock().unwrap().contains(&target) {
                     let entity = self
                         .entity_mut(&target)
                         .ok_or("Alvo do dano foi removido")?;
@@ -600,11 +662,11 @@ impl Runtime {
                     } else {
                         return Err("Atributo de dano precisa ser numérico".into());
                     }
-                    self.damage_hits.insert(key);
+                    hits.lock().unwrap().insert(target);
                 }
             }
             "action.animation" => {
-                let target = self.target(&graph, &node, &context, budget, 0)?;
+                let target = self.target(&graph, node, &context, budget, 0)?;
                 let entity = self.entity(&target).ok_or("Objeto animado ausente")?;
                 let clip = entity
                     .clips
@@ -636,8 +698,9 @@ impl Runtime {
                 });
             }
             "action.spawn" => {
-                let template = self.target(&graph, &node, &context, budget, 0)?;
-                let root = self.scene_mut().duplicate_subtree(&template)?;
+                let template = self.target(&graph, node, &context, budget, 0)?;
+                self.index.take();
+                let root = self.scene_mut_internal().duplicate_subtree(&template)?;
                 // The editor duplicate offset is not part of a runtime spawn's explicit offset.
                 let delta = Vec3::new(
                     node.number("x", 0.0) as f32 - 0.5,
@@ -649,7 +712,7 @@ impl Runtime {
                 entity.transform.position =
                     (Vec3::from(entity.transform.position) + delta).to_array();
                 for entity in self
-                    .scene_mut()
+                    .scene_mut_internal()
                     .entities
                     .iter_mut()
                     .filter(|entity| descendants.contains(&entity.id))
@@ -666,20 +729,20 @@ impl Runtime {
                         }
                     }
                 }
-                context.outputs.insert(
+                Arc::make_mut(&mut context.outputs).insert(
                     (node.id.clone(), "created".into()),
                     Value::Object(Some(root)),
                 );
             }
             "action.remove" => {
-                let target = self.target(&graph, &node, &context, budget, 0)?;
+                let target = self.target(&graph, node, &context, budget, 0)?;
                 self.remove_object(&target);
                 if self.entity(&context.owner).is_none() {
                     return Ok(());
                 }
             }
             "action.component" => {
-                let target = self.target(&graph, &node, &context, budget, 0)?;
+                let target = self.target(&graph, node, &context, budget, 0)?;
                 let enabled = node.boolean("enabled", true);
                 match node.text("component") {
                     "collider" => {
@@ -687,9 +750,11 @@ impl Runtime {
                         let activation = enabled && !collider.enabled;
                         collider.enabled = enabled;
                         if activation {
-                            let serial = self.next_serial(); self.area_activations.insert(target.clone(), serial);
+                            self.activate_area(&target);
                             self.overlap_pairs.retain(|(area, _)| area != &target);
-                            self.damage_hits.retain(|(owner, _, _)| owner != &target);
+                        }
+                        if !enabled {
+                            self.area_activations.remove(&target); self.area_hits.remove(&target);
                         }
                     }
                     "controller" => self.entity_mut(&target).ok_or("Objeto ausente")?.controller.as_mut().ok_or("Objeto não tem controlador")?.enabled = enabled,
@@ -708,23 +773,33 @@ impl Runtime {
             }
             _ => return Err(format!("Operação {} não é executável", node.operation)),
         }
-        self.outputs(&graph, &node, &ports, context, delay);
+        self.outputs(&graph, node, &ports, context, delay);
         Ok(())
     }
     pub fn remove_object(&mut self, id: &str) {
         let ids: HashSet<_> = self.scene().descendants(id).into_iter().collect();
-        self.scene_mut().remove_subtree(id);
+        self.index.take();
+        self.scene_mut_internal().remove_subtree(id);
+        self.graphs.retain(|owner, _| !ids.contains(owner));
+        self.area_hits.retain(|owner, _| !ids.contains(owner));
+        self.area_activations
+            .retain(|owner, _| !ids.contains(owner));
         self.ready.retain(|task| !ids.contains(&task.owner));
         self.waiting.retain(|task| !ids.contains(&task.owner));
         self.bodies.retain(|owner, _| !ids.contains(owner));
         self.animations.retain(|owner, _| !ids.contains(owner));
         self.overlap_pairs
             .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
-        self.damage_hits
-            .retain(|(a, _, b)| !ids.contains(a) && !ids.contains(b));
+        self.damage_hits.retain(|(a, _), hits| {
+            if let Some(hits) = hits.upgrade() {
+                hits.lock().unwrap().retain(|target| !ids.contains(target));
+            }
+            !ids.contains(a) && hits.strong_count() > 0
+        });
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();
+        self.graphs.clear();
         let scene = self
             .source
             .scene(id)
@@ -743,6 +818,7 @@ impl Runtime {
         self.overlap_pairs.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
+        self.area_hits.clear();
         self.pending_pressed.clear();
         self.sounds.clear();
         self.emit(RuntimeEvent::SceneStart);
@@ -752,9 +828,6 @@ impl Runtime {
         collider_box(self.scene(), id)
     }
     fn move_controllers(&mut self, input: &InputFrame) {
-        let Ok(index) = SceneIndex::new(self.scene()) else {
-            return;
-        };
         let controllers: Vec<_> = self
             .scene()
             .entities
@@ -767,6 +840,12 @@ impl Runtime {
                     .map(|controller| (entity.id.clone(), controller.clone()))
             })
             .collect();
+        if controllers.is_empty() {
+            return;
+        }
+        let Ok(mut evaluated) = SceneEvaluation::new(self.scene()) else {
+            return;
+        };
         let dimensions = if self.scene().kind == SceneKind::TwoD {
             2
         } else {
@@ -788,7 +867,11 @@ impl Runtime {
                 body_state.velocity.y = controller.jump;
                 body_state.grounded = false;
             }
-            let displacement = if let Some(body) = self.collider_box(&id) {
+            let displacement = if let Some(body) = evaluated
+                .index
+                .position(&id)
+                .and_then(|i| evaluated.boxes[i])
+            {
                 let obstacles: Vec<_> = self
                     .scene()
                     .entities
@@ -800,9 +883,14 @@ impl Runtime {
                             .is_some_and(|collider| collider.enabled && !collider.is_trigger)
                     })
                     .filter(|entity| {
-                        entity.id != id && !index.related(self.scene(), &id, &entity.id)
+                        entity.id != id && !evaluated.index.related(self.scene(), &id, &entity.id)
                     })
-                    .filter_map(|entity| self.collider_box(&entity.id))
+                    .filter_map(|entity| {
+                        evaluated
+                            .index
+                            .position(&entity.id)
+                            .and_then(|i| evaluated.boxes[i])
+                    })
                     .inspect(|_| crate::metrics::count(|c| c.candidates += 1))
                     .collect();
                 let result =
@@ -816,7 +904,12 @@ impl Runtime {
             let local_delta = self
                 .entity(&id)
                 .and_then(|entity| entity.parent.as_deref())
-                .and_then(|parent| self.scene().world_matrix(parent).ok())
+                .and_then(|parent| {
+                    evaluated
+                        .index
+                        .position(parent)
+                        .and_then(|i| evaluated.worlds[i])
+                })
                 .map_or(displacement, |matrix| {
                     matrix.inverse().transform_vector3(displacement)
                 });
@@ -824,6 +917,7 @@ impl Runtime {
                 entity.transform.position =
                     (Vec3::from(entity.transform.position) + local_delta).to_array();
             }
+            evaluated.refresh_subtree(self.scene(), &id);
             self.bodies.insert(id, body_state);
         }
     }
@@ -851,6 +945,14 @@ impl Runtime {
         }
     }
     fn detect_areas(&mut self) {
+        if !self.scene().entities.iter().any(|e| {
+            e.collider
+                .as_ref()
+                .is_some_and(|c| c.enabled && c.is_trigger)
+        }) {
+            self.overlap_pairs.clear();
+            return;
+        }
         let Ok(index) = SceneIndex::new(self.scene()) else {
             return;
         };
@@ -859,22 +961,24 @@ impl Runtime {
         } else {
             3
         };
-        let colliders: Vec<_> = self
-            .scene()
-            .entities
-            .iter()
-            .filter_map(|entity| {
-                let collider = entity.collider.as_ref()?;
-                if !collider.enabled {
-                    return None;
-                }
-                Some((
-                    entity.id.clone(),
-                    collider.is_trigger,
-                    self.collider_box(&entity.id)?,
-                ))
-            })
-            .collect();
+        let colliders: Vec<_> = {
+            let view = SceneView::new(self.scene());
+            self.scene()
+                .entities
+                .iter()
+                .filter_map(|entity| {
+                    let collider = entity.collider.as_ref()?;
+                    if !collider.enabled {
+                        return None;
+                    }
+                    Some((
+                        entity.id.clone(),
+                        collider.is_trigger,
+                        view.collider_bounds(&entity.id).ok()?,
+                    ))
+                })
+                .collect()
+        };
         let mut pairs = HashSet::new();
         let mut events = Vec::new();
         for (area, is_trigger, volume) in &colliders {
@@ -895,9 +999,7 @@ impl Runtime {
                     let activation = if let Some(activation) = self.area_activations.get(area) {
                         *activation
                     } else {
-                        let serial = self.next_serial();
-                        self.area_activations.insert(area.clone(), serial);
-                        serial
+                        self.activate_area(area)
                     };
                     events.push(RuntimeEvent::AreaEnter {
                         area: area.clone(),
@@ -926,6 +1028,7 @@ pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::Graph;
     use crate::{
         document::{Collider, Controller, Entity, Primitive},
         graph::Edge,

@@ -71,12 +71,12 @@ pub struct Edge {
 impl Node {
     pub fn new(operation: &str, position: [f32; 2]) -> Self {
         let params = registry()
-            .into_iter()
+            .iter()
             .find(|item| item.id == operation)
             .map(|item| {
                 item.params
-                    .into_iter()
-                    .map(|param| (param.id.into(), param.default))
+                    .iter()
+                    .map(|param| (param.id.into(), param.default.clone()))
                     .collect()
             })
             .unwrap_or_default();
@@ -121,7 +121,11 @@ fn number(id: &'static str, label: &'static str, value: f64) -> ParamDef {
     param(id, label, Value::Number(value))
 }
 
-pub fn registry() -> Vec<OperationDef> {
+pub fn registry() -> &'static [OperationDef] {
+    static REGISTRY: std::sync::OnceLock<Vec<OperationDef>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(build_registry)
+}
+fn build_registry() -> Vec<OperationDef> {
     use PortType::*;
     let mut result = Vec::new();
     for (id, label, params) in [
