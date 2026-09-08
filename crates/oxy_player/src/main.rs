@@ -297,3 +297,6 @@ impl eframe::App for Player {
         }
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod native_perf;

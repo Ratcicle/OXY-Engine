@@ -30,7 +30,7 @@ Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
-Projetos usam schema_version 1, compatível com OXY Engine 0.1–0.1.2.
+Projetos usam schema_version 1, compatível com OXY Engine 0.1–0.1.3.
 Sem instalador, atualização automática ou assinatura digital.
 "@
 [IO.File]::WriteAllText((Join-Path $destinationPath 'LEIA-ME.txt'), $instructions, [Text.Encoding]::UTF8)

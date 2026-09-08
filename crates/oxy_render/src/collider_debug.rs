@@ -3,7 +3,7 @@
 use crate::CameraState;
 use egui::{Color32, Pos2, Rect, Shape, Stroke, Vec2};
 use glam::Vec3;
-use oxy_core::{collision::Aabb, document::*, spatial::collider_bounds};
+use oxy_core::{collision::Aabb, document::*, scene_view::SceneView};
 
 #[derive(Default)]
 pub struct OverlayFrame {
@@ -162,6 +162,14 @@ pub fn draw(
     show_disabled: bool,
 ) -> OverlayFrame {
     let mut frame = OverlayFrame::default();
+    if !global
+        && !selected
+            .iter()
+            .any(|id| scene.entity(id).is_some_and(|e| e.collider.is_some()))
+    {
+        return frame;
+    }
+    let view = SceneView::new(scene);
     let painter = ui.painter_at(rect);
     let mut shapes = Vec::new();
     // Selected boxes are drawn last and win contour picking even when overlapping.
@@ -177,7 +185,7 @@ pub fn draw(
         if !active_selection && (!global || (!collider.enabled && !show_disabled)) {
             continue;
         }
-        let bounds = match collider_bounds(scene, &entity.id) {
+        let bounds = match view.collider_bounds(&entity.id) {
             Ok(b) => b,
             Err(error) => {
                 frame.errors.push(format!("{}: {error}", entity.name));

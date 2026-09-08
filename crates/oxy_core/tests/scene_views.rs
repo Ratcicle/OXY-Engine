@@ -96,3 +96,43 @@ fn duplicate_missing_cycles_and_siblings_are_not_silently_resolved() {
     assert!(SceneIndex::new(s).is_err());
     assert!(SceneView::new(s).entity("piece-0").is_none());
 }
+
+#[test]
+fn deep_chain_matches_independent_ordered_matrix_product() {
+    let mut p = Project::new("Profunda");
+    let mut expected = glam::Mat4::IDENTITY;
+    for i in 0..256 {
+        let mut e = Entity::new("Articulação", None);
+        e.id = format!("joint-{i}");
+        e.parent = (i > 0).then(|| format!("joint-{}", i - 1));
+        e.transform.position = [0.01, 0.02, 0.];
+        e.transform.rotation[2] = 0.005;
+        e.transform.pivot = [0.2, 0., 0.];
+        expected *= e.transform.matrix();
+        p.scenes[0].entities.push(e);
+    }
+    let view = SceneView::new(&p.scenes[0]);
+    assert!(
+        view.world_matrix("joint-255")
+            .unwrap()
+            .abs_diff_eq(expected, 1e-5)
+    );
+    assert_eq!(view.descendants("joint-128").len(), 128);
+}
+
+#[test]
+#[cfg(feature = "profiling")]
+fn shared_phase_calculates_each_matrix_once_without_linear_id_scans() {
+    let p = fixture();
+    oxy_core::metrics::take();
+    let view = SceneView::new(&p.scenes[0]);
+    for _ in 0..3 {
+        for entity in &p.scenes[0].entities {
+            view.world_matrix(&entity.id).unwrap();
+        }
+    }
+    let work = oxy_core::metrics::take();
+    assert_eq!(work.matrices, p.scenes[0].entities.len() as u64);
+    assert_eq!(work.index_builds, 1);
+    assert_eq!(work.entity_scans, 0);
+}

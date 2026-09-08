@@ -5,9 +5,10 @@ fn frame_camera(camera: &mut CameraState, scene: &Scene, selection: &[Id], size:
         *camera = CameraState::for_scene(scene);
         return;
     }
+    let view = oxy_core::scene_view::SceneView::new(scene);
     let ids: std::collections::HashSet<_> = selection
         .iter()
-        .flat_map(|id| scene.descendants(id))
+        .flat_map(|id| view.descendants(id))
         .collect();
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
@@ -16,7 +17,7 @@ fn frame_camera(camera: &mut CameraState, scene: &Scene, selection: &[Id], size:
         .iter()
         .filter(|e| ids.contains(&e.id) && e.primitive.is_some())
     {
-        if let Ok(world) = scene.world_matrix(&entity.id) {
+        if let Ok(world) = view.world_matrix(&entity.id) {
             let half = Vec3::from_array(entity.dimensions) * 0.5;
             for x in [-1., 1.] {
                 for y in [-1., 1.] {
@@ -471,12 +472,16 @@ impl Editor {
     }
 
     fn selection_outlines(&self, ui: &egui::Ui, scene: &Scene, rect: Rect, size: [u32; 2]) {
+        if self.selection.ids.is_empty() {
+            return;
+        }
+        let view = oxy_core::scene_view::SceneView::new(scene);
         let painter = ui.painter_at(rect);
         let ids: std::collections::HashSet<_> = self
             .selection
             .ids
             .iter()
-            .flat_map(|id| scene.descendants(id))
+            .flat_map(|id| view.descendants(id))
             .collect();
         for entity in scene
             .entities
@@ -494,7 +499,7 @@ impl Editor {
             if entity.primitive.is_none() || self.selected.as_ref() == Some(&entity.id) {
                 continue;
             }
-            let Ok(world) = scene.world_matrix(&entity.id) else {
+            let Ok(world) = view.world_matrix(&entity.id) else {
                 continue;
             };
             let half = Vec3::from(entity.dimensions) * 0.5;

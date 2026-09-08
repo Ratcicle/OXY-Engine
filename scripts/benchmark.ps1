@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Label, [string]$Sizes = '100,200,400,800,1600', [string]$Executable = '')
+param([Parameter(Mandatory)][string]$Label, [string]$Sizes = '100,200,400,800,1600', [string]$Executable = '', [ValidateSet('performance','performance_extra')][string]$Example = 'performance', [string]$ReferenceCommit = '')
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $results = Join-Path $workspace 'benchmarks/results'
@@ -7,12 +7,14 @@ if ($Label -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Rótulo inválido.' }
 $result = Join-Path $results "$Label.json"
 if (Test-Path -LiteralPath $result) { throw 'Referência existente preservada. Escolha outro rótulo.' }
 if (!$Executable) {
-    & (Join-Path $PSScriptRoot 'cargo.ps1') build --release --locked -p oxy_render --example performance --features oxy_core/profiling
+    & (Join-Path $PSScriptRoot 'cargo.ps1') build --release --locked -p oxy_render --example $Example --features oxy_core/profiling
     if ($LASTEXITCODE -ne 0) { throw 'Falha no build.' }
-    $Executable = Join-Path $workspace 'target/release/examples/performance.exe'
+    $Executable = Join-Path $workspace "target/release/examples/$Example.exe"
 }
 $metadata = [ordered]@{
     commit = (& git -c "safe.directory=$($workspace.Replace('\','/'))" rev-parse HEAD)
+    executable_reference_commit = $ReferenceCommit
+    example = $Example
     dirty = @(& git -c "safe.directory=$($workspace.Replace('\','/'))" status --porcelain)
     cpu = (Get-CimInstance Win32_Processor | Select-Object -ExpandProperty Name)
     logical_cpus = [Environment]::ProcessorCount
@@ -33,12 +35,18 @@ $start.RedirectStandardOutput = $true; $start.WorkingDirectory = $workspace
 $process = [Diagnostics.Process]::Start($start)
 $read = $process.StandardOutput.ReadToEndAsync()
 $deadline = [DateTime]::UtcNow.AddMinutes(15)
-while (!$process.WaitForExit(1000)) {
+$peakWorkingSet = 0L
+while (!$process.WaitForExit(100)) {
+    $process.Refresh()
+    $peakWorkingSet = [Math]::Max($peakWorkingSet, $process.PeakWorkingSet64)
     if ([DateTime]::UtcNow -gt $deadline) { $process.Kill(); throw 'Limite de 15 minutos excedido. Referência anterior preservada.' }
 }
 if ($process.ExitCode -ne 0) { throw "Benchmark falhou: $($process.ExitCode)" }
 $json = $read.GetAwaiter().GetResult()
 $null = $json | ConvertFrom-Json
 [IO.File]::WriteAllText($result, $json, [Text.UTF8Encoding]::new($false))
+$metadata['observed_peak_working_set_bytes'] = $peakWorkingSet
+$metadata['memory_method'] = 'Windows PeakWorkingSet64 sampled every 100ms while alive; includes allocator and libraries, not live logical records; zero means unavailable.'
+$metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $results "$Label-environment.json") -Encoding utf8
 $process.Dispose()
 Write-Host "Resultados: $result"

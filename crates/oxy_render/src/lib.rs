@@ -796,19 +796,6 @@ pub fn entity_mesh(entity: &Entity) -> mesh::Mesh {
         .unwrap_or_default()
 }
 
-fn is_visible(scene: &Scene, entity: &Entity) -> bool {
-    let mut current = Some(entity);
-    let mut remaining = scene.entities.len() + 1;
-    while let Some(entity) = current {
-        if !entity.visible || remaining == 0 {
-            return false;
-        }
-        remaining -= 1;
-        current = entity.parent.as_deref().and_then(|id| scene.entity(id));
-    }
-    true
-}
-
 #[derive(Clone, Debug)]
 pub struct PickHit {
     pub entity: Id,
@@ -823,14 +810,15 @@ pub fn pick(
     size: [u32; 2],
     pixel: [f32; 2],
 ) -> Option<PickHit> {
+    let view = oxy_core::scene_view::SceneView::new(scene);
     let (origin, direction) = camera.ray(size, pixel);
     let mut best: Option<PickHit> = None;
     let mut best_layer = i32::MIN;
     for entity in &scene.entities {
-        if entity.primitive.is_none() || entity.ui.is_some() || !is_visible(scene, entity) {
+        if entity.primitive.is_none() || entity.ui.is_some() || !view.visible(entity) {
             continue;
         }
-        let Ok(world) = scene.world_matrix(&entity.id) else {
+        let Ok(world) = view.world_matrix(&entity.id) else {
             continue;
         };
         let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));

@@ -1,4 +1,4 @@
-# OXY Engine 0.1.2
+# OXY Engine 0.1.3
 
 Editor e runtime desktop próprios em Rust, com cenas 2D/3D, montagem por peças, pintura PNG, animação, atributos, lógica visual e execução independente. Interface e renderização compartilham egui/eframe 0.33.3 com wgpu 27.0.1; nenhuma engine pronta é usada como núcleo. Dependências fixadas e `Cargo.lock` mantido.
 
@@ -55,8 +55,8 @@ cargo test -p oxy_render native_gpu_depth_texture_and_resize --locked -- --ignor
 cargo test -p oxy_editor native_portable_home_workflow --locked -- --ignored --nocapture
 # ZIP da engine, com player e exemplos; -SkipBuild reutiliza release já compilado.
 .\scripts\package-engine.ps1
-& '.\dist\OXY-Engine-0.1.2-windows-x64\OXY Engine.exe'
-.\scripts\test-portable.ps1 -Zip '.\dist\OXY-Engine-0.1.2-windows-x64.zip'
+& '.\dist\OXY-Engine-0.1.3-windows-x64\OXY Engine.exe'
+.\scripts\test-portable.ps1 -Zip '.\dist\OXY-Engine-0.1.3-windows-x64.zip'
 # O fluxo de jogos permanece separado (apenas runtime + dados do seu projeto).
 .\scripts\package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
 .\dist\Meu-Jogo\oxy_player.exe
@@ -64,7 +64,7 @@ cargo test -p oxy_editor native_portable_home_workflow --locked -- --ignored --n
 
 Para usar o auxiliar com argumentos após `--`, passe um vetor, como no exemplo de execução. O empacotador inclui executáveis e dados locais, prepara uma pasta temporária e preserva o pacote anterior. `-DebugBuild` escolhe desenvolvimento; `-SkipBuild` usa binários já compilados do perfil escolhido. O pacote independe do diretório-fonte.
 
-**Distribuição automática:** `.github/workflows/portable-windows.yml` gera ZIP Windows x64 e SHA-256, disponibiliza artifact por 14 dias em pushes para `main` e anexa ambos a GitHub Releases em tags `v*`. A tag deve corresponder à versão do workspace (por exemplo, `v0.1.2`); atualize `Cargo.toml`/`Cargo.lock` antes de uma nova versão. O build usa MSVC com runtime C estático. `ci.yml` continua verificando fmt/build/test/Clippy. Binários, ZIPs e DLLs permanecem em `target/` e `dist/`, ignorados pelo Git. Nenhum instalador, updater ou assinatura foi acrescentado.
+**Distribuição automática:** `.github/workflows/portable-windows.yml` gera ZIP Windows x64 e SHA-256, disponibiliza artifact por 14 dias em pushes para `main` e anexa ambos a GitHub Releases em tags `v*`. A tag deve corresponder à versão do workspace (por exemplo, `v0.1.3`); atualize `Cargo.toml`/`Cargo.lock` antes de uma nova versão. O build usa MSVC com runtime C estático. `ci.yml` continua verificando fmt/build/test/Clippy. Binários, ZIPs e DLLs permanecem em `target/` e `dist/`, ignorados pelo Git. Nenhum instalador, updater ou assinatura foi acrescentado.
 
 `test-portable.ps1` extrai em um caminho temporário com espaços, confere arquitetura x64, ícone/metadados, DLLs importadas e assets, e abre o editor sem argumentos a partir de outro diretório, com Rust/Cargo removidos do PATH. `-ContentOnly` omite a janela para runners sem GPU. Para a aceitação em Windows realmente limpo, execute esse mesmo script e ZIP em outra máquina/Windows Sandbox sem Rust, confirme os quatro comandos da tela inicial, abra o exemplo, teste Jogar e salve/reabra uma cópia. **Windows Sandbox não está disponível neste ambiente; o teste em outra máquina e a execução do novo workflow no GitHub ainda não foram verificados.**
 
@@ -76,7 +76,7 @@ Verificado na atualização portátil em Windows/GNU: **95 testes automatizados 
 
 ## Estrutura e limites
 
-`oxy_core` separa documentos, simulação, ações, persistência e histórico; `oxy_render` compartilha renderização, entrada e interface de jogo; `oxy_editor` e `oxy_player` são hosts independentes. A v0.1.2 mantém **schema_version 1**, compatível com os documentos da v0.1 e da v0.1.1.
+`oxy_core` separa documentos, simulação, ações, persistência e histórico; `oxy_render` compartilha renderização, entrada e interface de jogo; `oxy_editor` e `oxy_player` são hosts independentes. A v0.1.3 mantém **schema_version 1**, compatível com os documentos da v0.1, v0.1.1 e v0.1.2.
 
 O histórico armazena deltas de documentos e pixels. Imagens CPU são carregadas sob demanda, com orçamento de **128 MiB**; pixels alterados/em uso são preservados e podem ultrapassá-lo até serem liberados. Caches de malhas CPU/GPU usam LRU de **64 entradas/64 MiB** cada. O editor ocioso redesenha sob demanda; jogo, animação, interação e diagnóstico têm atualizações próprias. Esses mecanismos não representam medições de desempenho nem um limite total de memória. Em janelas estreitas, a Animação usa o botão **Propriedades** para abrir a edição da pose/quadro/evento, deixando espaço para o viewport e a timeline.
 

@@ -14,6 +14,9 @@ pub struct Counters {
     pub actions: u64,
     pub graph_nodes_copied: u64,
     pub steps: u64,
+    pub physics_prepare_ns: u64,
+    pub physics_filter_ns: u64,
+    pub physics_resolve_ns: u64,
     pub movement_ns: u64,
     pub areas_ns: u64,
     pub tasks_ns: u64,
@@ -48,3 +51,4 @@ pub fn timed<T>(f: impl FnOnce() -> T, record: impl FnOnce(&mut Counters, u64)) 
     let _ = record;
     result
 }
+pub const ENABLED: bool = cfg!(feature = "profiling");

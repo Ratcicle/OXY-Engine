@@ -27,5 +27,7 @@ jobs:
         run: cargo build --workspace --locked
       - name: Testes sem janela
         run: cargo test --workspace --locked
+      - name: Invariantes e contadores (sem limites de tempo)
+        run: cargo test -p oxy_core --features profiling --locked
       - name: Análise estática
         run: cargo clippy --workspace --all-targets --locked -- -D warnings

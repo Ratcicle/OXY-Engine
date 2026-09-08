@@ -1876,7 +1876,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 fn native_editor_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.1.2/regression");
+    let output = workspace.join("qa/v0.1.3/regression");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-native-qa-{}", new_id()));
     copy_directory(&workspace.join("examples/validacao"), &fixture).unwrap();

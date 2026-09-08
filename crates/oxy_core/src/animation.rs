@@ -156,10 +156,16 @@ pub fn sample_clip(scene: &mut Scene, clip: &Clip, time: f32) {
     } else {
         time.clamp(0., clip.duration.max(0.))
     };
+    let Ok(index) = crate::scene_view::SceneIndex::new(scene) else {
+        return;
+    };
     for track in &clip.tracks {
-        if let (Some(entity), Some(mut pose)) =
-            (scene.entity_mut(&track.target), sample_track(track, time))
-        {
+        if let (Some(entity), Some(mut pose)) = (
+            index
+                .position(&track.target)
+                .and_then(|i| scene.entities.get_mut(i)),
+            sample_track(track, time),
+        ) {
             pose.pivot = entity.transform.pivot;
             entity.transform = pose;
         }

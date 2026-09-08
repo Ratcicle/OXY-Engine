@@ -108,10 +108,14 @@ impl GameUi {
             self.root = root.to_owned();
         }
         let mut clicks = Vec::new();
+        if !scene.entities.iter().any(|e| e.ui.is_some()) {
+            return clicks;
+        }
+        let view = oxy_core::scene_view::SceneView::new(scene);
         let mut elements: Vec<_> = scene
             .entities
             .iter()
-            .filter(|entity| super::is_visible(scene, entity) && entity.ui.is_some())
+            .filter(|entity| entity.ui.is_some() && view.visible(entity))
             .collect();
         elements.sort_by_key(|entity| entity.layer);
         let painter = ui.painter().with_clip_rect(viewport);
@@ -119,7 +123,7 @@ impl GameUi {
             let element = entity.ui.as_ref().unwrap();
             let rect = element_rect(element, viewport);
             let color = rgba(element.color);
-            let value = scene
+            let value = view
                 .entity(element.binding_object.as_deref().unwrap_or(&entity.id))
                 .and_then(|bound| bound.attributes.get(&element.binding_attribute));
             let text = display_text(element, value, scene);
@@ -300,10 +304,11 @@ pub fn pick_ui(scene: &Scene, viewport: Rect, pointer: Pos2) -> Option<Id> {
     if !viewport.contains(pointer) {
         return None;
     }
+    let view = oxy_core::scene_view::SceneView::new(scene);
     let mut elements: Vec<_> = scene
         .entities
         .iter()
-        .filter(|entity| super::is_visible(scene, entity) && entity.ui.is_some())
+        .filter(|entity| entity.ui.is_some() && view.visible(entity))
         .collect();
     elements.sort_by_key(|entity| entity.layer);
     elements

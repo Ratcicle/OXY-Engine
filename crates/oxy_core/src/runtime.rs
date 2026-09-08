@@ -843,7 +843,10 @@ impl Runtime {
         if controllers.is_empty() {
             return;
         }
-        let Ok(mut evaluated) = SceneEvaluation::new(self.scene()) else {
+        let Ok(mut evaluated) = crate::metrics::timed(
+            || SceneEvaluation::new(self.scene()),
+            |c, ns| c.physics_prepare_ns += ns,
+        ) else {
             return;
         };
         let dimensions = if self.scene().kind == SceneKind::TwoD {
@@ -851,6 +854,21 @@ impl Runtime {
         } else {
             3
         };
+        let mut spatial = crate::metrics::timed(
+            || {
+                crate::broadphase::Candidates::new(
+                    evaluated.boxes.iter().enumerate().filter_map(|(i, b)| {
+                        self.scene().entities[i]
+                            .collider
+                            .as_ref()
+                            .filter(|c| c.enabled && !c.is_trigger)
+                            .and_then(|_| b.map(|b| (i, b)))
+                    }),
+                    dimensions,
+                )
+            },
+            |c, ns| c.physics_prepare_ns += ns,
+        );
         for (id, controller) in controllers {
             let mut body_state = self.bodies.get(&id).copied().unwrap_or_default();
             let horizontal =
@@ -872,29 +890,30 @@ impl Runtime {
                 .position(&id)
                 .and_then(|i| evaluated.boxes[i])
             {
-                let obstacles: Vec<_> = self
-                    .scene()
-                    .entities
-                    .iter()
-                    .filter(|entity| {
-                        entity
-                            .collider
-                            .as_ref()
-                            .is_some_and(|collider| collider.enabled && !collider.is_trigger)
-                    })
-                    .filter(|entity| {
-                        entity.id != id && !evaluated.index.related(self.scene(), &id, &entity.id)
-                    })
-                    .filter_map(|entity| {
-                        evaluated
-                            .index
-                            .position(&entity.id)
-                            .and_then(|i| evaluated.boxes[i])
-                    })
-                    .inspect(|_| crate::metrics::count(|c| c.candidates += 1))
-                    .collect();
-                let result =
-                    move_and_slide(body, body_state.velocity, FIXED_DT, &obstacles, dimensions);
+                let obstacles: Vec<_> = crate::metrics::timed(
+                    || {
+                        let eligible = |i: usize| {
+                            let entity = &self.scene().entities[i];
+                            entity.id != id
+                                && !evaluated.index.related(self.scene(), &id, &entity.id)
+                        };
+                        spatial
+                            .motion(body, body_state.velocity * FIXED_DT, |i| {
+                                evaluated.boxes[i].is_some_and(|b| body.overlaps(b, dimensions))
+                                    && eligible(i)
+                            })
+                            .into_iter()
+                            .filter(|i| eligible(*i))
+                            .filter_map(|i| evaluated.boxes[i])
+                            .inspect(|_| crate::metrics::count(|c| c.candidates += 1))
+                            .collect()
+                    },
+                    |c, ns| c.physics_filter_ns += ns,
+                );
+                let result = crate::metrics::timed(
+                    || move_and_slide(body, body_state.velocity, FIXED_DT, &obstacles, dimensions),
+                    |c, ns| c.physics_resolve_ns += ns,
+                );
                 body_state.velocity = result.velocity;
                 body_state.grounded = result.grounded;
                 result.delta
@@ -918,6 +937,16 @@ impl Runtime {
                     (Vec3::from(entity.transform.position) + local_delta).to_array();
             }
             evaluated.refresh_subtree(self.scene(), &id);
+            for changed in evaluated.index.descendants(self.scene(), &id) {
+                if let Some(i) = evaluated.index.position(&changed)
+                    && self.scene().entities[i]
+                        .collider
+                        .as_ref()
+                        .is_some_and(|c| c.enabled && !c.is_trigger)
+                {
+                    spatial.changed(i);
+                }
+            }
             self.bodies.insert(id, body_state);
         }
     }
@@ -979,13 +1008,18 @@ impl Runtime {
                 })
                 .collect()
         };
+        let spatial = crate::broadphase::Candidates::new(
+            colliders.iter().enumerate().map(|(i, (_, _, b))| (i, *b)),
+            dimensions,
+        );
         let mut pairs = HashSet::new();
         let mut events = Vec::new();
         for (area, is_trigger, volume) in &colliders {
             if !is_trigger {
                 continue;
             }
-            for (other, _, target) in &colliders {
+            for i in spatial.query(*volume) {
+                let (other, _, target) = &colliders[i];
                 crate::metrics::count(|c| c.candidates += 1);
                 if area == other
                     || !volume.overlaps(*target, dimensions)

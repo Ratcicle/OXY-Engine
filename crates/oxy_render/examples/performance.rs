@@ -15,7 +15,7 @@ use std::{
 fn id(n: usize) -> String {
     format!("00000000-0000-4000-8000-{n:012x}")
 }
-fn fixture(n: usize, mode: &str) -> Project {
+pub(crate) fn fixture(n: usize, mode: &str) -> Project {
     let mut p = Project::new("Benchmark OXY");
     p.id = id(1);
     p.scenes[0].id = id(2);
@@ -88,7 +88,7 @@ fn fixture(n: usize, mode: &str) -> Project {
     }
     p
 }
-fn samples(mut work: impl FnMut() -> usize, limit: Duration) -> serde_json::Value {
+pub(crate) fn samples(mut work: impl FnMut() -> usize, limit: Duration) -> serde_json::Value {
     for _ in 0..3 {
         black_box(work());
     }

@@ -83,14 +83,21 @@ pub fn resize_box(mut bounds: Aabb, edges: [i8; 3], delta: Vec3, snap: Option<f3
 }
 
 pub fn visual_bounds(scene: &Scene, ids: &[Id]) -> Result<Aabb, String> {
+    let view = crate::scene_view::SceneView::new(scene);
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for id in ids {
-        let e = scene.entity(id).ok_or("Peça não encontrada")?;
+        let e = view.entity(id).ok_or("Peça não encontrada")?;
         if e.primitive.is_none() || e.camera.is_some() || e.ui.is_some() {
             continue;
         }
-        let world = invertible_world(scene, id)?;
+        let world = view.world_matrix(id)?;
+        if !world.is_finite() || world.determinant().abs() < 1e-8 {
+            return Err(
+                "A transformação não pode ser invertida. Ajuste as escalas da peça e dos pais."
+                    .into(),
+            );
+        }
         let mut half = Vec3::from(e.dimensions) * 0.5;
         match e.primitive {
             Some(Primitive::Plane) => half.y = 0.,

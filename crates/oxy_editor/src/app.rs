@@ -1157,3 +1157,6 @@ pub fn vector3(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64
 fn read_input(ctx: &egui::Context, project: &Project, enabled: bool) -> InputFrame {
     oxy_render::input::collect_input(ctx, &project.input_bindings, enabled)
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod native_perf;

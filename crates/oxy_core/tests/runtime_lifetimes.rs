@@ -76,6 +76,97 @@ fn completed_attacks_release_records_and_waits_keep_same_activation() {
     rt.stop();
     assert_eq!(rt.retained_counts(), [0, 0, 0, 0]);
 }
+
+#[test]
+fn external_reorder_and_same_count_replacement_invalidate_runtime_indices() {
+    let (mut p, owner) = attacks(false);
+    let mut other = Entity::new("Other", None);
+    other.attributes.insert("Vida".into(), Value::Number(123.));
+    p.scenes[0].entities.push(other);
+    let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+    let input = InputFrame {
+        pressed: ["atacar".into()].into(),
+        ..Default::default()
+    };
+    rt.advance(FIXED_DT, &input);
+    rt.scene_mut().entities.reverse();
+    rt.advance(FIXED_DT, &input);
+    assert_eq!(
+        rt.scene().entity(&owner).unwrap().attributes["Vida"],
+        Value::Number(99980.)
+    );
+    assert_eq!(
+        rt.scene().entities[0].attributes["Vida"],
+        Value::Number(123.)
+    );
+    rt.scene_mut().entities.remove(0);
+    rt.scene_mut()
+        .entities
+        .insert(0, Entity::new("Replacement", None));
+    rt.advance(FIXED_DT, &input);
+    assert_eq!(
+        rt.scene().entity(&owner).unwrap().attributes["Vida"],
+        Value::Number(99970.)
+    );
+    rt.remove_object(&owner);
+    for _ in 0..8 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    assert_eq!(rt.retained_counts(), [0; 4]);
+}
+
+#[test]
+fn reactivation_does_not_expire_old_waits_or_share_new_hits() {
+    let (p, owner) = attacks(true);
+    let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    rt.scene_mut()
+        .entity_mut(&owner)
+        .unwrap()
+        .collider
+        .as_mut()
+        .unwrap()
+        .enabled = false;
+    rt.advance(FIXED_DT, &InputFrame::default());
+    rt.scene_mut()
+        .entity_mut(&owner)
+        .unwrap()
+        .collider
+        .as_mut()
+        .unwrap()
+        .enabled = true;
+    rt.advance(FIXED_DT, &InputFrame::default());
+    for _ in 0..8 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    assert_eq!(
+        rt.scene().entity(&owner).unwrap().attributes["Vida"],
+        Value::Number(99980.)
+    );
+    assert_eq!(rt.retained_counts(), [1, 1, 0, 0]);
+    rt.stop();
+    assert_eq!(rt.retained_counts(), [0; 4]);
+}
+
+#[test]
+#[cfg(feature = "profiling")]
+fn steady_actions_do_not_clone_prepared_graphs() {
+    let (p, _) = attacks(false);
+    let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+    let input = InputFrame {
+        pressed: ["atacar".into()].into(),
+        ..Default::default()
+    };
+    rt.advance(FIXED_DT, &input);
+    oxy_core::metrics::take();
+    for _ in 0..10 {
+        rt.advance(FIXED_DT, &input);
+    }
+    let work = oxy_core::metrics::take();
+    assert_eq!(work.graph_nodes_copied, 0);
+    assert_eq!(work.entity_scans, 0);
+    assert!(work.actions > 0);
+}
 #[test]
 fn active_area_keeps_hits_across_exit_reentry_and_releases_when_disabled() {
     let (p, id) = attacks(true);
