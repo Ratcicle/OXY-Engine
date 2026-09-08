@@ -6,6 +6,15 @@ use super::*;
 fn native_portable_home_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // Release deliberately has no source-directory fallback. Exercise the same
+    // adjacent data layout as the portable ZIP; never overwrite existing data.
+    if !cfg!(debug_assertions) {
+        let executable = std::env::current_exe().unwrap();
+        let data = executable.parent().unwrap().join("data");
+        if !data.exists() {
+            copy_directory(&workspace.join("examples/validacao"), &data).unwrap();
+        }
+    }
     let output = workspace.join("qa/v0.1.3/portable");
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));

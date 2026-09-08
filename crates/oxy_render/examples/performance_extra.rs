@@ -5,6 +5,45 @@ mod standard;
 use oxy_core::{animation::*, document::*};
 use oxy_render::{CameraState, collider_debug};
 use std::{hint::black_box, time::Duration};
+fn history_phases(project: &Project) -> serde_json::Value {
+    let mut p = project.clone();
+    let mut images = oxy_core::texture_cache::TextureCache::default();
+    let mut history = oxy_core::edit_history::CommandHistory::new();
+    let mut times: [Vec<u64>; 4] = Default::default();
+    let started = std::time::Instant::now();
+    for iteration in 0..104 {
+        if started.elapsed() > Duration::from_secs(12) {
+            break;
+        }
+        let mut one = [0; 4];
+        let start = std::time::Instant::now();
+        history.begin("Mover", &p, &images);
+        one[0] = start.elapsed().as_nanos() as u64;
+        p.scenes[0].entities[0].transform.position[0] += 1.;
+        let start = std::time::Instant::now();
+        history.commit(&p, &mut images).unwrap();
+        one[1] = start.elapsed().as_nanos() as u64;
+        let start = std::time::Instant::now();
+        history.undo(&mut p, &mut images).unwrap();
+        one[2] = start.elapsed().as_nanos() as u64;
+        let start = std::time::Instant::now();
+        history.redo(&mut p, &mut images).unwrap();
+        one[3] = start.elapsed().as_nanos() as u64;
+        black_box(&p);
+        if iteration >= 3 {
+            for (samples, time) in times.iter_mut().zip(one) {
+                samples.push(time);
+            }
+        }
+    }
+    let mut result = serde_json::json!({"retained_estimated_bytes":history.estimated_bytes(),"limit_seconds":12});
+    for (name, mut values) in ["begin", "commit", "undo", "redo"].into_iter().zip(times) {
+        values.sort_unstable();
+        let n = values.len();
+        result[name] = serde_json::json!({"samples":n,"median_ns":values.get(n/2),"p95_ns":if n>=100 {values.get(((n-1) as f32*0.95).ceil() as usize)}else{None},"p99_ns":if n>=100 {values.get(((n-1) as f32*0.99).ceil() as usize)}else{None},"limit_exceeded":n<101});
+    }
+    result
+}
 fn cycle_project(n: usize) -> Project {
     use oxy_core::graph::{Edge, Node};
     let mut p = standard::fixture(n, "static");
@@ -150,7 +189,8 @@ fn main() {
             },
             limit,
         );
-        rows.push(serde_json::json!({"entities":n,"pick":pick,"overlay":overlay,"preview_clone_sample_prepare":preview,"reparent_roundtrip":reparent}));
+        let history = history_phases(&project);
+        rows.push(serde_json::json!({"entities":n,"pick":pick,"overlay":overlay,"preview_clone_sample_prepare":preview,"reparent_roundtrip":reparent,"history_phases":history}));
     }
     let mut cycles = Vec::new();
     for n in [100, 400] {
@@ -174,6 +214,121 @@ fn main() {
         assert!(runtime.logs.is_empty(), "{:?}", runtime.logs);
         cycles.push(serde_json::json!({"entities":n,"nodes":10,"edges":11,"sampled_step":timing,"after_drain":runtime.retained_counts(),"attributes":runtime.scene().entities[0].attributes}));
     }
+    let mut soak_project = cycle_project(100);
+    {
+        use oxy_core::graph::{Edge, Node};
+        let target = &mut soak_project.scenes[0].entities[3];
+        target.collider = Some(Collider::default());
+        target.transform.position = [0.; 3];
+        target.attributes.insert("Vida".into(), Value::Number(1e9));
+        let target_id = target.id.clone();
+        let area = &mut soak_project.scenes[0].entities[2];
+        area.collider = Some(Collider {
+            is_trigger: true,
+            ..Default::default()
+        });
+        area.transform.position = [0.; 3];
+        let mut nodes: Vec<_> = [
+            "event.area_enter",
+            "action.damage",
+            "control.wait",
+            "action.damage",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, op)| {
+            let mut node = Node::new(op, [0.; 2]);
+            node.id = format!("00000000-0000-4000-8000-{:012x}", 30000 + i);
+            node
+        })
+        .collect();
+        for i in [1, 3] {
+            nodes[i]
+                .params
+                .insert("target".into(), Value::Object(Some(target_id.clone())));
+        }
+        nodes[2].params.insert("seconds".into(), Value::Number(0.1));
+        for i in 0..3 {
+            area.graph.edges.push(Edge {
+                from_node: nodes[i].id.clone(),
+                from_port: "exec".into(),
+                to_node: nodes[i + 1].id.clone(),
+                to_port: "exec".into(),
+            });
+        }
+        area.graph.nodes = nodes;
+    }
+    {
+        use oxy_core::graph::{Edge, Node};
+        let area = soak_project.scenes[0].entities[2].id.clone();
+        let graph = &mut soak_project.scenes[0].entities[0].graph;
+        for (i, action, enabled) in [(0, "ativar_area", true), (1, "desativar_area", false)] {
+            let mut event = Node::new("event.input", [0.; 2]);
+            event.id = format!("00000000-0000-4000-8000-{:012x}", 40000 + i * 2);
+            event
+                .params
+                .insert("action".into(), Value::Text(action.into()));
+            let mut node = Node::new("action.component", [0.; 2]);
+            node.id = format!("00000000-0000-4000-8000-{:012x}", 40001 + i * 2);
+            node.params
+                .insert("target".into(), Value::Object(Some(area.clone())));
+            node.params
+                .insert("component".into(), Value::Text("collider".into()));
+            node.params.insert("enabled".into(), Value::Bool(enabled));
+            graph.edges.push(Edge {
+                from_node: event.id.clone(),
+                from_port: "exec".into(),
+                to_node: node.id.clone(),
+                to_port: "exec".into(),
+            });
+            graph.nodes.extend([event, node]);
+        }
+    }
+    let mut rt = oxy_core::runtime::Runtime::new(&soak_project, &soak_project.start_scene).unwrap();
+    let mut soak = Vec::new();
+    let start = std::time::Instant::now();
+    for step in 0..2000 {
+        let mut pressed = std::collections::BTreeSet::from(["atacar".into()]);
+        if step % 64 == 0 {
+            pressed.insert("desativar_area".into());
+        }
+        if step % 64 == 1 {
+            pressed.insert("ativar_area".into());
+        }
+        rt.advance(
+            oxy_core::runtime::FIXED_DT,
+            &oxy_core::runtime::InputFrame {
+                pressed,
+                ..Default::default()
+            },
+        );
+        if step % 200 == 0 {
+            soak.push(serde_json::json!({"step":step,"objects":rt.scene().entities.len(),"retained":rt.retained_counts()}));
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "Soak exceeded 30 seconds"
+        );
+    }
+    rt.advance(
+        oxy_core::runtime::FIXED_DT,
+        &oxy_core::runtime::InputFrame {
+            pressed: ["desativar_area".into()].into(),
+            ..Default::default()
+        },
+    );
+    for _ in 0..10 {
+        rt.advance(oxy_core::runtime::FIXED_DT, &Default::default());
+    }
+    assert_eq!(rt.scene().entities.len(), 100);
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    assert_eq!(
+        rt.scene().entities[0].attributes["Contador"],
+        Value::Number(4000.)
+    );
+    soak.push(serde_json::json!({"phase":"drained","retained":rt.retained_counts(),"objects":rt.scene().entities.len(),"owner_attributes":rt.scene().entities[0].attributes,"target_attributes":rt.scene().entities[3].attributes,"duration_ns":start.elapsed().as_nanos()}));
+    rt.stop();
+    soak.push(serde_json::json!({"phase":"stop","retained":rt.retained_counts()}));
     let mut equivalence = Vec::new();
     for mode in [
         "move",
@@ -199,5 +354,5 @@ fn main() {
         }
         equivalence.push(serde_json::json!({"scenario":mode,"entities":runtime.scene().entities.iter().map(|e|(&e.id,&e.parent,&e.transform,&e.attributes)).collect::<Vec<_>>(),"logs":runtime.logs,"trace":runtime.traces.iter().map(|t|(&t.object,&t.node,&t.operation,t.time)).collect::<Vec<_>>()}));
     }
-    println!("{}",serde_json::to_string_pretty(&serde_json::json!({"method":"CPU only; seed 0; 16-piece chains; all pieces collidable and animated; 3 warmups, up to 101 samples, 3s soft cap; picking and overlays at 1280x720 logical points; preview includes scene clone and actual sampling/preparation; no GPU timing","rows":rows,"cycles":cycles,"equivalence":equivalence})).unwrap());
+    println!("{}",serde_json::to_string_pretty(&serde_json::json!({"method":"CPU only; seed 0; 16-piece chains; all pieces collidable and animated; 3 warmups, up to 101 samples, 3s soft cap; picking and overlays at 1280x720 logical points; preview includes scene clone and actual sampling/preparation; no GPU timing","rows":rows,"cycles":cycles,"soak":soak,"equivalence":equivalence})).unwrap());
 }

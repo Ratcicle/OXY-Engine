@@ -70,9 +70,21 @@ Para usar o auxiliar com argumentos após `--`, passe um vetor, como no exemplo 
 
 `examples/validacao/project.oxy.json` contém sala 2D, boneco 3D articulado e interação de carta. São cenas editáveis normais com comportamentos em componentes/grafos e placeholders locais. Para gerar outra cópia: `cargo run --locked -p oxy_core --example create_demos -- artifacts/validacao-regenerada`.
 
-Os testes cobrem persistência segura e falhas de escrita, referências/hierarquias, seleção e transformações, isolamento de execução, histórico de documentos/pixels, animação/eventos, grafos/esperas/cancelamento, colisões, caches e interação egui. Testes nativos exercitam editor, player e GPU; evidências desta revisão ficam em `qa/v0.1.2/`. A configuração em `.github/workflows/ci.yml` executa formatação, build, testes sem janela e Clippy no Windows; **a execução no GitHub ainda não foi verificada**.
+Os testes cobrem persistência segura e falhas de escrita, referências/hierarquias, seleção e transformações, isolamento de execução, histórico de documentos/pixels, animação/eventos, grafos/esperas/cancelamento, colisões, caches e interação egui. Testes nativos exercitam editor, player e GPU; evidências da 0.1.3 ficam em `qa/v0.1.3/`. A configuração em `.github/workflows/ci.yml` executa formatação, build, testes sem janela e Clippy no Windows; **a execução no GitHub ainda não foi verificada**.
 
-Verificado na atualização portátil em Windows/GNU: **95 testes automatizados e 3 testes nativos passaram** (tela inicial, regressão do editor e player), além de fmt, builds de desenvolvimento/release e Clippy com `-D warnings`. O executável do ZIP abriu fora do repositório e sem Rust/Cargo no PATH; o pacote passou na inspeção de arquitetura, recursos e DLLs. Evidências novas ficam em `qa/portable/`. A QA usa janelas wgpu reais e entrada isolada no egui. Na tela inicial, houve 1 atualização espontânea em 500 ms após estabilização; não é uma medição de consumo total de CPU/GPU.
+Na 0.1.3, consultas por fase usam índices de entidades/hierarquia e matrizes reutilizadas. O runtime compartilha grafos preparados, encerra registros de ativações e filtra candidatos 2D em cenas esparsas, mantendo força bruta para casos pequenos/densos e 3D. Formato, ferramentas e distribuição portátil foram preservados.
+
+**Validação local:** 105 testes regulares em release, testes adicionais de contadores com `profiling`, fmt/build/Clippy e cinco testes nativos. O ZIP 0.1.3 abriu fora do repositório e sem Rust/Cargo no PATH. Não houve teste em outra máquina limpa nem execução do CI remoto. Janelas reais e entrada egui isolada validam editor, player e GPU; não substituem avaliação humana prolongada de fluidez.
+
+O [relatório de desempenho](benchmarks/README.md) contém ambiente, commits, decisões, limitações e tabelas antes/depois, com JSON/CSV e capturas. No Ryzen 5 5600/RX 6600 usado, o trabalho CPU do editor com 1.600 objetos caiu de 26,06 para 6,89 ms; isso não é tempo GPU ou promessa de FPS. A geração de diferenças do histórico continua sendo um gargalo medido.
+
+```powershell
+.\scripts\benchmark.ps1 -Label meu-teste
+.\scripts\benchmark.ps1 -Label minhas-ferramentas -Example performance_extra
+.\scripts\benchmark-native.ps1 -Label meus-hosts
+```
+
+Os benchmarks usam release/locked e dados determinísticos. Os rótulos não podem sobrescrever resultados existentes. A instrumentação detalhada é opcional (`--features oxy_core/profiling`) e desligada no pacote distribuído. `performance.yml` permite uma execução manual no GitHub; o CI regular verifica invariantes, sem impor limites de milissegundos.
 
 ## Estrutura e limites
 

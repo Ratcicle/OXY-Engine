@@ -1,0 +1,10 @@
+[[109.0 58.0] - [274.0 89.0]]: OXY Engine
+[[108.0 98.0] - [298.0 112.0]]: Versão 0.1.3 · Crie do seu jeito.
+[[76.2 167.5] - [151.2 180.5]]: Novo projeto
+[[253.7 166.5] - [327.7 180.5]]: Abrir projeto
+[[413.2 166.5] - [526.2 180.5]]: Projeto de exemplo
+[[28.0 204.0] - [416.0 218.0]]: Cenas 2D e 3D · Modelagem · Pintura · Animação · Lógica visual
+[[29.0 252.0] - [168.0 270.0]]: Projetos recentes
+[[28.0 279.0] - [372.0 293.0]]: Seus projetos aparecerão aqui depois de abrir ou salvar.
+[[29.0 302.0] - [591.0 316.0]]: Exemplo não encontrado. Extraia o ZIP inteiro, mantendo a pasta data junto do executável.
+[[28.0 341.0] - [519.0 355.0]]: Tudo no seu computador. Seus projetos e assets permanecem em pastas locais.

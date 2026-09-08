@@ -31,4 +31,14 @@ if ($a.equivalence -and $b.equivalence) {
     if ($old -cne $new) { throw 'Estados/rastros observáveis diferentes; investigar antes de aceitar os tempos.' }
     Write-Host 'Estados e rastros ordenados exatamente iguais nos replays de 60 passos.'
 }
+if ($a.soak -and $b.soak) {
+    $old = $a.soak | Where-Object phase -eq 'drained'
+    $new = $b.soak | Where-Object phase -eq 'drained'
+    foreach ($field in @('objects','owner_attributes','target_attributes')) {
+        if ((ConvertTo-Json -InputObject $old.$field -Depth 20 -Compress) -cne (ConvertTo-Json -InputObject $new.$field -Depth 20 -Compress)) {
+            throw "Teste prolongado mudou $field; investigar antes de aceitar a medição."
+        }
+    }
+    Write-Host 'Objetos e atributos do teste prolongado equivalentes após encerrar o trabalho.'
+}
 Write-Host "Comparação: $Before-to-$After.csv. Razão > 1 indica menor duração após; não representa FPS."

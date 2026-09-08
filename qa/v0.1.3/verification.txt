@@ -1,0 +1,13 @@
+OXY Engine 0.1.3 - verificação local em 08/09/2026
+Produção medida: e7257dea5ee53d1dde9950cb3a82eaab0356e2bb
+105 testes regulares em dev e release: passaram. Dois testes adicionais de contadores com profiling: passaram.
+cargo fmt --all --check; cargo build --workspace --locked; cargo test --workspace --locked; cargo test -p oxy_core --features profiling --locked; cargo clippy --workspace --all-targets --all-features --locked -- -D warnings: passaram.
+Cinco testes nativos em release: native_spatial_workflow, native_editor_workflow, native_player_portable_workflow, native_gpu_depth_texture_and_resize, native_portable_home_workflow: passaram.
+QA da tela inicial em release usa cópia de data adjacente ao executável de teste, tal como o ZIP; sem fallback ao fonte.
+GPU: Radeon RX 6600 / Vulkan / AMD 26.7.1; Windows driver 32.0.21045.1000.
+Pacote: dist/OXY-Engine-0.1.3-windows-x64.zip
+SHA256: 8085a7120429cac1af2f77538aa7c09acb8adf265776f969d594b4484bce3436
+test-portable.ps1: PE x64, ícone/versão, DLLs e três cenas verificados; janela OXY Engine 0.1.3 abriu fora do repositório e sem Rust/Cargo no PATH.
+Sem segunda máquina limpa/Windows Sandbox, CI remoto ou tempo GPU.
+Capturas são da janela nativa real; entrada de QA injetada apenas no egui da aplicação de teste.
+Mais detalhes, dados de referência e medições: benchmarks/README.md.
