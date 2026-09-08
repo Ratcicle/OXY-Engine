@@ -714,6 +714,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
     Ok(())
 }
 fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), String> {
+    let view = crate::scene_view::SceneView::new(scene);
     let ids: HashSet<_> = scene.entities.iter().map(|e| e.id.as_str()).collect();
     if ids.len() != scene.entities.len() {
         return Err(format!("IDs duplicados em {}", scene.name));
@@ -737,7 +738,7 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
         {
             return Err(format!("Cor inválida: {}", e.name));
         }
-        scene.world_matrix(&e.id)?;
+        view.world_matrix(&e.id)?;
         for texture in [
             e.material.texture.as_ref(),
             e.ui.as_ref().and_then(|u| u.texture.as_ref()),

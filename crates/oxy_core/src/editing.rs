@@ -46,24 +46,21 @@ impl Selection {
 }
 
 pub fn hierarchy_order(scene: &Scene) -> Vec<Id> {
-    fn visit(scene: &Scene, parent: Option<&str>, out: &mut Vec<Id>, depth: usize) {
-        if depth > 64 {
-            return;
+    let Ok(index) = crate::scene_view::SceneIndex::new(scene) else {
+        return Vec::new();
+    };
+    let mut stack: Vec<_> = index.roots.iter().rev().copied().collect();
+    let mut out = Vec::with_capacity(scene.entities.len());
+    let mut visited = HashSet::new();
+    while let Some(i) = stack.pop() {
+        if !visited.insert(i) {
+            continue;
         }
-        for entity in scene
-            .entities
-            .iter()
-            .filter(|e| e.parent.as_deref() == parent)
-        {
-            out.push(entity.id.clone());
-            visit(scene, Some(&entity.id), out, depth + 1);
-        }
+        out.push(scene.entities[i].id.clone());
+        stack.extend(index.children[i].iter().rev().copied());
     }
-    let mut out = Vec::new();
-    visit(scene, None, &mut out, 0);
     out
 }
-
 /// Selected descendants inherit their selected ancestor's operation exactly once.
 pub fn selection_roots(scene: &Scene, ids: &[Id]) -> Vec<Id> {
     let set: HashSet<_> = ids.iter().collect();

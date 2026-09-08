@@ -1,4 +1,5 @@
 //! Fixed-step, editor-independent execution of ordinary project documents.
+use crate::scene_view::SceneIndex;
 use crate::{
     animation::AnimationPlayer,
     audio::SoundRequest,
@@ -8,6 +9,7 @@ use crate::{
 };
 use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::OnceLock;
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
@@ -70,8 +72,9 @@ struct BodyState {
 }
 
 pub struct Runtime {
-    pub project: Project,
-    pub scene_id: Id,
+    project: Project,
+    scene_id: Id,
+    index: OnceLock<Result<SceneIndex, String>>,
     pub paused: bool,
     pub logs: Vec<String>,
     pub traces: Vec<NodeTrace>,
@@ -99,6 +102,7 @@ impl Runtime {
             return Err("Cena solicitada não existe.".into());
         }
         let mut runtime = Self {
+            index: OnceLock::new(),
             project: project.clone(),
             scene_id: scene_id.into(),
             paused: false,
@@ -130,7 +134,32 @@ impl Runtime {
             .scene(&self.scene_id)
             .expect("runtime scene invariant")
     }
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+    pub fn scene_id(&self) -> &str {
+        &self.scene_id
+    }
+    fn index(&self) -> Option<&SceneIndex> {
+        self.index
+            .get_or_init(|| SceneIndex::new(self.scene()))
+            .as_ref()
+            .ok()
+    }
+    fn entity(&self, id: &str) -> Option<&crate::document::Entity> {
+        self.index()?
+            .position(id)
+            .map(|i| &self.scene().entities[i])
+    }
+    fn entity_mut(&mut self, id: &str) -> Option<&mut crate::document::Entity> {
+        let i = self.index()?.position(id)?;
+        Some(&mut self.scene_mut_internal().entities[i])
+    }
     pub fn scene_mut(&mut self) -> &mut Scene {
+        self.index.take();
+        self.scene_mut_internal()
+    }
+    fn scene_mut_internal(&mut self) -> &mut Scene {
         self.project
             .scene_mut(&self.scene_id)
             .expect("runtime scene invariant")
@@ -285,9 +314,7 @@ impl Runtime {
         }
         self.waiting = future;
         while let Some(task) = self.ready.pop_front() {
-            if self.disabled_behaviors.contains(&task.owner)
-                || self.scene().entity(&task.owner).is_none()
-            {
+            if self.disabled_behaviors.contains(&task.owner) || self.entity(&task.owner).is_none() {
                 continue;
             }
             let result = self.execute(task.clone(), budget);
@@ -390,8 +417,7 @@ impl Runtime {
                 .ok_or("Constante sem valor".into()),
             "attribute.get" => {
                 let target = self.target(graph, node, context, budget, depth + 1)?;
-                self.scene()
-                    .entity(&target)
+                self.entity(&target)
                     .ok_or("Objeto de leitura ausente")?
                     .attributes
                     .get(node.text("attribute"))
@@ -485,7 +511,6 @@ impl Runtime {
         crate::metrics::count(|c| c.actions += 1);
         Self::spend(budget)?;
         let graph = self
-            .scene()
             .entity(&task.owner)
             .ok_or("Objeto removido")?
             .graph
@@ -534,12 +559,11 @@ impl Runtime {
                 let target = self.target(&graph, &node, &context, budget, 0)?;
                 let value = self.input_value(&graph, &node, "value", &context, budget, 0)?;
                 if let Value::Object(Some(id)) = &value
-                    && self.scene().entity(id).is_none()
+                    && self.entity(id).is_none()
                 {
                     return Err("Nova referência de atributo não existe".into());
                 }
                 let entity = self
-                    .scene_mut()
                     .entity_mut(&target)
                     .ok_or("Objeto de escrita não existe")?;
                 let old = entity
@@ -565,7 +589,6 @@ impl Runtime {
                 let key = (context.owner.clone(), context.activation, target.clone());
                 if !node.boolean("once", true) || !self.damage_hits.contains(&key) {
                     let entity = self
-                        .scene_mut()
                         .entity_mut(&target)
                         .ok_or("Alvo do dano foi removido")?;
                     let value = entity
@@ -582,10 +605,7 @@ impl Runtime {
             }
             "action.animation" => {
                 let target = self.target(&graph, &node, &context, budget, 0)?;
-                let entity = self
-                    .scene()
-                    .entity(&target)
-                    .ok_or("Objeto animado ausente")?;
+                let entity = self.entity(&target).ok_or("Objeto animado ausente")?;
                 let clip = entity
                     .clips
                     .iter()
@@ -625,7 +645,7 @@ impl Runtime {
                     node.number("z", 0.0) as f32,
                 );
                 let descendants: HashSet<_> = self.scene().descendants(&root).into_iter().collect();
-                let entity = self.scene_mut().entity_mut(&root).unwrap();
+                let entity = self.entity_mut(&root).unwrap();
                 entity.transform.position =
                     (Vec3::from(entity.transform.position) + delta).to_array();
                 for entity in self
@@ -654,7 +674,7 @@ impl Runtime {
             "action.remove" => {
                 let target = self.target(&graph, &node, &context, budget, 0)?;
                 self.remove_object(&target);
-                if self.scene().entity(&context.owner).is_none() {
+                if self.entity(&context.owner).is_none() {
                     return Ok(());
                 }
             }
@@ -663,7 +683,7 @@ impl Runtime {
                 let enabled = node.boolean("enabled", true);
                 match node.text("component") {
                     "collider" => {
-                        let collider = self.scene_mut().entity_mut(&target).ok_or("Objeto ausente")?.collider.as_mut().ok_or("Objeto não tem colisor")?;
+                        let collider = self.entity_mut(&target).ok_or("Objeto ausente")?.collider.as_mut().ok_or("Objeto não tem colisor")?;
                         let activation = enabled && !collider.enabled;
                         collider.enabled = enabled;
                         if activation {
@@ -672,10 +692,10 @@ impl Runtime {
                             self.damage_hits.retain(|(owner, _, _)| owner != &target);
                         }
                     }
-                    "controller" => self.scene_mut().entity_mut(&target).ok_or("Objeto ausente")?.controller.as_mut().ok_or("Objeto não tem controlador")?.enabled = enabled,
-                    "visible" => self.scene_mut().entity_mut(&target).ok_or("Objeto ausente")?.visible = enabled,
+                    "controller" => self.entity_mut(&target).ok_or("Objeto ausente")?.controller.as_mut().ok_or("Objeto não tem controlador")?.enabled = enabled,
+                    "visible" => self.entity_mut(&target).ok_or("Objeto ausente")?.visible = enabled,
                     "behavior" => {
-                        if self.scene().entity(&target).is_none() { return Err("Objeto ausente".into()); }
+                        if self.entity(&target).is_none() { return Err("Objeto ausente".into()); }
                         if enabled { self.disabled_behaviors.remove(&target); } else { self.disabled_behaviors.insert(target.clone()); self.waiting.retain(|task| task.owner != target); }
                     }
                     "animation" => { if let Some(player) = self.animations.get_mut(&target) { player.playing = enabled; } }
@@ -704,6 +724,7 @@ impl Runtime {
             .retain(|(a, _, b)| !ids.contains(a) && !ids.contains(b));
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
+        self.index.take();
         let scene = self
             .source
             .scene(id)
@@ -731,6 +752,9 @@ impl Runtime {
         collider_box(self.scene(), id)
     }
     fn move_controllers(&mut self, input: &InputFrame) {
+        let Ok(index) = SceneIndex::new(self.scene()) else {
+            return;
+        };
         let controllers: Vec<_> = self
             .scene()
             .entities
@@ -769,12 +793,14 @@ impl Runtime {
                     .scene()
                     .entities
                     .iter()
-                    .filter(|entity| entity.id != id && !is_related(self.scene(), &id, &entity.id))
                     .filter(|entity| {
                         entity
                             .collider
                             .as_ref()
                             .is_some_and(|collider| collider.enabled && !collider.is_trigger)
+                    })
+                    .filter(|entity| {
+                        entity.id != id && !index.related(self.scene(), &id, &entity.id)
                     })
                     .filter_map(|entity| self.collider_box(&entity.id))
                     .inspect(|_| crate::metrics::count(|c| c.candidates += 1))
@@ -788,14 +814,13 @@ impl Runtime {
                 body_state.velocity * FIXED_DT
             };
             let local_delta = self
-                .scene()
                 .entity(&id)
                 .and_then(|entity| entity.parent.as_deref())
                 .and_then(|parent| self.scene().world_matrix(parent).ok())
                 .map_or(displacement, |matrix| {
                     matrix.inverse().transform_vector3(displacement)
                 });
-            if let Some(entity) = self.scene_mut().entity_mut(&id) {
+            if let Some(entity) = self.entity_mut(&id) {
                 entity.transform.position =
                     (Vec3::from(entity.transform.position) + local_delta).to_array();
             }
@@ -807,7 +832,6 @@ impl Runtime {
         let mut events = Vec::new();
         for (owner, player) in &mut players {
             let clip = self
-                .scene()
                 .entity(owner)
                 .and_then(|entity| entity.clips.iter().find(|clip| clip.id == player.clip_id))
                 .cloned();
@@ -818,7 +842,7 @@ impl Runtime {
                         marker,
                     });
                 }
-                player.sample(self.scene_mut(), &clip);
+                player.sample(self.scene_mut_internal(), &clip);
             }
         }
         self.animations = players;
@@ -827,6 +851,9 @@ impl Runtime {
         }
     }
     fn detect_areas(&mut self) {
+        let Ok(index) = SceneIndex::new(self.scene()) else {
+            return;
+        };
         let dimensions = if self.scene().kind == SceneKind::TwoD {
             2
         } else {
@@ -857,8 +884,8 @@ impl Runtime {
             for (other, _, target) in &colliders {
                 crate::metrics::count(|c| c.candidates += 1);
                 if area == other
-                    || is_related(self.scene(), area, other)
                     || !volume.overlaps(*target, dimensions)
+                    || index.related(self.scene(), area, other)
                 {
                     continue;
                 }
@@ -894,10 +921,6 @@ pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {
         return None;
     }
     crate::spatial::collider_bounds(scene, id).ok()
-}
-
-fn is_related(scene: &Scene, a: &str, b: &str) -> bool {
-    scene.descendants(a).iter().any(|id| id == b) || scene.descendants(b).iter().any(|id| id == a)
 }
 
 #[cfg(test)]

@@ -1,0 +1,18 @@
+{
+  "commit": "90cbcb04358addf2363a867743eb16e528254154",
+  "dirty": [],
+  "cpu": "AMD Ryzen 5 5600 6-Core Processor              ",
+  "logical_cpus": 12,
+  "ram_bytes": 17076060160,
+  "os": {
+    "Caption": "Microsoft Windows 11 Pro",
+    "Version": "10.0.26100",
+    "BuildNumber": "26100"
+  },
+  "rust": "rustc 1.92.0 (ded5c06cf 2025-12-08)\nbinary: rustc\ncommit-hash: ded5c06cf21d2b93bffd5d884aa6e96934ee4234\ncommit-date: 2025-12-08\nhost: x86_64-pc-windows-gnu\nrelease: 1.92.0\nLLVM version: 21.1.3",
+  "flags": "release opt-level=2; --locked; oxy_core/profiling; no RUSTFLAGS override",
+  "utc": "2026-09-08T21:04:10.6150098Z",
+  "executable_sha256": "5B1F151C2876D7F47EC1B2D4581B1B9765B15FB5183691C820AD97A4031B36DD",
+  "sizes": "100,200,400,800,1600",
+  "graphics": "CPU only. No GPU time, resolution or FPS inferred."
+}

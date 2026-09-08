@@ -988,12 +988,11 @@ impl std::ops::Deref for PreparedEntity<'_> {
 }
 /// CPU visibility, stable ordering and instance transform preparation. No GPU timing.
 pub fn prepare_scene<'a>(scene: &'a Scene, camera: &CameraState) -> Vec<PreparedEntity<'a>> {
+    let view = oxy_core::scene_view::SceneView::new(scene);
     let mut entities: Vec<_> = scene
         .entities
         .iter()
-        .filter(|entity| {
-            entity.primitive.is_some() && entity.ui.is_none() && is_visible(scene, entity)
-        })
+        .filter(|entity| entity.primitive.is_some() && entity.ui.is_none() && view.visible(entity))
         .collect();
     if scene.kind == SceneKind::TwoD {
         entities.sort_by_key(|entity| entity.layer);
@@ -1007,8 +1006,7 @@ pub fn prepare_scene<'a>(scene: &'a Scene, camera: &CameraState) -> Vec<Prepared
                     return std::cmp::Ordering::Equal;
                 }
                 let distance = |e: &Entity| {
-                    scene
-                        .world_matrix(&e.id)
+                    view.world_matrix(&e.id)
                         .map(|w| {
                             w.transform_point3(Vec3::ZERO)
                                 .distance_squared(camera.eye())
@@ -1023,8 +1021,7 @@ pub fn prepare_scene<'a>(scene: &'a Scene, camera: &CameraState) -> Vec<Prepared
     entities
         .into_iter()
         .filter_map(|entity| {
-            scene
-                .world_matrix(&entity.id)
+            view.world_matrix(&entity.id)
                 .ok()
                 .map(|world| PreparedEntity { entity, world })
         })

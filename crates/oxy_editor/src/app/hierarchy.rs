@@ -106,9 +106,10 @@ impl Editor {
                     self.select(None);
                 }
                 self.hierarchy_drop(ui, &root_drop, None);
-                let scene = self.scene().clone();
+                let snapshot = self.scene().clone();
+                let scene = oxy_core::scene_view::SceneView::new(&snapshot);
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for entity in scene.entities.iter().filter(|e| e.parent.is_none()) {
+                    for entity in scene.scene.entities.iter().filter(|e| e.parent.is_none()) {
                         self.hierarchy_item(ui, &scene, &entity.id, 0);
                     }
                     let blank =
@@ -123,7 +124,7 @@ impl Editor {
     pub(super) fn hierarchy_item(
         &mut self,
         ui: &mut egui::Ui,
-        scene: &Scene,
+        scene: &oxy_core::scene_view::SceneView<'_>,
         id: &str,
         depth: usize,
     ) {
@@ -135,9 +136,11 @@ impl Editor {
             ui.horizontal(|ui| {
                 ui.add_space(depth as f32 * 12.);
                 if scene
-                    .entities
-                    .iter()
-                    .any(|e| e.parent.as_deref() == Some(id))
+                    .index
+                    .as_ref()
+                    .ok()
+                    .and_then(|i| i.position(id).map(|p| !i.children[p].is_empty()))
+                    .unwrap_or(false)
                 {
                     let collapsed = self.collapsed.contains(id);
                     if ui
@@ -232,9 +235,13 @@ impl Editor {
             return;
         }
         for child in scene
-            .entities
-            .iter()
-            .filter(|c| c.parent.as_deref() == Some(id))
+            .index
+            .as_ref()
+            .ok()
+            .and_then(|i| i.position(id).map(|p| &i.children[p]))
+            .into_iter()
+            .flatten()
+            .map(|i| &scene.scene.entities[*i])
         {
             self.hierarchy_item(ui, scene, &child.id, depth + 1);
         }

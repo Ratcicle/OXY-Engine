@@ -88,7 +88,7 @@ impl Player {
             Ok(runtime) => {
                 self.error = None;
                 self.diagnostics.clear();
-                for (action, key) in &runtime.project.input_bindings {
+                for (action, key) in &runtime.project().input_bindings {
                     if egui::Key::from_name(key).is_none() {
                         self.diagnostics
                             .push(format!("Ação {action}: tecla desconhecida '{key}'"));
@@ -165,7 +165,7 @@ impl eframe::App for Player {
                 self.last_size = rect.size();
                 let input = oxy_render::input::collect_input(
                     ctx,
-                    &runtime.project.input_bindings,
+                    &runtime.project().input_bindings,
                     !runtime.paused && focused,
                 );
                 runtime.advance(if resized { 0. } else { elapsed }, &input);
@@ -183,7 +183,7 @@ impl eframe::App for Player {
                 ];
                 let texture = renderer.render(
                     rs,
-                    &runtime.project,
+                    &runtime.project(),
                     runtime.scene(),
                     &self.root,
                     &camera,
@@ -199,7 +199,7 @@ impl eframe::App for Player {
                 );
                 let clicks =
                     self.game_ui
-                        .draw(ui, &runtime.project, runtime.scene(), &self.root, rect);
+                        .draw(ui, &runtime.project(), runtime.scene(), &self.root, rect);
                 if !runtime.paused {
                     if clicks.is_empty()
                         && response.clicked()
@@ -218,7 +218,7 @@ impl eframe::App for Player {
                 }
                 for request in std::mem::take(&mut runtime.sounds) {
                     let result = runtime
-                        .project
+                        .project()
                         .asset(&request.asset)
                         .ok_or_else(|| format!("Recurso de áudio ausente: {}", request.asset))
                         .and_then(|asset| persistence::resolve_asset_path(&self.root, &asset.path))
@@ -249,7 +249,7 @@ impl eframe::App for Player {
                     ui.separator();
                     ui.label("Controles configurados no projeto:");
                     if let Some(runtime) = &self.runtime {
-                        for (action, key) in &runtime.project.input_bindings {
+                        for (action, key) in &runtime.project().input_bindings {
                             ui.label(format!("{action}: {}", oxy_render::labels::key(key)));
                         }
                     }

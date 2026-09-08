@@ -114,7 +114,7 @@ impl NativePlayerQa {
                 {
                     return Err("Player não está usando exclusivamente a cópia portátil".into());
                 }
-                for asset in &runtime.project.assets {
+                for asset in &runtime.project().assets {
                     if !asset.path.is_empty() {
                         let path = persistence::resolve_asset_path(&self.fixture, &asset.path)?;
                         if !path.is_file() {

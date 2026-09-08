@@ -1,0 +1,29 @@
+{
+  "commit": "90cbcb04358addf2363a867743eb16e528254154",
+  "dirty": [
+    " M crates/oxy_core/src/document.rs",
+    " M crates/oxy_core/src/editing.rs",
+    " M crates/oxy_core/src/runtime.rs",
+    " M crates/oxy_core/src/scene_view.rs",
+    " M crates/oxy_core/src/spatial.rs",
+    " M crates/oxy_editor/src/app/hierarchy.rs",
+    " M crates/oxy_player/src/main.rs",
+    " M crates/oxy_player/src/native_qa.rs",
+    " M crates/oxy_render/src/lib.rs",
+    "?? benchmarks/"
+  ],
+  "cpu": "AMD Ryzen 5 5600 6-Core Processor              ",
+  "logical_cpus": 12,
+  "ram_bytes": 17076060160,
+  "os": {
+    "Caption": "Microsoft Windows 11 Pro",
+    "Version": "10.0.26100",
+    "BuildNumber": "26100"
+  },
+  "rust": "rustc 1.92.0 (ded5c06cf 2025-12-08)\nbinary: rustc\ncommit-hash: ded5c06cf21d2b93bffd5d884aa6e96934ee4234\ncommit-date: 2025-12-08\nhost: x86_64-pc-windows-gnu\nrelease: 1.92.0\nLLVM version: 21.1.3",
+  "flags": "release opt-level=2; --locked; oxy_core/profiling; no RUSTFLAGS override",
+  "utc": "2026-09-08T21:10:47.6033421Z",
+  "executable_sha256": "4A8EAB08890EDA5C00B6E2401DB51EEC6E1ACE5A5ACCF2348417B92BF561558F",
+  "sizes": "100,200,400,800,1600",
+  "graphics": "CPU only. No GPU time, resolution or FPS inferred."
+}
