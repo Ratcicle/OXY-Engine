@@ -2145,6 +2145,7 @@ dependencies = [
  "glam",
  "image",
  "oxy_core",
+ "serde_json",
 ]
 
 [[package]]

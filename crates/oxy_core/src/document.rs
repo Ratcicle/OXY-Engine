@@ -280,10 +280,18 @@ impl Scene {
         }
     }
     pub fn entity(&self, id: &str) -> Option<&Entity> {
-        self.entities.iter().find(|e| e.id == id)
+        crate::metrics::count(|c| c.entity_queries += 1);
+        self.entities.iter().find(|e| {
+            crate::metrics::count(|c| c.entity_scans += 1);
+            e.id == id
+        })
     }
     pub fn entity_mut(&mut self, id: &str) -> Option<&mut Entity> {
-        self.entities.iter_mut().find(|e| e.id == id)
+        crate::metrics::count(|c| c.entity_queries += 1);
+        self.entities.iter_mut().find(|e| {
+            crate::metrics::count(|c| c.entity_scans += 1);
+            e.id == id
+        })
     }
     pub fn world_matrix(&self, id: &str) -> Result<Mat4, String> {
         let mut current = Some(id);
@@ -297,6 +305,7 @@ impl Scene {
                 .entity(key)
                 .ok_or_else(|| format!("Objeto ausente: {key}"))?;
             chain.push(e.transform.matrix());
+            crate::metrics::count(|c| c.matrices += 1);
             current = e.parent.as_deref();
         }
         Ok(chain.into_iter().rev().fold(Mat4::IDENTITY, |a, b| a * b))
@@ -307,6 +316,7 @@ impl Scene {
         while index < result.len() {
             let parent = result[index].clone();
             for e in &self.entities {
+                crate::metrics::count(|c| c.hierarchy_visits += 1);
                 if e.parent.as_deref() == Some(&parent) && !result.contains(&e.id) {
                     result.push(e.id.clone());
                 }

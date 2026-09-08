@@ -138,6 +138,15 @@ impl Runtime {
     pub fn pending_tasks(&self) -> usize {
         self.ready.len() + self.waiting.len()
     }
+    /// Logical live-state counts, not resident RAM or allocator capacity.
+    pub fn retained_counts(&self) -> [usize; 4] {
+        [
+            self.damage_hits.len(),
+            self.area_activations.len(),
+            self.ready.len(),
+            self.waiting.len(),
+        ]
+    }
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
         self.accumulator = 0.0;
@@ -180,15 +189,16 @@ impl Runtime {
         }
     }
     fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
+        crate::metrics::count(|c| c.steps += 1);
         self.time += f64::from(FIXED_DT);
         for action in &input.pressed {
             self.emit(RuntimeEvent::Input(action.clone()));
         }
-        self.process_tasks(budget);
-        self.move_controllers(input);
-        self.advance_animations();
-        self.detect_areas();
-        self.process_tasks(budget);
+        crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
+        crate::metrics::timed(|| self.move_controllers(input), |c, ns| c.movement_ns += ns);
+        crate::metrics::timed(|| self.advance_animations(), |c, ns| c.animation_ns += ns);
+        crate::metrics::timed(|| self.detect_areas(), |c, ns| c.areas_ns += ns);
+        crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
     }
     fn log(&mut self, message: String) {
         self.logs.push(message);
@@ -472,6 +482,7 @@ impl Runtime {
         }
     }
     fn execute(&mut self, task: Task, budget: &mut usize) -> Result<(), String> {
+        crate::metrics::count(|c| c.actions += 1);
         Self::spend(budget)?;
         let graph = self
             .scene()
@@ -480,6 +491,7 @@ impl Runtime {
             .graph
             .clone();
         let node = graph.node(&task.node).ok_or("Nó não encontrado")?.clone();
+        crate::metrics::count(|c| c.graph_nodes_copied += graph.nodes.len() as u64);
         let mut context = task.context;
         self.traces.push(NodeTrace {
             object: task.owner.clone(),
@@ -765,6 +777,7 @@ impl Runtime {
                             .is_some_and(|collider| collider.enabled && !collider.is_trigger)
                     })
                     .filter_map(|entity| self.collider_box(&entity.id))
+                    .inspect(|_| crate::metrics::count(|c| c.candidates += 1))
                     .collect();
                 let result =
                     move_and_slide(body, body_state.velocity, FIXED_DT, &obstacles, dimensions);
@@ -842,6 +855,7 @@ impl Runtime {
                 continue;
             }
             for (other, _, target) in &colliders {
+                crate::metrics::count(|c| c.candidates += 1);
                 if area == other
                     || is_related(self.scene(), area, other)
                     || !volume.overlaps(*target, dimensions)
@@ -849,6 +863,7 @@ impl Runtime {
                     continue;
                 }
                 let pair = (area.clone(), other.clone());
+                crate::metrics::count(|c| c.overlaps += 1);
                 if !self.overlap_pairs.contains(&pair) {
                     let activation = if let Some(activation) = self.area_activations.get(area) {
                         *activation

@@ -16,3 +16,6 @@ egui-wgpu.workspace = true
 glam.workspace = true
 image.workspace = true
 bytemuck.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

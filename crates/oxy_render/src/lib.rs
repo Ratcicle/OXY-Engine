@@ -410,41 +410,9 @@ impl Renderer {
         self.stats.triangles = 0;
         let mut instances = Vec::new();
         let mut draws = Vec::new();
-        let mut entities: Vec<_> = scene
-            .entities
-            .iter()
-            .filter(|entity| {
-                entity.primitive.is_some() && entity.ui.is_none() && is_visible(scene, entity)
-            })
-            .collect();
-        if scene.kind == SceneKind::TwoD {
-            entities.sort_by_key(|entity| entity.layer);
-        } else {
-            // Opaque geometry first; alpha materials far-to-near. Depth still handles occlusion.
-            entities.sort_by(|a, b| {
-                let aa = a.material.color[3] < 1.;
-                let ba = b.material.color[3] < 1.;
-                aa.cmp(&ba).then_with(|| {
-                    if !aa {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    let distance = |e: &Entity| {
-                        scene
-                            .world_matrix(&e.id)
-                            .map(|w| {
-                                w.transform_point3(Vec3::ZERO)
-                                    .distance_squared(camera.eye())
-                            })
-                            .unwrap_or(0.)
-                    };
-                    distance(b).total_cmp(&distance(a))
-                })
-            });
-        }
+        let entities = prepare_scene(scene, camera);
         for entity in &entities {
-            let Ok(world) = scene.world_matrix(&entity.id) else {
-                continue;
-            };
+            let world = entity.world;
             let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
             let key = mesh::MeshKey::for_entity(entity).expect("Filtered primitive");
             let (mesh, hit) = self.geometry.get(&rs.device, key);
@@ -1006,6 +974,61 @@ fn box_lines(
             line(vertices, points[a], points[b], color);
         }
     }
+}
+
+pub struct PreparedEntity<'a> {
+    pub entity: &'a Entity,
+    pub world: Mat4,
+}
+impl std::ops::Deref for PreparedEntity<'_> {
+    type Target = Entity;
+    fn deref(&self) -> &Entity {
+        self.entity
+    }
+}
+/// CPU visibility, stable ordering and instance transform preparation. No GPU timing.
+pub fn prepare_scene<'a>(scene: &'a Scene, camera: &CameraState) -> Vec<PreparedEntity<'a>> {
+    let mut entities: Vec<_> = scene
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.primitive.is_some() && entity.ui.is_none() && is_visible(scene, entity)
+        })
+        .collect();
+    if scene.kind == SceneKind::TwoD {
+        entities.sort_by_key(|entity| entity.layer);
+    } else {
+        // Opaque geometry first; alpha materials far-to-near. Depth still handles occlusion.
+        entities.sort_by(|a, b| {
+            let aa = a.material.color[3] < 1.;
+            let ba = b.material.color[3] < 1.;
+            aa.cmp(&ba).then_with(|| {
+                if !aa {
+                    return std::cmp::Ordering::Equal;
+                }
+                let distance = |e: &Entity| {
+                    scene
+                        .world_matrix(&e.id)
+                        .map(|w| {
+                            w.transform_point3(Vec3::ZERO)
+                                .distance_squared(camera.eye())
+                        })
+                        .unwrap_or(0.)
+                };
+                distance(b).total_cmp(&distance(a))
+            })
+        });
+    }
+
+    entities
+        .into_iter()
+        .filter_map(|entity| {
+            scene
+                .world_matrix(&entity.id)
+                .ok()
+                .map(|world| PreparedEntity { entity, world })
+        })
+        .collect()
 }
 
 #[cfg(test)]

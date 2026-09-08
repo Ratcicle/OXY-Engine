@@ -21,6 +21,7 @@ pub fn physical_scale(world: Mat4) -> Vec3 {
 /// Size stays axis aligned; only the center follows the complete hierarchy.
 /// Visibility, enabled and is_trigger never change the geometric result.
 pub fn collider_bounds(scene: &Scene, id: &str) -> Result<Aabb, String> {
+    crate::metrics::count(|c| c.boxes += 1);
     let collider = scene
         .entity(id)
         .and_then(|e| e.collider.as_ref())
