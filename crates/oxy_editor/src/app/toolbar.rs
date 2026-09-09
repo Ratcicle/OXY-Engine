@@ -1,6 +1,9 @@
 use super::*;
 
 impl Editor {
+    pub(crate) fn compact_layout(ctx: &egui::Context) -> bool {
+        ctx.content_rect().width() < 800. || ctx.content_rect().height() < 490.
+    }
     fn history_buttons(&mut self, ui: &mut egui::Ui) {
         if ui
             .add_enabled(self.history.can_undo(), egui::Button::new("Desfazer"))
@@ -37,17 +40,25 @@ impl Editor {
                 ui.disable();
             }
             ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new("OXY")
-                        .size(26.)
-                        .strong()
-                        .color(Color32::from_rgb(131, 224, 207)),
-                );
-                ui.label(
-                    egui::RichText::new(concat!("ENGINE\n", env!("CARGO_PKG_VERSION")))
-                        .size(12.)
-                        .strong(),
-                );
+                if ctx.content_rect().width() < 700. {
+                    ui.label(
+                        egui::RichText::new(concat!("OXY\n", env!("CARGO_PKG_VERSION")))
+                            .strong()
+                            .color(Color32::from_rgb(131, 224, 207)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new("OXY")
+                            .size(26.)
+                            .strong()
+                            .color(Color32::from_rgb(131, 224, 207)),
+                    );
+                    ui.label(
+                        egui::RichText::new(concat!("ENGINE\n", env!("CARGO_PKG_VERSION")))
+                            .size(12.)
+                            .strong(),
+                    );
+                }
                 ui.separator();
                 ui.menu_button("Projeto", |ui| {
                     if ui.button("Tela inicial").clicked() {
@@ -123,13 +134,34 @@ impl Editor {
                         ui.close();
                     }
                 });
-                ui.label(if self.dirty() {
+                let dirty = self.dirty();
+                let status = if dirty {
                     "● Não salvo"
                 } else if self.path.is_none() {
                     "Sem arquivo"
                 } else {
                     "Salvo"
-                });
+                };
+                if ctx.content_rect().width() < 700. {
+                    // A fixed-size status never adds a toolbar row when the first edit occurs.
+                    let (rect, response) =
+                        ui.allocate_exact_size(Vec2::splat(14.), egui::Sense::hover());
+                    if dirty {
+                        ui.painter().circle_filled(rect.center(), 4., Color32::GOLD);
+                    } else {
+                        ui.painter().circle_stroke(
+                            rect.center(),
+                            4.,
+                            egui::Stroke::new(1.5, Color32::from_rgb(131, 224, 207)),
+                        );
+                    }
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), status)
+                    });
+                    response.on_hover_text(format!("{status} · Salvar: Ctrl+S"));
+                } else {
+                    ui.label(status);
+                }
             });
             ui.horizontal_wrapped(|ui| {
                 let old = self.tab;
@@ -150,6 +182,29 @@ impl Editor {
                 }
                 ui.separator();
                 self.scene_bar(ui);
+                if Self::compact_layout(ctx) && self.tab != Tab::Game {
+                    ui.menu_button("Painéis", |ui| {
+                        ui.label("Exibir um painel por vez");
+                        for (panel, label) in [
+                            (CompactPanel::Hierarchy, "Hierarquia"),
+                            (CompactPanel::Properties, "Propriedades"),
+                            (CompactPanel::Library, "Biblioteca"),
+                            (CompactPanel::None, "Ampliar viewport"),
+                        ] {
+                            if ui
+                                .selectable_value(&mut self.compact_panel, panel, label)
+                                .clicked()
+                            {
+                                ui.close();
+                            }
+                        }
+                        ui.small("Na Animação, selecione as peças pela linha do tempo.");
+                    })
+                    .response
+                    .on_hover_text(
+                        "Em janelas pequenas, alterne os painéis para preservar espaço de criação.",
+                    );
+                }
                 if ctx.content_rect().width() >= 900. {
                     ui.checkbox(&mut self.console, "Console");
                     self.notices_button(ui);

@@ -1,22 +1,22 @@
 Concluído: true
 Erro: None
 Selecionar hierarquia: Peça pintada
-Clique: Estúdio
-Clique: Enquadrar
+Clique: Estúdio em [153.2 79.0]
+Clique: Enquadrar em [726.5 290.2]
 Verificado: m4_base
 Atalho V com Modifiers { shift: true }
 Escolher ponto do mundo pelo mouse no viewport
 Escolher ponto do mundo pelo mouse no viewport
 Verificado: m4_snap_preview
 Captura GPU da janela: vertex-snap.png
-Clique: Escalar X
+Clique: Escalar X em [1265.9 168.0]
 Verificado: m4_snap_scale
 Atalho Escape com Modifiers { alt: true }
 Verificado: m4_cancel
 Atalho V com Modifiers { shift: true }
 Escolher ponto do mundo pelo mouse no viewport
 Escolher ponto do mundo pelo mouse no viewport
-Clique: Confirmar encaixe (Enter)
+Clique: Confirmar encaixe (Enter) em [1248.5 344.0]
 Verificado: m4_snap_done
 Tecla Z, Ctrl=true
 Verificado: m4_cancel
@@ -25,13 +25,13 @@ Selecionar componente pelo ponto projetado na janela
 Selecionar componente pelo ponto projetado na janela
 Atalho E com Modifiers { shift: true }
 Verificado: m4_requires_atlas
-Clique: Criar cópia ampliada (2×)
+Clique: Criar cópia ampliada (2×) em [1274.5 281.0]
 Captura GPU da janela: extrusion-preview.png
 Atalho Escape com Modifiers { alt: true, shift: true }
 Verificado: m4_cancel
 Atalho E com Modifiers { shift: true }
-Clique: Criar cópia ampliada (2×)
-Clique: Confirmar (Enter)
+Clique: Criar cópia ampliada (2×) em [1291.5 281.0]
+Clique: Confirmar (Enter) em [1257.0 310.0]
 Verificado: m4_extruded
 Tecla Z, Ctrl=true
 Verificado: m4_cancel
@@ -40,15 +40,15 @@ Verificado: m4_redo
 Tecla S, Ctrl=true
 Reabrir projeto no editor e comparar todos os documentos
 Selecionar hierarquia: Peça pintada
-Clique: Estúdio
-Clique: Enquadrar
+Clique: Estúdio em [153.2 79.0]
+Clique: Enquadrar em [726.5 310.2]
 Tecla Num2, Ctrl=false
 Selecionar componente pelo ponto projetado na janela
 Tecla Delete, Ctrl=false
-Clique: Confirmar (Enter)
+Clique: Confirmar (Enter) em [1257.0 173.0]
 Tecla A, Ctrl=true
 Atalho F com Modifiers { shift: true }
-Clique: Confirmar (Enter)
+Clique: Confirmar (Enter) em [1257.0 148.0]
 Verificado: m4_created_face
 Tecla Z, Ctrl=true
 Tecla Z, Ctrl=true

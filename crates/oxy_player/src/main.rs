@@ -250,7 +250,11 @@ impl eframe::App for Player {
                     ui.label("Controles configurados no projeto:");
                     if let Some(runtime) = &self.runtime {
                         for (action, key) in &runtime.project().input_bindings {
-                            ui.label(format!("{action}: {}", oxy_render::labels::key(key)));
+                            ui.label(format!(
+                                "{}: {}",
+                                input_action_label(runtime.project(), action),
+                                oxy_render::labels::key(key)
+                            ));
                         }
                     }
                     ui.label("Esc: pausar · F3: diagnóstico");
@@ -296,6 +300,24 @@ impl eframe::App for Player {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+}
+
+fn input_action_label<'a>(project: &'a oxy_core::document::Project, action: &'a str) -> &'a str {
+    project
+        .input_labels
+        .get(action)
+        .map_or(action, String::as_str)
+}
+
+#[test]
+fn player_controls_show_labels_and_preserve_legacy_actions() {
+    let mut project = oxy_core::document::Project::new("Controles");
+    let id = "02000000-0000-4000-8000-000000000001";
+    project
+        .input_labels
+        .insert(id.into(), "Ataque principal".into());
+    assert_eq!(input_action_label(&project, id), "Ataque principal");
+    assert_eq!(input_action_label(&project, "pular"), "pular");
 }
 
 #[cfg(all(test, target_os = "windows"))]

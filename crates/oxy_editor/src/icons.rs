@@ -16,6 +16,8 @@ pub enum Icon {
     Loop,
     Knife,
     Bevel,
+    Collider,
+    Pivot,
 }
 pub fn button(
     ui: &mut Ui,
@@ -80,6 +82,39 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
         p.line_segment([a, b], Stroke::new(1.3, color));
     };
     match icon {
+        Icon::Collider => {
+            let box_rect = Rect::from_min_max(at(0.1, 0.15), at(0.9, 0.85));
+            p.rect_stroke(
+                box_rect,
+                0.,
+                Stroke::new(1.5, color),
+                egui::StrokeKind::Inside,
+            );
+            for q in [
+                box_rect.left_top(),
+                box_rect.left_bottom(),
+                box_rect.right_top(),
+                box_rect.right_bottom(),
+            ] {
+                p.rect_filled(Rect::from_center_size(q, Vec2::splat(4.)), 0., color);
+            }
+            line(at(0.36, 0.5), at(0.64, 0.5));
+            line(at(0.5, 0.36), at(0.5, 0.64));
+        }
+        Icon::Pivot => {
+            p.circle_stroke(r.center(), 5., Stroke::new(1.4, color));
+            p.circle_filled(r.center(), 2., color);
+            p.arrow(
+                at(0.5, 0.9),
+                at(0.5, 0.04) - at(0.5, 0.9),
+                Stroke::new(1.3, color),
+            );
+            p.arrow(
+                at(0.1, 0.5),
+                at(0.96, 0.5) - at(0.1, 0.5),
+                Stroke::new(1.3, color),
+            );
+        }
         Icon::Loop => {
             for x in [0.1, 0.9] {
                 line(at(x, 0.1), at(x, 0.9));

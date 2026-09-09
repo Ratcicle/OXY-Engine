@@ -1,8 +1,8 @@
 Concluído: true
 Erro: None
 Selecionar hierarquia: Cubo editável
-Clique: Estúdio
-Clique: Enquadrar
+Clique: Estúdio em [153.2 79.0]
+Clique: Enquadrar em [726.5 290.2]
 Verificado: m3_base
 Tecla Num2, Ctrl=false
 Selecionar componente pelo ponto projetado na janela
@@ -14,21 +14,21 @@ Captura GPU da janela: mesh-preview.png
 Atalho Escape com Modifiers { alt: true, shift: true }
 Verificado: m3_cancel
 Arrastar eixo X pelo controle visual
-Clique: Confirmar (Enter)
+Clique: Confirmar (Enter) em [1257.0 182.0]
 Verificado: m3_commit
 Tecla Z, Ctrl=true
 Verificado: m3_cancel
 Tecla Y, Ctrl=true
 Verificado: m3_redo
 Tecla Delete, Ctrl=false
-Clique: Confirmar (Enter)
+Clique: Confirmar (Enter) em [1257.0 173.0]
 Verificado: m3_deleted
 Tecla Z, Ctrl=true
 Verificado: m3_redo
 Tecla Num4, Ctrl=false
 Tecla A, Ctrl=true
 Verificado: m3_vertices
-Clique: Enquadrar
+Clique: Enquadrar em [726.5 310.2]
 Selecionar componentes com uma caixa no viewport
 Verificado: m3_visible_vertices
 Atalho X com Modifiers { shift: true }
@@ -41,19 +41,19 @@ Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
 Repouso medido: 1 atualizações espontâneas em 500 ms
 Tecla S, Ctrl=true
 Verificado: m3_saved
-Clique: Cena
+Clique: Cena em [32.5 79.5]
 Verificado: m3_creationbase
-Clique: + Objeto
-Clique: Tubo
+Clique: + Objeto em [131.5 117.8]
+Clique: Tubo em [119.5 296.5]
 Atalho Escape com Modifiers { alt: true, shift: true }
 Verificado: m3_creationcancel
-Clique: + Objeto
-Clique: Tubo
-Clique: Enquadrar prévia
+Clique: + Objeto em [131.5 117.8]
+Clique: Tubo em [119.5 296.5]
+Clique: Enquadrar prévia em [823.5 408.0]
 Captura GPU da janela: tube-parameters.png
 Editar campo visível: Raio externo = 2
 Verificado: m3_tube
-Clique: Enquadrar
+Clique: Enquadrar em [438.5 123.8]
 Captura GPU da janela: tube-eight-sides.png
 Tecla Z, Ctrl=true
 Selecionar hierarquia: Cubo editável
@@ -62,12 +62,12 @@ Reabrir projeto no editor e comparar todos os documentos
 Selecionar hierarquia: Cubo editável
 Verificado: m3_saved
 Verificado: m3_creationbase
-Clique: + Objeto
-Clique: Cone
-Clique: PROPRIEDADES
+Clique: + Objeto em [131.5 117.8]
+Clique: Cone em [120.0 272.0]
+Clique: PROPRIEDADES em [719.9 112.2]
 Verificado: m3_outside
-Clique: Forma e material
-Clique: Parâmetros da forma
+Clique: Forma e material em [737.5 322.1]
+Clique: Parâmetros da forma em [759.5 436.1]
 Verificado: m3_parameters
 Tecla Escape, Ctrl=false
 Verificado: m3_parameters_cancelled

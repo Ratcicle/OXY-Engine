@@ -85,16 +85,16 @@ Reproduzir 16 quadros sem entrada
 Verificado: animation_preview
 Captura GPU da janela: animation.png
 Redimensionar: [920.0 600.0]
-Clique: Enquadrar em [510.5 289.5]
+Clique: Enquadrar em [598.5 232.5]
 Captura GPU da janela: animation-small.png
-Animação 920×600: viewport 524×102 pontos
+Animação 920×600: viewport 524×160 pontos
 Verificado: animation_small_layout
 Clique: + Quadro-chave em [451.5 496.0]
 Verificado: key_created
 Tecla Z, Ctrl=true
 Verificado: animation_preview
 Redimensionar: [1440.0 900.0]
-Clique: Pose-base em [525.7 179.8]
+Clique: Pose-base em [525.7 156.8]
 Clique: + Quadro-chave em [949.9 657.0]
 Verificado: key_created
 Rolar painel QUADRO-CHAVE
@@ -195,7 +195,7 @@ Selecionar hierarquia: Articulação
 Verificado: focused_group
 Clique: Estúdio em [153.2 79.0]
 Clique: Animação em [514.8 124.2]
-Clique: + Nova animação em [295.0 240.2]
+Clique: + Nova animação em [295.0 217.2]
 Tecla A, Ctrl=true
 Digitar: Parado
 Tecla Enter, Ctrl=false
@@ -203,14 +203,14 @@ Clique: + Quadro-chave em [946.9 657.0]
 Selecionar hierarquia: Peça A
 Clique: + Quadro-chave em [946.9 657.0]
 Selecionar hierarquia: Articulação
-Clique: + Nova animação em [295.0 240.2]
+Clique: + Nova animação em [295.0 217.2]
 Tecla A, Ctrl=true
 Digitar: Ataque
 Tecla Enter, Ctrl=false
 Clique: + Quadro-chave em [946.9 657.0]
 Verificado: authored_clips
 Editar campo visível: Cursor = 0.5
-Clique: Mover (W) em [474.5 214.8]
+Tecla W, Ctrl=false
 Verificado: draft_baseline
 Arrastar eixo X pelo controle visual
 Verificado: group_draft
@@ -223,7 +223,7 @@ Clique: + Quadro-chave em [946.9 657.0]
 Verificado: group_key
 Captura GPU da janela: group-animation.png
 Abrir menu de contexto: Ataque
-Clique: Duplicar animação em [393.5 360.5]
+Clique: Duplicar animação em [393.5 337.5]
 Verificado: clip_duplicated
 Tecla S, Ctrl=true
 Verificado: saved_roundtrip
@@ -235,7 +235,7 @@ Clique: Estúdio em [153.2 79.0]
 Clique: Animação em [514.8 124.2]
 Verificado: clip_reference_baseline
 Abrir menu de contexto: Ataque
-Clique: Excluir animação em [388.5 348.5]
+Clique: Excluir animação em [388.5 325.5]
 Verificado: clip_reference_blocked
 Captura GPU da janela: animation-reference.png
 Clique: Entendi em [275.5 249.7]

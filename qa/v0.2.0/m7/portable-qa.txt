@@ -1,0 +1,19 @@
+OXY Engine 0.2.0 - QA portatil M7
+UTC: 2026-09-09T20:12:50.9432146Z
+Resultado: PASS no Windows local; builds release existentes, sem recompilar.
+ZIP: dist/OXY-Engine-0.2.0-windows-x64.zip (22091163 bytes)
+SHA-256 ZIP: bf57578b9195b953472a1c1ccab4c21fd128e50822583abd3825c673632bd0e1
+Checksum adjacente .zip.sha256 conferido antes da extracao.
+Editor: ProductName=OXY Engine; ProductVersion=0.2.0; FileVersion=0.2.0; OriginalFilename=OXY Engine.exe
+SHA-256 editor: 2da4c92e3dc8720792a8dfde63943a9373c90a62ad6c41c6dfba6814f7b08523
+SHA-256 player: 93ad232640742f276806a1fffe7c72013bbb05f59a83b9ac22e815cf87e8e79a
+PE32+ x64 e imports DLL do editor/player/DLLs incluidos aprovados; recursos de icone e metadados incorporados ao EDITOR aprovados.
+VERSAO.txt coincide com o editor; data/project.oxy.json inclui as tres cenas de exemplo; assets presentes; nenhum launcher .cmd.
+OXY Engine.exe abriu sem argumentos e respondeu como OXY Engine 0.2.0, em pasta temporaria com espacos, diretorio corrente externo ao repositorio, PATH so Windows/System32 e Windows; CARGO_HOME/RUSTUP_HOME vazios.
+Jogo: dist/OXY-v020-modelo-validacao (oxy_player.exe + data, sem editor). Documento schema2, duas malhas editaveis, um modelo, um PNG; manifesto/assets identicos por SHA-256 ao projeto final do editor.
+oxy_player.exe exportado abriu sem argumentos e respondeu em outra copia temporaria fora do repositorio, com o mesmo PATH restrito. Dados permaneceram inalterados apos encerrar.
+QA WGPU separado repetido sobre data do jogo JA EXPORTADO: PASS (1 teste, 1,03 s); 192 triangulos, 2 objetos, 1 textura GPU, animacao por grafo de inicio, pose intermediaria e persistencia de malha/UV/pivo/colisor. Captura: final-mesh-player.png; relatorio: final-mesh-player-qa.txt.
+O teste WGPU usa host de teste compilado e copia os dados exportados; a abertura sem Rust usa os executaveis finais do pacote. Nenhuma entrada foi enviada a outros aplicativos.
+Limites: nao houve outra maquina Windows limpa/Windows Sandbox, assinatura digital, CI remoto ou reproducao audivel de WAV. PATH restrito nao equivale a uma segunda maquina limpa.
+Logs: artifacts/v020-m7-package-engine.log, v020-m7-test-portable.log, v020-m7-package-game.log, v020-m7-exported-player-native.log, v020-m7-exported-player-launch.log.
+Sem commit/push/tag/Release nesta verificacao; dist e target permanecem ignorados.

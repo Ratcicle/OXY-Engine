@@ -166,6 +166,92 @@ impl Editor {
     }
     pub(super) fn model_toolbar(&mut self, ui: &mut egui::Ui) {
         use crate::icons::{Icon, button};
+        if ui.available_width() < 580. || ui.available_height() < 310. {
+            ui.add_enabled_ui(!self.mesh_operation_active(), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (mode, icon, label) in [
+                        (Mode::Object, Icon::Object, "Objeto (1)"),
+                        (Mode::Face, Icon::Face, "Face (2)"),
+                        (Mode::Edge, Icon::Edge, "Aresta (3)"),
+                        (Mode::Vertex, Icon::Vertex, "Vértice (4)"),
+                    ] {
+                        if button(
+                            ui,
+                            icon,
+                            label,
+                            label,
+                            self.modeling.selection.mode == mode,
+                            self.preferences.tool_names,
+                        )
+                        .clicked()
+                        {
+                            self.model_mode(mode);
+                        }
+                    }
+                    ui.menu_button("Malha", |ui| {
+                        if self
+                            .selected
+                            .as_deref()
+                            .and_then(|id| self.scene().entity(id))
+                            .is_some_and(|e| e.primitive.is_some())
+                            && ui.button("Converter em malha editável").clicked()
+                        {
+                            self.convert_selected_mesh();
+                            ui.close();
+                        }
+                        self.topology_menu(ui);
+                        if self.modeling.selection.mode == Mode::Object
+                            && ui.button("Encaixar vértices (Shift+V)").clicked()
+                        {
+                            self.begin_snap();
+                            ui.close();
+                        }
+                        if self.components_active() {
+                            ui.checkbox(
+                                &mut self.modeling.selection.through,
+                                "Selecionar através (Shift+X)",
+                            );
+                            ui.checkbox(&mut self.modeling.global, "Coordenadas globais");
+                            if ui.button("Transformar seleção").clicked() {
+                                self.begin_mesh_operation(Operation::Transform(self.gizmo));
+                                ui.close();
+                            }
+                            if ui.button("Inverter seleção (Shift+I)").clicked()
+                                && let Ok(mesh) = self.model_source()
+                            {
+                                self.modeling.selection.invert(&mesh);
+                                ui.close();
+                            }
+                            if ui.button("Excluir componentes").clicked() {
+                                self.begin_mesh_operation(Operation::Delete);
+                                ui.close();
+                            }
+                            if ui.button("Triangular faces").clicked() {
+                                self.begin_mesh_operation(Operation::Triangulate);
+                                ui.close();
+                            }
+                        }
+                        if ui.button("Ajuda (F1)").clicked() {
+                            self.modeling.help = true;
+                            ui.close();
+                        }
+                        if let Ok(mesh) = self.model_source() {
+                            ui.small(format!(
+                                "{} vértices · {} faces · {} triângulos",
+                                mesh.data().vertices.len(),
+                                mesh.data().faces.len(),
+                                mesh.prepared().triangles.len()
+                            ));
+                        }
+                    });
+                    if self.modeling.selection.through {
+                        ui.colored_label(Color32::GOLD, "Através")
+                            .on_hover_text("Inclui componentes ocultos. Shift+X desativa.");
+                    }
+                });
+            });
+            return;
+        }
         ui.horizontal_wrapped(|ui|{
             for (mode,icon,label,tip) in [(Mode::Object,Icon::Object,"Objeto","Objeto (1): transforme a peça inteira."),(Mode::Face,Icon::Face,"Face","Face (2): selecione polígonos da peça."),(Mode::Edge,Icon::Edge,"Aresta","Aresta (3): selecione bordas reais da malha."),(Mode::Vertex,Icon::Vertex,"Vértice","Vértice (4): selecione pontos da malha.")] {
                 if button(ui,icon,label,tip,self.modeling.selection.mode==mode,self.preferences.tool_names).clicked(){self.model_mode(mode);}

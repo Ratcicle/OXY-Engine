@@ -1,44 +1,61 @@
-# OXY Engine 0.1.3
+# OXY Engine 0.2.0
 
-Editor e runtime desktop próprios em Rust, com cenas 2D/3D, montagem por peças, pintura PNG, animação, atributos, lógica visual e execução independente. Interface e renderização compartilham egui/eframe 0.33.3 com wgpu 27.0.1; nenhuma engine pronta é usada como núcleo. Dependências fixadas e `Cargo.lock` mantido.
+Editor e runtime desktop próprios em Rust: cenas 2D/3D, modelagem por peças e polígonos, pintura PNG, animação rígida, atributos e lógica visual. Editor e player compartilham egui/eframe 0.33.3 e wgpu 27.0.1, sem outra engine como núcleo. Dependências fixadas e `Cargo.lock` mantido.
 
-## Abrir e compilar
+Os marcos M0–M7 estão implementados e validados localmente. O [relatório da 0.2.0](docs/v0.2.0.md) registra testes, capturas, medições e limitações de desempenho/ambiente. Pacote Windows x64 gerado; nenhuma tag ou Release publicada nesta implementação.
 
-Windows 10/11 x64, driver atualizado e GPU compatível com DirectX 12 ou Vulkan. Extraia o ZIP inteiro em uma pasta gravável e abra **`OXY Engine.exe`** diretamente. O pacote inclui ícone, metadados de versão e **`oxy_player.exe`** separado. Mantenha `data` e as DLLs junto dos executáveis; Rust/Cargo são necessários apenas para desenvolver/compilar.
+## Abrir e desenvolver
 
-Para desenvolver, instale Rust **1.92.0**, rustfmt, Clippy e o linker MSVC com ferramentas C++/Windows SDK, ou MinGW-w64 completo. Na raiz do repositório, em PowerShell:
+Windows 10/11 x64, driver gráfico atualizado e GPU compatível com DirectX 12 ou Vulkan. Extraia o ZIP inteiro em uma pasta gravável e abra **`OXY Engine.exe`** diretamente. Mantenha `data` e as DLLs junto dos executáveis. Rust/Cargo são necessários somente para compilar; **`oxy_player.exe`** é o runtime separado dos jogos.
+
+Sem argumentos, o editor mostra **Novo projeto**, **Abrir projeto**, **Projetos recentes** e **Projeto de exemplo**. O exemplo abre uma cópia segura das três cenas de validação; Salvar escolhe outra pasta e copia os assets. Recentes e preferências ficam em `%LOCALAPPDATA%/OXY Engine`, fora do projeto. **Projeto → Tela inicial** confirma antes de descartar alterações.
+
+Para desenvolver, instale Rust **1.92.0**, rustfmt, Clippy e ferramentas C++/Windows SDK para MSVC, ou MinGW-w64 completo. Na raiz do repositório, em PowerShell:
 
 ```powershell
+cargo run --locked -p oxy_editor
 cargo run --locked -p oxy_editor -- examples/validacao/project.oxy.json
 cargo run --locked -p oxy_player -- examples/validacao/project.oxy.json
 cargo build --workspace --release --locked
 ```
 
-Sem argumentos, o editor mostra **Novo projeto**, **Abrir projeto**, **Projetos recentes** e **Projeto de exemplo**. O exemplo abre uma cópia temporária das três cenas; Salvar pede uma nova pasta e copia seus assets, preservando o original. **Projeto → Tela inicial** retorna ao início com confirmação de alterações pendentes. Recentes ficam em `%LOCALAPPDATA%/OXY Engine/recent-projects.json`; remover da lista não exclui arquivos. O editor também aceita o arquivo do projeto como argumento. O player aceita arquivo/pasta e, sem argumento, procura `data/project.oxy.json` ao lado do próprio executável. Nesta máquina, o auxiliar `scripts/cargo.ps1` configura o compilador GNU preparado:
+Nesta máquina, `scripts/cargo.ps1` configura o compilador GNU preparado. Passe argumentos após `--` como vetor:
 
 ```powershell
-$oxyArgs = @('run','--locked','-p','oxy_editor','--','examples/validacao/project.oxy.json')
-& .\scripts\cargo.ps1 @oxyArgs
+./scripts/cargo.ps1 @('run','--locked','-p','oxy_editor','--','examples/validacao/project.oxy.json')
 ```
 
-## Criar → editar → testar → salvar
+## Criar → modelar → pintar → animar → testar
 
-1. Em **Projeto**, crie e salve um projeto local. **+ Cena** adiciona uma cena 2D/3D; **Definir inicial** escolhe a cena do player. **+ Objeto** cria formas, grupos, câmeras e elementos de interface; a biblioteca importa cópias de PNG/WAV e guarda modelos compostos.
-2. Selecione na hierarquia ou no viewport. **Ctrl+clique** adiciona/remove objetos; **Shift+clique** seleciona um intervalo na hierarquia. **F2** renomeia, Enter confirma e Escape cancela. Arraste sobre outro objeto para mudar o pai, ou sobre **Raiz da cena** para removê-lo, mantendo a transformação global. **Agrupar**, duplicar e excluir trabalham com a seleção e suas hierarquias.
-3. **W/E/R** escolhem mover/girar/escalar; arraste os eixos ou use valores numéricos. A seleção múltipla gira/escala em torno do centro do conjunto. Duplo clique no mesmo objeto enquadra a seleção. Botão central move a câmera, roda amplia/reduz e arraste direito orbita no 3D; Alt suspende o encaixe durante o movimento.
-4. Botão direito → **Abrir no Estúdio** preserva o objeto escolhido. Em Modelagem, novas peças usam a seleção como pai. **Salvar hierarquia como modelo** mantém peças, grupos e pivôs editáveis.
-5. Em Pintura, crie 256×256/512×512 ou importe PNG. Pincel, preenchimento, conta-gotas e paleta alteram pixels na imagem ou na superfície. **Exportar PNG** salva a imagem; **Remover textura** retira apenas o vínculo. **Substituir**, **Editar no Estúdio** e **Localizar na biblioteca** ficam junto à miniatura. Antes de pintar uma textura compartilhada, escolha editar o original ou criar uma cópia independente.
-6. Em Animação, o modelo vem da raiz/grupo selecionado ou do ancestral animado; **Modelo** permite escolha manual. Use **+ Nova animação**, F2 e o menu da lista para renomear/duplicar/excluir. Exclusões referenciadas pela lógica são bloqueadas e listadas. Ajuste a **pose provisória** de uma peça/grupo e use **+ Quadro-chave** no cursor: a pose-base permanece intacta. Grave ou descarte poses provisórias antes de trocar animação/modelo ou reproduzir. A linha do tempo oferece posição/rotação/escala, quadros movíveis, copiar/colar/excluir, duração, repetição e eventos; as propriedades editam a seleção.
-7. Edite atributos nas propriedades e configure **Lógica** pelo catálogo pesquisável. Conecte execução/dados e escolha parâmetros por nomes. Texto, imagem, botão e barra compõem a interface do jogo; use `{valor}` para exibir um atributo vinculado. Atributos como `Vida` não impõem regras por conta própria.
-8. **Jogar** abre uma cópia isolada na aba Jogo. Sair da aba, pausar ou pressionar Esc libera a entrada; **Retomar** é explícito e **Parar** descarta o teste. **Ctrl+S** salva; **Ctrl+Z** desfaz; **Ctrl+Y/Ctrl+Shift+Z** refaz. Arrastos e pinceladas são um gesto de histórico. **Ctrl+D/Delete** duplicam/excluem objetos ou nós conforme a ferramenta ativa.
+1. **Novo projeto** pede nome e primeira cena 2D/3D, sem personagens ou mecânicas automáticas. Na faixa **Cena**, o seletor alterna cenas; **+** cria; **⋯** renomeia, duplica, exclui e escolhe a inicial. Exclusões em uso são bloqueadas com as referências.
+2. **+ Objeto** cria grupos, formas, câmeras e interface. PNG/WAV são importados como cópias. Ctrl+clique seleciona vários objetos; Shift+clique seleciona intervalo na Hierarquia. Arraste para definir parentesco, ou para **Raiz da cena**, preservando a transformação global. F2 renomeia sem mudar o ID. Duplo clique enquadra; setas recolhem filhos.
+3. No **Estúdio → Modelagem**, adicione cubo, esfera, cilindro, plano, pirâmide, cone ou tubo. O painel de criação ajusta dimensões/segmentos com prévia; Enter ou o primeiro clique externo confirma, Esc cancela. O clique externo é consumido. Parâmetros continuam editáveis até **Converter em malha** ou a primeira operação de geometria.
+4. Escolha Objeto/Face/Aresta/Vértice, selecione por clique, Ctrl+clique ou caixa e transforme em coordenadas Local/Global. Componentes ocultos só entram com **Selecionar através**. Extrusão, criação de face/aresta, cortes, encaixe e arredondamento mostram prévia validada. Enter confirma uma operação de histórico; Esc, inclusive com Alt/Shift, restaura geometria, UVs, seleção e cópias temporárias de textura.
+5. Em **Pintura**, crie 256×256/512×512 ou importe PNG. Pincel, preenchimento, conta-gotas e paleta alteram pixels na imagem ou na superfície. **Selecionar faces** relaciona a malha às ilhas UV reais. Cortes preservam a pintura por interpolação; novas superfícies recebem espaço independente no atlas. Sem espaço, escolha a cópia ampliada ou cancele. Textura compartilhada exige escolher original/cópia. **Remover textura** remove só o vínculo; **Exportar PNG** salva pixels. Sombreamento **Plano/Suave** altera a iluminação, não arredonda a silhueta.
+6. **Salvar hierarquia como modelo** preserva peças, malhas, pivôs e vínculos. Instanciar produz uma cópia independente. Em **Animação**, escolha o modelo/clip e a peça; ajuste a pose provisória e grave **+ Quadro-chave** ou **Gravar poses alteradas**. Cada quadro contém posição/rotação/escala vinculadas. Gravar/descartar precede mudança de cursor/modelo e reprodução; a pose-base permanece separada. Duração, repetição, eventos e copiar/mover/excluir quadros ficam na timeline.
+7. Na **Lógica**, **Ações de entrada** centraliza nomes/teclas usados por controladores e nós, com Pressionar/Manter pressionado/Soltar. Projetos novos recebem vínculos de movimento quando um controlador é adicionado. **Ajuda → Guia de lógica visual**, também acessível por F1, funciona offline e abre cópias editáveis de cinco receitas: mensagem, porta com chave, carta/energia, ataque por marcador e passagem entre cenas. Atributos como `Vida` não criam regras ocultas.
+8. **Jogar** usa uma cópia isolada na aba Jogo. Sair da aba, pausar ou Esc libera entrada; **Retomar** é explícito e **Parar** descarta o teste. Texto, imagem, botão e barra funcionam no player; `{valor}` exibe um atributo vinculado. Ctrl+S salva; Ctrl+Z desfaz; Ctrl+Y/Ctrl+Shift+Z refaz. Cada arrasto/pincelada é um gesto de histórico.
 
-**Colisores e articulações (0.1.2):** selecionar uma peça ou grupo com colisor mostra sua caixa física, mesmo sem aparência. **Colisores** mostra as demais caixas; sólidos são verdes, áreas amarelas e desativados tracejados. **C / Editar colisor** abre alças de bordas/cantos no 2D e faces no 3D; o centro desloca somente a caixa. **Ajustar ao objeto / grupo/filhos** oferece uma prévia com margem e escolha das peças; confirmar calcula uma única caixa na pose-base. Imagens usam o retângulo do sprite. Alt suspende o encaixe; Esc cancela o gesto inteiro e, sem gesto, sai da ferramenta. No Jogo, o overlay usa a instância real e é somente leitura; mudanças no documento exigem Parar e Jogar novamente.
+O botão **Interface: 100%** separa escala pendente/aplicada: ajuste 80–160%, use Aplicar, Cancelar ou Restaurar 100%. **Mostrar nomes das ferramentas** acompanha os ícones para iniciantes. Avisos não abrem o console nem mudam o viewport; **Console/Ver detalhes** abre o registro manualmente. Falhas de salvamento permanecem visíveis.
 
-**P / Editar pivô** move o ponto de giro sem desmontar a peça, filhos ou colisores. Campos numéricos usam a mesma compensação; **Centralizar na peça / conjunto** e **Valores da ferramenta** dão precisão. No 3D, o centro usa um plano voltado à câmera, e as alças X/Y/Z usam eixos do mundo. W/E/R retornam às ferramentas de objetos. Em janelas estreitas, **Opções** reúne grade, encaixe, desativados e valores numéricos. Setas na Hierarquia recolhem/expandem filhos.
+Em janelas pequenas ou escalas maiores, **Painéis** alterna Hierarquia, Propriedades e Biblioteca. O menu **Malha** reúne operações; o menu da ferramenta mantém Mover/Girar/Escalar/Colisor/Pivô. Na pintura, **Textura** e o menu do pincel guardam os controles completos. A linha do tempo permite selecionar peças mesmo com a Hierarquia recolhida.
 
-Na Animação, **Gravar poses alteradas** grava todas as peças provisórias no tempo em que foram editadas, em um único comando de desfazer. O cursor permanece nesse instante até gravar/descartar. Cada quadro-chave contém posição, rotação e escala vinculadas. Editar pivô exige pausa e ausência de rascunhos; a ferramenta entra explicitamente na pose-base e restaura o contexto ao sair. Pivôs diretamente animados e parentescos que envolveriam movimentos existentes são bloqueados com os clips afetados: não há retargeting aproximado. As montagens exercitadas pela QA ficam como dados editáveis em `qa/v0.1.2/spatial-project.oxy.json`.
+## Controles e ferramentas
 
-Os controles de jogo são remapeáveis nas propriedades do projeto, com a seleção limpa. Padrão: A/D movem, Espaço pula, J ataca, E interage e W/S movem em profundidade no 3D. No player, Esc pausa e F3 mostra diagnóstico. Unidades em metros, +Y para cima, sistema 3D destro; a interface mostra graus e os documentos guardam radianos.
+| Contexto | Atalhos |
+|---|---|
+| Modelagem | **1/2/3/4** Objeto/Face/Aresta/Vértice; **W/E/R** Mover/Girar/Escalar |
+| Operações | **Shift+E** Extrudir; **Shift+F** Criar face/aresta; **Shift+N** Inverter orientação |
+| Cortes/encaixe | **Shift+K** Bisturi; **Shift+R** Corte em loop; **Shift+B** Arredondar; **Shift+V** Encaixar vértices |
+| Seleção | **Shift+I** Inverter; **Shift+X** Selecionar através; **Ctrl+A** Selecionar no contexto ativo |
+| Objeto | **C/P** Editar colisor/pivô; **F2** Renomear; **Ctrl+D/Delete** Duplicar/excluir |
+| Operação em curso | **Enter/Esc** Confirmar/cancelar; Delete em componentes não exclui a entidade |
+
+Campos de texto, modais, guia, grafo e jogo têm foco próprio; combinações Shift não acionam também W/E/R. Botão central move a câmera, roda amplia/reduz, arraste direito orbita no 3D. Alças X/Y/Z restringem escala por eixo; centro escala uniformemente. Alt suspende encaixe em movimento/colisor/pivô; ao escalar, força o eixo já escolhido e não desliga encaixe. Unidades em metros, +Y para cima, sistema 3D destro; graus na interface, radianos nos documentos.
+
+Selecionar uma peça **ou grupo vazio** com colisor mostra a caixa real da física. **Colisores** mostra as demais; sólidos verdes, áreas amarelas, desativados tracejados. **Editar colisor** oferece bordas/cantos 2D e faces 3D; mover o centro altera só a caixa. **Ajustar ao objeto/grupo/filhos** calcula uma caixa inicial com prévia, margem e seleção das peças. Geometria editada não redimensiona o colisor automaticamente. No Jogo, o overlay é somente leitura; mudanças da cena exigem Parar/Jogar novamente.
+
+**Editar pivô** compensa a transformação para manter peça, filhos e colisores no lugar; campos numéricos e Centralizar usam a mesma operação. Mudanças de pivô/parentesco que afetariam animações existentes são recusadas com os clips envolvidos. Não há retargeting aproximado. No player, Esc pausa e F3 mostra diagnóstico.
 
 ## Verificar e distribuir
 
@@ -47,55 +64,42 @@ cargo fmt --all --check
 cargo build --workspace --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-# Testes com janela nativa: Windows e GPU disponíveis.
-cargo test -p oxy_editor native_spatial_workflow --locked -- --ignored --nocapture
-cargo test -p oxy_editor native_editor_workflow --locked -- --ignored --nocapture
-cargo test -p oxy_player native_player_portable_workflow --locked -- --ignored --nocapture
-cargo test -p oxy_render native_gpu_depth_texture_and_resize --locked -- --ignored --nocapture
-cargo test -p oxy_editor native_portable_home_workflow --locked -- --ignored --nocapture
-# ZIP da engine, com player e exemplos; -SkipBuild reutiliza release já compilado.
-.\scripts\package-engine.ps1
-& '.\dist\OXY-Engine-0.1.3-windows-x64\OXY Engine.exe'
-.\scripts\test-portable.ps1 -Zip '.\dist\OXY-Engine-0.1.3-windows-x64.zip'
-# O fluxo de jogos permanece separado (apenas runtime + dados do seu projeto).
-.\scripts\package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
-.\dist\Meu-Jogo\oxy_player.exe
+# Testes nativos: Windows e GPU; demais comandos no relatório de entrega.
+./scripts/test-native.ps1
+# Medição da interação na janela nativa, separada da suíte de correção.
+cargo test --release --locked -p oxy_editor native_mesh_editor_measurements -- --ignored --nocapture
+# Engine portátil: editor + player + exemplos. -SkipBuild reutiliza release já compilado.
+./scripts/package-engine.ps1
+& './dist/OXY-Engine-0.2.0-windows-x64/OXY Engine.exe'
+./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.2.0-windows-x64.zip'
+# Exportar seu jogo: só runtime e dados; não depende do editor ou do diretório-fonte.
+./scripts/package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
+./dist/Meu-Jogo/oxy_player.exe
+# Medições release/locked; rótulos novos preservam resultados anteriores.
+./scripts/benchmark.ps1 -Label meu-teste-v020
+./scripts/benchmark.ps1 -Label minhas-malhas-v020 -Example performance_mesh -Sizes '22,70,158'
 ```
 
-Para usar o auxiliar com argumentos após `--`, passe um vetor, como no exemplo de execução. O empacotador inclui executáveis e dados locais, prepara uma pasta temporária e preserva o pacote anterior. `-DebugBuild` escolhe desenvolvimento; `-SkipBuild` usa binários já compilados do perfil escolhido. O pacote independe do diretório-fonte.
+Execute cada teste nativo em um processo separado: o Winit permite uma janela de teste por processo. O script acima organiza essa sequência; medições de desempenho ficam separadas para evitar carga concorrente.
 
-**Distribuição automática:** `.github/workflows/portable-windows.yml` gera ZIP Windows x64 e SHA-256, disponibiliza artifact por 14 dias em pushes para `main` e anexa ambos a GitHub Releases em tags `v*`. A tag deve corresponder à versão do workspace (por exemplo, `v0.1.3`); atualize `Cargo.toml`/`Cargo.lock` antes de uma nova versão. O build usa MSVC com runtime C estático. `ci.yml` continua verificando fmt/build/test/Clippy. Binários, ZIPs e DLLs permanecem em `target/` e `dist/`, ignorados pelo Git. Nenhum instalador, updater ou assinatura foi acrescentado.
+O player aceita arquivo/pasta; sem argumento procura `data/project.oxy.json` junto do executável. Empacotadores incluem assets referenciados e modelos/malhas no JSON, usam uma pasta temporária e preservam o pacote anterior. O guia e suas receitas são embarcados no executável. `-DebugBuild` no empacotador de jogos escolhe desenvolvimento; `-SkipBuild` usa os binários do perfil selecionado.
 
-`test-portable.ps1` extrai em um caminho temporário com espaços, confere arquitetura x64, ícone/metadados, DLLs importadas e assets, e abre o editor sem argumentos a partir de outro diretório, com Rust/Cargo removidos do PATH. `-ContentOnly` omite a janela para runners sem GPU. Para a aceitação em Windows realmente limpo, execute esse mesmo script e ZIP em outra máquina/Windows Sandbox sem Rust, confirme os quatro comandos da tela inicial, abra o exemplo, teste Jogar e salve/reabra uma cópia. **Windows Sandbox não está disponível neste ambiente; o teste em outra máquina e a execução do novo workflow no GitHub ainda não foram verificados.**
+`portable-windows.yml` gera ZIP x64 e SHA-256: artifact por 14 dias em pushes para `main`, e anexos de Release **somente em tags `v*`** correspondentes à versão do workspace, como `v0.2.0`. MSVC usa runtime C estático. `ci.yml` verifica fmt/build/test/Clippy e invariantes; `performance.yml` permite benchmarks manuais sem reprovar por variação de milissegundos. `target/`, `dist/` e ferramentas temporárias permanecem ignorados. Não há instalador, updater ou assinatura digital.
 
-`examples/validacao/project.oxy.json` contém sala 2D, boneco 3D articulado e interação de carta. São cenas editáveis normais com comportamentos em componentes/grafos e placeholders locais. Para gerar outra cópia: `cargo run --locked -p oxy_core --example create_demos -- artifacts/validacao-regenerada`.
+O teste portátil confere o checksum adjacente quando disponível, versão/ícone, PE x64, DLLs e assets; extrai em caminho com espaços e abre o editor de outro diretório, sem Rust/Cargo no PATH. `-ContentOnly` omite a janela em runners sem GPU. Isso **não substitui outra máquina limpa**: Windows Sandbox não está disponível neste ambiente. Execução do CI remoto e reprodução audível de WAV também não estão verificadas. O [relatório de entrega](docs/v0.2.0.md) distingue testes automáticos, janelas/capturas reais, medições CPU e pendências M7; [benchmarks da base](benchmarks/README.md) preservam a referência da 0.1.3. Não há promessa de FPS, medição inventada de GPU/VRAM ou validação universal de hardware.
 
-Os testes cobrem persistência segura e falhas de escrita, referências/hierarquias, seleção e transformações, isolamento de execução, histórico de documentos/pixels, animação/eventos, grafos/esperas/cancelamento, colisões, caches e interação egui. Testes nativos exercitam editor, player e GPU; evidências da 0.1.3 ficam em `qa/v0.1.3/`. A configuração em `.github/workflows/ci.yml` executa formatação, build, testes sem janela e Clippy no Windows; **a execução no GitHub ainda não foi verificada**.
+## Compatibilidade e domínio suportado
 
-Na 0.1.3, consultas por fase usam índices de entidades/hierarquia e matrizes reutilizadas. O runtime compartilha grafos preparados, encerra registros de ativações e filtra candidatos 2D em cenas esparsas, mantendo força bruta para casos pequenos/densos e 3D. Formato, ferramentas e distribuição portátil foram preservados.
+O formato atual é **schema_version 2**. Documentos schema 1 da v0.1–0.1.3 são migrados em memória sem mudar IDs nem sobrescrever ao abrir. Ao salvar convertido, há backup identificado dos bytes originais e escrita segura. Versões futuras/inválidas são recusadas; leitores antigos não devem abrir o novo formato. As três demonstrações continuam em `examples/validacao`; as cinco receitas são projetos comuns em `examples/guia`.
 
-**Validação local:** 105 testes regulares em release, testes adicionais de contadores com `profiling`, fmt/build/Clippy e cinco testes nativos. O ZIP 0.1.3 abriu fora do repositório e sem Rust/Cargo no PATH. Não houve teste em outra máquina limpa nem execução do CI remoto. Janelas reais e entrada egui isolada validam editor, player e GPU; não substituem avaliação humana prolongada de fluidez.
+- Malhas: triângulos, quads e polígonos simples planos, inclusive côncavos; bordas abertas e elementos soltos. Faces com buracos, cruzamentos, degenerações ou mais de duas faces por aresta são recusadas. Faces não planas exigem triangulação explícita ou edição válida.
+- Extrusão: região conectada, por face, faixa de bordas/arestas soltas e cadeias de vértices. Criar face exige contorno/ordem inequívoca. Encaixe move a seleção efetiva ou escala no eixo com solução; operações que exigiriam cisalhamento são recusadas.
+- Loop: faixa de quads, até 64 cortes; para em polos/triângulos/polígonos. Bisturi: percurso contínuo visível entre bordas de faces adjacentes, uma visita por face; não atravessa volume, vazio ou outras malhas.
+- Arredondamento: arestas convexas expostas com duas faces, cadeias e junções de cubos/prismas; cantos convexos de três arestas, inclusive múltiplos não conflitantes. Largura abaixo de 45% da menor aresta incidente, 1–16 segmentos. Regiões abertas/côncavas/encobertas, valências complexas e sobreposições são recusadas.
+- Pintura: um atlas RGBA por peça, UV por canto e espaço conservador para faces novas; sem camadas/editor UV avançado. A cópia ampliada preserva pixels antigos 1:1. Instâncias são independentes, sem variantes/herança.
+- Colisões continuam caixas alinhadas aos eixos: girar a malha não gira a caixa. Ajuste usa limites geométricos, não silhueta transparente ou corpo composto. O overlay 3D atravessa geometria sem distinguir todos os trechos ocultos.
+- Animação é por peças rígidas; sem deformação, pesos, IK, canais independentes ou mistura avançada. Lua/plugins, física avançada, PBR, gêneros completos e exportação web/mobile ficam fora desta versão.
 
-O [relatório de desempenho](benchmarks/README.md) contém ambiente, commits, decisões, limitações e tabelas antes/depois, com JSON/CSV e capturas. No Ryzen 5 5600/RX 6600 usado, o trabalho CPU do editor com 1.600 objetos caiu de 26,06 para 6,89 ms; isso não é tempo GPU ou promessa de FPS. A geração de diferenças do histórico continua sendo um gargalo medido.
+As otimizações da 0.1.3 permanecem: índices por fase, matrizes reutilizadas, grafos preparados e vida útil de ativações. Histórico guarda deltas/pixels e apenas malhas afetadas em armazenamento imutável; não copia todas as imagens. Texturas CPU sob demanda têm orçamento de 128 MiB, preservando buffers alterados/em uso. Caches de malhas CPU/GPU usam 64 entradas/64 MiB cada. Repouso redesenha sob demanda. Esses orçamentos não equivalem à RAM/VRAM total; custos e limites medidos de malhas 968/9.800/49.928 triângulos estão no relatório.
 
-```powershell
-.\scripts\benchmark.ps1 -Label meu-teste
-.\scripts\benchmark.ps1 -Label minhas-ferramentas -Example performance_extra
-.\scripts\benchmark-native.ps1 -Label meus-hosts
-```
-
-Os benchmarks usam release/locked e dados determinísticos. Os rótulos não podem sobrescrever resultados existentes. A instrumentação detalhada é opcional (`--features oxy_core/profiling`) e desligada no pacote distribuído. `performance.yml` permite uma execução manual no GitHub; o CI regular verifica invariantes, sem impor limites de milissegundos.
-
-## Estrutura e limites
-
-`oxy_core` separa documentos, simulação, ações, persistência e histórico; `oxy_render` compartilha renderização, entrada e interface de jogo; `oxy_editor` e `oxy_player` são hosts independentes. A v0.1.3 mantém **schema_version 1**, compatível com os documentos da v0.1, v0.1.1 e v0.1.2.
-
-O histórico armazena deltas de documentos e pixels. Imagens CPU são carregadas sob demanda, com orçamento de **128 MiB**; pixels alterados/em uso são preservados e podem ultrapassá-lo até serem liberados. Caches de malhas CPU/GPU usam LRU de **64 entradas/64 MiB** cada. O editor ocioso redesenha sob demanda; jogo, animação, interação e diagnóstico têm atualizações próprias. Esses mecanismos não representam medições de desempenho nem um limite total de memória. Em janelas estreitas, a Animação usa o botão **Propriedades** para abrir a edição da pose/quadro/evento, deixando espaço para o viewport e a timeline.
-
-- O overlay 3D permite ver a caixa através da geometria, mas ainda não diferencia trechos ocultos por oclusão. Ajuste usa limites geométricos retangulares, sem silhueta transparente ou corpo composto.
-- Escala múltipla é uniforme; operações que exigiriam cisalhamento são recusadas. Colisões são AABBs/áreas: girar a malha não gira o colisor.
-- Modelos preservam peças rígidas e grupos; não há edição livre de malha, pesos, IK, mistura avançada, PBR ou sombras sofisticadas. Pintura usa RGBA sem camadas.
-- Modelos instanciados são cópias independentes, sem herança de variantes. Excluir um recurso retira seu registro da biblioteca, preservando o arquivo no disco para desfazer; referências em uso impedem essa exclusão.
-- Referências quebradas de objetos são diagnosticadas e precisam ser corrigidas antes de salvar/jogar. Escrita segura preserva o arquivo anterior se falhar; versões incompatíveis são rejeitadas.
-- Lua permanece planejada: ações atuais são nativas com IDs estáveis. Não há scripts/plugins públicos, gêneros completos, instalador ou exportação web/mobile.
-- Áudio WAV simples no Windows, sem mixer/áudio espacial. Reprodução audível e uso em uma segunda máquina Windows **não foram validados manualmente**.
+Malhas densas ainda tornam a edição de componentes lenta: no Ryzen 5 5600/RX 6600 usado nos testes, a atualização CPU com overlay levou cerca de 19 ms para 9.800 triângulos e 107 ms para 49.928. Esses valores não medem FPS/GPU. Use primitivas com poucas divisões para modelagem interativa; os limites e resultados completos permanecem registrados.

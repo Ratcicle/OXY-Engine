@@ -112,8 +112,37 @@ impl Editor {
                 self.gizmo = tool;
             }
         }
-        if ui.selectable_label(self.spatial.mode==Tool::Collider,"Editar colisor (C)").on_hover_text("Arraste bordas para ajustar a caixa real; o centro desloca apenas o colisor. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.").clicked(){self.set_spatial_tool(Tool::Collider);}
-        if ui.selectable_label(self.spatial.mode==Tool::Pivot,"Editar pivô (P)").on_hover_text("Reposiciona o ponto de giro sem mover a peça e seus filhos. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.").clicked(){self.set_spatial_tool(Tool::Pivot);}
+        for (tool, icon, label, tip) in [
+            (
+                Tool::Collider,
+                crate::icons::Icon::Collider,
+                "Editar colisor (C)",
+                "Arraste bordas para ajustar a caixa real; o centro desloca apenas o colisor. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.",
+            ),
+            (
+                Tool::Pivot,
+                crate::icons::Icon::Pivot,
+                "Editar pivô (P)",
+                "Reposiciona o ponto de giro sem mover a peça e seus filhos. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.",
+            ),
+        ] {
+            let response = if self.modeling_active() {
+                crate::icons::button(
+                    ui,
+                    icon,
+                    label,
+                    tip,
+                    self.spatial.mode == tool,
+                    self.preferences.tool_names,
+                )
+            } else {
+                ui.selectable_label(self.spatial.mode == tool, label)
+                    .on_hover_text(tip)
+            };
+            if response.clicked() {
+                self.set_spatial_tool(tool);
+            }
+        }
     }
     pub fn viewport(&mut self, ui: &mut egui::Ui, painting: bool) {
         if self.modeling_active() && !painting {
@@ -122,7 +151,7 @@ impl Editor {
         let compact_tools = ui.available_width() < 550.;
         if !painting {
             ui.horizontal_wrapped(|ui| {
-                if ui.available_width() < 350. {
+                if compact_tools || (self.tab==Tab::Studio && self.studio.tab==StudioTab::Animation) {
                     let label = match self.spatial.mode {
                         Tool::Collider => "Colisor (C)",
                         Tool::Pivot => "Pivô (P)",

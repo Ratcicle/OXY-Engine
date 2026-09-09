@@ -1,0 +1,138 @@
+Concluído: true
+Erro: None
+Clique: Novo projeto em [113.7 192.5]
+Clique: Cena 3D
+Comece com modelos, profundidade e uma câmera 3D. em [737.5 486.1]
+Clique: Criar projeto em [578.5 550.6]
+Verificado: f7_new
+Fluxo integrado: save_location
+Clique: Estúdio em [153.2 79.0]
+Clique: + Objeto em [131.5 117.8]
+Clique: Tubo em [119.5 296.5]
+Tecla Enter, Ctrl=false
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Tubo criado
+Tecla Enter, Ctrl=false
+Verificado: f7_tube
+Tecla Num2, Ctrl=false
+Clique: Converter em malha editável em [447.6 219.8]
+Verificado: f7_converted
+Clique: Enquadrar em [726.5 310.2]
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho R com Modifiers { shift: true }
+Tecla Enter, Ctrl=false
+Verificado: f7_loop
+Captura GPU da janela: tube-loop.png
+Tecla Num2, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho E com Modifiers { shift: true }
+Tecla Enter, Ctrl=false
+Verificado: f7_extruded
+Fluxo integrado: cap_edge
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho B com Modifiers { shift: true }
+Clique: 2 em [1245.8 181.0]
+Editar campo visível: Largura = 0.02
+Verificado: f7_beveled
+Tecla Z, Ctrl=true
+Verificado: f7_undo
+Tecla Y, Ctrl=true
+Verificado: f7_redo
+Captura GPU da janela: tube-edited.png
+Fluxo integrado: paint_faces
+Clique: Pintura em [438.2 123.2]
+Clique: Criar 512×512 em [683.6 218.8]
+Clique: Enquadrar peça em [947.5 296.0]
+Verificado: f7_paint_base
+Clique real na face antiga pela imagem
+Verificado: f7_old_painted
+Clique real na face nova pela peça
+Verificado: f7_painted
+Tecla Z, Ctrl=true
+Verificado: f7_paint_undo
+Tecla Y, Ctrl=true
+Verificado: f7_redo
+Captura GPU da janela: tube-painted.png
+Clique: Modelagem em [354.0 123.8]
+Tecla Num1, Ctrl=false
+Rolar painel PROPRIEDADES
+Clique: Salvar hierarquia como modelo em [1289.0 472.1]
+Verificado: f7_model
+Clique: Colocar na cena em [292.0 894.0]
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Instância articulada
+Tecla Enter, Ctrl=false
+Verificado: f7_instance
+Tecla W, Ctrl=false
+Arrastar eixo X pelo controle visual
+Clique: Enquadrar em [726.5 273.2]
+Rolar painel PROPRIEDADES
+Clique: Componentes em [1249.0 374.6]
+Clique: Colisão / área em [1267.5 404.1]
+Verificado: f7_spatial_base
+Tecla P, Ctrl=false
+Arrastar alça espacial por projeção da câmera
+Verificado: f7_pivot
+Tecla Z, Ctrl=true
+Verificado: f7_undo
+Tecla Y, Ctrl=true
+Verificado: f7_redo
+Captura GPU da janela: tube-pivot.png
+Tecla W, Ctrl=false
+Clique: Ajustar ao objeto em [1267.5 648.1]
+Clique: Confirmar ajuste em [301.0 270.7]
+Verificado: f7_fit
+Tecla C, Ctrl=false
+Captura GPU da janela: tube-collider.png
+Tecla W, Ctrl=false
+Clique: Animação em [514.8 124.2]
+Clique: + Nova animação em [295.0 217.2]
+Tecla A, Ctrl=true
+Digitar: Giro rígido
+Tecla Enter, Ctrl=false
+Clique: + Quadro-chave em [946.9 657.0]
+Editar campo visível: Cursor = 0.5
+Tecla E, Ctrl=false
+Girar braço pelo eixo Z
+Clique: + Quadro-chave em [946.9 657.0]
+Verificado: f7_animation
+Captura GPU da janela: tube-rigid-animation.png
+Clique: Pose-base em [525.7 156.8]
+Clique: Lógica em [220.8 80.0]
+Clique: Ao iniciar cena em [287.5 317.5]
+Clique: Pesquisar ação… em [293.0 254.8]
+Digitar: animação
+Clique: Reproduzir animação em [307.5 385.0]
+Arrastar nó pelo título
+Clique: Escolha… em [1243.5 429.0]
+Clique: Instância articulada · Giro rígido em [1313.0 464.0]
+Conectar saída e entrada pelas portas visuais
+Captura GPU da janela: tube-animation-graph.png
+Clique: Cena em [32.5 79.5]
+Clique: + Objeto em [131.5 117.8]
+Clique: Câmera em [127.0 347.0]
+Clique: Transformação em [1201.5 289.1]
+Fluxo integrado: camera_x
+Fluxo integrado: camera_y
+Fluxo integrado: camera_z
+Fluxo integrado: camera_pitch
+Verificado: f7_camera
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Instância articulada
+Clique: ▶ Jogar em [326.6 46.5]
+Reproduzir 20 quadros sem entrada
+Verificado: f7_runtime
+Captura GPU da janela: tube-runtime.png
+Clique: ■ Parar em [407.5 45.5]
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Instância articulada
+Clique: Estúdio em [153.2 79.0]
+Clique: Enquadrar em [726.5 273.2]
+Captura GPU da janela: tube-final-reopened.png
+Capturas: ["tube-loop.png", "tube-edited.png", "tube-painted.png", "tube-pivot.png", "tube-collider.png", "tube-rigid-animation.png", "tube-animation-graph.png", "tube-runtime.png", "tube-final-reopened.png"]

@@ -1,5 +1,6 @@
 #[path = "../../../../benchmarks/native_host.rs"]
 mod harness;
+mod mesh;
 #[test]
 #[ignore = "Opt-in native CPU benchmark; opens an inactive WGPU window"]
 fn native_editor_performance() {

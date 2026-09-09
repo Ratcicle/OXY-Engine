@@ -72,7 +72,12 @@ impl NativeQa {
                         .messages
                         .last()
                         .is_some_and(|s| s.contains("grave ou descarte")),
-                "Mudança estrutural descartou pose",
+                &format!(
+                    "Mudança estrutural: modo objeto={}, rascunhos={}, diagnóstico={:?}",
+                    self.editor.spatial.mode == crate::app::Tool::Object,
+                    self.editor.studio.animation.drafts.len(),
+                    self.editor.messages.last()
+                ),
             ),
             "spatial_collective_keys" => {
                 let before = self

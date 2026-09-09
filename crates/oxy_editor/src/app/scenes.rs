@@ -27,10 +27,13 @@ impl Editor {
         self.new_project = Some(NewProject::default());
     }
     pub(super) fn scene_bar(&mut self, ui: &mut egui::Ui) {
-        ui.label("Cena:");
+        let compact = ui.ctx().content_rect().width() < 700.;
+        if !compact {
+            ui.label("Cena:");
+        }
         let mut scene_id = self.scene_id.clone();
         egui::ComboBox::from_id_salt("scene")
-            .width(150.)
+            .width(if compact { 105. } else { 150. })
             .selected_text(format!(
                 "{} · {}",
                 self.scene().name,

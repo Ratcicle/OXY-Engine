@@ -58,8 +58,10 @@ impl Editor {
         let previous = self.studio.tab;
         ui.horizontal_wrapped(|ui| {
             if self.mesh_operation_active(){ui.disable();}
-            ui.heading("Estúdio");
-            ui.separator();
+            if !Self::compact_layout(ui.ctx()) {
+                ui.heading("Estúdio");
+                ui.separator();
+            }
             ui.selectable_value(&mut self.studio.tab, StudioTab::Model, "Modelagem").on_hover_text("Crie formas em + Objeto. Arraste peças na hierarquia para definir suas articulações.");
             ui.selectable_value(&mut self.studio.tab, StudioTab::Paint, "Pintura").on_hover_text("Edite os pixels à esquerda ou pinte diretamente na peça. Ctrl+Z desfaz a pincelada inteira.");
             ui.selectable_value(&mut self.studio.tab, StudioTab::Animation, "Animação");
@@ -67,7 +69,9 @@ impl Editor {
         if previous != self.studio.tab {
             self.set_spatial_tool(crate::app::Tool::Object);
         }
-        if let Some(id) = self.studio.owner.as_ref().or(self.selected.as_ref())
+        if !Self::compact_layout(ui.ctx())
+            && self.studio.tab != StudioTab::Animation
+            && let Some(id) = self.studio.owner.as_ref().or(self.selected.as_ref())
             && let Some(entity) = self.scene().entity(id)
         {
             ui.label(format!("Modelo: {}", entity.name));

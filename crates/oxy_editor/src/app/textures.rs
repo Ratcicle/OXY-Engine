@@ -89,7 +89,7 @@ impl Editor {
             if editing::asset_references(&self.state.project,&id).len()>1 && ui.button("Criar cópia independente").clicked() {
                 match self.copy_texture_asset(&id) { Ok(copy)=>next=Some(copy),Err(e)=>self.log(e) }
             }
-            if ui.button("Localizar na biblioteca").clicked() { self.locate_asset=Some(id.clone());self.asset_search.clear(); }
+            if ui.button("Localizar na biblioteca").clicked() { self.locate_asset=Some(id.clone());self.asset_search.clear(); self.compact_panel=CompactPanel::Library; }
         });
         if interface {
             if let Some(element) = &mut entity.ui {

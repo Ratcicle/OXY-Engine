@@ -8,7 +8,7 @@ mod checks;
 fn native_spatial_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.1.3");
+    let output = workspace.join("qa/v0.2.0/m7/spatial");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-spatial-{}", new_id()));
     std::fs::create_dir_all(&fixture).unwrap();
@@ -200,9 +200,12 @@ fn native_spatial_workflow() {
                 Action::Check("spatial_drafts"),
                 Action::EditValue("Cursor", "0.8"),
                 Action::Check("spatial_drafts"),
+                // A disabled cursor does not own Ctrl+A: restore the intended single object
+                // before testing the separate structural-edit refusal with drafts pending.
+                Action::SelectEntity("Personagem"),
                 Action::Key(Key::P, false),
                 Action::Check("spatial_draft_structure_blocked"),
-                Action::Click("Console"),
+                Action::OptionalClick("Dispensar"),
                 Action::Click("Gravar poses alteradas"),
                 Action::Check("spatial_collective_keys"),
                 Action::Click("Enquadrar"),
@@ -219,7 +222,7 @@ fn native_spatial_workflow() {
                 Action::SelectEntity("Braço"),
                 Action::Key(Key::P, false),
                 Action::Check("spatial_track_blocked"),
-                Action::Click("Console"),
+                Action::OptionalClick("Dispensar"),
                 Action::Click("Cena"),
                 Action::Key(Key::S, true),
                 Action::Check("saved_roundtrip"),

@@ -1,0 +1,281 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Tubo
+Clique: Estúdio em [153.2 79.0]
+Verificado: ux_base
+Janela: 1440 × 900 pixels físicos
+Clique: Interface: 100% em [424.0 45.0]
+Clique: 125% em [716.6 451.5]
+Verificado: ux_scale_100
+Clique: Cancelar em [678.9 510.0]
+Verificado: ux_scale_100
+Clique: Interface: 100% em [424.0 45.0]
+Clique: 80% em [598.5 451.5]
+Clique: Aplicar em [606.0 511.0]
+Clique: Estúdio em [153.8 80.0]
+Clique: Modelagem em [354.6 124.5]
+Tecla Num2, Ctrl=false
+Clique: Enquadrar em [734.7 328.2]
+Captura GPU da janela: 1440-80-model.png
+Viewport 1272.0 × 626.4 pontos; escala 0.80
+Verificado: l7_viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Verificado: ux_viewport
+Atalho B com Modifiers { shift: true }
+Verificado: l7_refusal
+Pan e zoom reais no viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Clique: Dispensar em [1594.3 1093.8]
+Clique: Pintura em [437.6 124.5]
+Clique: Enquadrar peça em [950.8 297.5]
+Captura GPU da janela: 1440-80-paint.png
+Viewport 661.4 × 622.4 pontos; escala 0.80
+Verificado: l7_viewport
+Clique: Animação em [514.7 125.1]
+Viewport 1098.5 × 619.6 pontos; escala 0.80
+Verificado: l7_viewport
+Clique: Lógica em [220.6 80.6]
+Clique: Guia de lógica visual em [425.5 124.5]
+Verificado: l7_guide
+Clique: Fechar guia em [562.6 1082.4]
+Clique: Projeto em [86.8 46.8]
+Clique: Novo projeto em [102.1 101.0]
+Clique: Cancelar em [848.8 663.0]
+Verificado: ux_unchanged
+Janela: 1440 × 900 pixels físicos
+Clique: Interface: 80% em [419.3 45.5]
+Clique: 125% em [896.5 564.6]
+Verificado: ux_scale_80
+Clique: Cancelar em [859.9 623.0]
+Verificado: ux_scale_80
+Clique: Interface: 80% em [419.3 45.5]
+Clique: 100% em [836.4 564.6]
+Clique: Aplicar em [787.0 623.6]
+Clique: Estúdio em [153.2 79.0]
+Clique: Modelagem em [355.0 123.8]
+Tecla Num2, Ctrl=false
+Clique: Enquadrar em [727.5 327.2]
+Captura GPU da janela: 1440-100-model.png
+Viewport 912.0 × 402.2 pontos; escala 1.00
+Verificado: l7_viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Verificado: ux_viewport
+Atalho B com Modifiers { shift: true }
+Verificado: l7_refusal
+Pan e zoom reais no viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Clique: Dispensar em [1325.6 868.5]
+Clique: Pintura em [439.2 123.2]
+Clique: Enquadrar peça em [948.5 296.0]
+Captura GPU da janela: 1440-100-paint.png
+Viewport 524.2 × 398.8 pontos; escala 1.00
+Verificado: l7_viewport
+Clique: Animação em [515.8 124.2]
+Viewport 738.0 × 395.2 pontos; escala 1.00
+Verificado: l7_viewport
+Clique: Lógica em [220.8 80.0]
+Clique: Guia de lógica visual em [424.6 123.8]
+Verificado: l7_guide
+Clique: Fechar guia em [383.5 856.1]
+Clique: Projeto em [87.8 46.5]
+Clique: Novo projeto em [103.5 101.0]
+Clique: Cancelar em [667.6 549.1]
+Verificado: ux_unchanged
+Janela: 1440 × 900 pixels físicos
+Clique: Interface: 100% em [424.0 45.0]
+Clique: 125% em [716.6 451.5]
+Verificado: ux_scale_100
+Clique: Cancelar em [678.9 510.0]
+Verificado: ux_scale_100
+Clique: Interface: 100% em [424.0 45.0]
+Clique: 160% em [838.2 451.5]
+Clique: Aplicar em [606.0 511.0]
+Clique: Estúdio em [153.8 78.9]
+Clique: Modelagem em [355.5 123.6]
+Tecla Num2, Ctrl=false
+Clique: Enquadrar em [439.9 217.8]
+Captura GPU da janela: 1440-160-model.png
+Viewport 375.0 × 175.5 pontos; escala 1.60
+Verificado: l7_viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Verificado: ux_viewport
+Atalho B com Modifiers { shift: true }
+Verificado: l7_refusal
+Pan e zoom reais no viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Clique: Dispensar em [785.2 530.6]
+Clique: Pintura em [438.5 122.9]
+Clique: Enquadrar peça em [394.6 214.8]
+Captura GPU da janela: 1440-160-paint.png
+Viewport 243.8 × 178.5 pontos; escala 1.60
+Verificado: l7_viewport
+Clique: Animação em [515.3 123.9]
+Viewport 502.6 × 162.7 pontos; escala 1.60
+Verificado: l7_viewport
+Clique: Lógica em [221.6 79.8]
+Clique: Guia de lógica visual em [425.5 123.6]
+Verificado: l7_guide
+Clique: Fechar guia em [113.2 518.9]
+Clique: Projeto em [87.7 46.1]
+Clique: Novo projeto em [103.4 100.4]
+Clique: Cancelar em [398.5 380.5]
+Verificado: ux_unchanged
+Janela: 920 × 600 pixels físicos
+Clique: Interface: 160% em [399.8 33.0]
+Clique: 125% em [284.0 189.0]
+Verificado: ux_scale_160
+Clique: Cancelar em [245.8 247.4]
+Verificado: ux_scale_160
+Clique: Interface: 160% em [399.8 33.0]
+Clique: 80% em [166.1 189.0]
+Clique: Aplicar em [173.2 248.3]
+Clique: Estúdio em [153.8 80.0]
+Clique: Modelagem em [308.3 124.5]
+Tecla Num2, Ctrl=false
+Clique: Enquadrar em [688.4 328.2]
+Captura GPU da janela: 920-80-model.png
+Viewport 670.8 × 251.4 pontos; escala 0.80
+Verificado: l7_viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Verificado: ux_viewport
+Atalho B com Modifiers { shift: true }
+Verificado: l7_refusal
+Pan e zoom reais no viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Clique: Dispensar em [1034.6 718.8]
+Clique: Pintura em [391.3 124.5]
+Clique: Enquadrar peça em [237.8 336.0]
+Captura GPU da janela: 920-80-paint.png
+Viewport 539.5 × 208.9 pontos; escala 0.80
+Verificado: l7_viewport
+Clique: Animação em [468.4 125.1]
+Viewport 494.8 × 244.6 pontos; escala 0.80
+Verificado: l7_viewport
+Clique: Lógica em [220.6 80.6]
+Clique: Guia de lógica visual em [379.2 124.5]
+Verificado: l7_guide
+Clique: Fechar guia em [237.6 707.4]
+Clique: Projeto em [86.8 46.8]
+Clique: Novo projeto em [102.1 101.0]
+Clique: Cancelar em [523.8 475.5]
+Verificado: ux_unchanged
+Janela: 920 × 600 pixels físicos
+Clique: Interface: 80% em [419.3 45.5]
+Clique: 125% em [571.5 377.1]
+Verificado: ux_scale_80
+Clique: Cancelar em [534.9 435.5]
+Verificado: ux_scale_80
+Clique: Interface: 80% em [419.3 45.5]
+Clique: 100% em [511.4 377.1]
+Clique: Aplicar em [462.0 436.1]
+Clique: Estúdio em [153.2 79.0]
+Clique: Modelagem em [309.0 123.8]
+Tecla Num2, Ctrl=false
+Clique: Enquadrar em [393.5 217.8]
+Captura GPU da janela: 920-100-model.png
+Viewport 440.5 × 213.2 pontos; escala 1.00
+Verificado: l7_viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Verificado: ux_viewport
+Atalho B com Modifiers { shift: true }
+Verificado: l7_refusal
+Pan e zoom reais no viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Clique: Dispensar em [805.6 568.5]
+Clique: Pintura em [393.2 123.2]
+Clique: Enquadrar peça em [348.8 214.8]
+Captura GPU da janela: 920-100-paint.png
+Viewport 309.2 × 216.2 pontos; escala 1.00
+Verificado: l7_viewport
+Clique: Animação em [469.8 124.2]
+Viewport 569.0 × 193.8 pontos; escala 1.00
+Verificado: l7_viewport
+Clique: Lógica em [220.8 80.0]
+Clique: Guia de lógica visual em [378.6 123.8]
+Verificado: l7_guide
+Clique: Fechar guia em [123.5 556.1]
+Clique: Projeto em [87.8 46.5]
+Clique: Novo projeto em [103.5 101.0]
+Clique: Cancelar em [407.6 399.1]
+Verificado: ux_unchanged
+Janela: 920 × 600 pixels físicos
+Clique: Interface: 100% em [424.0 45.0]
+Clique: 125% em [456.6 301.5]
+Verificado: ux_scale_100
+Clique: Cancelar em [418.9 360.0]
+Verificado: ux_scale_100
+Clique: Interface: 100% em [424.0 45.0]
+Clique: 160% em [578.2 301.5]
+Clique: Aplicar em [346.0 361.0]
+Clique: Estúdio em [153.8 67.0]
+Clique: Modelagem em [52.7 109.4]
+Tecla Num2, Ctrl=false
+Clique: Enquadrar em [393.2 180.4]
+Captura GPU da janela: 920-160-model.png
+Viewport 384.7 × 166.4 pontos; escala 1.60
+Verificado: l7_viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Verificado: ux_viewport
+Atalho B com Modifiers { shift: true }
+Verificado: l7_refusal
+Pan e zoom reais no viewport
+Selecionar componente pelo ponto projetado na janela
+Verificado: l7_selection
+Clique: Dispensar em [460.2 343.1]
+Clique: Pintura em [309.9 108.8]
+Clique: Enquadrar peça em [347.8 177.4]
+Captura GPU da janela: 920-160-paint.png
+Viewport 253.5 × 169.4 pontos; escala 1.60
+Verificado: l7_viewport
+Clique: Animação em [386.8 109.8]
+Viewport 399.0 × 89.3 pontos; escala 1.60
+Verificado: l7_viewport
+Clique: Lógica em [221.6 67.9]
+Clique: Guia de lógica visual em [378.8 109.4]
+Verificado: l7_guide
+Clique: Fechar guia em [67.0 331.4]
+Clique: Projeto em [92.0 34.2]
+Clique: Novo projeto em [107.8 88.5]
+Clique: Cancelar em [236.0 286.8]
+Verificado: ux_unchanged
+Clique: Estúdio em [153.8 67.0]
+Clique: Animação em [212.5 109.8]
+Clique: + Quadro-chave em [426.4 302.8]
+Verificado: l7_key
+Rolar painel Tempo (s)
+Captura GPU da janela: 920-160-animation.png
+Verificado: l7_tracks
+Clique: Tubo em [281.9 350.9]
+Verificado: l7_track_selected
+Viewport 399.0 × 89.3 pontos; escala 1.60
+Verificado: l7_viewport
+Tecla Z, Ctrl=true
+Verificado: ux_unchanged
+Clique: Lógica em [221.6 67.9]
+Clique: Guia de lógica visual em [378.8 109.4]
+Captura GPU da janela: 920-160-guide.png
+Clique: Fechar guia em [67.0 331.4]
+Clique: Estúdio em [153.8 67.0]
+Clique: Modelagem em [52.7 109.4]
+Clique: + Objeto em [130.9 103.4]
+Clique: Tubo em [119.3 195.4]
+Captura GPU da janela: 920-160-primitive.png
+Atalho Escape com Modifiers { alt: true, shift: true }
+Verificado: ux_unchanged
+Clique: Interface: 160% em [399.8 33.0]
+Clique: 80% em [166.1 189.0]
+Captura GPU da janela: 920-160-pending-preference.png
+Clique: Cancelar em [245.8 247.4]
+Verificado: ux_scale_160
+Capturas: ["1440-80-model.png", "1440-80-paint.png", "1440-100-model.png", "1440-100-paint.png", "1440-160-model.png", "1440-160-paint.png", "920-80-model.png", "920-80-paint.png", "920-100-model.png", "920-100-paint.png", "920-160-model.png", "920-160-paint.png", "920-160-animation.png", "920-160-guide.png", "920-160-primitive.png", "920-160-pending-preference.png"]

@@ -156,24 +156,7 @@ impl Editor {
             self.refresh_texture(&id);
         }
     }
-    pub(super) fn paint_ui(&mut self, ui: &mut egui::Ui) {
-        if !ui.input(|i| i.pointer.primary_down()) {
-            self.studio.last_pixel = None;
-        }
-        let Some(_entity) = self.selected.clone() else {
-            self.viewport(ui, false);
-            return;
-        };
-        if let Some(mut entity) = self.scene().entity(&_entity).cloned() {
-            let interface = !entity.has_geometry() && entity.ui.is_some();
-            self.texture_controls(ui, &mut entity, interface);
-            if let Some(original) = self.scene_mut().entity_mut(&_entity) {
-                *original = entity;
-            }
-        }
-        if let Some(id) = self.texture_id() {
-            self.ensure_texture(&id);
-        }
+    fn paint_options(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.studio.tool, PaintTool::Brush, "Pincel");
             ui.selectable_value(&mut self.studio.tool, PaintTool::Fill, "Preencher região");
@@ -233,6 +216,49 @@ impl Editor {
                 }
             }
         });
+    }
+    pub(super) fn paint_ui(&mut self, ui: &mut egui::Ui) {
+        let compact = ui.available_width() < 620. || ui.available_height() < 340.;
+        if !ui.input(|i| i.pointer.primary_down()) {
+            self.studio.last_pixel = None;
+        }
+        let Some(_entity) = self.selected.clone() else {
+            self.viewport(ui, false);
+            return;
+        };
+        if let Some(mut entity) = self.scene().entity(&_entity).cloned() {
+            let interface = !entity.has_geometry() && entity.ui.is_some();
+            if compact {
+                ui.menu_button("Textura", |ui| {
+                    self.texture_controls(ui, &mut entity, interface)
+                });
+            } else {
+                self.texture_controls(ui, &mut entity, interface);
+            }
+            if let Some(original) = self.scene_mut().entity_mut(&_entity) {
+                *original = entity;
+            }
+        }
+        if let Some(id) = self.texture_id() {
+            self.ensure_texture(&id);
+        }
+        if compact {
+            ui.horizontal_wrapped(|ui| {
+                let label = match self.studio.tool {
+                    PaintTool::Brush => "Pincel",
+                    PaintTool::Fill => "Preencher região",
+                    PaintTool::Sample => "Conta-gotas",
+                    PaintTool::Select => "Selecionar faces",
+                };
+                ui.menu_button(label, |ui| self.paint_options(ui));
+                ui.color_edit_button_srgba_unmultiplied(&mut self.studio.color);
+                if ui.button("Enquadrar peça").clicked() {
+                    self.frame_selection();
+                }
+            });
+        } else {
+            self.paint_options(ui);
+        }
         let Some(id) = self.texture_id() else {
             self.viewport(ui, true);
             return;
@@ -242,7 +268,12 @@ impl Editor {
             ui.group(|ui|{ui.colored_label(Color32::from_rgb(232,190,113),format!("Esta textura está vinculada a {uses} peças ou imagens. A pintura afetará todas essas referências."));ui.horizontal(|ui|{if ui.button("Criar cópia independente").clicked(){self.copy_texture(&id)}
 if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=Some(id.clone());}});});
         }
-        let width = (ui.available_width() * 0.48).max(100.);
+        let width = (ui.available_width() * if compact { 0.35 } else { 0.48 }).max(100.);
+        let max_width = if compact {
+            width
+        } else {
+            (ui.available_width() * 0.65).max(100.)
+        };
         let mesh = self.model_source().ok();
         let key = self
             .state
@@ -252,7 +283,7 @@ if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=S
         egui::SidePanel::left("paint_pixels")
             .resizable(true)
             .default_width(width)
-            .width_range(100.0..=1200.0)
+            .width_range(100.0..=max_width)
             .show_inside(ui, |ui| {
                 if let Some(image) = self.state.images.get(&id) {
                     if self.studio.texture_key != key || self.studio.texture.is_none() {

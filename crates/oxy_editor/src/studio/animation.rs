@@ -655,7 +655,9 @@ impl Editor {
             }
         }
         // Keep space for the shared viewport toolbar and a useful drawing area.
-        let timeline_max = if compact {
+        let timeline_max = if Self::compact_layout(ui.ctx()) {
+            (ui.available_height() * 0.35).clamp(80., 120.)
+        } else if compact {
             (ui.available_height() * 0.45)
                 .max(180.0)
                 .min((ui.available_height() - 155.0).max(120.0))
@@ -724,93 +726,212 @@ impl Editor {
         self.animation_reference_dialog(ui.ctx());
     }
     fn animation_toolbar(&mut self, ui: &mut egui::Ui, clip: &mut Clip, compact: bool) {
+        let scope = self
+            .studio
+            .owner
+            .as_deref()
+            .map(|id| self.scene().descendants(id))
+            .unwrap_or_default();
+        let selected = self.selected.clone().filter(|id| scope.contains(id));
+        if Self::compact_layout(ui.ctx()) {
+            // Keep a full, scrollable strip of tracks below this one-line toolbar.
+            // The menu retains every action without making the viewport progressively smaller.
+            ui.horizontal(|ui| {
+                ui.menu_button("Controles", |ui| {
+                    ui.set_width(300.0_f32.min(ui.ctx().content_rect().width() - 40.0));
+                    egui::ScrollArea::vertical()
+                        .max_height((ui.ctx().content_rect().height() * 0.7).max(120.0))
+                        .show(ui, |ui| {
+                            ui.strong("LINHA DO TEMPO");
+                            ui.label(&clip.name);
+                            ui.horizontal_wrapped(|ui| self.animation_duration_controls(ui, clip));
+                            ui.horizontal_wrapped(|ui| {
+                                self.animation_playback_controls(ui, clip, false)
+                            });
+                            ui.separator();
+                            ui.horizontal_wrapped(|ui| {
+                                self.animation_record_all_button(ui, clip, &scope);
+                                self.animation_paste_key_button(ui, clip, selected.as_deref());
+                            });
+                            ui.separator();
+                            ui.horizontal_wrapped(|ui| self.animation_event_controls(ui, clip));
+                        });
+                })
+                .response
+                .on_hover_text("Reprodução, duração, repetição, poses alteradas e eventos.");
+                self.animation_cursor_control(ui, clip);
+                self.animation_record_key_button(ui, clip, selected.as_deref());
+            });
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.strong("LINHA DO TEMPO");
             ui.separator();
             if !compact {
                 ui.label(&clip.name);
             }
-            let end = clip
-                .tracks
-                .iter()
-                .flat_map(|track| track.keyframes.iter().map(|key| key.time))
-                .chain(clip.events.iter().map(|event| event.time))
-                .fold(
-                    self.studio.animation.draft_time.unwrap_or(0.1).max(0.1),
-                    f32::max,
-                );
-            ui.label("Duração");
-            ui.add(
-                egui::DragValue::new(&mut clip.duration)
-                    .range(end..=3600.0)
-                    .speed(0.05)
+            self.animation_duration_controls(ui, clip);
+        });
+        ui.horizontal_wrapped(|ui| {
+            self.animation_playback_controls(ui, clip, compact);
+            self.animation_cursor_control(ui, clip);
+            self.animation_record_all_button(ui, clip, &scope);
+            self.animation_record_key_button(ui, clip, selected.as_deref());
+            self.animation_paste_key_button(ui, clip, selected.as_deref());
+        });
+    }
+    fn animation_duration_controls(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
+        let end = clip
+            .tracks
+            .iter()
+            .flat_map(|track| track.keyframes.iter().map(|key| key.time))
+            .chain(clip.events.iter().map(|event| event.time))
+            .fold(
+                self.studio.animation.draft_time.unwrap_or(0.1).max(0.1),
+                f32::max,
+            );
+        ui.label("Duração");
+        ui.add(
+            egui::DragValue::new(&mut clip.duration)
+                .range(end..=3600.0)
+                .speed(0.05)
+                .suffix(" s"),
+        )
+        .on_hover_text(
+            "A duração inclui o último quadro e evento. Mova-os antes de encurtar a animação.",
+        );
+        ui.checkbox(&mut clip.looping, "Repetir").on_hover_text(
+            "Ao chegar ao fim, volta ao início e emite novamente os eventos atravessados.",
+        );
+    }
+    fn animation_playback_controls(&mut self, ui: &mut egui::Ui, clip: &mut Clip, compact: bool) {
+        if ui
+            .add_enabled(
+                self.studio.animation.drafts.is_empty(),
+                egui::Button::new(if self.studio.playing {
+                    "Ⅱ Pausar"
+                } else {
+                    "▶ Reproduzir"
+                }),
+            )
+            .on_hover_text("Grave ou descarte poses provisórias antes de reproduzir.")
+            .clicked()
+        {
+            self.studio.playing = !self.studio.playing;
+            self.studio.animation.preview = true;
+            if self.studio.animation.time >= clip.duration {
+                self.studio.animation.time = 0.0;
+            }
+        }
+        if ui
+            .add_enabled(
+                self.studio.animation.drafts.is_empty(),
+                egui::Button::new(if compact { "■" } else { "■ Início" }),
+            )
+            .on_hover_text("Grave ou descarte as poses alteradas antes de mudar o cursor.")
+            .clicked()
+        {
+            self.studio.playing = false;
+            self.studio.animation.time = 0.0;
+            self.studio.animation.preview = true;
+        }
+    }
+    fn animation_cursor_control(&mut self, ui: &mut egui::Ui, clip: &Clip) {
+        ui.label("Cursor");
+        if ui
+            .add_enabled(
+                self.studio.animation.drafts.is_empty(),
+                egui::DragValue::new(&mut self.studio.animation.time)
+                    .range(0.0..=clip.duration)
+                    .speed(1.0 / 60.0)
                     .suffix(" s"),
             )
             .on_hover_text(
-                "A duração inclui o último quadro e evento. Mova-os antes de encurtar a animação.",
-            );
-            ui.checkbox(&mut clip.looping, "Repetir").on_hover_text(
-                "Ao chegar ao fim, volta ao início e emite novamente os eventos atravessados.",
-            );
-        });
-        ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(self.studio.animation.drafts.is_empty(), egui::Button::new(if self.studio.playing { "Ⅱ Pausar" } else { "▶ Reproduzir" })).on_hover_text("Grave ou descarte poses provisórias antes de reproduzir.").clicked() {
-                self.studio.playing = !self.studio.playing; self.studio.animation.preview = true;
-                if self.studio.animation.time >= clip.duration { self.studio.animation.time = 0.0; }
-            }
-            if ui.add_enabled(self.studio.animation.drafts.is_empty(),egui::Button::new(if compact { "■" } else { "■ Início" })).on_hover_text("Grave ou descarte as poses alteradas antes de mudar o cursor.").clicked() { self.studio.playing = false; self.studio.animation.time = 0.0; self.studio.animation.preview = true; }
-            ui.label("Cursor");
-            if ui.add_enabled(self.studio.animation.drafts.is_empty(),egui::DragValue::new(&mut self.studio.animation.time).range(0.0..=clip.duration).speed(1.0 / 60.0).suffix(" s")).on_hover_text("O cursor fica preso ao tempo da pose provisória até gravar ou descartar.").changed() { self.studio.playing = false; self.studio.animation.preview = true; }
-            let scope = self.studio.owner.as_deref().map(|id| self.scene().descendants(id)).unwrap_or_default();
-            let selected = self.selected.clone().filter(|id| scope.contains(id));
-            if ui.add_enabled(!self.studio.animation.drafts.is_empty(),egui::Button::new("Gravar poses alteradas")).on_hover_text("Grava todas as peças e grupos alterados no tempo da pose provisória, em uma operação de desfazer.").clicked() && let Err(e)=record_drafts(&mut self.studio.animation,clip,&scope){self.studio.animation.message=e;}
-            if ui.add_enabled(selected.is_some(), egui::Button::new("+ Quadro-chave")).on_hover_text("Grava posição, rotação e escala da peça selecionada no cursor, incluindo a pose provisória.").clicked()
-                && let Some(target) = &selected && let Some(transform) = self.animation_draft_transform(target) {
+                "O cursor fica preso ao tempo da pose provisória até gravar ou descartar.",
+            )
+            .changed()
+        {
+            self.studio.playing = false;
+            self.studio.animation.preview = true;
+        }
+    }
+    fn animation_record_all_button(&mut self, ui: &mut egui::Ui, clip: &mut Clip, scope: &[Id]) {
+        if ui.add_enabled(!self.studio.animation.drafts.is_empty(),egui::Button::new("Gravar poses alteradas")).on_hover_text("Grava todas as peças e grupos alterados no tempo da pose provisória, em uma operação de desfazer.").clicked() && let Err(e)=record_drafts(&mut self.studio.animation,clip,scope){self.studio.animation.message=e;}
+    }
+    fn animation_record_key_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        clip: &mut Clip,
+        selected: Option<&str>,
+    ) {
+        if ui.add_enabled(selected.is_some(), egui::Button::new("+ Quadro-chave")).on_hover_text("Grava posição, rotação e escala da peça selecionada no cursor, incluindo a pose provisória.").clicked()
+                && let Some(target) = selected && let Some(transform) = self.animation_draft_transform(target) {
                 clip.insert_key(target, Keyframe { time: self.studio.animation.time, transform, interpolation: Interpolation::Linear });
-                self.studio.animation.drafts.remove(target); self.studio.animation.selection = TimelineSelection::Key { target: target.clone(), time: self.studio.animation.time };
+                self.studio.animation.drafts.remove(target); self.studio.animation.selection = TimelineSelection::Key { target: target.to_owned(), time: self.studio.animation.time };
                 self.studio.animation.preview = true; self.studio.animation.message.clear();
             }
-            if ui.add_enabled(selected.is_some() && self.studio.animation.copied_key.is_some(), egui::Button::new("Colar quadro")).clicked()
-                && let (Some(target), Some(mut key)) = (selected, self.studio.animation.copied_key.clone()) {
-                key.time = self.studio.animation.time; clip.insert_key(&target, key);
-                self.studio.animation.selection = TimelineSelection::Key { target, time: self.studio.animation.time }; self.studio.animation.preview = true;
-            }
-        });
+    }
+    fn animation_paste_key_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        clip: &mut Clip,
+        selected: Option<&str>,
+    ) {
+        if ui
+            .add_enabled(
+                selected.is_some() && self.studio.animation.copied_key.is_some(),
+                egui::Button::new("Colar quadro"),
+            )
+            .clicked()
+            && let (Some(target), Some(mut key)) =
+                (selected, self.studio.animation.copied_key.clone())
+        {
+            key.time = self.studio.animation.time;
+            clip.insert_key(target, key);
+            self.studio.animation.selection = TimelineSelection::Key {
+                target: target.to_owned(),
+                time: self.studio.animation.time,
+            };
+            self.studio.animation.preview = true;
+        }
+    }
+    fn animation_event_controls(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
+        ui.label("EVENTOS").on_hover_text("Grupos também podem ser articulações. Cada quadro reúne posição, rotação e escala; expandir mostra os três canais.");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.studio.animation.marker_name)
+                .desired_width(110.0)
+                .hint_text("Nome do evento"),
+        );
+        if ui
+            .add_enabled(
+                !self.studio.animation.marker_name.trim().is_empty(),
+                egui::Button::new("+ Evento no cursor"),
+            )
+            .clicked()
+        {
+            clip.events.push(AnimationEvent {
+                time: self.studio.animation.time,
+                name: self.studio.animation.marker_name.trim().into(),
+            });
+            self.studio.animation.selection = TimelineSelection::Event(clip.events.len() - 1);
+        }
+        if ui
+            .add_enabled(
+                self.studio.animation.copied_event.is_some(),
+                egui::Button::new("Colar evento"),
+            )
+            .clicked()
+            && let Some(mut event) = self.studio.animation.copied_event.clone()
+        {
+            event.time = self.studio.animation.time;
+            clip.events.push(event);
+            self.studio.animation.selection = TimelineSelection::Event(clip.events.len() - 1);
+        }
     }
     fn animation_timeline(&mut self, ui: &mut egui::Ui, clip: &mut Clip, compact: bool) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("EVENTOS").on_hover_text("Grupos também podem ser articulações. Cada quadro reúne posição, rotação e escala; expandir mostra os três canais.");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.studio.animation.marker_name)
-                    .desired_width(110.0)
-                    .hint_text("Nome do evento"),
-            );
-            if ui
-                .add_enabled(
-                    !self.studio.animation.marker_name.trim().is_empty(),
-                    egui::Button::new("+ Evento no cursor"),
-                )
-                .clicked()
-            {
-                clip.events.push(AnimationEvent {
-                    time: self.studio.animation.time,
-                    name: self.studio.animation.marker_name.trim().into(),
-                });
-                self.studio.animation.selection = TimelineSelection::Event(clip.events.len() - 1);
-            }
-            if ui
-                .add_enabled(
-                    self.studio.animation.copied_event.is_some(),
-                    egui::Button::new("Colar evento"),
-                )
-                .clicked()
-                && let Some(mut event) = self.studio.animation.copied_event.clone()
-            {
-                event.time = self.studio.animation.time;
-                clip.events.push(event);
-                self.studio.animation.selection = TimelineSelection::Event(clip.events.len() - 1);
-            }
-        });
+        if !Self::compact_layout(ui.ctx()) {
+            ui.horizontal_wrapped(|ui| self.animation_event_controls(ui, clip));
+        }
         if !compact {
             ui.small("Grupos também podem ser articulações. Cada quadro reúne posição, rotação e escala; expandir mostra os três canais.");
         }
@@ -828,6 +949,10 @@ impl Editor {
             .collect();
         egui::ScrollArea::vertical()
             .id_salt("animation_tracks")
+            // The default 64-point minimum can exceed the remaining compact timeline.
+            // Let the scroll viewport use its actual height so its last row is reachable.
+            .min_scrolled_height(0.0)
+            .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_sized([160.0, 24.0], egui::Label::new("Tempo (s)"));

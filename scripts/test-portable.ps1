@@ -1,6 +1,17 @@
 param([Parameter(Mandatory)][string]$Zip, [switch]$ContentOnly)
 $ErrorActionPreference = 'Stop'
 $zipPath = (Resolve-Path -LiteralPath $Zip).Path
+$checksumPath = "$zipPath.sha256"
+if (Test-Path -LiteralPath $checksumPath -PathType Leaf) {
+    $checksum = (Get-Content -LiteralPath $checksumPath -Raw).Trim()
+    if ($checksum -notmatch '^([0-9a-fA-F]{64})\s+\*?(.+)$') { throw 'Checksum SHA-256 inválido.' }
+    $expectedHash = $Matches[1]
+    $expectedName = $Matches[2]
+    if ($expectedName -ne [IO.Path]::GetFileName($zipPath) -or (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash -ne $expectedHash) { throw 'ZIP diferente do checksum publicado; extração cancelada.' }
+    Write-Host 'Checksum SHA-256 conferido.'
+} else {
+    Write-Warning 'Arquivo .zip.sha256 ausente; a integridade do ZIP não será verificada por checksum.'
+}
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('OXY portable test ' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 Expand-Archive -LiteralPath $zipPath -DestinationPath $testRoot
@@ -8,12 +19,14 @@ $editors = @(Get-ChildItem -LiteralPath $testRoot -Recurse -Filter 'OXY Engine.e
 if ($editors.Count -ne 1) { throw 'O ZIP deve conter exatamente um OXY Engine.exe.' }
 $editor = $editors[0]
 $package = $editor.DirectoryName
-foreach ($file in @('oxy_player.exe','data/project.oxy.json','LEIA-ME.txt','LICENSE')) {
+foreach ($file in @('oxy_player.exe','data/project.oxy.json','LEIA-ME.txt','LICENSE','VERSAO.txt')) {
     if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo ausente: $file" }
 }
 if (Get-ChildItem -LiteralPath $package -Filter '*.cmd') { throw 'O pacote portátil não deve depender de launchers .cmd.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName)
 if ($version.ProductName -ne 'OXY Engine' -or $version.OriginalFilename -ne 'OXY Engine.exe' -or !$version.ProductVersion) { throw 'Metadados do editor inválidos.' }
+$versionMarker = (Get-Content -LiteralPath (Join-Path $package 'VERSAO.txt') -Raw).Trim()
+if ($versionMarker -ne "OXY Engine $($version.ProductVersion)") { throw 'VERSAO.txt não corresponde ao executável incluído.' }
 # Read PE headers/imports with .NET only: the validation script itself needs no Rust/SDK.
 function Assert-PortablePe([string]$Path) {
     $bytes = [IO.File]::ReadAllBytes($Path)

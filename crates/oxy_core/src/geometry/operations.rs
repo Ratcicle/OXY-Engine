@@ -4,7 +4,7 @@ use super::{
     selection::{Mode, Selection},
 };
 use glam::{Vec2, Vec3};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct Output {
     pub mesh: EditableMesh,
@@ -52,6 +52,74 @@ fn edge(data: &mut MeshData, a: Id, b: Id) -> Result<Id, String> {
     Ok(id)
 }
 
+fn boundary_direction(mesh: &EditableMesh, id: Id) -> Option<[Id; 2]> {
+    let i = mesh.prepared().edges[&id];
+    mesh.prepared().incident_faces[i].first().map(|&(f, c)| {
+        let face = &mesh.data().faces[f];
+        [
+            face.corners[(c + 1) % face.corners.len()].vertex,
+            face.corners[c].vertex,
+        ]
+    })
+}
+
+/// A strip must enter/leave each shared vertex in opposite directions. Existing faces anchor
+/// the winding; otherwise the first selected edge deterministically orients its whole component.
+fn strip_directions(
+    mesh: &EditableMesh,
+    ids: &[Id],
+    neighbors: &HashMap<Id, Vec<Id>>,
+) -> Result<HashMap<Id, [Id; 2]>, String> {
+    let mut directions = HashMap::new();
+    // Process anchors first, so a loose edge cannot incorrectly reject a solvable component.
+    for &seed in ids
+        .iter()
+        .filter(|&&id| boundary_direction(mesh, id).is_some())
+        .chain(ids.iter())
+    {
+        if directions.contains_key(&seed) {
+            continue;
+        }
+        directions.insert(
+            seed,
+            boundary_direction(mesh, seed).unwrap_or(mesh.edge(seed).unwrap().vertices),
+        );
+        let mut queue = VecDeque::from([seed]);
+        while let Some(id) = queue.pop_front() {
+            let ends = directions[&id];
+            for vertex in ends {
+                for &next in &neighbors[&vertex] {
+                    if next == id {
+                        continue;
+                    }
+                    let next_ends = mesh.edge(next).unwrap().vertices;
+                    let other = if next_ends[0] == vertex {
+                        next_ends[1]
+                    } else {
+                        next_ends[0]
+                    };
+                    let proposed = if vertex == ends[0] {
+                        [other, vertex]
+                    } else {
+                        [vertex, other]
+                    };
+                    if boundary_direction(mesh, next).is_some_and(|v| v != proposed)
+                        || directions.get(&next).is_some_and(|&v| v != proposed)
+                    {
+                        return Err("As faces incidentes impõem sentidos incompatíveis à faixa. Inverta a orientação das faces afetadas ou extruda cadeias separadas.".into());
+                    }
+                    if let std::collections::hash_map::Entry::Vacant(entry) = directions.entry(next)
+                    {
+                        entry.insert(proposed);
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+    }
+    Ok(directions)
+}
+
 pub fn extrude(
     mesh: &EditableMesh,
     selection: &Selection,
@@ -76,38 +144,30 @@ pub fn extrude(
             }
         }
         Mode::Edge => {
-            let mut degree = HashMap::<Id, usize>::new();
+            let mut neighbors = HashMap::<Id, Vec<Id>>::new();
             for &id in &selection.ids {
                 let i = mesh.prepared().edges[&id];
                 if mesh.prepared().incident_faces[i].len() > 1 {
                     return Err("Extrusão de aresta aceita bordas abertas ou arestas soltas; esta aresta já possui duas faces.".into());
                 }
                 for v in mesh.data().edges[i].vertices {
-                    *degree.entry(v).or_default() += 1;
+                    neighbors.entry(v).or_default().push(id);
                 }
             }
-            if degree.values().any(|&v| v > 2) {
+            if neighbors.values().any(|v| v.len() > 2) {
                 return Err("Selecione uma cadeia ou laço sem ramificações.".into());
             }
+            let directions = strip_directions(mesh, &selection.ids, &neighbors)?;
             let mut copies = HashMap::new();
             // Preserve document order; hash tables only resolve IDs.
             for v in &mesh.data().vertices {
-                if degree.contains_key(&v.id) {
+                if neighbors.contains_key(&v.id) {
                     copies.insert(v.id, data.add_vertex(Vec3::from(v.position) + delta)?);
                 }
             }
             next.ids.clear();
             for &id in &selection.ids {
-                let i = mesh.prepared().edges[&id];
-                let mut ends = mesh.data().edges[i].vertices;
-                if let Some(&(f, c)) = mesh.prepared().incident_faces[i].first() {
-                    let face = &mesh.data().faces[f];
-                    ends = [
-                        face.corners[(c + 1) % face.corners.len()].vertex,
-                        face.corners[c].vertex,
-                    ];
-                }
-                let [a, b] = ends;
+                let [a, b] = directions[&id];
                 let [aa, bb] = [copies[&a], copies[&b]];
                 new_faces.push(data.add_face(corners(&[a, b, bb, aa]))?);
                 next.ids.push(edge(&mut data, aa, bb)?);

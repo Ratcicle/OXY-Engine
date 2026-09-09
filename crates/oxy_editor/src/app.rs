@@ -48,6 +48,14 @@ pub enum Tab {
     Studio,
     Logic,
 }
+#[derive(Clone, Copy, PartialEq, Default)]
+enum CompactPanel {
+    #[default]
+    Hierarchy,
+    Properties,
+    Library,
+    None,
+}
 #[derive(Clone, Copy, PartialEq)]
 enum Gizmo {
     Move,
@@ -87,6 +95,7 @@ pub struct Editor {
     scene_dialog: Option<scenes::SceneDialog>,
     logic_ui: logic::LogicUi,
     modeling: modeling::ModelState,
+    compact_panel: CompactPanel,
     pub state: Snapshot,
     history: CommandHistory,
     pub path: Option<PathBuf>,
@@ -159,6 +168,10 @@ impl Editor {
         }
         Ok(())
     }
+    #[cfg(test)]
+    pub(crate) fn qa_console_open(&self) -> bool {
+        self.console
+    }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals = egui::Visuals::dark();
@@ -196,6 +209,7 @@ impl Editor {
             scene_dialog: None,
             logic_ui: Default::default(),
             modeling: Default::default(),
+            compact_panel: Default::default(),
             history: CommandHistory::new(),
             state,
             path: None,
@@ -1097,13 +1111,22 @@ impl eframe::App for Editor {
         }
         self.toolbar(ctx);
         self.console(ctx);
+        let compact = Self::compact_layout(ctx);
+        let panel = if self.mesh_operation_active() {
+            CompactPanel::Properties
+        } else {
+            self.compact_panel
+        };
         match self.tab {
             Tab::Scene | Tab::Studio => {
-                if !(self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation) {
+                let animation = self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation;
+                if !animation && (!compact || panel == CompactPanel::Library) {
                     self.library(ctx);
                 }
-                self.hierarchy(ctx);
-                if !(self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation) {
+                if !compact || (panel == CompactPanel::Hierarchy && !animation) {
+                    self.hierarchy(ctx);
+                }
+                if !animation && (!compact || panel == CompactPanel::Properties) {
                     self.properties(ctx);
                 }
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -1115,7 +1138,9 @@ impl eframe::App for Editor {
                 });
             }
             Tab::Logic => {
-                self.hierarchy(ctx);
+                if !compact || panel == CompactPanel::Hierarchy {
+                    self.hierarchy(ctx);
+                }
                 egui::CentralPanel::default().show(ctx, |ui| {
                     self.logic_toolbar(ui);
                     let objects: Vec<_> = self

@@ -3,4 +3,5 @@
 /dist/
 /artifacts/*.log
 /qa/**/native-qa-labels.txt
+/qa/**/project/
 *.tmp

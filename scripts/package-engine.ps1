@@ -22,15 +22,23 @@ Extraia o ZIP inteiro em uma pasta gravável e abra OXY Engine.exe.
 Não é necessário instalar Rust, Cargo ou usar um arquivo .cmd.
 Windows 10/11 x64 e um driver gráfico compatível com DirectX 12 ou Vulkan.
 
-Novo projeto: comece uma cena e use Salvar para escolher sua pasta.
+Novo projeto: escolha a primeira cena 2D/3D e use Salvar para escolher sua pasta.
 Abrir projeto: escolha project.oxy.json de um projeto existente.
 Projetos recentes: lista local em %LOCALAPPDATA%\OXY Engine.
 Projeto de exemplo: sala 2D, oficina 3D e cartas; Salvar cria sua cópia.
+Ajuda > Guia de lógica visual: consulte os nós e abra cópias de cinco receitas
+editáveis, disponíveis offline dentro do executável.
+Estúdio > Modelagem: crie formas, edite faces/arestas/vértices, pinte e anime
+peças rígidas. Enter confirma operações; Esc cancela. F1 abre ajuda contextual.
+Interface: ajuste a escala pendente e clique Aplicar; Cancelar mantém a atual.
 Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
-Projetos antigos (schema 1) são convertidos em memória. O novo schema 2 requer esta versão da OXY Engine; ao salvar convertido, um backup do documento original é preservado.
+Projetos antigos (schema 1) são convertidos em memória, sem alterar o original
+ao abrir. Ao salvar convertido, a OXY preserva um backup do documento original.
+O novo schema 2 requer OXY Engine 0.2.0 ou leitor compatível; não abra esses
+documentos em versões antigas que desconheçam ações de entrada e malhas editáveis.
 Sem instalador, atualização automática ou assinatura digital.
 "@
 [IO.File]::WriteAllText((Join-Path $destinationPath 'LEIA-ME.txt'), $instructions, [Text.Encoding]::UTF8)

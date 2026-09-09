@@ -1,14 +1,14 @@
 Concluído: true
 Erro: None
 Selecionar hierarquia: Peça pintável
-Clique: Estúdio
-Clique: Pintura
-Clique: Enquadrar peça
+Clique: Estúdio em [153.2 79.0]
+Clique: Pintura em [438.2 123.2]
+Clique: Enquadrar peça em [947.5 296.0]
 Verificado: m6_shared
-Clique: Criar cópia independente
+Clique: Criar cópia independente em [646.6 259.8]
 Reproduzir 5 quadros sem entrada
 Verificado: m6_base
-Clique: Selecionar faces
+Clique: Selecionar faces em [570.9 292.8]
 Clique real na face antiga pela imagem
 Verificado: m6_selected_old
 Captura GPU da janela: uv-old-face.png
@@ -18,7 +18,7 @@ Captura GPU da janela: uv-new-face.png
 Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
 Repouso medido: 1 atualizações espontâneas em 500 ms
 Verificado: m6_cached
-Clique: Pincel
+Clique: Pincel em [256.0 292.8]
 Clique real na face nova pela peça
 Reproduzir 5 quadros sem entrada
 Verificado: m6_painted
@@ -30,8 +30,8 @@ Verificado: m6_redo
 Tecla S, Ctrl=true
 Reabrir projeto no editor e comparar todos os documentos
 Selecionar hierarquia: Peça pintável
-Clique: Estúdio
-Clique: Pintura
-Clique: Enquadrar peça
+Clique: Estúdio em [153.2 79.0]
+Clique: Pintura em [438.2 123.2]
+Clique: Enquadrar peça em [947.5 296.0]
 Captura GPU da janela: painted-reopened.png
 Capturas: ["uv-old-face.png", "uv-new-face.png", "new-face-painted.png", "painted-reopened.png"]

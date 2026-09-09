@@ -2,7 +2,9 @@
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
 mod cuts;
+mod final_flow;
 mod input_guide;
+mod layout;
 mod mesh;
 mod modeling;
 mod painting;
@@ -21,6 +23,7 @@ use std::{
 
 #[derive(Clone)]
 enum Action {
+    Final(&'static str),
     Click(&'static str),
     SelectEntity(&'static str),
     ControlSelect(&'static str),
@@ -29,6 +32,7 @@ enum Action {
     Reparent(&'static str, &'static str),
     EditValue(&'static str, &'static str),
     Scroll(&'static str, f32),
+    ScrollAt(&'static str, f32),
     DeleteTextureAsset,
     OptionalClick(&'static str),
     Text(&'static str),
@@ -120,6 +124,7 @@ struct NativeQa {
     wait: usize,
     missing: usize,
     pending_shot: Option<String>,
+    shot_wait: Option<(&'static str, Instant)>,
     base: Option<Snapshot>,
     before_paint: Option<Snapshot>,
     after_paint: Option<Snapshot>,
@@ -360,7 +365,7 @@ impl NativeQa {
             Action::Click("+ Quadro-chave"),
             Action::Check("authored_clips"),
             Action::EditValue("Cursor", "0.5"),
-            Action::Click("Mover (W)"),
+            Action::Key(Key::W, false),
             Action::Check("draft_baseline"),
             Action::GizmoDelta(35.),
             Action::Check("group_draft"),
@@ -403,6 +408,7 @@ impl NativeQa {
             wait: 15,
             missing: 0,
             pending_shot: None,
+            shot_wait: None,
             base: None,
             before_paint: None,
             after_paint: None,
@@ -531,6 +537,12 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("f7_") {
+            return self.check_final_flow(label);
+        }
+        if label.starts_with("l7_") {
+            return self.check_layout(label);
+        }
         if label.starts_with("m6_") {
             return self.check_paint_mesh(label);
         }
@@ -1543,12 +1555,18 @@ impl NativeQa {
                 self.key(Key::Enter, false);
                 description = format!("Editar campo visível: {label} = {value}");
             }
-            Action::Scroll(label, delta) => {
+            Action::Scroll(label, delta) | Action::ScrollAt(label, delta) => {
                 let anchor = self
                     .find(label, false)
                     .ok_or_else(|| format!("Área para rolagem não encontrada: {label}"))?;
-                self.events
-                    .push_back(vec![Event::PointerMoved(anchor + Vec2::new(0., 110.))]);
+                self.events.push_back(vec![Event::PointerMoved(
+                    anchor
+                        + if matches!(action, Action::ScrollAt(..)) {
+                            Vec2::ZERO
+                        } else {
+                            Vec2::new(0., 110.)
+                        },
+                )]);
                 self.events.push_back(vec![Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta: Vec2::new(0., delta),
@@ -1683,6 +1701,11 @@ impl NativeQa {
                 description = format!("Redimensionar: {size:?}");
             }
             Action::Screenshot(name) => {
+                let (_, start) = self.shot_wait.get_or_insert((name, Instant::now()));
+                if start.elapsed() < Duration::from_millis(180) {
+                    return Ok(false);
+                }
+                self.shot_wait = None;
                 self.pending_shot = Some(name.into());
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
                     name.to_owned(),
@@ -1699,6 +1722,10 @@ impl NativeQa {
             Action::Check(label) => {
                 self.check(label)?;
                 description = format!("Verificado: {label}");
+            }
+            Action::Final(label) => {
+                self.final_action(ctx, label)?;
+                description = format!("Fluxo integrado: {label}");
             }
             Action::SelectNode(label) => {
                 let point = self.find(label, true).ok_or("Nó não visível no grafo")?;

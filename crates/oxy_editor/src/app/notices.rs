@@ -82,9 +82,13 @@ impl Editor {
                     (entry.expires - now).max(0.01),
                 ));
             }
-            if !ctx.input(|i| i.pointer.any_down()) {
+            {
+                // Keep the buttons registered on both press and release. Omitting the area
+                // while a pointer is down prevents Dismiss/Details from receiving a click.
                 egui::Area::new("operation_notice".into())
-                    .order(egui::Order::Foreground)
+                    // Above the scene, below modal dialogs and their input-blocking backdrop.
+                    // A long notice must never cover Cancel/Apply in a small scaled window.
+                    .order(egui::Order::Middle)
                     .anchor(egui::Align2::RIGHT_BOTTOM, [-12., -12.])
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
