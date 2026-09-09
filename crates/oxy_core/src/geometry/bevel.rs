@@ -13,11 +13,17 @@ struct Plane {
     normal: Vec3,
     distance: f32,
 }
-fn relative_scale(mesh: &EditableMesh) -> f32 {
-    mesh.prepared()
-        .bounds
-        .map_or(1., |(a, b)| (b - a).length())
-        .max(1e-5)
+fn relative_scale(mesh: &EditableMesh, surface: &HashSet<Id>) -> f32 {
+    let (min, max) = mesh
+        .data()
+        .vertices
+        .iter()
+        .filter(|v| surface.contains(&v.id))
+        .fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(a, b), v| (a.min(Vec3::from(v.position)), b.max(Vec3::from(v.position))),
+        );
+    (max - min).length().max(1e-5)
 }
 fn face_normal(mesh: &EditableMesh, fi: usize) -> Vec3 {
     mesh.prepared().face_normals[fi]
@@ -52,10 +58,49 @@ pub fn apply(
             "Arredonde até 64 componentes por operação para manter a prévia responsiva.".into(),
         );
     }
-    if mesh.prepared().incident_faces.iter().any(|f| f.len() != 2) {
-        return Err("Arredondar requer uma superfície fechada nesta versão. Feche as bordas e separe componentes soltos antes de continuar.".into());
+    if let Some((ei, _)) = mesh
+        .prepared()
+        .incident_faces
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.len() == 1)
+    {
+        return Err(format!(
+            "Arredondar requer uma superfície fechada nesta versão. A aresta {} pertence a uma abertura; feche essa borda antes de continuar. Componentes soltos não serão removidos.",
+            mesh.data().edges[ei].id
+        ));
     }
-    let scale = relative_scale(mesh);
+    // Provenance is captured before clipping: an authored loose component must never be
+    // mistaken for a disposable point/edge created or replaced by this surface operation.
+    let surface: HashSet<_> = mesh
+        .data()
+        .faces
+        .iter()
+        .flat_map(|f| f.corners.iter().map(|c| c.vertex))
+        .collect();
+    let loose_edges: HashSet<_> = mesh
+        .data()
+        .edges
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| mesh.prepared().incident_faces[*i].is_empty())
+        .map(|(_, e)| e.id)
+        .collect();
+    let protected_vertices: HashSet<_> = mesh
+        .data()
+        .vertices
+        .iter()
+        .filter(|v| !surface.contains(&v.id))
+        .map(|v| v.id)
+        .chain(
+            mesh.data()
+                .edges
+                .iter()
+                .filter(|e| loose_edges.contains(&e.id))
+                .flat_map(|e| e.vertices),
+        )
+        .collect();
+    let scale = relative_scale(mesh, &surface);
     let tolerance = scale * 1e-5;
     let mut planes = Vec::new();
     for &id in &selection.ids {
@@ -65,6 +110,11 @@ pub fn apply(
             let a = mesh.position(edge.vertices[0]).unwrap();
             let b = mesh.position(edge.vertices[1]).unwrap();
             let uses = &mesh.prepared().incident_faces[ei];
+            if uses.len() != 2 {
+                return Err(format!(
+                    "A aresta {id} está solta; arredondar requer uma quina entre duas faces."
+                ));
+            }
             let n0 = face_normal(mesh, uses[0].0);
             let n1 = face_normal(mesh, uses[1].0);
             let dot = n0.dot(n1).clamp(-1., 1.);
@@ -73,10 +123,16 @@ pub fn apply(
                 return Err("Esta aresta é plana ou degenerada; escolha uma quina convexa.".into());
             }
             // Exposure proof: these clipping planes cannot remove unrelated geometry on another lobe.
-            if mesh.data().vertices.iter().any(|v| {
-                let p = Vec3::from(v.position) - a;
-                n0.dot(p) > tolerance || n1.dot(p) > tolerance
-            }) {
+            if mesh
+                .data()
+                .vertices
+                .iter()
+                .filter(|v| surface.contains(&v.id))
+                .any(|v| {
+                    let p = Vec3::from(v.position) - a;
+                    n0.dot(p) > tolerance || n1.dot(p) > tolerance
+                })
+            {
                 return Err("A quina é côncava ou encoberta por outra região da mesma malha. Este arredondamento aceita quinas convexas expostas.".into());
             }
             let radius = width / (angle * 0.5).tan();
@@ -101,6 +157,7 @@ pub fn apply(
                 .data()
                 .edges
                 .iter()
+                .filter(|e| !loose_edges.contains(&e.id))
                 .filter_map(|e| {
                     if e.vertices[0] == id {
                         Some(e.vertices[1])
@@ -166,6 +223,7 @@ pub fn apply(
             .data()
             .edges
             .iter()
+            .filter(|e| !loose_edges.contains(&e.id))
             .filter(|e| e.vertices.iter().any(|v| corner_ids.contains(v)))
             .map(|e| {
                 mesh.position(e.vertices[0])
@@ -180,10 +238,16 @@ pub fn apply(
             ));
         }
         for plane in &created {
-            if mesh.data().vertices.iter().any(|v| {
-                !corner_ids.contains(&v.id)
-                    && plane.normal.dot(Vec3::from(v.position)) - plane.distance > tolerance
-            }) {
+            if mesh
+                .data()
+                .vertices
+                .iter()
+                .filter(|v| surface.contains(&v.id))
+                .any(|v| {
+                    !corner_ids.contains(&v.id)
+                        && plane.normal.dot(Vec3::from(v.position)) - plane.distance > tolerance
+                })
+            {
                 return Err("O perfil alcançaria outro vértice/região. Reduza a largura ou selecione uma quina convexa isolável.".into());
             }
         }
@@ -204,14 +268,15 @@ pub fn apply(
         .map(|f| f.id)
         .collect::<HashSet<_>>();
     for plane in planes {
-        clip(&mut data, plane, tolerance)?;
+        clip(&mut data, plane, tolerance, &protected_vertices)?;
     }
     let used = data
         .faces
         .iter()
         .flat_map(|f| f.corners.iter().map(|c| c.vertex))
         .collect::<HashSet<_>>();
-    data.vertices.retain(|v| used.contains(&v.id));
+    data.vertices
+        .retain(|v| used.contains(&v.id) || protected_vertices.contains(&v.id));
     let used_edges = data
         .faces
         .iter()
@@ -224,10 +289,10 @@ pub fn apply(
         })
         .collect::<HashSet<_>>();
     data.edges
-        .retain(|e| used_edges.contains(&pair(e.vertices)));
+        .retain(|e| loose_edges.contains(&e.id) || used_edges.contains(&pair(e.vertices)));
     data.complete_edges()?;
     let mesh = EditableMesh::new(data)?;
-    if mesh.prepared().incident_faces.iter().any(|f| f.len() != 2) {
+    if mesh.prepared().incident_faces.iter().any(|f| f.len() == 1) {
         return Err(
             "A seleção não produziu uma junção fechada; a malha original foi preservada.".into(),
         );
@@ -249,14 +314,24 @@ pub fn apply(
         new_faces,
     })
 }
-fn clip(data: &mut MeshData, plane: Plane, tolerance: f32) -> Result<(), String> {
+fn clip(
+    data: &mut MeshData,
+    plane: Plane,
+    tolerance: f32,
+    protected_vertices: &HashSet<Id>,
+) -> Result<(), String> {
     let mut positions = data
         .vertices
         .iter()
         .map(|v| (v.id, Vec3::from(v.position)))
         .collect::<HashMap<_, _>>();
     let distance = |p: Vec3| plane.normal.dot(p) - plane.distance;
-    if !positions.values().any(|&p| distance(p) > tolerance) {
+    if !data
+        .faces
+        .iter()
+        .flat_map(|f| &f.corners)
+        .any(|c| distance(positions[&c.vertex]) > tolerance)
+    {
         return Ok(());
     }
     let mut intersections = HashMap::new();
@@ -393,6 +468,7 @@ fn clip(data: &mut MeshData, plane: Plane, tolerance: f32) -> Result<(), String>
         .iter()
         .flat_map(|f| f.corners.iter().map(|c| c.vertex))
         .collect::<HashSet<_>>();
-    data.vertices.retain(|v| used.contains(&v.id));
+    data.vertices
+        .retain(|v| used.contains(&v.id) || protected_vertices.contains(&v.id));
     Ok(())
 }
