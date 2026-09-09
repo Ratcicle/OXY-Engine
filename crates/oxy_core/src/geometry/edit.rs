@@ -108,7 +108,18 @@ pub fn triangulate(mesh: &EditableMesh, selection: &Selection) -> Result<Editabl
     if selection.mode != Mode::Face || selection.ids.is_empty() {
         return Err("Selecione as faces a triangular.".into());
     }
-    let ids: HashSet<_> = selection.ids.iter().copied().collect();
+    if selection.ids.iter().any(|&id| mesh.face(id).is_none()) {
+        return Err("A seleção contém uma face ausente.".into());
+    }
+    let ids: HashSet<_> = selection
+        .ids
+        .iter()
+        .copied()
+        .filter(|&id| mesh.face(id).unwrap().corners.len() > 3)
+        .collect();
+    if ids.is_empty() {
+        return Ok(mesh.clone());
+    }
     let mut data = mesh.data().clone();
     data.faces.retain(|f| !ids.contains(&f.id));
     for triangle in &mesh.prepared().triangles {

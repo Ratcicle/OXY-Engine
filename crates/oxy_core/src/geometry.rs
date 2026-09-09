@@ -3,6 +3,7 @@ pub mod atlas;
 pub mod bevel;
 pub mod cuts;
 pub mod edit;
+pub mod inset;
 pub mod operations;
 pub mod primitives;
 pub mod ray;
