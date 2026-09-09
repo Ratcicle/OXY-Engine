@@ -43,11 +43,14 @@ impl Editor {
                     (Primitive::Sphere, "Esfera"),
                     (Primitive::Cylinder, "Cilindro"),
                     (Primitive::Plane, "Plano"),
+                    (Primitive::Pyramid, "Pirâmide"),
+                    (Primitive::Cone, "Cone"),
+                    (Primitive::Tube, "Tubo"),
                 ]
             };
             for (primitive, name) in primitives {
                 if ui.button(name).clicked() {
-                    self.add_entity(Some(primitive), name);
+                    self.create_primitive(primitive, name);
                     ui.close();
                 }
             }
@@ -86,6 +89,9 @@ impl Editor {
             .width_range(115.0..=(ctx.content_rect().width() * 0.3).clamp(120., 370.))
             .resizable(true)
             .show(ctx, |ui| {
+                if self.mesh_operation_active() {
+                    ui.disable();
+                }
                 ui.horizontal(|ui| {
                     ui.strong("HIERARQUIA");
                     self.creation_menu(ui);
@@ -159,7 +165,7 @@ impl Editor {
                     "◉"
                 } else if e.ui.is_some() {
                     "▤"
-                } else if e.primitive.is_none() {
+                } else if !e.has_geometry() {
                     "▾"
                 } else {
                     "◇"

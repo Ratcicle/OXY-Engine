@@ -205,7 +205,8 @@ fn native_gpu_depth_texture_and_resize() {
         renderer.stats().instance_uploads,
         first_stats.instance_uploads + 1
     );
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.1.3/native-depth-proof.png");
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.0/m3/native-depth-proof.png");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     image::save_buffer(&path, &pixels, 512, 256, image::ColorType::Rgba8).unwrap();
     println!("GPU depth readback evidence: {}", path.display());
@@ -445,5 +446,131 @@ fn native_gpu_depth_texture_and_resize() {
     assert_eq!(renderer.stats().draw_calls, 2);
     assert_eq!(renderer.stats().visible_objects, 2);
     assert_eq!(renderer.stats().triangles, 4);
+    assert!(renderer.take_errors().is_empty());
+}
+
+#[test]
+#[ignore = "Native GPU comparison of primitive conversion, editable mesh cache and loose topology"]
+fn native_gpu_editable_mesh_equivalence() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter =
+        block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    println!("GPU: {:?}", adapter.get_info());
+    let (device, queue) =
+        block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let egui_renderer =
+        egui_wgpu::Renderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, Default::default());
+    let rs = RenderState {
+        adapter,
+        available_adapters: Vec::new(),
+        device,
+        queue,
+        target_format: wgpu::TextureFormat::Rgba8Unorm,
+        renderer: Arc::new(egui::epaint::mutex::RwLock::new(egui_renderer)),
+    };
+    let mut renderer = Renderer::new(&rs);
+    renderer.show_grid = false;
+    let mut project = Project::new("Conversão GPU");
+    project.scenes[0].kind = SceneKind::ThreeD;
+    let pixels: Vec<u8> = (0..64 * 64)
+        .flat_map(|i| [(i % 64 * 4) as u8, (i / 64 * 4) as u8, 160, 255])
+        .collect();
+    renderer
+        .set_texture_pixels(&rs, "conversion-texture", 64, 64, &pixels, true)
+        .unwrap();
+    let mut camera = CameraState::for_scene(&project.scenes[0]);
+    camera.target = Vec3::ZERO;
+    camera.distance = 5.;
+    for primitive in [
+        Primitive::Cube,
+        Primitive::Sphere,
+        Primitive::Cylinder,
+        Primitive::Plane,
+    ] {
+        let mut entity = Entity::new("Forma", Some(primitive));
+        entity.dimensions = [1.3, 2.1, 0.7];
+        entity.transform.pivot = [0.1, 0.2, 0.];
+        entity.transform.rotation = [0.2, 0.4, 0.1];
+        entity.material.color = [1.; 4];
+        entity.material.texture = Some("conversion-texture".into());
+        project.scenes[0].entities = vec![entity];
+        renderer.render(
+            &rs,
+            &project,
+            &project.scenes[0],
+            Path::new(""),
+            &camera,
+            [640, 480],
+            None,
+            false,
+        );
+        let before = read_pixels(&renderer, &rs);
+        oxy_core::geometry::primitives::convert(&mut project.scenes[0].entities[0]).unwrap();
+        renderer.render(
+            &rs,
+            &project,
+            &project.scenes[0],
+            Path::new(""),
+            &camera,
+            [640, 480],
+            None,
+            false,
+        );
+        let after = read_pixels(&renderer, &rs);
+        let different = before
+            .chunks_exact(4)
+            .zip(after.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 2))
+            .count();
+        assert!(
+            different < 50,
+            "{primitive:?}: {different} pixels mudaram além da tolerância de rasterização (2/255; no máximo 50 pixels de borda em 307.200)."
+        );
+        let stats = renderer.stats();
+        camera.yaw += 0.05;
+        renderer.render(
+            &rs,
+            &project,
+            &project.scenes[0],
+            Path::new(""),
+            &camera,
+            [640, 480],
+            None,
+            false,
+        );
+        assert_eq!(stats.mesh_uploads, renderer.stats().mesh_uploads);
+        let entity = &mut project.scenes[0].entities[0];
+        let mut data = entity.mesh.as_ref().unwrap().data().clone();
+        for v in &mut data.vertices {
+            v.position[0] += 0.15;
+        }
+        entity.mesh = Some(oxy_core::geometry::EditableMesh::new(data).unwrap());
+        renderer.render(
+            &rs,
+            &project,
+            &project.scenes[0],
+            Path::new(""),
+            &camera,
+            [640, 480],
+            None,
+            false,
+        );
+        assert_eq!(stats.mesh_uploads + 1, renderer.stats().mesh_uploads);
+    }
+    let mut data = oxy_core::geometry::MeshData::default();
+    data.add_vertex(Vec3::ZERO).unwrap();
+    let entity = &mut project.scenes[0].entities[0];
+    entity.mesh = Some(oxy_core::geometry::EditableMesh::new(data).unwrap());
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &camera,
+        [640, 480],
+        None,
+        false,
+    );
+    assert_eq!(renderer.stats().triangles, 0);
     assert!(renderer.take_errors().is_empty());
 }

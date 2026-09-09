@@ -93,7 +93,7 @@ impl Editor {
         }
     }
     pub(super) fn properties(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::right("properties").default_width((ctx.content_rect().width()*0.23).clamp(140.,290.)).width_range(130.0..=(ctx.content_rect().width()*0.32).clamp(140.,460.)).resizable(true).show(ctx,|ui| {
+        egui::SidePanel::right("properties").default_width((ctx.content_rect().width()*0.23).clamp(140.,290.)).width_range(130.0..=(ctx.content_rect().width()*0.32).clamp(140.,460.)).resizable(true).show(ctx,|ui| { if self.mesh_operation_active(){ui.disable();}
             ui.strong("PROPRIEDADES");ui.separator();
             egui::ScrollArea::vertical().show(ui,|ui| {
                 let Some(id)=self.selected.clone() else {
@@ -146,11 +146,11 @@ impl Editor {
                     }
                     if ui.button("Espelhar X").clicked(){entity.transform.scale[0]*=-1.;}
                 });
-                if entity.primitive.is_some(){ui.collapsing("Forma e material",|ui| {
-                    ui.label(match entity.primitive.unwrap(){Primitive::Rectangle=>"Retângulo",Primitive::Circle=>"Círculo",Primitive::Sprite=>"Sprite",Primitive::Cube=>"Cubo",Primitive::Sphere=>"Esfera",Primitive::Cylinder=>"Cilindro",Primitive::Plane=>"Plano"});
-                    vector3(ui,"Dimensões",&mut entity.dimensions,0.05,true);entity.dimensions=entity.dimensions.map(|v|v.max(0.0001));
-                    if matches!(entity.primitive,Some(Primitive::Circle|Primitive::Sphere|Primitive::Cylinder)){ui.add(egui::Slider::new(&mut entity.segments,3..=128).text("Segmentos"));if entity.material.texture.is_some(){ui.small("UVs paramétricos preservados. Alterar segmentos mantém o PNG; a superfície pode reamostrar os pixels.");}}
-                    ui.label("Cor base");ui.color_edit_button_rgba_unmultiplied(&mut entity.material.color);
+                if entity.has_geometry(){ui.collapsing("Forma e material",|ui| {
+                    ui.label(entity.primitive.map(oxy_render::labels::primitive).unwrap_or("Malha editável"));
+                    if entity.mesh.is_none(){vector3(ui,"Dimensões",&mut entity.dimensions,0.05,true);entity.dimensions=entity.dimensions.map(|v|v.max(0.0001));}
+                    if entity.primitive.is_some() && ui.button("Parâmetros da forma").clicked(){self.edit_primitive_parameters(&entity.id);}
+                    ui.label("Cor base");color_editor(ui, &mut entity.material.color);
                     ui.label("Textura PNG");
                     let selected=entity.material.texture.as_ref().and_then(|id|textures.iter().find(|(i,_)|i==id).map(|(_,n)|n.as_str())).unwrap_or("Sem textura");
                     egui::ComboBox::from_id_salt("material_texture").selected_text(selected).show_ui(ui,|ui|{ui.selectable_value(&mut entity.material.texture,None,"Sem textura");for (id,name) in &textures{ui.selectable_value(&mut entity.material.texture,Some(id.clone()),name);}});
@@ -191,7 +191,7 @@ impl Editor {
                     egui::ComboBox::from_id_salt("ui_anchor").selected_text(crate::labels::anchor(element.anchor)).show_ui(ui,|ui|{for anchor in [UiAnchor::TopLeft,UiAnchor::TopRight,UiAnchor::BottomLeft,UiAnchor::BottomRight,UiAnchor::Center]{ui.selectable_value(&mut element.anchor,anchor,crate::labels::anchor(anchor));}});
                     ui.label("Deslocamento em pontos");ui.horizontal(|ui|{for value in &mut element.position{ui.add(egui::DragValue::new(value));}});
                     ui.label("Tamanho");ui.horizontal(|ui|{for value in &mut element.size{ui.add(egui::DragValue::new(value).range(1.0..=4000.));}});
-                    ui.label("Texto ({valor} mostra o vínculo)");ui.text_edit_multiline(&mut element.text);ui.color_edit_button_rgba_unmultiplied(&mut element.color);
+                    ui.label("Texto ({valor} mostra o vínculo)");ui.text_edit_multiline(&mut element.text);color_editor(ui,&mut element.color);
                     ui.label("Objeto que possui o atributo").on_hover_text("A interface lê o valor deste objeto, por exemplo Vida do personagem. Sem escolha, usa o próprio objeto.");object_picker(ui,&mut element.binding_object,&objects,"ui_binding");ui.text_edit_singleline(&mut element.binding_attribute);ui.add(egui::DragValue::new(&mut element.max_value).range(0.01..=1000000.).prefix("Máximo "));
                     let label=element.texture.as_ref().and_then(|id|textures.iter().find(|(i,_)|i==id).map(|(_,n)|n.as_str())).unwrap_or("Sem imagem");
                     egui::ComboBox::from_id_salt("ui_image").selected_text(label).show_ui(ui,|ui|{ui.selectable_value(&mut element.texture,None,"Sem imagem");for (id,name) in &textures{ui.selectable_value(&mut element.texture,Some(id.clone()),name);}});

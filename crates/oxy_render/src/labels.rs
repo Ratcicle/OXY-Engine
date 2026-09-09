@@ -1,5 +1,20 @@
 //! Presentation labels never change the stable serialized identifiers.
 use oxy_core::document::{UiAnchor, UiKind};
+pub fn primitive(primitive: oxy_core::document::Primitive) -> &'static str {
+    use oxy_core::document::Primitive::*;
+    match primitive {
+        Rectangle => "Retângulo",
+        Circle => "Círculo",
+        Sprite => "Sprite",
+        Cube => "Cubo",
+        Sphere => "Esfera",
+        Cylinder => "Cilindro",
+        Plane => "Plano",
+        Pyramid => "Pirâmide",
+        Cone => "Cone",
+        Tube => "Tubo",
+    }
+}
 pub fn ui_kind(kind: UiKind) -> &'static str {
     match kind {
         UiKind::Text => "Texto",

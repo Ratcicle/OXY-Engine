@@ -88,7 +88,7 @@ pub fn visual_bounds(scene: &Scene, ids: &[Id]) -> Result<Aabb, String> {
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for id in ids {
         let e = view.entity(id).ok_or("Peça não encontrada")?;
-        if e.primitive.is_none() || e.camera.is_some() || e.ui.is_some() {
+        if !e.has_geometry() || e.camera.is_some() || e.ui.is_some() {
             continue;
         }
         let world = view.world_matrix(id)?;
@@ -97,6 +97,14 @@ pub fn visual_bounds(scene: &Scene, ids: &[Id]) -> Result<Aabb, String> {
                 "A transformação não pode ser invertida. Ajuste as escalas da peça e dos pais."
                     .into(),
             );
+        }
+        if let Some(mesh) = &e.mesh {
+            for vertex in &mesh.data().vertices {
+                let p = world.transform_point3(Vec3::from(vertex.position));
+                min = min.min(p);
+                max = max.max(p);
+            }
+            continue;
         }
         let mut half = Vec3::from(e.dimensions) * 0.5;
         match e.primitive {

@@ -98,7 +98,12 @@ impl Editor {
         }
     }
     pub(crate) fn set_spatial_tool(&mut self, mode: Tool) {
+        if self.mesh_operation_active() {
+            self.warn("Confirme ou cancele a edição da malha antes de trocar de ferramenta.");
+            return;
+        }
         if mode != Tool::Object {
+            self.modeling.selection.mode = oxy_core::geometry::selection::Mode::Object;
             if self.selection.ids.len() != 1 {
                 self.log("Escolha somente um objeto para editar seu colisor ou pivô.");
                 self.notice_last(false);
@@ -168,7 +173,7 @@ impl Editor {
             .filter(|id| {
                 self.scene()
                     .entity(id)
-                    .is_some_and(|e| e.primitive.is_some() && e.camera.is_none() && e.ui.is_none())
+                    .is_some_and(|e| e.has_geometry() && e.camera.is_none() && e.ui.is_none())
             })
             .map(|id| (id, true))
             .collect();

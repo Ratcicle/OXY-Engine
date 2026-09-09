@@ -33,3 +33,4 @@ fn main() -> eframe::Result {
         Box::new(|cc| Ok(Box::new(app::Editor::new(cc)))),
     )
 }
+mod icons;

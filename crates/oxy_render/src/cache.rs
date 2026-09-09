@@ -38,14 +38,19 @@ pub(crate) struct GeometryCache {
 }
 
 impl GeometryCache {
-    pub fn get(&mut self, device: &wgpu::Device, key: MeshKey) -> (Arc<GpuMesh>, bool) {
+    pub fn get(
+        &mut self,
+        device: &wgpu::Device,
+        entity: &oxy_core::document::Entity,
+    ) -> (Arc<GpuMesh>, bool) {
+        let key = MeshKey::for_entity(entity).expect("Filtered geometry");
         if let Some(index) = self.entries.iter().position(|(stored, _)| *stored == key) {
             let entry = self.entries.remove(index).expect("Known cache entry");
             let mesh = Arc::clone(&entry.1);
             self.entries.push_back(entry);
             return (mesh, true);
         }
-        let mesh = mesh::cached_primitive(key);
+        let mesh = mesh::cached_entity(entity).expect("Filtered geometry");
         let vertices: Vec<_> = mesh
             .vertices
             .iter()

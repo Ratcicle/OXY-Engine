@@ -5,6 +5,7 @@ Verificado: lazy_open
 Captura GPU da janela: editor-scene.png
 Clique: + Objeto
 Clique: Retângulo
+Tecla Enter, Ctrl=false
 Verificado: created
 Verificado: gizmo_baseline
 Arrastar eixo X pelo controle visual
@@ -125,6 +126,7 @@ Clique: Cena 3D
 Clique: Criar cena
 Clique: + Objeto
 Clique: Cubo
+Tecla Enter, Ctrl=false
 Tecla F2, Ctrl=false
 Tecla A, Ctrl=true
 Digitar: Peça A
@@ -139,6 +141,7 @@ Verificado: renamed_a
 Arrastar eixo X pelo controle visual
 Clique: + Objeto
 Clique: Cubo
+Tecla Enter, Ctrl=false
 Tecla F2, Ctrl=false
 Tecla A, Ctrl=true
 Digitar: Peça B
@@ -180,6 +183,10 @@ Verificado: multi_undo
 Tecla R, Ctrl=false
 Arrastar eixo X pelo controle visual
 Verificado: multi_scale
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Escalar seleção pela alça central uniforme
+Verificado: multi_scale_uniform
 Tecla Z, Ctrl=true
 Verificado: multi_undo
 Captura GPU da janela: multi-selection.png

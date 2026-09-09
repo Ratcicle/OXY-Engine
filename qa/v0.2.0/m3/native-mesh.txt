@@ -1,0 +1,76 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Cubo editável
+Clique: Estúdio
+Clique: Enquadrar
+Verificado: m3_base
+Tecla Num2, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Verificado: m3_face
+Captura GPU da janela: face-selection.png
+Arrastar eixo X pelo controle visual
+Verificado: m3_preview
+Captura GPU da janela: mesh-preview.png
+Atalho Escape com Modifiers { alt: true, shift: true }
+Verificado: m3_cancel
+Arrastar eixo X pelo controle visual
+Clique: Confirmar (Enter)
+Verificado: m3_commit
+Tecla Z, Ctrl=true
+Verificado: m3_cancel
+Tecla Y, Ctrl=true
+Verificado: m3_redo
+Tecla Delete, Ctrl=false
+Clique: Confirmar (Enter)
+Verificado: m3_deleted
+Tecla Z, Ctrl=true
+Verificado: m3_redo
+Tecla Num4, Ctrl=false
+Tecla A, Ctrl=true
+Verificado: m3_vertices
+Selecionar componentes com uma caixa no viewport
+Verificado: m3_visible_vertices
+Atalho X com Modifiers { shift: true }
+Selecionar componentes com uma caixa no viewport
+Verificado: m3_vertices
+Captura GPU da janela: vertex-selection.png
+Janela: 920 × 600 pixels físicos
+Captura GPU da janela: mesh-small.png
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Tecla S, Ctrl=true
+Verificado: m3_saved
+Clique: Cena
+Verificado: m3_creationbase
+Clique: + Objeto
+Clique: Tubo
+Atalho Escape com Modifiers { alt: true, shift: true }
+Verificado: m3_creationcancel
+Clique: + Objeto
+Clique: Tubo
+Clique: Enquadrar prévia
+Captura GPU da janela: tube-parameters.png
+Editar campo visível: Raio externo = 2
+Verificado: m3_tube
+Clique: Enquadrar
+Captura GPU da janela: tube-eight-sides.png
+Tecla Z, Ctrl=true
+Selecionar hierarquia: Cubo editável
+Verificado: m3_creationcancel
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Cubo editável
+Verificado: m3_saved
+Verificado: m3_creationbase
+Clique: + Objeto
+Clique: Cone
+Clique: PROPRIEDADES
+Verificado: m3_outside
+Clique: Forma e material
+Clique: Parâmetros da forma
+Verificado: m3_parameters
+Tecla Escape, Ctrl=false
+Verificado: m3_parameters_cancelled
+Tecla Z, Ctrl=true
+Selecionar hierarquia: Cubo editável
+Verificado: m3_creationcancel
+Capturas: ["face-selection.png", "mesh-preview.png", "vertex-selection.png", "mesh-small.png", "tube-parameters.png", "tube-eight-sides.png"]

@@ -55,6 +55,9 @@ pub enum Primitive {
     Sphere,
     Cylinder,
     Plane,
+    Pyramid,
+    Cone,
+    Tube,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Transform {
@@ -229,6 +232,10 @@ pub struct Entity {
     pub parent: Option<Id>,
     pub transform: Transform,
     pub primitive: Option<Primitive>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<crate::geometry::EditableMesh>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primitive_parameters: Option<crate::geometry::primitives::Parameters>,
     pub dimensions: [f32; 3],
     pub segments: u32,
     pub material: Material,
@@ -244,6 +251,9 @@ pub struct Entity {
     pub model_source: Option<Id>,
 }
 impl Entity {
+    pub fn has_geometry(&self) -> bool {
+        self.primitive.is_some() || self.mesh.is_some()
+    }
     pub fn new(name: impl Into<String>, primitive: Option<Primitive>) -> Self {
         Self {
             id: new_id(),
@@ -251,6 +261,8 @@ impl Entity {
             parent: None,
             transform: Transform::default(),
             primitive,
+            mesh: None,
+            primitive_parameters: None,
             dimensions: [1.; 3],
             segments: 24,
             material: Material::default(),
@@ -737,6 +749,21 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     }
     let owned_ids: HashSet<_> = ids.iter().map(|id| (*id).to_owned()).collect();
     for e in &scene.entities {
+        if e.mesh.is_some()
+            && (e.primitive.is_some()
+                || e.primitive_parameters.is_some()
+                || e.dimensions != [1.; 3])
+        {
+            return Err(format!(
+                "{}: malha editável não pode conter parâmetros de primitiva ou dimensões externas; use a transformação para escalar.",
+                e.name
+            ));
+        }
+        if let Some(parameters) = e.primitive_parameters {
+            parameters
+                .validate()
+                .map_err(|error| format!("{}: {error}", e.name))?;
+        }
         if e.id.is_empty()
             || !e.transform.finite()
             || !e.dimensions.iter().all(|v| v.is_finite() && *v > 0.)

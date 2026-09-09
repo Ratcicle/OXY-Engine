@@ -103,7 +103,7 @@ impl Default for AnimationState {
 /// A selected root/group owns its own animations. Leaves use the nearest animated ancestor.
 fn automatic_model(scene: &Scene, selected: Option<&str>) -> Option<Id> {
     let entity = scene.entity(selected?)?;
-    if entity.parent.is_none() || entity.primitive.is_none() || !entity.clips.is_empty() {
+    if entity.parent.is_none() || !entity.has_geometry() || !entity.clips.is_empty() {
         return Some(entity.id.clone());
     }
     let mut current = entity.parent.as_deref();
@@ -909,7 +909,7 @@ impl Editor {
                                         self.studio.animation.expanded.insert(entity.id.clone());
                                     }
                                 }
-                                let label = if entity.primitive.is_none() {
+                                let label = if !entity.has_geometry() {
                                     format!("▧ {}", entity.name)
                                 } else {
                                     entity.name.clone()

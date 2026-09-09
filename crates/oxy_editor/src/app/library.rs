@@ -11,6 +11,9 @@ impl Editor {
             })
             .height_range(45.0..=(ctx.content_rect().height() * 0.4).max(50.))
             .show(ctx, |ui| {
+                if self.mesh_operation_active() {
+                    ui.disable();
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.strong("BIBLIOTECA DO PROJETO");
                     ui.add(

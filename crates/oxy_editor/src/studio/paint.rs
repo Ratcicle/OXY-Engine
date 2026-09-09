@@ -59,7 +59,7 @@ impl Editor {
                     model: None,
                 });
                 if let Some(e) = self.scene_mut().entity_mut(&entity_id) {
-                    if e.primitive.is_none()
+                    if !e.has_geometry()
                         && let Some(element) = &mut e.ui
                     {
                         element.texture = Some(id.clone());
@@ -100,7 +100,7 @@ impl Editor {
         });
         self.state.images.insert(copy.clone(), image);
         if let Some(e) = self.scene_mut().entity_mut(&entity_id) {
-            if e.primitive.is_none()
+            if !e.has_geometry()
                 && let Some(element) = &mut e.ui
             {
                 element.texture = Some(copy.clone());
@@ -161,7 +161,7 @@ impl Editor {
             return;
         };
         if let Some(mut entity) = self.scene().entity(&_entity).cloned() {
-            let interface = entity.primitive.is_none() && entity.ui.is_some();
+            let interface = !entity.has_geometry() && entity.ui.is_some();
             self.texture_controls(ui, &mut entity, interface);
             if let Some(original) = self.scene_mut().entity_mut(&_entity) {
                 *original = entity;

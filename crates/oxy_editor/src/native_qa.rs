@@ -2,6 +2,7 @@
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
 mod input_guide;
+mod mesh;
 mod portable;
 mod spatial;
 mod ux;
@@ -28,6 +29,9 @@ enum Action {
     OptionalClick(&'static str),
     Text(&'static str),
     Key(Key, bool),
+    Chord(Key, Modifiers),
+    ComponentClick([f32; 3], bool),
+    ComponentBox,
     Hold(Key, usize),
     Wait(usize),
     Card,
@@ -40,6 +44,7 @@ enum Action {
     ConnectPorts,
     Paint,
     GizmoX,
+    GizmoUniform,
     GizmoZ,
     GizmoDelta(f32),
     SpatialDrag {
@@ -74,6 +79,7 @@ struct Surface {
     native_viewport: Option<Rect>,
     ports: Vec<Pos2>,
     gizmo_x: Option<Pos2>,
+    gizmo_uniform: Option<Pos2>,
     gizmo_z: Option<Pos2>,
 }
 
@@ -134,6 +140,7 @@ impl NativeQa {
             Action::Screenshot("editor-scene.png"),
             Action::Click("+ Objeto"),
             Action::Click("Retângulo"),
+            Action::Key(Key::Enter, false),
             Action::Check("created"),
             Action::Check("gizmo_baseline"),
             Action::GizmoX,
@@ -255,6 +262,7 @@ impl NativeQa {
             Action::Click("Criar cena"),
             Action::Click("+ Objeto"),
             Action::Click("Cubo"),
+            Action::Key(Key::Enter, false),
             Action::Key(Key::F2, false),
             Action::Key(Key::A, true),
             Action::Text("Peça A"),
@@ -269,6 +277,7 @@ impl NativeQa {
             Action::GizmoDelta(75.),
             Action::Click("+ Objeto"),
             Action::Click("Cubo"),
+            Action::Key(Key::Enter, false),
             Action::Key(Key::F2, false),
             Action::Key(Key::A, true),
             Action::Text("Peça B"),
@@ -310,6 +319,10 @@ impl NativeQa {
             Action::Key(Key::R, false),
             Action::GizmoX,
             Action::Check("multi_scale"),
+            Action::Key(Key::Z, true),
+            Action::Check("multi_undo"),
+            Action::GizmoUniform,
+            Action::Check("multi_scale_uniform"),
             Action::Key(Key::Z, true),
             Action::Check("multi_undo"),
             Action::Screenshot("multi-selection.png"),
@@ -500,6 +513,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("m3_") {
+            return self.check_mesh(label);
+        }
         if label.starts_with("m2_") {
             return self.check_input_guide(label);
         }
@@ -844,7 +860,7 @@ impl NativeQa {
                 self.base = Some(self.editor.state.clone());
                 Ok(())
             }
-            "multi_move" | "multi_rotate" | "multi_scale" => {
+            "multi_move" | "multi_rotate" | "multi_scale" | "multi_scale_uniform" => {
                 let scene = self.editor.scene();
                 let before = self
                     .base
@@ -878,6 +894,14 @@ impl NativeQa {
                             (entity.transform.rotation[0] - old.transform.rotation[0]).abs() > 0.01,
                             "E + gizmo deve girar ambas as peças",
                         )?,
+                        "multi_scale" => ensure(
+                            entity.transform.scale[0] > old.transform.scale[0] * 1.01
+                                && (entity.transform.scale[1] - old.transform.scale[1]).abs()
+                                    < 0.0001
+                                && (entity.transform.scale[2] - old.transform.scale[2]).abs()
+                                    < 0.0001,
+                            "Alça X deve escalar somente X em ambos os objetos",
+                        )?,
                         _ => ensure(
                             entity
                                 .transform
@@ -885,7 +909,7 @@ impl NativeQa {
                                 .iter()
                                 .zip(old.transform.scale)
                                 .all(|(new, old)| new > &(old * 1.01)),
-                            "R + gizmo deve escalar o conjunto proporcionalmente",
+                            "A alça central deve escalar o conjunto proporcionalmente",
                         )?,
                     }
                 }
@@ -1468,6 +1492,13 @@ impl NativeQa {
                     .surface
                     .texts
                     .iter()
+                    .skip(
+                        self.surface
+                            .texts
+                            .iter()
+                            .rposition(|text| text.text == label)
+                            .map_or(0, |index| index + 1),
+                    )
                     .filter(|text| {
                         let p = text.rect.center();
                         p.x > anchor.x && (p.y - anchor.y).abs() < 8.
@@ -1652,6 +1683,57 @@ impl NativeQa {
                 let from = self.surface.gizmo_z.ok_or("Controle Z não encontrado")?;
                 self.drag(from, from + Vec2::new(50., -50.));
                 description = "Girar braço pelo eixo Z".into();
+            }
+            Action::GizmoUniform => {
+                let from = self
+                    .surface
+                    .gizmo_uniform
+                    .ok_or("Alça central de escala ausente")?;
+                self.drag(from, from + Vec2::new(70., -40.));
+                description = "Escalar seleção pela alça central uniforme".into();
+            }
+            Action::ComponentClick(local, toggle) => {
+                let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
+                let id = self.editor.selected.as_ref().ok_or("Peça ausente")?;
+                let world = self.editor.scene().world_matrix(id)?;
+                let point = oxy_render::collider_debug::project(
+                    &self.editor.camera,
+                    rect,
+                    world.transform_point3(glam::Vec3::from(local)),
+                )
+                .ok_or("Ponto fora da projeção")?;
+                let modifiers = if toggle {
+                    Modifiers::CTRL
+                } else {
+                    Modifiers::NONE
+                };
+                self.events.push_back(vec![Event::PointerMoved(point)]);
+                for pressed in [true, false] {
+                    self.events.push_back(vec![Event::PointerButton {
+                        pos: point,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers,
+                    }]);
+                }
+                description = "Selecionar componente pelo ponto projetado na janela".into();
+            }
+            Action::ComponentBox => {
+                let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
+                self.drag(rect.min + Vec2::splat(14.), rect.max - Vec2::splat(14.));
+                description = "Selecionar componentes com uma caixa no viewport".into();
+            }
+            Action::Chord(key, modifiers) => {
+                for pressed in [true, false] {
+                    self.events.push_back(vec![Event::Key {
+                        key,
+                        physical_key: Some(key),
+                        pressed,
+                        repeat: false,
+                        modifiers,
+                    }]);
+                }
+                description = format!("Atalho {key:?} com {modifiers:?}");
             }
             Action::GizmoX | Action::GizmoDelta(_) => {
                 let from = self
@@ -1849,10 +1931,23 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
             egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(20, 24, 31) => {
                 surface.canvas = Some(rect.rect.intersect(clip))
             }
+            egui::Shape::Rect(rect)
+                if rect.fill == Color32::LIGHT_RED && (rect.rect.width() - 9.).abs() < 0.1 =>
+            {
+                surface.gizmo_x = Some(rect.rect.center());
+            }
+            egui::Shape::Rect(rect)
+                if rect.fill == Color32::LIGHT_BLUE && (rect.rect.width() - 9.).abs() < 0.1 =>
+            {
+                surface.gizmo_z = Some(rect.rect.center());
+            }
             egui::Shape::Circle(circle)
                 if circle.fill == Color32::WHITE && circle.radius > 2. && circle.radius < 10. =>
             {
-                surface.ports.push(circle.center)
+                surface.ports.push(circle.center);
+                if (circle.radius - 6.).abs() < 0.1 {
+                    surface.gizmo_uniform = Some(circle.center);
+                }
             }
             egui::Shape::Circle(circle)
                 if circle.fill == Color32::from_rgb(122, 169, 240)

@@ -414,8 +414,10 @@ impl Renderer {
         for entity in &entities {
             let world = entity.world;
             let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
-            let key = mesh::MeshKey::for_entity(entity).expect("Filtered primitive");
-            let (mesh, hit) = self.geometry.get(&rs.device, key);
+            let (mesh, hit) = self.geometry.get(&rs.device, entity);
+            if mesh.index_count == 0 {
+                continue;
+            }
             self.stats.mesh_cache_hits += u64::from(hit);
             self.stats.mesh_uploads += u64::from(!hit);
             self.stats.buffer_allocations += 2 * u64::from(!hit);
@@ -461,10 +463,15 @@ impl Renderer {
                     && let Ok(world) = scene.world_matrix(&entity.id)
                 {
                     let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
+                    let (min, max) = entity
+                        .mesh
+                        .as_ref()
+                        .and_then(|m| m.prepared().bounds)
+                        .unwrap_or((Vec3::splat(-0.5), Vec3::splat(0.5)));
                     box_lines(
                         &mut overlays,
-                        Vec3::splat(-0.5),
-                        Vec3::splat(0.5),
+                        min,
+                        max,
                         world,
                         [1., 0.7, 0.24, 1.],
                         scene.kind == SceneKind::TwoD,
@@ -791,8 +798,8 @@ fn make_target(rs: &RenderState, size: [u32; 2], id: Option<egui::TextureId>) ->
 }
 
 pub fn entity_mesh(entity: &Entity) -> mesh::Mesh {
-    mesh::MeshKey::for_entity(entity)
-        .map(|key| (*mesh::cached_primitive(key)).clone())
+    mesh::cached_entity(entity)
+        .map(|mesh| (*mesh).clone())
         .unwrap_or_default()
 }
 
@@ -802,6 +809,7 @@ pub struct PickHit {
     pub uv: [f32; 2],
     pub position: Vec3,
     pub distance: f32,
+    pub face: Option<oxy_core::geometry::ComponentId>,
 }
 
 pub fn pick(
@@ -810,24 +818,71 @@ pub fn pick(
     size: [u32; 2],
     pixel: [f32; 2],
 ) -> Option<PickHit> {
-    let view = oxy_core::scene_view::SceneView::new(scene);
+    let picker = ScenePicker::new(scene);
     let (origin, direction) = camera.ray(size, pixel);
-    let mut best: Option<PickHit> = None;
-    let mut best_layer = i32::MIN;
-    for entity in &scene.entities {
-        if entity.primitive.is_none() || entity.ui.is_some() || !view.visible(entity) {
-            continue;
+    picker.ray(origin, direction)
+}
+
+struct PickEntry<'a> {
+    entity: &'a Entity,
+    inverse: Mat4,
+    mesh: Arc<mesh::Mesh>,
+}
+/// One indexed scene evaluation for a batch of CPU picking/visibility queries.
+pub struct ScenePicker<'a> {
+    kind: SceneKind,
+    entries: Vec<PickEntry<'a>>,
+}
+impl<'a> ScenePicker<'a> {
+    pub fn new(scene: &'a Scene) -> Self {
+        let view = oxy_core::scene_view::SceneView::new(scene);
+        let mut entries = Vec::new();
+        for entity in &scene.entities {
+            if !entity.has_geometry() || entity.ui.is_some() || !view.visible(entity) {
+                continue;
+            }
+            let Ok(world) = view.world_matrix(&entity.id) else {
+                continue;
+            };
+            let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
+            let Some(mesh) = mesh::cached_entity(entity) else {
+                continue;
+            };
+            let inverse = world.inverse();
+            if !inverse.is_finite() {
+                continue;
+            }
+            entries.push(PickEntry {
+                entity,
+                inverse,
+                mesh,
+            });
         }
-        let Ok(world) = view.world_matrix(&entity.id) else {
-            continue;
-        };
-        let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
-        let mesh = mesh::cached_primitive(mesh::MeshKey::for_entity(entity)?);
-        for triangle in mesh.indices.chunks_exact(3) {
-            let vertices = triangle.map_indices(&mesh.vertices);
-            let points = vertices.map(|vertex| world.transform_point3(vertex.position));
-            if let Some((distance, barycentric)) = mesh::ray_triangle(origin, direction, points) {
-                let closer = if scene.kind == SceneKind::TwoD {
+        Self {
+            kind: scene.kind,
+            entries,
+        }
+    }
+    pub fn ray(&self, origin: Vec3, direction: Vec3) -> Option<PickHit> {
+        let mut best: Option<PickHit> = None;
+        let mut best_layer = i32::MIN;
+        for PickEntry {
+            entity,
+            inverse,
+            mesh,
+        } in &self.entries
+        {
+            if let Some((triangle_index, distance, barycentric)) = mesh.acceleration.hit(
+                inverse.transform_point3(origin),
+                inverse.transform_vector3(direction),
+                |i| {
+                    let triangle = &mesh.indices[i * 3..i * 3 + 3];
+                    triangle.map_indices(&mesh.vertices).map(|v| v.position)
+                },
+            ) {
+                let triangle = &mesh.indices[triangle_index * 3..triangle_index * 3 + 3];
+                let vertices = triangle.map_indices(&mesh.vertices);
+                let closer = if self.kind == SceneKind::TwoD {
                     entity.layer >= best_layer
                 } else {
                     best.as_ref().is_none_or(|hit| distance < hit.distance)
@@ -842,13 +897,17 @@ pub fn pick(
                         uv: uv.to_array(),
                         position: origin + direction * distance,
                         distance,
+                        face: entity
+                            .mesh
+                            .as_ref()
+                            .map(|m| m.prepared().triangles[triangle_index].face),
                     });
                     best_layer = entity.layer;
                 }
             }
         }
+        best
     }
-    best
 }
 
 trait TriangleVertices {
@@ -980,7 +1039,7 @@ pub fn prepare_scene<'a>(scene: &'a Scene, camera: &CameraState) -> Vec<Prepared
     let mut entities: Vec<_> = scene
         .entities
         .iter()
-        .filter(|entity| entity.primitive.is_some() && entity.ui.is_none() && view.visible(entity))
+        .filter(|entity| entity.has_geometry() && entity.ui.is_none() && view.visible(entity))
         .collect();
     if scene.kind == SceneKind::TwoD {
         entities.sort_by_key(|entity| entity.layer);

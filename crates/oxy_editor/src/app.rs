@@ -3,6 +3,7 @@ mod hierarchy;
 mod home;
 mod library;
 mod logic;
+mod modeling;
 mod notices;
 mod preferences;
 mod properties;
@@ -85,6 +86,7 @@ pub struct Editor {
     new_project: Option<scenes::NewProject>,
     scene_dialog: Option<scenes::SceneDialog>,
     logic_ui: logic::LogicUi,
+    modeling: modeling::ModelState,
     pub state: Snapshot,
     history: CommandHistory,
     pub path: Option<PathBuf>,
@@ -193,6 +195,7 @@ impl Editor {
             new_project: None,
             scene_dialog: None,
             logic_ui: Default::default(),
+            modeling: Default::default(),
             history: CommandHistory::new(),
             state,
             path: None,
@@ -348,6 +351,10 @@ impl Editor {
         }
     }
     pub fn save(&mut self) -> bool {
+        if self.mesh_operation_active() {
+            self.warn("Confirme ou cancele a prévia de modelagem antes de salvar.");
+            return false;
+        }
         if !self.history.is_pending() {
             self.history
                 .begin("Finalizar edição", &self.state.project, &self.state.images);
@@ -518,6 +525,9 @@ impl Editor {
         }
     }
     fn finish_history(&mut self, force: bool) {
+        if self.mesh_operation_active() {
+            return;
+        }
         if force && self.history.is_pending() {
             if let Err(error) = self
                 .history
@@ -532,6 +542,9 @@ impl Editor {
         }
     }
     fn undo(&mut self, redo: bool) {
+        if self.cancel_mesh_operation() {
+            return;
+        }
         self.cancel_spatial_drag();
         self.finish_history(true);
         let result = if redo {
@@ -572,6 +585,10 @@ impl Editor {
         }
     }
     fn start(&mut self) {
+        if self.mesh_operation_active() {
+            self.warn("Confirme ou cancele a prévia de modelagem antes de jogar.");
+            return;
+        }
         self.set_spatial_tool(Tool::Object);
         self.finish_history(true);
         match Runtime::new(&self.state.project, &self.scene_id) {
@@ -977,13 +994,20 @@ impl eframe::App for Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        let dialog_open = self.pending_preferences.is_some()
+        let mesh_cancelled = self.mesh_operation_active()
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && self.cancel_mesh_operation();
+        let dialog_open = self.modeling.creation.is_some()
+            || mesh_cancelled
+            || self.modeling.help
+            || self.pending_preferences.is_some()
             || self.new_project.is_some()
             || self.scene_dialog.is_some()
             || self.pending.is_some()
             || self.logic_ui.inputs
             || self.logic_ui.guide;
         if !dialog_open
+            && !self.mesh_operation_active()
             && !self.capture
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
         {
@@ -993,6 +1017,7 @@ impl eframe::App for Editor {
             && !self.capture
             && ctx.input(|i| i.focused)
             && !crate::graph_ui::text_input_active(ctx)
+            && !self.mesh_shortcuts(ctx)
         {
             if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
                 self.open_guide("");
@@ -1023,6 +1048,11 @@ impl eframe::App for Editor {
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
                     self.begin_rename();
+                }
+                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+                    self.selection.ids =
+                        self.scene().entities.iter().map(|e| e.id.clone()).collect();
+                    self.selected = self.selection.ids.last().cloned();
                 }
             }
             if matches!(self.tab, Tab::Scene | Tab::Studio)
@@ -1135,6 +1165,8 @@ impl eframe::App for Editor {
         self.project_dialogs(ctx);
         self.preferences_ui(ctx);
         self.logic_dialogs(ctx);
+        self.mesh_help(ctx);
+        self.mesh_creation_dialog(ctx);
         self.notices_ui(ctx);
         if self.pending.is_some() {
             self.pause();
@@ -1219,6 +1251,16 @@ fn component_switch<T>(ui: &mut egui::Ui, label: &str, value: &mut Option<T>, de
         .changed()
     {
         *value = if enabled { Some(default) } else { None };
+    }
+}
+// The HSV conversion inside egui can round untouched RGB values. Only author a color on input.
+pub fn color_editor(ui: &mut egui::Ui, value: &mut [f32; 4]) {
+    let mut candidate = *value;
+    if ui
+        .color_edit_button_rgba_unmultiplied(&mut candidate)
+        .changed()
+    {
+        *value = candidate;
     }
 }
 pub fn vector3(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64, nonzero: bool) {

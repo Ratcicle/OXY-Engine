@@ -5,6 +5,7 @@ pub mod collision;
 pub mod document;
 pub mod edit_history;
 pub mod editing;
+pub mod geometry;
 pub mod graph;
 pub mod guide;
 pub mod history;

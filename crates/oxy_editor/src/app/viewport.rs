@@ -15,9 +15,17 @@ fn frame_camera(camera: &mut CameraState, scene: &Scene, selection: &[Id], size:
     for entity in scene
         .entities
         .iter()
-        .filter(|e| ids.contains(&e.id) && e.primitive.is_some())
+        .filter(|e| ids.contains(&e.id) && e.has_geometry())
     {
         if let Ok(world) = view.world_matrix(&entity.id) {
+            if let Some(mesh) = &entity.mesh {
+                for vertex in &mesh.data().vertices {
+                    let p = world.transform_point3(Vec3::from(vertex.position));
+                    min = min.min(p);
+                    max = max.max(p);
+                }
+                continue;
+            }
             let half = Vec3::from_array(entity.dimensions) * 0.5;
             for x in [-1., 1.] {
                 for y in [-1., 1.] {
@@ -77,13 +85,24 @@ impl Editor {
             (Gizmo::Rotate, "Girar (E)"),
             (Gizmo::Scale, "Escalar (R)"),
         ] {
-            if ui
-                .selectable_label(
-                    self.spatial.mode == Tool::Object && self.gizmo == tool,
+            let selected = self.spatial.mode == Tool::Object && self.gizmo == tool;
+            let response = if self.modeling_active() {
+                crate::icons::button(
+                    ui,
+                    match tool {
+                        Gizmo::Move => crate::icons::Icon::Move,
+                        Gizmo::Rotate => crate::icons::Icon::Rotate,
+                        Gizmo::Scale => crate::icons::Icon::Scale,
+                    },
                     label,
+                    label,
+                    selected,
+                    self.preferences.tool_names,
                 )
-                .clicked()
-            {
+            } else {
+                ui.selectable_label(selected, label)
+            };
+            if response.clicked() {
                 self.set_spatial_tool(Tool::Object);
                 self.gizmo = tool;
             }
@@ -92,6 +111,9 @@ impl Editor {
         if ui.selectable_label(self.spatial.mode==Tool::Pivot,"Editar pivô (P)").on_hover_text("Reposiciona o ponto de giro sem mover a peça e seus filhos. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.").clicked(){self.set_spatial_tool(Tool::Pivot);}
     }
     pub fn viewport(&mut self, ui: &mut egui::Ui, painting: bool) {
+        if self.modeling_active() && !painting {
+            self.model_toolbar(ui);
+        }
         let compact_tools = ui.available_width() < 550.;
         if !painting {
             ui.horizontal_wrapped(|ui| {
@@ -213,16 +235,21 @@ impl Editor {
         );
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
         self.editor_size = size;
-        if response.hovered() && !self.spatial_active_drag() {
+        let blocked = self.modeling.creation.is_some() || self.modeling.help;
+        if response.hovered() && !self.spatial_active_drag() && !blocked {
             self.camera.zoom(ui.input(|i| i.smooth_scroll_delta.y));
         }
-        if response.dragged_by(egui::PointerButton::Middle) && !self.spatial_active_drag() {
+        if response.dragged_by(egui::PointerButton::Middle)
+            && !self.spatial_active_drag()
+            && !blocked
+        {
             let d = ui.input(|i| i.pointer.delta());
             self.camera.pan([d.x, d.y], size);
         }
         if self.scene().kind == SceneKind::ThreeD
             && response.dragged_by(egui::PointerButton::Secondary)
             && !self.spatial_active_drag()
+            && !blocked
         {
             let d = ui.input(|i| i.pointer.delta());
             self.camera.orbit([d.x, d.y]);
@@ -248,6 +275,9 @@ impl Editor {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
             Color32::WHITE,
         );
+        if blocked {
+            return;
+        }
         let point = ui
             .input(|i| i.pointer.interact_pos())
             .filter(|p| rect.contains(*p));
@@ -270,6 +300,9 @@ impl Editor {
         );
         let contour_pick = point.and_then(|p| overlays.pick(p, &self.selection.ids));
         let handle_owned = !painting && self.spatial_handles(ui, &scene, rect);
+        if !painting && self.mesh_viewport(ui, &scene, rect, &response) {
+            return;
+        }
         if painting {
             if (response.dragged_by(egui::PointerButton::Primary) || response.clicked())
                 && let Some(hit) = pick.as_ref()
@@ -372,11 +405,20 @@ impl Editor {
             (0, Color32::from_rgb(239, 113, 117)),
             (1, Color32::from_rgb(127, 215, 153)),
             (2, Color32::from_rgb(122, 169, 240)),
+            (3, Color32::WHITE),
         ] {
+            let uniform = axis == 3;
+            if uniform && self.gizmo != Gizmo::Scale {
+                continue;
+            }
             if self.scene().kind == SceneKind::TwoD && axis == 2 && self.gizmo != Gizmo::Rotate {
                 continue;
             }
-            let vector = [Vec3::X, Vec3::Y, Vec3::Z][axis];
+            let vector = if uniform {
+                Vec3::ONE
+            } else {
+                [Vec3::X, Vec3::Y, Vec3::Z][axis]
+            };
             let parent = if multi {
                 glam::Mat4::IDENTITY
             } else {
@@ -392,22 +434,28 @@ impl Editor {
                 .world_to_screen(pivot + world_axis, size)
                 .map(|p| rect.min + Vec2::from(p) - origin)
                 .unwrap_or(Vec2::ZERO);
-            let direction = if projected.length() > 0.1 {
+            let direction = if !uniform && projected.length() > 0.1 {
                 projected.normalized()
             } else {
                 Vec2::new(0.7, -0.7)
             };
-            let endpoint = origin + direction * (70. + axis as f32 * 8.);
+            let endpoint = if uniform {
+                origin
+            } else {
+                origin + direction * (70. + axis as f32 * 8.)
+            };
             let painter = ui.painter_at(rect);
             painter.line_segment([origin, endpoint], egui::Stroke::new(2., color));
             painter.circle_filled(endpoint, 6., color);
-            painter.text(
-                endpoint + Vec2::new(8., -8.),
-                egui::Align2::LEFT_BOTTOM,
-                ["X", "Y", "Z"][axis],
-                egui::FontId::proportional(12.),
-                color,
-            );
+            if !uniform {
+                painter.text(
+                    endpoint + Vec2::new(8., -8.),
+                    egui::Align2::LEFT_BOTTOM,
+                    ["X", "Y", "Z"][axis],
+                    egui::FontId::proportional(12.),
+                    color,
+                );
+            }
             let _response = ui.interact(
                 Rect::from_center_size(endpoint, Vec2::splat(20.)),
                 ui.id().with(("gizmo", axis)),
@@ -427,6 +475,10 @@ impl Editor {
             if let Some(pos) =
                 pressed.filter(|p| Rect::from_center_size(endpoint, Vec2::splat(22.)).contains(*p))
             {
+                if uniform && ui.input(|i| i.modifiers.alt) {
+                    self.warn("Alt em Escalar exige escolher a alça X, Y ou Z.");
+                    continue;
+                }
                 self.gizmo_drag = Some(GizmoDrag {
                     entity: id.clone(),
                     base: entity.transform.clone(),
@@ -452,6 +504,9 @@ impl Editor {
                     continue;
                 }
                 let mut next = drag.base.clone();
+                if uniform && ui.input(|i| i.modifiers.alt) {
+                    continue;
+                }
                 let amount = (pos - drag.origin).dot(drag.direction);
                 if drag.originals.len() > 1 {
                     let mut working = displayed.clone();
@@ -478,8 +533,14 @@ impl Editor {
                                 * glam::Mat4::from_translation(-drag.center)
                         }
                         Gizmo::Scale => {
+                            let mut factor = Vec3::ONE;
+                            if uniform {
+                                factor = Vec3::splat((amount * 0.01).exp());
+                            } else {
+                                factor[axis] = (amount * 0.01).exp();
+                            }
                             glam::Mat4::from_translation(drag.center)
-                                * glam::Mat4::from_scale(Vec3::splat((amount * 0.01).exp()))
+                                * glam::Mat4::from_scale(factor)
                                 * glam::Mat4::from_translation(-drag.center)
                         }
                     };
@@ -508,7 +569,13 @@ impl Editor {
                         next.rotation[axis] += amount * 0.012;
                     }
                     Gizmo::Scale => {
-                        next.scale[axis] = drag.base.scale[axis] * (amount * 0.01).exp();
+                        if uniform {
+                            if !ui.input(|i| i.modifiers.alt) {
+                                next.scale = drag.base.scale.map(|v| v * (amount * 0.01).exp());
+                            }
+                        } else {
+                            next.scale[axis] = drag.base.scale[axis] * (amount * 0.01).exp();
+                        }
                     }
                 }
                 self.apply_pose(&id, next);
@@ -552,19 +619,24 @@ impl Editor {
                     egui::StrokeKind::Inside,
                 );
             }
-            if entity.primitive.is_none() || self.selected.as_ref() == Some(&entity.id) {
+            if !entity.has_geometry() || self.selected.as_ref() == Some(&entity.id) {
                 continue;
             }
             let Ok(world) = view.world_matrix(&entity.id) else {
                 continue;
             };
             let half = Vec3::from(entity.dimensions) * 0.5;
+            let (min, max) = entity
+                .mesh
+                .as_ref()
+                .and_then(|m| m.prepared().bounds)
+                .unwrap_or((-half, half));
             let points: Vec<_> = (0..8)
                 .map(|i| {
                     let local = Vec3::new(
-                        if i & 1 == 0 { -half.x } else { half.x },
-                        if i & 2 == 0 { -half.y } else { half.y },
-                        if i & 4 == 0 { -half.z } else { half.z },
+                        if i & 1 == 0 { min.x } else { max.x },
+                        if i & 2 == 0 { min.y } else { max.y },
+                        if i & 4 == 0 { min.z } else { max.z },
                     );
                     self.camera
                         .world_to_screen(world.transform_point3(local), size)

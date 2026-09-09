@@ -33,6 +33,9 @@ impl Editor {
     }
     pub(super) fn toolbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+            if self.mesh_operation_active() {
+                ui.disable();
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("OXY")

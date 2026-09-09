@@ -51,6 +51,7 @@ impl Editor {
     pub fn studio_ui(&mut self, ui: &mut egui::Ui, dt: f32) {
         let previous = self.studio.tab;
         ui.horizontal_wrapped(|ui| {
+            if self.mesh_operation_active(){ui.disable();}
             ui.heading("Estúdio");
             ui.separator();
             ui.selectable_value(&mut self.studio.tab, StudioTab::Model, "Modelagem").on_hover_text("Crie formas em + Objeto. Arraste peças na hierarquia para definir suas articulações.");

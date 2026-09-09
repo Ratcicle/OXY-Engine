@@ -16,11 +16,35 @@ pub(crate) enum MeshKey {
     Sphere(u32),
     Cylinder(u32),
     Plane,
+    Parametric(Primitive, u32, [u32; 5]),
+    Authored(u64),
 }
 
 impl MeshKey {
     pub fn for_entity(entity: &Entity) -> Option<Self> {
+        if let Some(mesh) = &entity.mesh {
+            return Some(Self::Authored(mesh.revision()));
+        }
         let segments = entity.segments.clamp(3, 256);
+        if entity.primitive_parameters.is_some()
+            || matches!(
+                entity.primitive,
+                Some(Primitive::Pyramid | Primitive::Cone | Primitive::Tube)
+            )
+        {
+            let p = oxy_core::geometry::primitives::Parameters::for_entity(entity);
+            return Some(Self::Parametric(
+                entity.primitive?,
+                segments,
+                [
+                    p.latitude,
+                    p.height_divisions,
+                    p.plane_divisions[0],
+                    p.plane_divisions[1],
+                    p.wall_fraction.to_bits(),
+                ],
+            ));
+        }
         Some(match entity.primitive? {
             Primitive::Rectangle | Primitive::Sprite => Self::Quad,
             Primitive::Circle => Self::Circle(segments),
@@ -28,6 +52,9 @@ impl MeshKey {
             Primitive::Sphere => Self::Sphere(segments),
             Primitive::Cylinder => Self::Cylinder(segments),
             Primitive::Plane => Self::Plane,
+            Primitive::Pyramid | Primitive::Cone | Primitive::Tube => {
+                unreachable!("Handled parametric form")
+            }
         })
     }
 
@@ -39,6 +66,18 @@ impl MeshKey {
             Self::Sphere(segments) => sphere(segments),
             Self::Cylinder(segments) => cylinder(segments),
             Self::Plane => plane(),
+            Self::Parametric(primitive, segments, [latitude, height_divisions, x, y, wall]) => {
+                let p = oxy_core::geometry::primitives::Parameters {
+                    latitude,
+                    height_divisions,
+                    plane_divisions: [x, y],
+                    wall_fraction: f32::from_bits(wall),
+                };
+                oxy_core::geometry::primitives::generate(primitive, segments, p)
+                    .map(|m| from_editable(&m))
+                    .unwrap_or_default()
+            }
+            Self::Authored(_) => unreachable!("Authored data is supplied to the cache"),
         }
     }
 }
@@ -50,14 +89,34 @@ struct CpuMeshCache {
 }
 
 impl CpuMeshCache {
-    fn get(&mut self, key: MeshKey) -> Arc<Mesh> {
+    fn get(
+        &mut self,
+        key: MeshKey,
+        source: Option<&oxy_core::geometry::EditableMesh>,
+    ) -> Arc<Mesh> {
         if let Some(index) = self.entries.iter().position(|(stored, _)| *stored == key) {
             let entry = self.entries.remove(index).expect("Known cache entry");
             let mesh = Arc::clone(&entry.1);
             self.entries.push_back(entry);
             return mesh;
         }
-        let mesh = Arc::new(key.generate());
+        let mut mesh = source.map(from_editable).unwrap_or_else(|| key.generate());
+        if mesh.acceleration.is_empty() {
+            mesh.acceleration = Arc::new(oxy_core::geometry::ray::Bvh::build(
+                &mesh
+                    .indices
+                    .chunks_exact(3)
+                    .map(|t| {
+                        [
+                            mesh.vertices[t[0] as usize].position,
+                            mesh.vertices[t[1] as usize].position,
+                            mesh.vertices[t[2] as usize].position,
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        let mesh = Arc::new(mesh);
         let bytes = mesh.byte_size();
         while !self.entries.is_empty()
             && (self.entries.len() >= 64 || self.bytes + bytes > 64 * 1024 * 1024)
@@ -77,12 +136,47 @@ impl CpuMeshCache {
 
 /// Shared by GPU upload and CPU ray picking. No entity/document state is held in this cache.
 pub(crate) fn cached_primitive(key: MeshKey) -> Arc<Mesh> {
+    cached(key, None)
+}
+pub(crate) fn cached_entity(entity: &Entity) -> Option<Arc<Mesh>> {
+    let key = MeshKey::for_entity(entity)?;
+    Some(if entity.mesh.is_some() {
+        cached(key, entity.mesh.as_ref())
+    } else {
+        cached_primitive(key)
+    })
+}
+fn cached(key: MeshKey, source: Option<&oxy_core::geometry::EditableMesh>) -> Arc<Mesh> {
     static CACHE: OnceLock<Mutex<CpuMeshCache>> = OnceLock::new();
     CACHE
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .get(key)
+        .get(key, source)
+}
+
+pub fn from_editable(source: &oxy_core::geometry::EditableMesh) -> Mesh {
+    let mut mesh = Mesh {
+        acceleration: Arc::clone(&source.prepared().acceleration),
+        ..Default::default()
+    };
+    let mut starts = std::collections::HashMap::new();
+    for (fi, face) in source.data().faces.iter().enumerate() {
+        starts.insert(face.id, mesh.vertices.len() as u32);
+        for corner in &face.corners {
+            mesh.vertex(
+                source.position(corner.vertex).expect("Validated vertex"),
+                source.corner_normal(fi, corner),
+                Vec2::from(corner.uv),
+            );
+        }
+    }
+    for triangle in &source.prepared().triangles {
+        let start = starts[&triangle.face];
+        mesh.indices
+            .extend(triangle.corners.map(|i| start + i as u32));
+    }
+    mesh
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -96,12 +190,14 @@ pub struct MeshVertex {
 pub struct Mesh {
     pub vertices: Vec<MeshVertex>,
     pub indices: Vec<u32>,
+    pub acceleration: Arc<oxy_core::geometry::ray::Bvh>,
 }
 
 impl Mesh {
     fn byte_size(&self) -> usize {
         std::mem::size_of_val(self.vertices.as_slice())
             + std::mem::size_of_val(self.indices.as_slice())
+            + self.acceleration.estimated_bytes()
     }
 
     fn vertex(&mut self, position: Vec3, normal: Vec3, uv: Vec2) -> u32 {
@@ -378,16 +474,16 @@ mod tests {
     #[test]
     fn cpu_cache_reuses_geometry_and_evicts_without_invalidating_references() {
         let mut cache = CpuMeshCache::default();
-        let first = cache.get(MeshKey::Sphere(24));
-        assert!(Arc::ptr_eq(&first, &cache.get(MeshKey::Sphere(24))));
+        let first = cache.get(MeshKey::Sphere(24), None);
+        assert!(Arc::ptr_eq(&first, &cache.get(MeshKey::Sphere(24), None)));
         let triangle_count = first.indices.len();
         for segments in 32..100 {
-            cache.get(MeshKey::Circle(segments));
+            cache.get(MeshKey::Circle(segments), None);
         }
         assert!(cache.entries.len() <= 64);
         assert!(cache.bytes <= 64 * 1024 * 1024);
         assert_eq!(first.indices.len(), triangle_count);
-        assert!(!Arc::ptr_eq(&first, &cache.get(MeshKey::Sphere(24))));
+        assert!(!Arc::ptr_eq(&first, &cache.get(MeshKey::Sphere(24), None)));
     }
 
     #[test]
