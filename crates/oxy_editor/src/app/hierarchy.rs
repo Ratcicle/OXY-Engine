@@ -82,8 +82,8 @@ impl Editor {
     }
     pub(super) fn hierarchy(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("hierarchy")
-            .default_width(220.)
-            .width_range(165.0..=370.0)
+            .default_width((ctx.content_rect().width() * 0.17).clamp(120., 220.))
+            .width_range(115.0..=(ctx.content_rect().width() * 0.3).clamp(120., 370.))
             .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -325,7 +325,7 @@ impl Editor {
             && let Err(error) = editing::reparent_selection(self.scene_mut(), &ids, parent)
         {
             self.log(error);
-            self.console = true;
+            self.notice_last(false);
         }
     }
 }

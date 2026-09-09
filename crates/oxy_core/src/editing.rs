@@ -3,6 +3,85 @@ use crate::document::*;
 use glam::{Mat4, Vec3};
 use std::collections::{HashMap, HashSet};
 
+/// Creates only the requested first scene, without demonstration gameplay.
+pub fn blank_project(name: &str, kind: SceneKind) -> Result<Project, String> {
+    if name.trim().is_empty() {
+        return Err("Informe um nome para o projeto.".into());
+    }
+    let mut project = Project::new(name.trim());
+    let scene = Scene::new(
+        if kind == SceneKind::TwoD {
+            "Cena 2D"
+        } else {
+            "Cena 3D"
+        },
+        kind,
+    );
+    project.start_scene = scene.id.clone();
+    project.scenes = vec![scene];
+    project.input_bindings.clear();
+    Ok(project)
+}
+
+pub fn duplicate_scene(project: &mut Project, id: &str) -> Result<Id, String> {
+    let mut scene = project.scene(id).ok_or("Cena não encontrada")?.clone();
+    let new_scene = new_id();
+    let mut map: HashMap<_, _> = scene
+        .entities
+        .iter()
+        .map(|e| (e.id.clone(), new_id()))
+        .collect();
+    map.insert(scene.id.clone(), new_scene.clone());
+    remap_entities(&mut scene.entities, &map)?;
+    scene.id = new_scene.clone();
+    scene.name.push_str(" (cópia)");
+    project.scenes.push(scene);
+    Ok(new_scene)
+}
+
+pub fn scene_references(project: &Project, id: &str) -> Vec<String> {
+    project
+        .scenes
+        .iter()
+        .map(|s| (s.name.as_str(), s.entities.as_slice()))
+        .chain(
+            project
+                .assets
+                .iter()
+                .filter_map(|a| a.model.as_deref().map(|m| (a.name.as_str(), m))),
+        )
+        .flat_map(|(scope, entities)| {
+            entities.iter().flat_map(move |e| {
+                e.graph.nodes.iter().filter(move |n| {
+                    n.operation == "action.scene"
+                        && matches!(n.params.get("scene"), Some(Value::Text(target)) if target==id)
+                }).map(move |n| format!("{scope} → {} → Mudar de cena ({})", e.name, n.id))
+            })
+        })
+        .collect()
+}
+
+pub fn delete_scene(project: &mut Project, id: &str) -> Result<(), String> {
+    if project.scene(id).is_none() {
+        return Err("Cena não encontrada".into());
+    }
+    if project.scenes.len() == 1 {
+        return Err("Mantenha pelo menos uma cena no projeto.".into());
+    }
+    let references = scene_references(project, id);
+    if !references.is_empty() {
+        return Err(format!(
+            "Altere os destinos destes nós antes de excluir:\n{}",
+            references.join("\n")
+        ));
+    }
+    if project.start_scene == id {
+        return Err("Escolha outra cena inicial do jogo antes de excluir esta cena.".into());
+    }
+    project.scenes.retain(|s| s.id != id);
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Selection {
     pub ids: Vec<Id>,

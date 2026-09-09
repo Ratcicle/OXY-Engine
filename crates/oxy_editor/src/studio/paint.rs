@@ -229,7 +229,6 @@ impl Editor {
             }
         });
         let Some(id) = self.texture_id() else {
-            ui.label("Crie ou importe uma textura para começar a pintar.");
             self.viewport(ui, true);
             return;
         };
@@ -238,7 +237,6 @@ impl Editor {
             ui.group(|ui|{ui.colored_label(Color32::from_rgb(232,190,113),format!("Esta textura está vinculada a {uses} peças ou imagens. A pintura afetará todas essas referências."));ui.horizontal(|ui|{if ui.button("Criar cópia independente").clicked(){self.copy_texture(&id)}
 if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=Some(id.clone());}});});
         }
-        ui.label("Esquerda: pixels do PNG e regiões UV. Direita: pintura direta na peça selecionada. Ctrl+Z desfaz a pincelada inteira.");
         let width = (ui.available_width() * 0.48).max(100.);
         egui::SidePanel::left("paint_pixels")
             .resizable(true)

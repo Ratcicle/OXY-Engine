@@ -1,0 +1,51 @@
+Concluído: true
+Erro: None
+Verificado: ux_base
+Clique: Novo projeto
+Captura GPU da janela: new-project.png
+Clique: Cancelar
+Verificado: ux_unchanged
+Clique: Novo projeto
+Clique: Cena 3D
+Comece com modelos, profundidade e uma câmera 3D.
+Clique: Criar projeto
+Verificado: ux_new_3d
+Clique: Interface: 100%
+Clique: 160%
+Verificado: ux_scale_100
+Captura GPU da janela: pending-scale.png
+Clique: Cancelar
+Verificado: ux_scale_100
+Clique: Interface: 100%
+Clique: 160%
+Clique: Aplicar
+Verificado: ux_scale_160
+Captura GPU da janela: 1440-scale160.png
+Janela: 920 × 600 pixels físicos
+Clique: Interface: 160%
+Captura GPU da janela: 920-scale160.png
+Clique: 80%
+Clique: Aplicar
+Verificado: ux_scale_80
+Clique: Interface: 80%
+Clique: Restaurar 100%
+Clique: Aplicar
+Verificado: ux_scale_100
+Verificado: ux_viewport
+Tecla C, Ctrl=false
+Verificado: ux_refusal
+Captura GPU da janela: refusal-920.png
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Clique: ...
+Clique: Duplicar cena
+Verificado: ux_duplicate
+Clique: Desfazer
+Verificado: ux_undo_scene
+Clique: Refazer
+Verificado: ux_duplicate
+Clique: Projeto
+Clique: Novo projeto
+Clique: Cancelar
+Verificado: ux_duplicate
+Capturas: ["new-project.png", "pending-scale.png", "1440-scale160.png", "920-scale160.png", "refusal-920.png"]

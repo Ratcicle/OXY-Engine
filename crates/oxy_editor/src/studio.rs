@@ -53,19 +53,20 @@ impl Editor {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Estúdio");
             ui.separator();
-            ui.selectable_value(&mut self.studio.tab, StudioTab::Model, "Modelagem");
-            ui.selectable_value(&mut self.studio.tab, StudioTab::Paint, "Pintura");
+            ui.selectable_value(&mut self.studio.tab, StudioTab::Model, "Modelagem").on_hover_text("Crie formas em + Objeto. Arraste peças na hierarquia para definir suas articulações.");
+            ui.selectable_value(&mut self.studio.tab, StudioTab::Paint, "Pintura").on_hover_text("Edite os pixels à esquerda ou pinte diretamente na peça. Ctrl+Z desfaz a pincelada inteira.");
             ui.selectable_value(&mut self.studio.tab, StudioTab::Animation, "Animação");
         });
         if previous != self.studio.tab {
             self.set_spatial_tool(crate::app::Tool::Object);
         }
-        if self.selected.is_none() {
-            ui.label("Selecione uma peça ou use + Objeto na hierarquia. Todas as peças continuam editáveis.");
+        if let Some(id) = self.studio.owner.as_ref().or(self.selected.as_ref())
+            && let Some(entity) = self.scene().entity(id)
+        {
+            ui.label(format!("Modelo: {}", entity.name));
         }
         match self.studio.tab {
             StudioTab::Model => {
-                ui.label("Adicione formas em + Objeto. No Estúdio, a peça criada recebe a peça selecionada como pai. Dimensões, pivô e parentesco ficam nas propriedades.");
                 self.viewport(ui, false);
             }
             StudioTab::Paint => self.paint_ui(ui),

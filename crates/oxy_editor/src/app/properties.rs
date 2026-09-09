@@ -89,16 +89,16 @@ impl Editor {
     fn transform_multiple(&mut self, ids: &[Id], delta: glam::Mat4) {
         if let Err(error) = editing::transform_selection(self.scene_mut(), ids, delta) {
             self.log(error);
-            self.console = true;
+            self.notice_last(false);
         }
     }
     pub(super) fn properties(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::right("properties").default_width(290.).width_range(240.0..=460.0).resizable(true).show(ctx,|ui| {
+        egui::SidePanel::right("properties").default_width((ctx.content_rect().width()*0.23).clamp(140.,290.)).width_range(130.0..=(ctx.content_rect().width()*0.32).clamp(140.,460.)).resizable(true).show(ctx,|ui| {
             ui.strong("PROPRIEDADES");ui.separator();
             egui::ScrollArea::vertical().show(ui,|ui| {
                 let Some(id)=self.selected.clone() else {
                     ui.heading("Projeto");ui.text_edit_singleline(&mut self.state.project.name);
-                    ui.label("Selecione um objeto na cena ou na hierarquia. Use + Objeto para criar sua primeira forma.");
+
                     ui.separator();ui.strong("Controles do jogo");
                     for (action,key) in &mut self.state.project.input_bindings {ui.horizontal_wrapped(|ui|{ui.label(action.replace('_'," "));egui::ComboBox::from_id_salt(action).selected_text(crate::labels::key(key)).show_ui(ui,|ui| { for candidate in egui::Key::ALL { if !matches!(candidate,egui::Key::Escape|egui::Key::F3) { ui.selectable_value(key,candidate.name().into(),crate::labels::key(candidate.name())); } } });});}
                     return
@@ -138,7 +138,7 @@ impl Editor {
                             let candidate = Transform::from_matrix(matrix,entity.transform.pivot);
                             if parent.determinant().abs() < 1e-8 || !candidate.finite() || !candidate.matrix().abs_diff_eq(matrix,0.0001) {
                                 self.log("A transformação global exigiria cisalhamento. Edite em Local ou ajuste a escala não uniforme do pai. A peça foi preservada.");
-                                self.console = true;
+                                self.notice_last(false);
                             } else {
                                 entity.transform = candidate;
                             }
@@ -196,17 +196,17 @@ impl Editor {
                 }); self.texture_controls(ui,&mut entity,true);}
                 if self.scene().entity(&id).is_some_and(|e|e.collider!=entity.collider) && entity.collider.is_some(){
                     let mut candidate=self.scene().clone();candidate.entity_mut(&id).unwrap().collider=entity.collider.clone();
-                    if let Err(error)=oxy_core::spatial::collider_bounds(&candidate,&id){entity.collider=self.scene().entity(&id).unwrap().collider.clone();self.log(error);self.console=true;}
+                    if let Err(error)=oxy_core::spatial::collider_bounds(&candidate,&id){entity.collider=self.scene().entity(&id).unwrap().collider.clone();self.log(error);self.notice_last(false);}
                 }
                 if let Some(original)=self.scene_mut().entity_mut(&id){*original=entity;}
-                if let Some(pivot)=requested_pivot && self.structural_ready() && let Err(e)=oxy_core::spatial::move_pivot(self.scene_mut(),&id,Vec3::from(pivot)){self.log(e);self.console=true;}
+                if let Some(pivot)=requested_pivot && self.structural_ready() && let Err(e)=oxy_core::spatial::move_pivot(self.scene_mut(),&id,Vec3::from(pivot)){self.log(e);self.notice_last(false);}
                 if let Some(tool)=requested_tool{self.set_spatial_tool(tool);}
                 if let Some(children)=requested_fit{self.start_fit(children);}
-                if new_parent!=old_parent&&self.structural_ready()&& let Err(e)=self.scene_mut().reparent(&id,new_parent,true){self.log(e);self.console=true;}
+                if new_parent!=old_parent&&self.structural_ready()&& let Err(e)=self.scene_mut().reparent(&id,new_parent,true){self.log(e);self.notice_last(false);}
                 ui.separator();
                 ui.horizontal(|ui|{if ui.button("Lógica").clicked(){self.tab=Tab::Logic;}
 if ui.button("Animação").clicked(){self.open_animation_for(&id);}});
-                if ui.button("Salvar hierarquia como modelo").clicked(){let scene_id=self.scene_id.clone();let name=self.scene().entity(&id).map(|e|e.name.clone()).unwrap_or_default();match self.state.project.save_model(&scene_id,&id,&name){Ok(_)=>self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco."),Err(e)=>{self.log(e);self.console=true;}}}
+                if ui.button("Salvar hierarquia como modelo").clicked(){let scene_id=self.scene_id.clone();let name=self.scene().entity(&id).map(|e|e.name.clone()).unwrap_or_default();match self.state.project.save_model(&scene_id,&id,&name){Ok(_)=>self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco."),Err(e)=>{self.log(e);self.notice_last(false);}}}
                 ui.horizontal(|ui|{if ui.button("Duplicar").clicked(){self.duplicate();}
 if ui.button("Agrupar").clicked(){self.group();}
 if ui.button("Excluir").clicked(){self.delete();}});

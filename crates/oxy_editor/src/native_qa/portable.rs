@@ -15,7 +15,7 @@ fn native_portable_home_workflow() {
             copy_directory(&workspace.join("examples/validacao"), &data).unwrap();
         }
     }
-    let output = workspace.join("qa/v0.1.3/portable");
+    let output = workspace.join("qa/v0.2.0/portable");
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let shared = report.clone();
@@ -48,6 +48,7 @@ fn native_portable_home_workflow() {
                 Action::Screenshot("home.png"),
                 Action::Idle,
                 Action::Click("Novo projeto"),
+                Action::Click("Criar projeto"),
                 Action::Check("home_new"),
                 Action::Click("Projeto"),
                 Action::Click("Tela inicial"),

@@ -1,9 +1,39 @@
 use super::*;
 
 impl Editor {
+    fn history_buttons(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_enabled(self.history.can_undo(), egui::Button::new("Desfazer"))
+            .on_hover_text("Desfazer a última edição (Ctrl+Z).")
+            .clicked()
+        {
+            self.undo(false);
+        }
+        if ui
+            .add_enabled(self.history.can_redo(), egui::Button::new("Refazer"))
+            .on_hover_text("Refazer a edição desfeita (Ctrl+Y).")
+            .clicked()
+        {
+            self.undo(true);
+        }
+    }
+    fn display_menu(&mut self, ui: &mut egui::Ui) {
+        let response = ui.menu_button("Exibir", |ui| {
+            ui.checkbox(&mut self.console, "Console");
+            ui.checkbox(&mut self.diagnostics, "Desempenho");
+            self.notices_button(ui);
+        });
+        if self.notices.has_unread() {
+            ui.painter().circle_filled(
+                response.response.rect.right_top() + Vec2::new(-3., 3.),
+                3.,
+                Color32::LIGHT_YELLOW,
+            );
+        }
+    }
     pub(super) fn toolbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("OXY")
                         .size(26.)
@@ -23,7 +53,7 @@ impl Editor {
                         ui.close();
                     }
                     if ui.button("Novo projeto").clicked() {
-                        self.transition(Transition::New);
+                        self.new_project_dialog();
                         ui.close();
                     }
                     if ui.button("Abrir projeto…").clicked() {
@@ -32,7 +62,7 @@ impl Editor {
                             .add_filter("Projeto OXY", &["json"])
                             .pick_file()
                         {
-                            self.transition(Transition::Open(path))
+                            self.transition(Transition::Open(path));
                         }
                         ui.close();
                     }
@@ -49,17 +79,10 @@ impl Editor {
                         ui.close();
                     }
                 });
-                if ui
-                    .add_enabled(self.history.can_undo(), egui::Button::new("Desfazer"))
-                    .clicked()
-                {
-                    self.undo(false)
-                }
-                if ui
-                    .add_enabled(self.history.can_redo(), egui::Button::new("Refazer"))
-                    .clicked()
-                {
-                    self.undo(true)
+                if ctx.content_rect().width() < 700. {
+                    ui.menu_button("Editar", |ui| self.history_buttons(ui));
+                } else {
+                    self.history_buttons(ui);
                 }
                 ui.separator();
                 if self.runtime.is_none() {
@@ -75,40 +98,31 @@ impl Editor {
                         if paused {
                             self.tab = Tab::Game;
                             self.capture = true;
-                            if let Some(r) = &mut self.runtime {
-                                r.set_paused(false);
+                            if let Some(rt) = &mut self.runtime {
+                                rt.set_paused(false);
                             }
                             self.last_time = Instant::now();
                         } else {
-                            self.pause()
+                            self.pause();
                         }
                     }
                     if ui.button("■ Parar").clicked() {
-                        self.stop()
+                        self.stop();
                     }
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut self.scale, 0.8..=1.6)
-                            .text("Interface")
-                            .show_value(false),
-                    );
-                    ui.label(if self.dirty() {
-                        "● Não salvo"
-                    } else if self.path.is_none() {
-                        "Sem arquivo"
-                    } else {
-                        "Salvo"
-                    });
-                    if ui.available_width() > 60. {
-                        ui.add_sized(
-                            [ui.available_width(), 20.],
-                            egui::Label::new(&self.state.project.name).truncate(),
-                        );
-                    }
+                if ctx.content_rect().width() < 900. {
+                    self.display_menu(ui);
+                }
+                self.interface_button(ui);
+                ui.label(if self.dirty() {
+                    "● Não salvo"
+                } else if self.path.is_none() {
+                    "Sem arquivo"
+                } else {
+                    "Salvo"
                 });
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let old = self.tab;
                 for (tab, label) in [
                     (Tab::Scene, "Cena"),
@@ -126,56 +140,15 @@ impl Editor {
                     self.spatial.fit = None;
                 }
                 ui.separator();
-                let mut scene_id = self.scene_id.clone();
-                egui::ComboBox::from_id_salt("scene")
-                    .selected_text(&self.scene().name)
-                    .show_ui(ui, |ui| {
-                        for scene in &self.state.project.scenes {
-                            ui.selectable_value(&mut scene_id, scene.id.clone(), &scene.name);
-                        }
-                    });
-                if scene_id != self.scene_id {
-                    self.set_scene(scene_id);
-                }
-                ui.menu_button("+ Cena", |ui| {
-                    ui.selectable_value(&mut self.new_scene_kind, SceneKind::TwoD, "2D");
-                    ui.selectable_value(&mut self.new_scene_kind, SceneKind::ThreeD, "3D");
-                    if ui.button("Criar cena").clicked() {
-                        let scene = Scene::new(
-                            if self.new_scene_kind == SceneKind::TwoD {
-                                "Nova cena 2D"
-                            } else {
-                                "Nova cena 3D"
-                            },
-                            self.new_scene_kind,
-                        );
-                        let id = scene.id.clone();
-                        self.state.project.scenes.push(scene);
-                        self.set_scene(id);
-                        ui.close();
-                    }
-                });
-                if ui
-                    .button("Definir inicial")
-                    .on_hover_text("Cena aberta pelo executável do jogo")
-                    .clicked()
-                {
-                    self.state.project.start_scene = self.scene_id.clone();
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.scene_bar(ui);
+                if ctx.content_rect().width() >= 900. {
                     ui.checkbox(&mut self.console, "Console");
+                    self.notices_button(ui);
                     ui.checkbox(&mut self.diagnostics, "Desempenho")
                         .on_hover_text(
-                            "Veja tempos medidos, objetos, texturas, malhas e tarefas do jogo.",
+                            "Tempos medidos, objetos, texturas, malhas e tarefas do jogo.",
                         );
-                    if ui.available_width() > 150. {
-                        ui.label(if self.scene().kind == SceneKind::TwoD {
-                            "2D · metros · Y ↑"
-                        } else {
-                            "3D · metros · Y ↑"
-                        });
-                    }
-                });
+                }
             });
         });
     }

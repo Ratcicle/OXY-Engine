@@ -2,5 +2,5 @@
 /.tools/
 /dist/
 /artifacts/*.log
+/qa/**/native-qa-labels.txt
 *.tmp
-

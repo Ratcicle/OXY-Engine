@@ -2,7 +2,10 @@ mod diagnostics;
 mod hierarchy;
 mod home;
 mod library;
+mod notices;
+mod preferences;
 mod properties;
+mod scenes;
 mod spatial_tools;
 mod textures;
 mod toolbar;
@@ -67,13 +70,18 @@ struct Rename {
 }
 enum Transition {
     Home,
-    New,
+    Create(String, SceneKind),
     Open(PathBuf),
     Close,
 }
 
 pub struct Editor {
     home: home::Home,
+    notices: notices::Notices,
+    preferences: preferences::Preferences,
+    pending_preferences: Option<preferences::Preferences>,
+    new_project: Option<scenes::NewProject>,
+    scene_dialog: Option<scenes::SceneDialog>,
     pub state: Snapshot,
     history: CommandHistory,
     pub path: Option<PathBuf>,
@@ -113,7 +121,6 @@ pub struct Editor {
     attribute_name: String,
     attribute_type: u8,
     asset_search: String,
-    new_scene_kind: SceneKind,
     view_global: bool,
     last_runtime_scene: Option<Id>,
     context_target: Option<Id>,
@@ -130,6 +137,23 @@ pub struct Editor {
 }
 
 impl Editor {
+    #[cfg(test)]
+    pub(crate) fn qa_ux_refusal(&self) -> Result<(), String> {
+        if self.console {
+            return Err("Recusa abriu o console automaticamente".into());
+        }
+        if self.dirty() {
+            return Err("Preferência ou aviso entrou no histórico".into());
+        }
+        if self
+            .messages
+            .last()
+            .is_none_or(|m| !m.contains("Escolha somente um objeto"))
+        {
+            return Err("Atalho inválido não informou motivo".into());
+        }
+        Ok(())
+    }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals = egui::Visuals::dark();
@@ -155,8 +179,16 @@ impl Editor {
             project,
             images: TextureCache::default(),
         };
+        let (preferences, preference_error) = preferences::Preferences::load();
+        let scale = preferences.scale_percent as f32 / 100.;
+        cc.egui_ctx.set_zoom_factor(scale);
         let mut this = Self {
             home: home::Home::load(&cc.egui_ctx),
+            notices: Default::default(),
+            preferences,
+            pending_preferences: None,
+            new_project: None,
+            scene_dialog: None,
             history: CommandHistory::new(),
             state,
             path: None,
@@ -192,11 +224,10 @@ impl Editor {
             spatial: SpatialTools::default(),
             pending: None,
             allow_close: false,
-            scale: 1.,
+            scale,
             attribute_name: String::new(),
             attribute_type: 0,
             asset_search: String::new(),
-            new_scene_kind: SceneKind::TwoD,
             view_global: false,
             last_runtime_scene: None,
             context_target: None,
@@ -211,6 +242,10 @@ impl Editor {
             frame_cpu_ms: 0.,
             save_requested: false,
         };
+        if let Some(error) = preference_error {
+            this.warn(error);
+            this.notice_last(true);
+        }
         let arg = if cfg!(test) {
             None
         } else {
@@ -300,7 +335,7 @@ impl Editor {
             }
             Err(e) => {
                 self.log(format!("Não foi possível abrir: {e}"));
-                self.console = true;
+                self.notice_last(false);
             }
         }
     }
@@ -316,7 +351,7 @@ impl Editor {
             }
             if let Err(error) = editing::rename_entity(self.scene_mut(), &rename.id, &rename.text) {
                 self.log(error);
-                self.console = true;
+                self.notice_last(true);
                 rename.focus = true;
                 self.rename = Some(rename);
                 return false;
@@ -324,12 +359,12 @@ impl Editor {
         }
         if !self.studio.animation.drafts.is_empty() {
             self.log("Há uma pose provisória na Animação. Grave-a com + Quadro-chave ou use Descartar pose provisória antes de salvar.");
-            self.console = true;
+            self.notice_last(true);
             return false;
         }
         if let Err(error) = self.finish_animation_rename() {
             self.log(error);
-            self.console = true;
+            self.notice_last(true);
             return false;
         }
         self.finish_history(true);
@@ -344,7 +379,7 @@ impl Editor {
             let path = folder.join("project.oxy.json");
             if path.exists() {
                 self.log("Já existe project.oxy.json nessa pasta. Abra-o ou escolha outra pasta.");
-                self.console = true;
+                self.notice_last(true);
                 return false;
             }
             self.path = Some(path);
@@ -378,7 +413,7 @@ impl Editor {
                 self.log(format!(
                     "Falha ao salvar; o estado de edição foi preservado: {e}"
                 ));
-                self.console = true;
+                self.notice_last(true);
                 false
             }
         }
@@ -393,14 +428,17 @@ impl Editor {
     fn apply_transition(&mut self, t: Transition) {
         match t {
             Transition::Home => {
-                self.apply_transition(Transition::New);
+                self.apply_transition(Transition::Create(
+                    "Meu projeto OXY".into(),
+                    SceneKind::TwoD,
+                ));
                 self.home.visible = true;
             }
-            Transition::New => {
+            Transition::Create(name, kind) => {
                 self.home.visible = false;
                 self.home.example_copy = false;
                 self.state = Snapshot {
-                    project: Project::new("Meu projeto OXY"),
+                    project: editing::blank_project(&name, kind).expect("Nome validado no diálogo"),
                     images: TextureCache::default(),
                 };
                 self.path = None;
@@ -470,7 +508,7 @@ impl Editor {
                 .commit(&self.state.project, &mut self.state.images)
             {
                 self.log(error);
-                self.console = true;
+                self.notice_last(false);
             }
             self.state
                 .images
@@ -489,7 +527,7 @@ impl Editor {
         };
         if let Err(error) = result {
             self.log(error);
-            self.console = true;
+            self.notice_last(false);
         } else {
             if self.state.project.scene(&self.scene_id).is_none() {
                 self.scene_id = self.state.project.start_scene.clone()
@@ -536,7 +574,7 @@ impl Editor {
             }
             Err(e) => {
                 self.log(e);
-                self.console = true;
+                self.notice_last(false);
             }
         }
     }
@@ -641,7 +679,7 @@ impl Editor {
             Ok(group) => self.select(Some(group)),
             Err(error) => {
                 self.log(error);
-                self.console = true;
+                self.notice_last(false);
             }
         }
     }
@@ -652,7 +690,7 @@ impl Editor {
             self.log(
                 "Grave a pose com + Quadro-chave ou descarte a pose provisória antes de mudar de cena.",
             );
-            self.console = true;
+            self.notice_last(false);
             return;
         }
         self.pause();
@@ -715,7 +753,7 @@ impl Editor {
                 }
                 Err(e) => {
                     self.log(e);
-                    self.console = true;
+                    self.notice_last(false);
                     None
                 }
             }
@@ -885,9 +923,15 @@ impl eframe::App for Editor {
         self.frame_interval_ms = self.last_time.elapsed().as_secs_f32() * 1000.;
         let dt = (self.frame_interval_ms / 1000.).min(0.1);
         self.last_time = Instant::now();
-        ctx.set_zoom_factor(self.scale);
+        if (ctx.zoom_factor() - self.scale).abs() > 0.0001 {
+            ctx.set_zoom_factor(self.scale);
+        }
         if self.home.visible {
+            self.console(ctx);
             self.home_ui(ctx);
+            self.project_dialogs(ctx);
+            self.preferences_ui(ctx);
+            self.notices_ui(ctx);
             return;
         }
         let edit_event = ctx.input(|i| {
@@ -916,11 +960,21 @@ impl eframe::App for Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        if !self.capture && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
+        let dialog_open = self.pending_preferences.is_some()
+            || self.new_project.is_some()
+            || self.scene_dialog.is_some()
+            || self.pending.is_some();
+        if !dialog_open
+            && !self.capture
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
         {
             self.save_requested = true;
         }
-        if !self.capture && ctx.input(|i| i.focused) && !crate::graph_ui::text_input_active(ctx) {
+        if !dialog_open
+            && !self.capture
+            && ctx.input(|i| i.focused)
+            && !crate::graph_ui::text_input_active(ctx)
+        {
             if ctx.input_mut(|i| {
                 i.consume_key(
                     egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -950,16 +1004,18 @@ impl eframe::App for Editor {
                 }
             }
             if matches!(self.tab, Tab::Scene | Tab::Studio)
-                && !ctx.input(|i| i.modifiers.ctrl || i.modifiers.alt || i.modifiers.command)
+                && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                && !self.cancel_spatial_drag()
+            {
+                self.set_spatial_tool(Tool::Object);
+            }
+            if matches!(self.tab, Tab::Scene | Tab::Studio) && ctx.input(|i| i.modifiers.is_none())
             {
                 if ctx.input(|i| i.key_pressed(egui::Key::C)) {
                     self.set_spatial_tool(Tool::Collider);
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::P)) {
                     self.set_spatial_tool(Tool::Pivot);
-                }
-                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.cancel_spatial_drag() {
-                    self.set_spatial_tool(Tool::Object);
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::W)) {
                     self.set_spatial_tool(Tool::Object);
@@ -1047,6 +1103,9 @@ impl eframe::App for Editor {
         self.asset_delete_dialog(ctx);
         self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);
+        self.project_dialogs(ctx);
+        self.preferences_ui(ctx);
+        self.notices_ui(ctx);
         if self.pending.is_some() {
             self.pause();
             egui::Window::new("Alterações não salvas").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,Vec2::ZERO).show(ctx,|ui|{
@@ -1070,11 +1129,11 @@ if ui.button("Cancelar").clicked(){self.pending=None;}});
         let errors = self.renderer.take_errors();
         for error in errors {
             self.log(error);
-            self.console = true;
+            self.notice_last(false);
         }
         for error in self.game_ui.take_errors() {
             self.log(error);
-            self.console = true;
+            self.notice_last(false);
         }
         let active_textures: Vec<Id> = if matches!(self.tab, Tab::Scene | Tab::Studio) {
             self.selected

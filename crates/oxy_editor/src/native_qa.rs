@@ -3,6 +3,7 @@
 use crate::app::{Editor, Snapshot, Tab};
 mod portable;
 mod spatial;
+mod ux;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use oxy_core::document::{Id, SceneKind, new_id};
 use std::{
@@ -30,6 +31,7 @@ enum Action {
     Wait(usize),
     Card,
     Resize(Vec2),
+    ResizePhysical(Vec2),
     Screenshot(&'static str),
     Check(&'static str),
     DragNode(&'static str),
@@ -112,6 +114,7 @@ struct NativeQa {
     texture_base: Option<Snapshot>,
     saved_before_draft: Option<Vec<u8>>,
     finished: bool,
+    ux_viewport: Option<Rect>,
 }
 
 impl NativeQa {
@@ -245,9 +248,8 @@ impl NativeQa {
             Action::Check("stop_isolated"),
         ]);
         actions.extend([
-            Action::Click("+ Cena"),
-            Action::Click("3D"),
-            Action::Click("+ Cena"),
+            Action::Click("+"),
+            Action::Click("Cena 3D"),
             Action::Click("Criar cena"),
             Action::Click("+ Objeto"),
             Action::Click("Cubo"),
@@ -335,10 +337,9 @@ impl NativeQa {
             Action::Check("group_draft"),
             Action::Key(Key::S, true),
             Action::Check("draft_save_refused"),
-            Action::Click("Nova cena 3D"),
+            Action::Click("Nova cena"),
             Action::Click("A · Sala de plataforma 2D"),
             Action::Check("draft_scene_refused"),
-            Action::Click("Console"),
             Action::Click("+ Quadro-chave"),
             Action::Check("group_key"),
             Action::Screenshot("group-animation.png"),
@@ -348,7 +349,7 @@ impl NativeQa {
             Action::Key(Key::S, true),
             Action::Check("saved_roundtrip"),
             Action::Click("Cena"),
-            Action::Click("Nova cena 3D"),
+            Action::Click("Nova cena"),
             Action::Click("B · Oficina 3D e golpe articulado"),
             Action::SelectEntity("Boneco · modelo por peças"),
             Action::Click("Estúdio"),
@@ -385,6 +386,7 @@ impl NativeQa {
             texture_base: None,
             saved_before_draft: None,
             finished: false,
+            ux_viewport: None,
         }
     }
 
@@ -406,7 +408,15 @@ impl NativeQa {
         self.surface
             .texts
             .iter()
-            .filter(|target| target.text == label || target.text.ends_with(&format!(" {label}")))
+            .filter(|target| {
+                let text = target.text.trim_start_matches("• ");
+                text == label
+                    || text.ends_with(&format!(" {label}"))
+                    || text
+                        .strip_suffix(" · 2D")
+                        .or_else(|| text.strip_suffix(" · 3D"))
+                        == Some(label)
+            })
             .filter(|target| {
                 !canvas
                     || self
@@ -488,6 +498,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("ux_") {
+            return self.check_ux(label);
+        }
         let ensure = |condition: bool, message: &str| {
             if condition {
                 Ok(())
@@ -973,7 +986,7 @@ impl NativeQa {
                 )
             }
             "draft_scene_refused" => ensure(
-                self.editor.scene().name == "Nova cena 3D"
+                self.editor.scene().name == "Nova cena"
                     && !self.editor.studio.animation.drafts.is_empty(),
                 "Trocar de cena deve preservar o rascunho e manter a cena atual",
             ),
@@ -1586,6 +1599,13 @@ impl NativeQa {
                 )));
                 description = format!("Captura GPU da janela: {name}");
             }
+            Action::ResizePhysical(size) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                    size / ctx.pixels_per_point(),
+                ));
+                self.wait = 20;
+                description = format!("Janela: {} × {} pixels físicos", size.x, size.y);
+            }
             Action::Check(label) => {
                 self.check(label)?;
                 description = format!("Verificado: {label}");
@@ -1713,6 +1733,17 @@ impl eframe::App for NativeQa {
                 .collect::<Vec<_>>()
         });
         for (name, pixels) in screenshots {
+            if name == "920-scale160.png" && (pixels.width() != 920 || pixels.height() != 600) {
+                self.fail(
+                    ctx,
+                    format!(
+                        "Janela física incorreta: {} × {}",
+                        pixels.width(),
+                        pixels.height()
+                    ),
+                );
+                return;
+            }
             let rgba: Vec<u8> = pixels
                 .pixels
                 .iter()
@@ -1876,7 +1907,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 fn native_editor_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.1.3/regression");
+    let output = workspace.join("qa/v0.2.0/regression");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-native-qa-{}", new_id()));
     copy_directory(&workspace.join("examples/validacao"), &fixture).unwrap();

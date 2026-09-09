@@ -91,7 +91,7 @@ impl Editor {
     pub(crate) fn structural_ready(&mut self) -> bool {
         if self.studio.playing || !self.studio.animation.drafts.is_empty() {
             self.log("Pause a animação e grave ou descarte as poses alteradas antes de editar pivô, caixa ou parentesco.");
-            self.console = true;
+            self.notice_last(false);
             false
         } else {
             true
@@ -101,7 +101,7 @@ impl Editor {
         if mode != Tool::Object {
             if self.selection.ids.len() != 1 {
                 self.log("Escolha somente um objeto para editar seu colisor ou pivô.");
-                self.console = true;
+                self.notice_last(false);
                 return;
             }
             if !self.structural_ready() {
@@ -119,7 +119,7 @@ impl Editor {
             };
             if let Err(error) = valid {
                 self.log(error);
-                self.console = true;
+                self.notice_last(false);
                 return;
             }
         }
@@ -262,7 +262,7 @@ impl Editor {
         });
         if let Err(e) = result {
             self.log(e);
-            self.console = true;
+            self.notice_last(false);
         }
     }
     /// Returns true while a handle owns the pointer, including the release frame.

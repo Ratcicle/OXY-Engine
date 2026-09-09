@@ -158,7 +158,13 @@ impl Editor {
                             ));
                         });
                     });
-                    ui.add_space(20.);
+                    ui.horizontal_wrapped(|ui| {
+                        self.interface_button(ui);
+                        self.notices_button(ui);
+                        if ui.button("Console").clicked() {
+                            self.console = !self.console;
+                        }
+                    });
                     ui.horizontal_wrapped(|ui| {
                         if ui
                             .add(
@@ -168,7 +174,7 @@ impl Editor {
                             )
                             .clicked()
                         {
-                            self.transition(Transition::New);
+                            self.new_project_dialog();
                         }
                         if ui
                             .add(egui::Button::new("Abrir projeto").min_size(Vec2::new(170., 44.)))
