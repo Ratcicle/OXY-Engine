@@ -37,7 +37,7 @@ impl NativeQa {
                 }
             }
             "m5_loop" => {
-                if !pending || faces != 10 {
+                if pending || faces != 10 {
                     return Err(format!(
                         "Corte em loop não percorreu os quatro quads: {faces}"
                     ));
@@ -51,12 +51,12 @@ impl NativeQa {
                 }
             }
             "m5_bevel" => {
-                if !pending || faces != 10 || self.editor.state.project.assets.len() != 2 {
+                if pending || faces != 10 || self.editor.state.project.assets.len() != 2 {
                     return Err(format!("Arredondamento com quatro segmentos: {faces}"));
                 }
             }
             "m5_vertex" => {
-                if !pending || faces <= 10 {
+                if pending || faces <= 10 {
                     return Err(format!(
                         "Arredondamento do canto não subdividiu a superfície: {faces}"
                     ));
@@ -83,7 +83,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_cut_bevel_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.0/m5");
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m5");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-cuts-qa-{}", new_id()));
     std::fs::create_dir_all(root.join("assets")).unwrap();
@@ -116,6 +116,7 @@ fn native_cut_bevel_workflow() {
     let shared = report.clone();
     let artifacts = output.clone();
     let options = eframe::NativeOptions {
+        persist_window: false,
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("OXY Engine — QA cortes e arredondamento")
@@ -134,7 +135,10 @@ fn native_cut_bevel_workflow() {
             qa.actions = VecDeque::from([
                 Action::SelectEntity("Cubo de cortes"),
                 Action::Click("Estúdio"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Check("m5_base"),
                 Action::Chord(Key::K, Modifiers::SHIFT),
                 Action::WorldClick([-0.5, 0., 0.5]),
@@ -149,7 +153,7 @@ fn native_cut_bevel_workflow() {
                 Action::WorldClick([-0.5, 0., 0.5]),
                 Action::WorldClick([0.5, 0., 0.5]),
                 Action::WorldClick([0.5, 0., -0.5]),
-                Action::Click("Confirmar (Enter)"),
+                Action::Key(Key::Enter, false),
                 Action::Check("m5_committed"),
                 Action::Key(Key::Z, true),
                 Action::Check("m5_cancel"),
@@ -159,6 +163,7 @@ fn native_cut_bevel_workflow() {
                 Action::Key(Key::Num3, false),
                 Action::ComponentClick([0.5, 0., 0.5], false),
                 Action::Chord(Key::R, Modifiers::SHIFT),
+                Action::WorldClick([0.5, 0., 0.5]),
                 Action::Check("m5_loop"),
                 Action::Screenshot("loop-preview.png"),
                 Action::EditValue("Quantidade de cortes", "2"),
@@ -168,11 +173,12 @@ fn native_cut_bevel_workflow() {
                 Action::Key(Key::Num3, false),
                 Action::ComponentClick([0.5, 0., 0.5], false),
                 Action::Chord(Key::B, Modifiers::SHIFT),
-                Action::Click("4"),
+                Action::EditValue("Segmentos", "4"),
+                Action::EditValue("Largura", "0.05"),
                 Action::Click("Criar cópia ampliada (2×)"),
                 Action::Check("m5_bevel"),
                 Action::Screenshot("bevel-edge.png"),
-                Action::Click("Confirmar (Enter)"),
+                Action::Key(Key::Enter, false),
                 Action::Check("m5_committed"),
                 Action::Key(Key::Z, true),
                 Action::Check("m5_cancel"),
@@ -182,11 +188,12 @@ fn native_cut_bevel_workflow() {
                 Action::Key(Key::Num4, false),
                 Action::ComponentClick([0.5, 0.5, 0.5], false),
                 Action::Chord(Key::B, Modifiers::SHIFT),
-                Action::Click("4"),
+                Action::EditValue("Segmentos", "4"),
+                Action::EditValue("Largura", "0.05"),
                 Action::Click("Criar cópia ampliada (2×)"),
                 Action::Check("m5_vertex"),
                 Action::Screenshot("bevel-vertex.png"),
-                Action::Click("Confirmar (Enter)"),
+                Action::Key(Key::Enter, false),
                 Action::Check("m5_committed"),
                 Action::Key(Key::S, true),
                 Action::ReopenProject,

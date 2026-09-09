@@ -1,0 +1,71 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Cubo de cortes
+Clique: Estúdio em [153.2 79.0]
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Verificado: m5_base
+Atalho K com Modifiers { shift: true }
+Escolher ponto do mundo pelo mouse no viewport
+Escolher ponto do mundo pelo mouse no viewport
+Verificado: m5_knife_one
+Escolher ponto do mundo pelo mouse no viewport
+Verificado: m5_knife_two
+Captura GPU da janela: knife-path.png
+Captura knife-path.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Atalho Escape com Modifiers { alt: true, shift: true }
+Verificado: m5_cancel
+Atalho K com Modifiers { shift: true }
+Escolher ponto do mundo pelo mouse no viewport
+Escolher ponto do mundo pelo mouse no viewport
+Escolher ponto do mundo pelo mouse no viewport
+Tecla Enter, Ctrl=false
+Verificado: m5_committed
+Tecla Z, Ctrl=true
+Verificado: m5_cancel
+Tecla Y, Ctrl=true
+Verificado: m5_redo
+Tecla Z, Ctrl=true
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho R com Modifiers { shift: true }
+Escolher ponto do mundo pelo mouse no viewport
+Verificado: m5_loop
+Captura GPU da janela: loop-preview.png
+Captura loop-preview.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Editar campo visível: Quantidade de cortes = 2
+Verificado: m5_loop_confirmed
+Tecla Z, Ctrl=true
+Verificado: m5_cancel
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho B com Modifiers { shift: true }
+Editar campo visível: Segmentos = 4
+Editar campo visível: Largura = 0.05
+Clique: Criar cópia ampliada (2×) em [1270.5 330.0]
+Verificado: m5_bevel
+Captura GPU da janela: bevel-edge.png
+Captura bevel-edge.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Enter, Ctrl=false
+Verificado: m5_committed
+Tecla Z, Ctrl=true
+Verificado: m5_cancel
+Tecla Y, Ctrl=true
+Verificado: m5_redo
+Tecla Z, Ctrl=true
+Tecla Num4, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho B com Modifiers { shift: true }
+Editar campo visível: Segmentos = 4
+Editar campo visível: Largura = 0.05
+Clique: Criar cópia ampliada (2×) em [1270.5 330.0]
+Verificado: m5_vertex
+Captura GPU da janela: bevel-vertex.png
+Captura bevel-vertex.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Enter, Ctrl=false
+Verificado: m5_committed
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Captura GPU da janela: reopened-model.png
+Captura reopened-model.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Capturas: ["knife-path.png", "loop-preview.png", "bevel-edge.png", "bevel-vertex.png", "reopened-model.png"]

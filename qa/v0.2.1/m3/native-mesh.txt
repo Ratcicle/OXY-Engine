@@ -1,0 +1,84 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Cubo editável
+Clique: Estúdio em [153.2 79.0]
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Verificado: m3_base
+Tecla Num2, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Verificado: m3_face
+Captura GPU da janela: face-selection.png
+Captura face-selection.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Arrastar eixo X pelo controle visual
+Verificado: m3_cancel
+Arrastar eixo X pelo controle visual
+Verificado: m3_preview
+Captura GPU da janela: mesh-preview.png
+Captura mesh-preview.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Verificado: m3_commit
+Tecla Z, Ctrl=true
+Verificado: m3_cancel
+Tecla Y, Ctrl=true
+Verificado: m3_redo
+Tecla Delete, Ctrl=false
+Verificado: m3_deleted
+Tecla Z, Ctrl=true
+Verificado: m3_redo
+Tecla Num4, Ctrl=false
+Tecla A, Ctrl=true
+Verificado: m3_vertices
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Selecionar componentes com uma caixa no viewport
+Verificado: m3_visible_vertices
+Atalho X com Modifiers { shift: true }
+Selecionar componentes com uma caixa no viewport
+Verificado: m3_vertices
+Captura GPU da janela: vertex-selection.png
+Captura vertex-selection.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Janela: 920 × 600 pixels físicos
+Captura GPU da janela: mesh-small.png
+Captura mesh-small.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: []
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Tecla S, Ctrl=true
+Verificado: m3_saved
+Clique: Cena em [32.5 79.5]
+Verificado: m3_creationbase
+Clique: + Objeto em [131.5 117.8]
+Clique: Tubo em [119.5 296.5]
+Atalho Escape com Modifiers { alt: true, shift: true }
+Verificado: m3_creationcancel
+Clique: + Objeto em [131.5 117.8]
+Clique: Tubo em [119.5 296.5]
+Clique: Enquadrar prévia em [823.5 408.0]
+Captura GPU da janela: tube-parameters.png
+Captura tube-parameters.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Editar campo visível: Raio externo = 2
+Verificado: m3_tube
+Clique: Visualização em [458.0 124.8]
+Clique: Enquadrar seleção em [533.5 336.5]
+Captura GPU da janela: tube-eight-sides.png
+Captura tube-eight-sides.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Selecionar hierarquia: Cubo editável
+Verificado: m3_creationcancel
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Cubo editável
+Verificado: m3_saved
+Verificado: m3_creationbase
+Clique: + Objeto em [131.5 117.8]
+Clique: Cone em [120.0 272.0]
+Clique: PROPRIEDADES em [688.0 112.2]
+Verificado: m3_outside
+Clique: Forma e material em [705.5 322.1]
+Clique: Parâmetros da forma em [727.5 436.1]
+Verificado: m3_parameters
+Tecla Escape, Ctrl=false
+Verificado: m3_parameters_cancelled
+Tecla Z, Ctrl=true
+Selecionar hierarquia: Cubo editável
+Verificado: m3_creationcancel
+Capturas: ["face-selection.png", "mesh-preview.png", "vertex-selection.png", "mesh-small.png", "tube-parameters.png", "tube-eight-sides.png"]

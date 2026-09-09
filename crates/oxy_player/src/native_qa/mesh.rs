@@ -162,7 +162,7 @@ fn native_player_final_authored_mesh() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source = std::env::var_os("OXY_NATIVE_MESH_PROJECT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("qa/v0.2.0/m7/full-flow/project"));
+        .unwrap_or_else(|| root.join("qa/v0.2.1/m7/full-flow/project"));
     assert!(
         source.join(persistence::PROJECT_FILE).is_file(),
         "Execute primeiro o fluxo nativo final do editor"
@@ -198,7 +198,7 @@ fn native_player_final_authored_mesh() {
         }
     }
     let original_bytes = std::fs::read(&path).unwrap();
-    let output = root.join("qa/v0.2.0/m7");
+    let output = root.join("qa/v0.2.1/m7");
     std::fs::create_dir_all(&output).unwrap();
     let artifacts = output.clone();
     let report = Arc::new(Mutex::new(Report::default()));

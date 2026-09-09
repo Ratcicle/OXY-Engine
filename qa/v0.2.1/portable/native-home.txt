@@ -1,0 +1,30 @@
+Concluído: true
+Erro: None
+Verificado: home_start
+Captura GPU da janela: home.png
+Captura home.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: []
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Clique: Novo projeto em [113.7 192.5]
+Clique: Criar projeto em [318.5 400.6]
+Verificado: home_new
+Clique: Projeto em [87.8 46.5]
+Clique: Tela inicial em [95.0 74.5]
+Clique: Projeto de exemplo em [469.7 192.0]
+Verificado: home_example
+Verificado: play_baseline
+Clique: ▶ Jogar em [326.6 46.5]
+Verificado: playing
+Captura GPU da janela: example-game.png
+Captura example-game.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [492.2 45.5]
+Verificado: stop_isolated
+Clique: Projeto em [87.8 46.5]
+Clique: Tela inicial em [95.0 74.5]
+Captura GPU da janela: recent-project.png
+Captura recent-project.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Clique: Minha cópia OXY em [87.0 309.5]
+Verificado: home_recent
+Verificado: home_bad_open
+Capturas: ["home.png", "example-game.png", "recent-project.png"]

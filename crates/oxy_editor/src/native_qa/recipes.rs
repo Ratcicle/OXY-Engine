@@ -55,7 +55,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_guide_recipes_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.0/m6");
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m6");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-guide-recipes-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
@@ -68,6 +68,7 @@ fn native_guide_recipes_workflow() {
     eframe::run_native(
         "OXY Engine — QA receitas",
         eframe::NativeOptions {
+            persist_window: false,
             renderer: eframe::Renderer::Wgpu,
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1440., 900.])

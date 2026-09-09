@@ -1,0 +1,49 @@
+Concluído: true
+Erro: None
+Clique: Lógica em [220.8 80.0]
+Clique: Guia de lógica visual em [423.6 123.8]
+Clique: Porta com chave em [541.7 132.0]
+Captura GPU da janela: guide-door.png
+Captura guide-door.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Abrir cópia da receita: porta com chave em [462.0 546.0]
+Clique: ▶ Jogar em [326.6 46.5]
+Entrada real D durante 2s de simulação
+Verificado: r6_door
+Captura GPU da janela: recipe-door-game.png
+Captura recipe-door-game.png: 1920 × 1009 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [492.2 45.5]
+Clique: Lógica em [220.8 80.0]
+Clique: Guia de lógica visual em [423.6 123.8]
+Clique: Carta e energia em [899.8 133.5]
+Clique: Abrir cópia da receita: carta e energia em [697.0 546.0]
+Clique: ▶ Jogar em [326.6 46.5]
+Clique: Raio · custo 2 · Clique para causar 20 de dano em [197.3 298.8]
+Reproduzir 30 quadros sem entrada
+Verificado: r6_card
+Clique: Raio · custo 2 · Clique para causar 20 de dano em [197.3 298.8]
+Reproduzir 30 quadros sem entrada
+Verificado: r6_card
+Captura GPU da janela: recipe-card-game.png
+Captura recipe-card-game.png: 1920 × 1009 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [492.2 45.5]
+Clique: Lógica em [220.8 80.0]
+Clique: Guia de lógica visual em [423.6 123.8]
+Clique: Ataque por marcador em [1034.0 133.0]
+Clique: Abrir cópia da receita: ataque por marcador em [715.0 546.0]
+Clique: ▶ Jogar em [326.6 46.5]
+Entrada real J durante 1s de simulação
+Verificado: r6_attack
+Captura GPU da janela: recipe-attack-game.png
+Captura recipe-attack-game.png: 1920 × 1009 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [492.2 45.5]
+Clique: Lógica em [220.8 80.0]
+Clique: Guia de lógica visual em [423.6 123.8]
+Clique: Passagem entre cenas em [1187.3 133.5]
+Clique: Abrir cópia da receita: passagem entre cenas em [718.5 530.0]
+Clique: ▶ Jogar em [326.6 46.5]
+Entrada real D durante 2s de simulação
+Verificado: r6_passage
+Captura GPU da janela: recipe-passage-game.png
+Captura recipe-passage-game.png: 1920 × 1009 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [492.2 45.5]
+Capturas: ["guide-door.png", "recipe-door-game.png", "recipe-card-game.png", "recipe-attack-game.png", "recipe-passage-game.png"]

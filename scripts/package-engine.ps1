@@ -29,7 +29,9 @@ Projeto de exemplo: sala 2D, oficina 3D e cartas; Salvar cria sua cópia.
 Ajuda > Guia de lógica visual: consulte os nós e abra cópias de cinco receitas
 editáveis, disponíveis offline dentro do executável.
 Estúdio > Modelagem: crie formas, edite faces/arestas/vértices, pinte e anime
-peças rígidas. Enter confirma operações; Esc cancela. F1 abre ajuda contextual.
+peças rígidas. Soltar a alça aplica a edição; Esc cancela o gesto inteiro.
+Última operação ajusta o mesmo comando. Shift+U cria borda interna; Shift+E
+extruda. Ctrl+caixa soma componentes, inclusive ocultos. F1 abre ajuda contextual.
 Interface: ajuste a escala pendente e clique Aplicar; Cancelar mantém a atual.
 Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
 

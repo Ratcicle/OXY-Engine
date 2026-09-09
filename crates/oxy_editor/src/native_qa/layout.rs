@@ -4,6 +4,14 @@ impl NativeQa {
     pub(super) fn check_layout(&mut self, label: &str) -> Result<(), String> {
         match label {
             "l7_viewport" => {
+                let header = self.editor.studio.header_bottom - self.editor.studio.header_top;
+                // Two 30-point targets plus theme item spacing / ComboBox margins and DPI rounding.
+                // A third 30-point tool row cannot fit this bound.
+                if !(60.0..=86.0).contains(&header) {
+                    return Err(format!(
+                        "Cabeçalho ultrapassa duas linhas ou perdeu ferramentas: {header:.1} pontos"
+                    ));
+                }
                 let r = self
                     .surface
                     .native_viewport
@@ -78,11 +86,11 @@ impl NativeQa {
     }
 }
 #[test]
-#[ignore = "Native six-size/scale combinations, modeling, painting, animation and guide"]
+#[ignore = "Native twelve-size/scale/names combinations, two-row Studio, painting, animation and guide"]
 #[cfg(target_os = "windows")]
 fn native_layout_matrix_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.0/m7");
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m7");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-layout-{}", new_id()));
     std::fs::create_dir_all(root.join("assets")).unwrap();
@@ -116,9 +124,12 @@ fn native_layout_matrix_workflow() {
     eframe::run_native(
         "OXY Engine — QA escala e espaço",
         eframe::NativeOptions {
+            persist_window: false,
             renderer: eframe::Renderer::Wgpu,
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1440., 900.])
+                .with_resizable(false)
+                .with_maximize_button(false)
                 .with_active(false),
             event_loop_builder: Some(Box::new(|b| {
                 b.with_any_thread(true);
@@ -133,89 +144,120 @@ fn native_layout_matrix_workflow() {
                 Action::Check("ux_base"),
             ]);
             let mut applied = 1.;
-            for (size, scale, model, paint) in [
-                ([1440., 900.], 0.8, "1440-80-model.png", "1440-80-paint.png"),
-                (
-                    [1440., 900.],
-                    1.,
-                    "1440-100-model.png",
-                    "1440-100-paint.png",
-                ),
-                (
-                    [1440., 900.],
-                    1.6,
-                    "1440-160-model.png",
-                    "1440-160-paint.png",
-                ),
-                ([920., 600.], 0.8, "920-80-model.png", "920-80-paint.png"),
-                ([920., 600.], 1., "920-100-model.png", "920-100-paint.png"),
-                ([920., 600.], 1.6, "920-160-model.png", "920-160-paint.png"),
-            ] {
-                let interface = if applied == 0.8 {
-                    "Interface: 80%"
-                } else if applied == 1.6 {
-                    "Interface: 160%"
-                } else {
-                    "Interface: 100%"
-                };
-                let check = if applied == 0.8 {
-                    "ux_scale_80"
-                } else if applied == 1.6 {
-                    "ux_scale_160"
-                } else {
-                    "ux_scale_100"
-                };
-                let target = if scale == 0.8 {
-                    "80%"
-                } else if scale == 1.6 {
-                    "160%"
-                } else {
-                    "100%"
-                };
-                qa.actions.extend([
-                    Action::ResizePhysical(Vec2::from(size)),
-                    Action::Click(interface),
-                    Action::Click("125%"),
-                    Action::Check(check),
-                    Action::Click("Cancelar"),
-                    Action::Check(check),
-                    Action::Click(interface),
-                    Action::Click(target),
-                    Action::Click("Aplicar"),
-                    Action::Click("Estúdio"),
-                    Action::Click("Modelagem"),
-                    Action::Key(Key::Num2, false),
-                    Action::Click("Enquadrar"),
-                    Action::Screenshot(model),
-                    Action::Check("l7_viewport"),
-                    Action::ComponentClick([0.1767767, 0.25, 0.4267767], false),
-                    Action::Check("l7_selection"),
-                    Action::Check("ux_viewport"),
-                    Action::Chord(Key::B, Modifiers::SHIFT),
-                    Action::Check("l7_refusal"),
-                    Action::PanZoom,
-                    Action::ComponentClick([0.1767767, 0.25, 0.4267767], false),
-                    Action::Check("l7_selection"),
-                    Action::OptionalClick("Dispensar"),
-                    Action::Click("Pintura"),
-                    Action::Click("Enquadrar peça"),
-                    Action::Screenshot(paint),
-                    Action::Check("l7_viewport"),
-                    Action::Click("Animação"),
-                    Action::Check("l7_viewport"),
-                    Action::Click("Lógica"),
-                    Action::Click("Guia de lógica visual"),
-                    Action::Check("l7_guide"),
-                    Action::Click("Fechar guia"),
-                    Action::Click("Projeto"),
-                    Action::Click("Novo projeto"),
-                    Action::Click("Cancelar"),
-                    Action::Check("ux_unchanged"),
-                ]);
-                applied = scale;
+            for names in [false, true] {
+                if names {
+                    qa.actions.extend([
+                        Action::Click("Interface: 160%"),
+                        Action::Click("Mostrar nomes das ferramentas"),
+                        Action::Click("Aplicar"),
+                    ]);
+                }
+                for (size, scale, model, paint) in [
+                    ([1440., 900.], 0.8, "1440-80-model.png", "1440-80-paint.png"),
+                    (
+                        [1440., 900.],
+                        1.,
+                        "1440-100-model.png",
+                        "1440-100-paint.png",
+                    ),
+                    (
+                        [1440., 900.],
+                        1.6,
+                        "1440-160-model.png",
+                        "1440-160-paint.png",
+                    ),
+                    ([920., 600.], 0.8, "920-80-model.png", "920-80-paint.png"),
+                    ([920., 600.], 1., "920-100-model.png", "920-100-paint.png"),
+                    ([920., 600.], 1.6, "920-160-model.png", "920-160-paint.png"),
+                ] {
+                    let model: &'static str = if names {
+                        Box::leak(format!("names-{model}").into_boxed_str())
+                    } else {
+                        model
+                    };
+                    let paint: &'static str = if names {
+                        Box::leak(format!("names-{paint}").into_boxed_str())
+                    } else {
+                        paint
+                    };
+                    let interface = if applied == 0.8 {
+                        "Interface: 80%"
+                    } else if applied == 1.6 {
+                        "Interface: 160%"
+                    } else {
+                        "Interface: 100%"
+                    };
+                    let check = if applied == 0.8 {
+                        "ux_scale_80"
+                    } else if applied == 1.6 {
+                        "ux_scale_160"
+                    } else {
+                        "ux_scale_100"
+                    };
+                    let target = if scale == 0.8 {
+                        "80%"
+                    } else if scale == 1.6 {
+                        "160%"
+                    } else {
+                        "100%"
+                    };
+                    qa.actions.extend([
+                        Action::ResizePhysical(Vec2::from(size)),
+                        Action::Click(interface),
+                        Action::Click("125%"),
+                        Action::Check(check),
+                        Action::Click("Cancelar"),
+                        Action::Check(check),
+                        Action::Click(interface),
+                        Action::Click(target),
+                        Action::Click("Aplicar"),
+                        Action::ResizePhysical(Vec2::from(size)),
+                        Action::Click("Estúdio"),
+                        Action::Click("Modelagem"),
+                        Action::Key(Key::Num2, false),
+                        Action::OptionalClick("Ferramentas"),
+                        Action::OptionalClick("Pintar"),
+                        Action::Click("Visualização"),
+                        Action::Click("Enquadrar seleção"),
+                        Action::Screenshot(model),
+                        Action::Check("l7_viewport"),
+                        Action::ComponentClick([0.1767767, 0.25, 0.4267767], false),
+                        Action::Check("l7_selection"),
+                        Action::Check("ux_viewport"),
+                        Action::Chord(Key::B, Modifiers::SHIFT),
+                        Action::Check("l7_refusal"),
+                        Action::PanZoom,
+                        Action::ComponentClick([0.1767767, 0.25, 0.4267767], false),
+                        Action::Check("l7_selection"),
+                        Action::OptionalClick("Dispensar"),
+                        Action::Click("Pintura"),
+                        Action::OptionalClick("Ferramentas"),
+                        Action::OptionalClick("Pintar"),
+                        Action::Click("Visualização"),
+                        Action::Click("Enquadrar seleção"),
+                        Action::Screenshot(paint),
+                        Action::Check("l7_viewport"),
+                        Action::Click("Animação"),
+                        Action::Check("l7_viewport"),
+                        Action::Click("Lógica"),
+                        Action::Click("Guia de lógica visual"),
+                        Action::Check("l7_guide"),
+                        Action::Click("Fechar guia"),
+                        Action::Click("Projeto"),
+                        Action::Click("Novo projeto"),
+                        Action::Click("Cancelar"),
+                        Action::Check("ux_unchanged"),
+                    ]);
+                    applied = scale;
+                }
             }
             qa.actions.extend([
                 Action::Click("Estúdio"),
+                Action::Click("Pintura"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Screenshot("920-160-view-menu.png"),
+                Action::Click("Enquadrar seleção"),
                 Action::Click("Animação"),
                 Action::OptionalClick("Dispensar"),
                 Action::Click("+ Quadro-chave"),

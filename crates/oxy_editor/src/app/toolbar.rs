@@ -106,7 +106,8 @@ impl Editor {
                 } else {
                     let paused = self.runtime.as_ref().is_some_and(|r| r.paused);
                     if ui
-                        .button(if paused { "▶ Retomar" } else { "Ⅱ Pausar" })
+                        .button(if paused { "▶ Retomar · Pausado" } else { "Ⅱ Pausar · Em execução" })
+                        .on_hover_text("Escape pausa e libera a entrada. Edições não alteram o teste iniciado; use Parar e Jogar novamente.")
                         .clicked()
                     {
                         if paused {
@@ -123,6 +124,7 @@ impl Editor {
                     if ui.button("■ Parar").clicked() {
                         self.stop();
                     }
+                    self.visualization_button(ui, true);
                 }
                 if ctx.content_rect().width() < 900. {
                     self.display_menu(ui);

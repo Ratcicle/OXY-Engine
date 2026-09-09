@@ -79,184 +79,9 @@ impl Editor {
         }
         self.last_object_click = if plain { id } else { None };
     }
-    fn transform_tool_buttons(&mut self, ui: &mut egui::Ui) {
-        ui.add_enabled_ui(!self.mesh_operation_active(), |ui| {
-            self.draw_transform_tool_buttons(ui)
-        });
-    }
-    fn draw_transform_tool_buttons(&mut self, ui: &mut egui::Ui) {
-        for (tool, label) in [
-            (Gizmo::Move, "Mover (W)"),
-            (Gizmo::Rotate, "Girar (E)"),
-            (Gizmo::Scale, "Escalar (R)"),
-        ] {
-            let selected = self.spatial.mode == Tool::Object && self.gizmo == tool;
-            let response = if self.modeling_active() {
-                crate::icons::button(
-                    ui,
-                    match tool {
-                        Gizmo::Move => crate::icons::Icon::Move,
-                        Gizmo::Rotate => crate::icons::Icon::Rotate,
-                        Gizmo::Scale => crate::icons::Icon::Scale,
-                    },
-                    label,
-                    label,
-                    selected,
-                    self.preferences.tool_names,
-                )
-            } else {
-                ui.selectable_label(selected, label)
-            };
-            if response.clicked() {
-                self.set_spatial_tool(Tool::Object);
-                self.gizmo = tool;
-            }
-        }
-        for (tool, icon, label, tip) in [
-            (
-                Tool::Collider,
-                crate::icons::Icon::Collider,
-                "Editar colisor (C)",
-                "Arraste bordas para ajustar a caixa real; o centro desloca apenas o colisor. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.",
-            ),
-            (
-                Tool::Pivot,
-                crate::icons::Icon::Pivot,
-                "Editar pivô (P)",
-                "Reposiciona o ponto de giro sem mover a peça e seus filhos. Alt suspende o encaixe; Esc cancela o gesto ou sai da ferramenta.",
-            ),
-        ] {
-            let response = if self.modeling_active() {
-                crate::icons::button(
-                    ui,
-                    icon,
-                    label,
-                    tip,
-                    self.spatial.mode == tool,
-                    self.preferences.tool_names,
-                )
-            } else {
-                ui.selectable_label(self.spatial.mode == tool, label)
-                    .on_hover_text(tip)
-            };
-            if response.clicked() {
-                self.set_spatial_tool(tool);
-            }
-        }
-    }
     pub fn viewport(&mut self, ui: &mut egui::Ui, painting: bool) {
-        if self.modeling_active() && !painting {
-            self.model_toolbar(ui);
-        }
-        let compact_tools = ui.available_width() < 550.;
         if !painting {
-            ui.horizontal_wrapped(|ui| {
-                if compact_tools || (self.tab==Tab::Studio && self.studio.tab==StudioTab::Animation) {
-                    let label = match self.spatial.mode {
-                        Tool::Collider => "Colisor (C)",
-                        Tool::Pivot => "Pivô (P)",
-                        Tool::Object => match self.gizmo {
-                            Gizmo::Move => "Mover (W)",
-                            Gizmo::Rotate => "Girar (E)",
-                            Gizmo::Scale => "Escalar (R)",
-                        },
-                    };
-                    ui.menu_button(label, |ui| self.transform_tool_buttons(ui));
-                } else {
-                    self.transform_tool_buttons(ui);
-                }
-                if !compact_tools {
-                    ui.separator();
-                    ui.checkbox(&mut self.grid, "Grade");
-                    ui.add(
-                        egui::DragValue::new(&mut self.grid_size)
-                            .range(0.01..=10.)
-                            .speed(0.01)
-                            .prefix("Encaixe "),
-                    );
-                }
-                ui.checkbox(&mut self.debug, "Colisores");
-                if self.debug && !compact_tools {
-                    ui.checkbox(&mut self.show_disabled_colliders, "Mostrar desativados");
-                }
-                if ui.button("Enquadrar").on_hover_text("Centralize a seleção. Navegação: roda aproxima, botão central desloca; botão direito orbita em 3D.").clicked() {
-                    self.frame_selection();
-                }
-                if self.spatial.mode != Tool::Object || compact_tools {
-                    ui.menu_button(
-                        if compact_tools {
-                            "Opções"
-                        } else {
-                            "Valores da ferramenta"
-                        },
-                        |ui| {
-                            if compact_tools {
-                                ui.checkbox(&mut self.grid, "Grade");
-                                ui.add(
-                                    egui::DragValue::new(&mut self.grid_size)
-                                        .range(0.01..=10.)
-                                        .speed(0.01)
-                                        .prefix("Encaixe "),
-                                );
-                                ui.checkbox(
-                                    &mut self.show_disabled_colliders,
-                                    "Mostrar desativados",
-                                );
-                                ui.separator();
-                            }
-                            if let Some(id) = self.selected.clone()
-                                && let Some(entity) = self.scene().entity(&id).cloned()
-                            {
-                                if self.spatial.mode == Tool::Pivot {
-                                    let mut pivot = entity.transform.pivot;
-                                    vector3(ui, "Pivô — ponto de giro", &mut pivot, 0.05, false);
-                                    if pivot != entity.transform.pivot
-                                        && let Err(error) = oxy_core::spatial::move_pivot(
-                                            self.scene_mut(),
-                                            &id,
-                                            Vec3::from(pivot),
-                                        )
-                                    {
-                                        self.log(error);
-                                        self.notice_last(false);
-                                    }
-                                } else if self.spatial.mode == Tool::Collider
-                                    && let Some(mut collider) = entity.collider.clone()
-                                {
-                                    vector3(ui, "Tamanho da caixa", &mut collider.size, 0.05, true);
-                                    vector3(ui, "Deslocamento", &mut collider.offset, 0.05, false);
-                                    if Some(&collider) != entity.collider.as_ref() {
-                                        let mut candidate = self.scene().clone();
-                                        candidate.entity_mut(&id).unwrap().collider =
-                                            Some(collider);
-                                        match oxy_core::spatial::collider_bounds(&candidate, &id) {
-                                            Ok(_) => *self.scene_mut() = candidate,
-                                            Err(e) => self.log(e),
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                    );
-                }
-            });
-            if self.spatial.mode == Tool::Pivot {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Mover pivô sem mover a peça");
-                    if ui.button("Centralizar na peça").clicked() {
-                        self.center_pivot(false);
-                    }
-                    if ui.button("Centralizar no conjunto").clicked() {
-                        self.center_pivot(true);
-                    }
-                });
-            }
-            if self.spatial.base_pose {
-                ui.colored_label(
-                    Color32::LIGHT_YELLOW,
-                    "Editando a pose-base · W/E/R ou Esc retorna à animação",
-                );
-            }
+            self.viewport_tools_row(ui);
         }
         let scene = if self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation {
             self.animation_preview()
@@ -315,7 +140,8 @@ impl Editor {
         let point = ui
             .input(|i| i.pointer.interact_pos())
             .filter(|p| rect.contains(*p));
-        let pick = point.and_then(|p| {
+        let object_point = point.filter(|_| !self.components_active());
+        let pick = object_point.and_then(|p| {
             oxy_render::pick(
                 &scene,
                 &self.camera,
@@ -323,7 +149,7 @@ impl Editor {
                 [p.x - rect.min.x, p.y - rect.min.y],
             )
         });
-        let ui_pick = point.and_then(|p| oxy_render::pick_ui(&scene, rect, p));
+        let ui_pick = object_point.and_then(|p| oxy_render::pick_ui(&scene, rect, p));
         let overlays = self.renderer.draw_colliders(
             ui,
             &scene,
@@ -564,7 +390,7 @@ impl Editor {
                     let delta = match self.gizmo {
                         Gizmo::Move => {
                             let mut distance = amount / drag.pixels_per_unit;
-                            if self.grid && !ui.input(|i| i.modifiers.alt) {
+                            if self.snap_grid && !ui.input(|i| i.modifiers.alt) {
                                 distance = (distance / self.grid_size).round() * self.grid_size;
                             }
                             glam::Mat4::from_translation(vector * distance)
@@ -605,7 +431,7 @@ impl Editor {
                 match self.gizmo {
                     Gizmo::Move => {
                         next.position[axis] += amount / drag.pixels_per_unit;
-                        if self.grid && !ui.input(|i| i.modifiers.alt) {
+                        if self.snap_grid && !ui.input(|i| i.modifiers.alt) {
                             next.position[axis] =
                                 (next.position[axis] / self.grid_size).round() * self.grid_size;
                         }

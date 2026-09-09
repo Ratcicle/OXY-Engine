@@ -1,0 +1,5 @@
+Concluído: true
+Erro: None
+Captura GPU: true
+Runtime em 0.300s; 2 objetos, 192 triângulos, 1 texturas GPU; quadro intermediário moveu a peça sem mudar malha/UV/pivô/colisor
+Cópia fora do repositório; grafo de início reproduziu animação rígida, captura GPU real, arquivo e vínculos intactos após reabrir

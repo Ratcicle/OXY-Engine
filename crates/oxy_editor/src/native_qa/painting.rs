@@ -109,7 +109,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_mesh_painting_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.0/m6");
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m6");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-paint-mesh-{}", new_id()));
     std::fs::create_dir_all(root.join("assets")).unwrap();
@@ -179,6 +179,7 @@ fn native_mesh_painting_workflow() {
     eframe::run_native(
         "OXY Engine — QA UV e pintura",
         eframe::NativeOptions {
+            persist_window: false,
             renderer: eframe::Renderer::Wgpu,
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1440., 900.])
@@ -195,7 +196,10 @@ fn native_mesh_painting_workflow() {
                 Action::SelectEntity("Peça pintável"),
                 Action::Click("Estúdio"),
                 Action::Click("Pintura"),
-                Action::Click("Enquadrar peça"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Check("m6_shared"),
                 Action::Click("Criar cópia independente"),
                 Action::Wait(5),
@@ -232,7 +236,10 @@ fn native_mesh_painting_workflow() {
                 Action::SelectEntity("Peça pintável"),
                 Action::Click("Estúdio"),
                 Action::Click("Pintura"),
-                Action::Click("Enquadrar peça"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Screenshot("painted-reopened.png"),
             ]);
             Ok(Box::new(qa))

@@ -1,7 +1,14 @@
 //! Mesh editing context. Previews share the normal scene renderer and commit one history delta.
 use super::*;
+#[cfg(test)]
+mod atlas_tests;
 mod creation;
 mod cutting;
+mod direct;
+#[cfg(test)]
+mod measure;
+mod numeric;
+mod selection;
 mod snapping;
 mod topology;
 mod viewport;
@@ -25,8 +32,10 @@ pub(super) struct ModelState {
     pub selection: Components,
     source: Option<(SourceKey, EditableMesh)>,
     pub preview: Option<Preview>,
+    last_operation: Option<direct::LastOperation>,
     pub creation: Option<Creation>,
-    box_start: Option<Pos2>,
+    selection_gesture: Option<selection::BoxGesture>,
+    projection_cache: selection::ProjectionCache,
     pub help: bool,
     global: bool,
     snap: Option<snapping::Snap>,
@@ -47,14 +56,17 @@ enum Operation {
     Delete,
     Triangulate,
     Extrude,
+    Inset,
     Create,
     Flip,
     Loop,
     Knife,
     Bevel,
 }
+#[derive(Clone)]
 pub(super) struct Preview {
     entity: Id,
+    original: Entity,
     source: EditableMesh,
     selection: Components,
     operation: Operation,
@@ -75,7 +87,14 @@ pub(super) struct Preview {
     cut_edge: Option<u32>,
     path: cutting::Path,
     notes: Vec<String>,
+    started: bool,
+    numeric_edit: bool,
+    amendment: Option<u64>,
+    rollback_selection: Option<Components>,
+    inner_size: f32,
+    direction: direct::Direction,
 }
+#[derive(Clone)]
 struct Drag {
     axis: Option<usize>,
     start: Pos2,
@@ -96,6 +115,10 @@ impl Editor {
         self.modeling.selection.click(face, toggle);
     }
     #[cfg(test)]
+    pub(crate) fn qa_icon_rect(&self, label: &str) -> Option<egui::Rect> {
+        crate::icons::qa_control_rect(&self.context, label)
+    }
+    #[cfg(test)]
     pub(crate) fn qa_mesh_info(&self) -> (Mode, usize, bool, usize) {
         (
             self.modeling.selection.mode,
@@ -105,7 +128,10 @@ impl Editor {
         )
     }
     pub(crate) fn mesh_operation_active(&self) -> bool {
-        self.modeling.preview.is_some()
+        self.modeling
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.started || !p.path.segments.is_empty())
             || self.modeling.creation.is_some()
             || self.modeling.snap.is_some()
     }
@@ -154,158 +180,157 @@ impl Editor {
         Ok(mesh)
     }
     fn model_mode(&mut self, mode: Mode) {
+        self.cancel_box_selection();
         if self.mesh_operation_active() {
-            self.warn("Confirme ou cancele a operação antes de trocar de modo.");
+            self.warn("Termine o gesto ou pressione Esc antes de trocar de modo.");
             return;
         }
+        self.cancel_mesh_operation();
         if self.modeling.selection.mode != mode {
             self.modeling.selection.ids.clear();
             self.modeling.selection.mode = mode;
         }
         self.set_spatial_tool(Tool::Object);
     }
+    /// First Studio row: modes and coordinate space, with overflow instead of wrapping.
     pub(super) fn model_toolbar(&mut self, ui: &mut egui::Ui) {
-        use crate::icons::{Icon, button};
-        if ui.available_width() < 580. || ui.available_height() < 310. {
-            ui.add_enabled_ui(!self.mesh_operation_active(), |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (mode, icon, label) in [
-                        (Mode::Object, Icon::Object, "Objeto (1)"),
-                        (Mode::Face, Icon::Face, "Face (2)"),
-                        (Mode::Edge, Icon::Edge, "Aresta (3)"),
-                        (Mode::Vertex, Icon::Vertex, "Vértice (4)"),
-                    ] {
-                        if button(
-                            ui,
-                            icon,
-                            label,
-                            label,
-                            self.modeling.selection.mode == mode,
-                            self.preferences.tool_names,
-                        )
-                        .clicked()
-                        {
-                            self.model_mode(mode);
-                        }
+        use crate::icons::{Icon, button, menu_button, width};
+        let modes = [
+            (Mode::Object, Icon::Object, "Objeto (1)"),
+            (Mode::Face, Icon::Face, "Face (2)"),
+            (Mode::Edge, Icon::Edge, "Aresta (3)"),
+            (Mode::Vertex, Icon::Vertex, "Vértice (4)"),
+        ];
+        let names = self.preferences.tool_names;
+        let required = modes
+            .iter()
+            .map(|(_, _, label)| width(ui, label, names) + ui.spacing().item_spacing.x)
+            .sum::<f32>()
+            + 76.;
+        ui.add_enabled_ui(!self.mesh_operation_active(), |ui| {
+            if ui.available_width() >= required {
+                for (mode, icon, label) in modes {
+                    if button(
+                        ui,
+                        icon,
+                        label,
+                        label,
+                        self.modeling.selection.mode == mode,
+                        names,
+                    )
+                    .clicked()
+                    {
+                        self.model_mode(mode);
                     }
-                    ui.menu_button("Malha", |ui| {
-                        if self
-                            .selected
-                            .as_deref()
-                            .and_then(|id| self.scene().entity(id))
-                            .is_some_and(|e| e.primitive.is_some())
-                            && ui.button("Converter em malha editável").clicked()
-                        {
-                            self.convert_selected_mesh();
-                            ui.close();
-                        }
-                        self.topology_menu(ui);
-                        if self.modeling.selection.mode == Mode::Object
-                            && ui.button("Encaixar vértices (Shift+V)").clicked()
-                        {
-                            self.begin_snap();
-                            ui.close();
-                        }
-                        if self.components_active() {
-                            ui.checkbox(
-                                &mut self.modeling.selection.through,
-                                "Selecionar através (Shift+X)",
-                            );
-                            ui.checkbox(&mut self.modeling.global, "Coordenadas globais");
-                            if ui.button("Transformar seleção").clicked() {
-                                self.begin_mesh_operation(Operation::Transform(self.gizmo));
-                                ui.close();
-                            }
-                            if ui.button("Inverter seleção (Shift+I)").clicked()
-                                && let Ok(mesh) = self.model_source()
+                }
+                egui::ComboBox::from_id_salt("component_space")
+                    .width(62.)
+                    .selected_text(if self.modeling.global {
+                        "Global"
+                    } else {
+                        "Local"
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.modeling.global, false, "Local");
+                        ui.selectable_value(&mut self.modeling.global, true, "Global");
+                    })
+                    .response
+                    .on_hover_text(
+                        "Local acompanha os eixos da peça; Global usa os eixos da cena.",
+                    );
+            } else {
+                let (_, icon, label) = modes
+                    .into_iter()
+                    .find(|(mode, _, _)| *mode == self.modeling.selection.mode)
+                    .unwrap();
+                // Names remain available in the popup when the full label cannot fit.
+                let names = names && ui.available_width() >= width(ui, label, true);
+                menu_button(
+                    ui,
+                    icon,
+                    label,
+                    "Modo de seleção (1/2/3/4) e espaço de transformação.",
+                    names,
+                    |ui| {
+                        for (mode, _, label) in modes {
+                            if ui
+                                .selectable_label(self.modeling.selection.mode == mode, label)
+                                .clicked()
                             {
-                                self.modeling.selection.invert(&mesh);
-                                ui.close();
-                            }
-                            if ui.button("Excluir componentes").clicked() {
-                                self.begin_mesh_operation(Operation::Delete);
-                                ui.close();
-                            }
-                            if ui.button("Triangular faces").clicked() {
-                                self.begin_mesh_operation(Operation::Triangulate);
+                                self.model_mode(mode);
                                 ui.close();
                             }
                         }
-                        if ui.button("Ajuda (F1)").clicked() {
-                            self.modeling.help = true;
-                            ui.close();
-                        }
-                        if let Ok(mesh) = self.model_source() {
-                            ui.small(format!(
-                                "{} vértices · {} faces · {} triângulos",
-                                mesh.data().vertices.len(),
-                                mesh.data().faces.len(),
-                                mesh.prepared().triangles.len()
-                            ));
-                        }
-                    });
-                    if self.modeling.selection.through {
-                        ui.colored_label(Color32::GOLD, "Através")
-                            .on_hover_text("Inclui componentes ocultos. Shift+X desativa.");
-                    }
-                });
-            });
-            return;
-        }
-        ui.horizontal_wrapped(|ui|{
-            for (mode,icon,label,tip) in [(Mode::Object,Icon::Object,"Objeto","Objeto (1): transforme a peça inteira."),(Mode::Face,Icon::Face,"Face","Face (2): selecione polígonos da peça."),(Mode::Edge,Icon::Edge,"Aresta","Aresta (3): selecione bordas reais da malha."),(Mode::Vertex,Icon::Vertex,"Vértice","Vértice (4): selecione pontos da malha.")] {
-                if button(ui,icon,label,tip,self.modeling.selection.mode==mode,self.preferences.tool_names).clicked(){self.model_mode(mode);}
+                        ui.separator();
+                        ui.label("Espaço da transformação");
+                        ui.selectable_value(&mut self.modeling.global, false, "Local");
+                        ui.selectable_value(&mut self.modeling.global, true, "Global");
+                    },
+                );
             }
-            if self.components_active(){
-                ui.checkbox(&mut self.modeling.selection.through,"Selecionar através").on_hover_text("Shift+X: inclui componentes ocultos. Desativado, respeita as superfícies à frente.");
-                egui::ComboBox::from_id_salt("component_space").selected_text(if self.modeling.global{"Global"}else{"Local"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.modeling.global,false,"Local");ui.selectable_value(&mut self.modeling.global,true,"Global");});
-                if ui.button("Inverter seleção").on_hover_text("Shift+I: troca selecionados e não selecionados neste modo.").clicked() && let Ok(mesh)=self.model_source(){self.modeling.selection.invert(&mesh);}
-            }
-            if ui.button("Ajuda (F1)").clicked(){self.modeling.help=true;}
         });
-        if let Some(id) = self.selected.as_ref()
-            && let Some(entity) = self.scene().entity(id)
-            && entity.has_geometry()
-        {
-            if entity.mesh.is_none() {
-                ui.horizontal_wrapped(|ui|{ui.label("Forma paramétrica").on_hover_text("Selecionar componentes preserva os parâmetros. A primeira edição converte a forma em polígonos editáveis.");if ui.button("Converter em malha editável").clicked(){self.convert_selected_mesh();}});
-            } else if let Some(mesh) = &entity.mesh {
-                ui.small(format!(
+    }
+    pub(crate) fn model_context_controls(&mut self, ui: &mut egui::Ui) {
+        self.model_toolbar(ui);
+    }
+    pub(super) fn model_tools_controls(&mut self, ui: &mut egui::Ui) {
+        self.topology_toolbar(ui);
+    }
+    pub(super) fn model_secondary_menu(&mut self, ui: &mut egui::Ui) {
+        if self.selected.as_deref().and_then(|id|self.scene().entity(id)).is_some_and(|e|e.primitive.is_some())
+            && ui.button("Converter em malha editável").on_hover_text("A primeira edição também converte a forma automaticamente, junto de seu comando de desfazer.").clicked() {
+            self.convert_selected_mesh();ui.close();
+        }
+        self.topology_menu(ui);
+        if self.components_active() {
+            ui.separator();
+            if ui.button("Inverter seleção (Shift+I)").clicked()
+                && let Ok(mesh) = self.model_source()
+            {
+                self.modeling.selection.invert(&mesh);
+                ui.close();
+            }
+            if ui.button("Excluir componentes (Delete)").clicked() {
+                self.begin_mesh_operation(Operation::Delete);
+                ui.close();
+            }
+            if ui.button("Triangular faces").clicked() {
+                self.begin_mesh_operation(Operation::Triangulate);
+                ui.close();
+            }
+        } else if ui.button("Encaixar vértices (Shift+V)").clicked() {
+            self.begin_snap();
+            ui.close();
+        }
+        ui.separator();
+        ui.collapsing("Informações da malha", |ui| {
+            if let Ok(mesh) = self.model_source() {
+                ui.label(format!(
                     "{} vértices · {} arestas · {} faces · {} triângulos",
                     mesh.data().vertices.len(),
                     mesh.data().edges.len(),
                     mesh.data().faces.len(),
                     mesh.prepared().triangles.len()
                 ));
+                ui.label(format!(
+                    "{} componentes selecionados",
+                    self.modeling.selection.ids.len()
+                ));
             }
+        });
+        if crate::icons::button(
+            ui,
+            crate::icons::Icon::Help,
+            "Ajuda (F1)",
+            "Ajuda das ferramentas de modelagem e atalhos.",
+            false,
+            true,
+        )
+        .clicked()
+        {
+            self.modeling.help = true;
+            ui.close();
         }
-        if self.components_active() {
-            ui.add_enabled_ui(self.modeling.preview.is_none(), |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.modeling.selection.ids.is_empty(),
-                            egui::Button::new("Transformar seleção"),
-                        )
-                        .clicked()
-                    {
-                        self.begin_mesh_operation(Operation::Transform(self.gizmo));
-                    }
-                    ui.menu_button("Componentes", |ui| {
-                        self.topology_menu(ui);
-                        if ui.button("Excluir componentes").clicked() {
-                            self.begin_mesh_operation(Operation::Delete);
-                            ui.close();
-                        }
-                        if ui.button("Triangular faces").clicked() {
-                            self.begin_mesh_operation(Operation::Triangulate);
-                            ui.close();
-                        }
-                    });
-                });
-            });
-        }
-        self.topology_toolbar(ui);
     }
     fn convert_selected_mesh(&mut self) {
         if self.mesh_operation_active() {
@@ -337,7 +362,10 @@ impl Editor {
     }
     fn begin_mesh_operation(&mut self, operation: Operation) {
         if self.modeling.preview.is_some() {
-            return;
+            if self.mesh_operation_active() {
+                return;
+            }
+            self.cancel_mesh_operation();
         }
         if !self.operation_available(operation) {
             self.warn("A ferramenta não está disponível neste modo. Arredondar usa Aresta/Vértice; orientação usa Face; corte em loop usa Face/Aresta.");
@@ -366,10 +394,6 @@ impl Editor {
                 .then(|| self.modeling.selection.ids.first().copied())
                 .flatten()
         });
-        if operation == Operation::Loop && cut_edge.is_none() {
-            self.warn("Aponte uma aresta da faixa ou selecione-a no modo Aresta para iniciar o corte em loop.");
-            return;
-        }
         let world = match self.scene().world_matrix(&id) {
             Ok(m) if m.is_finite() && m.determinant().abs() > 1e-8 => m,
             _ => {
@@ -397,45 +421,15 @@ impl Editor {
             None
         };
         self.finish_history(true);
-        self.history.begin(
-            "Editar componentes da malha",
-            &self.state.project,
-            &self.state.images,
-        );
-        if let Err(e) = primitives::convert(self.scene_mut().entity_mut(&id).unwrap()) {
-            self.history
-                .cancel(&mut self.state.project, &mut self.state.images);
-            self.warn(e);
-            return;
-        }
-        let values = if operation == Operation::Bevel {
-            [0.05, 0., 0.]
-        } else if operation == Operation::Extrude {
-            let normal = if self.modeling.selection.mode == Mode::Face {
-                self.modeling
-                    .selection
-                    .ids
-                    .iter()
-                    .filter_map(|id| source.prepared().faces.get(id))
-                    .map(|&i| source.prepared().face_normals[i])
-                    .sum::<Vec3>()
-                    .normalize_or_zero()
-            } else {
-                Vec3::Y
-            };
-            (if normal.length_squared() > 0.5 {
-                normal
-            } else {
-                Vec3::Y
-            } * 0.25)
-                .to_array()
-        } else if operation == Operation::Transform(Gizmo::Scale) {
+        let original = self.scene().entity(&id).unwrap().clone();
+        let values = if operation == Operation::Transform(Gizmo::Scale) {
             [1.; 3]
         } else {
             [0.; 3]
         };
         self.modeling.preview = Some(Preview {
             entity: id,
+            original,
             source,
             selection: self.modeling.selection.clone(),
             operation,
@@ -456,13 +450,35 @@ impl Editor {
             cut_edge,
             path: cutting::Path::default(),
             notes: Vec::new(),
+            started: false,
+            numeric_edit: false,
+            amendment: None,
+            rollback_selection: None,
+            inner_size: if operation == Operation::Inset {
+                75.
+            } else {
+                100.
+            },
+            direction: direct::Direction::Normal,
         });
         if operation == Operation::Knife {
             self.modeling.selection.mode = Mode::Edge;
         }
-        self.update_mesh_preview();
+        if matches!(
+            operation,
+            Operation::Delete | Operation::Triangulate | Operation::Create | Operation::Flip
+        ) {
+            self.update_mesh_preview();
+            self.confirm_mesh_operation();
+        }
     }
     fn update_mesh_preview(&mut self) {
+        if !self.start_mesh_gesture() {
+            return;
+        }
+        if self.restore_neutral_mesh() {
+            return;
+        }
         let Some(preview) = self.modeling.preview.as_mut() else {
             return;
         };
@@ -473,6 +489,7 @@ impl Editor {
         if matches!(
             preview.operation,
             Operation::Extrude
+                | Operation::Inset
                 | Operation::Create
                 | Operation::Flip
                 | Operation::Loop
@@ -528,7 +545,16 @@ impl Editor {
             Ok(mesh) => {
                 preview.error = None;
                 let id = preview.entity.clone();
-                self.scene_mut().entity_mut(&id).unwrap().mesh = Some(mesh);
+                if mesh.shares_storage(&preview.source) {
+                    let original = preview.original.clone();
+                    *self.scene_mut().entity_mut(&id).unwrap() = original;
+                } else {
+                    let entity = self.scene_mut().entity_mut(&id).unwrap();
+                    entity.mesh = Some(mesh);
+                    entity.primitive = None;
+                    entity.primitive_parameters = None;
+                    entity.dimensions = [1.; 3];
+                }
             }
             Err(error) => {
                 preview.error = Some(error);
@@ -563,116 +589,35 @@ impl Editor {
                 self.renderer.clear_texture_override(id);
                 self.game_ui.clear_texture_override(id);
             }
-            self.history
-                .cancel(&mut self.state.project, &mut self.state.images);
-            self.modeling.selection = preview.selection;
+            if preview.started {
+                self.history
+                    .cancel(&mut self.state.project, &mut self.state.images);
+                if let Some(id) = self
+                    .scene()
+                    .entity(&preview.entity)
+                    .and_then(|e| e.material.texture.clone())
+                {
+                    self.refresh_texture(&id);
+                }
+            }
+            self.modeling.selection = preview.rollback_selection.unwrap_or(preview.selection);
             self.modeling.source = None;
             return true;
         }
         false
-    }
-    fn confirm_mesh_operation(&mut self) {
-        if self
-            .modeling
-            .preview
-            .as_ref()
-            .is_some_and(|p| p.error.is_some())
-        {
-            return;
-        }
-        self.modeling.preview = None;
-        self.context.memory_mut(|memory| {
-            if let Some(id) = memory.focused() {
-                memory.surrender_focus(id);
-            }
-        });
-        self.modeling.source = None;
-        self.finish_history(true);
-        let _ = self.model_source();
-    }
-    pub(super) fn mesh_preview_panel(&mut self, ui: &mut egui::Ui) {
-        let Some(preview) = self.modeling.preview.as_mut() else {
-            return;
-        };
-        let mut confirm = false;
-        let mut cancel = false;
-        ui.group(|ui| {
-            ui.strong(match preview.operation {
-                Operation::Transform(Gizmo::Move) => "Prévia: mover componentes",
-                Operation::Transform(Gizmo::Rotate) => "Prévia: girar componentes",
-                Operation::Transform(Gizmo::Scale) => "Prévia: escalar componentes",
-                Operation::Delete => "Prévia: excluir componentes",
-                Operation::Triangulate => "Prévia: triangular faces",
-                Operation::Extrude=>"Prévia: extrudir seleção",
-                Operation::Create=>"Prévia: criar face ou aresta",
-                Operation::Flip=>"Prévia: inverter orientação",
-                Operation::Loop=>"Prévia: corte em loop",
-                Operation::Knife=>"Prévia: bisturi",
-                Operation::Bevel=>"Prévia: arredondar / chanfrar",
-            });
-            if matches!(preview.operation,Operation::Transform(_)|Operation::Extrude) {
-                let tool=if let Operation::Transform(t)=preview.operation {t}else{Gizmo::Move};
-                if preview.operation==Operation::Extrude {ui.label("Direção × distância (local)").on_hover_text("Os três valores definem o deslocamento. Em regiões não planas, todas as faces seguem esta mesma direção explícita.");}
-                ui.horizontal_wrapped(|ui| {
-                    for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
-                        ui.add(
-                            egui::DragValue::new(&mut preview.values[axis])
-                                .speed(if tool == Gizmo::Rotate { 1. } else { 0.02 })
-                                .prefix(format!("{label} ")),
-                        );
-                    }
-                });
-            }
-            if preview.operation==Operation::Extrude && preview.selection.mode==Mode::Face && ui.checkbox(&mut preview.per_face,"Por face independente").changed(){preview.previous=[f32::NAN;3];}
-            if matches!(preview.operation,Operation::Loop|Operation::Bevel){
-                if preview.operation==Operation::Bevel{
-                    ui.horizontal(|ui|{ui.label("Largura");ui.add(egui::DragValue::new(&mut preview.values[0]).range(0.0001..=100.).speed(0.01));});
-                    ui.horizontal_wrapped(|ui|{for n in [1,2,4,8]{if ui.selectable_value(&mut preview.count,n,n.to_string()).changed(){preview.previous=[f32::NAN;3];}}});
-                }else{ui.add(egui::Slider::new(&mut preview.values[1],-1. ..=1.).text("Deslizamento"));}
-                ui.horizontal(|ui|{ui.label(if preview.operation==Operation::Bevel{"Segmentos"}else{"Quantidade de cortes"});if ui.add(egui::DragValue::new(&mut preview.count).range(1..=if preview.operation==Operation::Bevel{16}else{64})).changed(){preview.previous=[f32::NAN;3];}});
-            }
-            if preview.operation==Operation::Knife{
-                ui.label("Clique nas bordas da superfície para traçar. Cada trecho atravessa uma face visível; Enter aplica o percurso.");
-                if ui.button("Recomeçar traçado").clicked(){preview.path=cutting::Path::default();preview.previous=[f32::NAN;3];}
-            }
-            for note in &preview.notes{ui.small(note);}
-            if preview.needs_space || preview.allow_expansion {
-                ui.label("A pintura original será preservada. A ampliação cria uma textura independente para esta peça.");
-                if ui.checkbox(&mut preview.allow_expansion,"Criar cópia ampliada (2×)").changed(){preview.previous=[f32::NAN;3];}
-            }
-            if preview.operation == Operation::Delete
-                && ui
-                    .checkbox(&mut preview.keep_edges, "Preservar bordas ao excluir faces")
-                    .changed()
-            {
-                preview.previous = [f32::NAN; 3];
-            }
-            if let Some(error) = &preview.error {
-                ui.colored_label(Color32::LIGHT_YELLOW, error);
-            }
-            ui.horizontal(|ui| {
-                confirm = ui
-                    .add_enabled(
-                        preview.error.is_none(),
-                        egui::Button::new("Confirmar (Enter)"),
-                    )
-                    .clicked();
-                cancel = ui.button("Cancelar (Esc)").clicked();
-            });
-        });
-        self.update_mesh_preview();
-        if cancel {
-            self.cancel_mesh_operation();
-        } else if confirm || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            self.confirm_mesh_operation();
-        }
     }
     pub(super) fn mesh_shortcuts(&mut self, ctx: &egui::Context) -> bool {
         if !self.modeling_active() {
             return false;
         }
         if self.modeling.preview.is_some() {
-            return true;
+            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.confirm_mesh_operation();
+                return true;
+            }
+            if self.mesh_operation_active() {
+                return true;
+            }
         }
         if self.modeling.snap.is_some() {
             return true;
@@ -701,6 +646,7 @@ impl Editor {
         if self.components_active() {
             for (key, operation) in [
                 (egui::Key::E, Operation::Extrude),
+                (egui::Key::U, Operation::Inset),
                 (egui::Key::F, Operation::Create),
                 (egui::Key::N, Operation::Flip),
                 (egui::Key::R, Operation::Loop),
@@ -744,9 +690,14 @@ impl Editor {
         }
         egui::Modal::new(egui::Id::new("mesh_help")).show(ctx,|ui|{
             ui.set_max_width(530.);ui.heading("Modelagem por componentes");
-            ui.label("1: Objeto · 2: Face · 3: Aresta · 4: Vértice. Clique seleciona; Ctrl+clique alterna; arraste uma caixa para selecionar vários. Shift+X inclui os ocultos e Shift+I inverte a seleção.");
+            egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-130.).max(100.)).show(ui, |ui| {
+            ui.label("1: Objeto · 2: Face · 3: Aresta · 4: Vértice. Clique seleciona; Ctrl+clique alterna. Caixa comum substitui os componentes visíveis. Ctrl+caixa soma todos os componentes tocados, inclusive ocultos; a tecla é considerada ao iniciar o gesto. Shift+X mantém seleção através e Shift+I inverte.");
             ui.label("Selecionar um modo preserva a forma paramétrica. Converter em malha editável mantém aparência, pivô, filhos, colisor e animações. A primeira edição também faz essa conversão; cancelar restaura os parâmetros.");
-            ui.label("W/E/R escolhem Mover/Girar/Escalar. Transformar seleção abre uma prévia com alças e valores Local/Global. Enter confirma e Esc cancela, inclusive com Alt/Shift. Faces não planas são recusadas; use Triangular faces antes de deformá-las.");
+            ui.label("W/E/R escolhem Mover/Girar/Escalar. Armar uma ferramenta não altera a peça. Arraste uma alça e solte para aplicar; valores numéricos aplicam ao soltar, Enter ou sair do campo. Esc cancela o gesto inteiro, inclusive com Alt/Shift. Ctrl+Z durante o gesto apenas cancela. Faces não planas exigem triangulação antes de deformar.");
+            ui.label("Shift+E: Extrudir; Shift+U: Criar borda interna. Tamanho interno reduz as dimensões em torno do centro: 50% é metade do tamanho. A moldura mantém o plano original. A distância pode ser positiva ou negativa; Normal da face acompanha sua orientação. Região convexa plana ou cada face independente; buracos, regiões côncavas e interseções sem suporte são recusados.");
+            ui.label("Última operação, em Propriedades, recalcula a partir da origem e substitui o mesmo comando. Desfazer retorna ao estado anterior à operação. Outra edição ou troca de peça encerra esse ajuste. UVs antigos mantêm a pintura; se faltar espaço para as faces novas, escolha explicitamente Criar cópia ampliada (2×) ou cancele.");
+            ui.label("Corte em loop: clique numa aresta, arraste para posicionar e solte. Bisturi: trace entre bordas; duplo clique ou Enter termina. Inverter orientação, triangular, criar face/aresta e excluir aplicam imediatamente. Visualização reúne grade, encaixe, seleção através e enquadramento; esconder a grade não desliga o encaixe.");
+            });
             if ui.button("Fechar ajuda").clicked() || ui.input(|i|i.key_pressed(egui::Key::Escape)){self.modeling.help=false;}
         });
     }

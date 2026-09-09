@@ -1,11 +1,12 @@
 use super::*;
 use oxy_core::{
-    geometry::{atlas, bevel, cuts, operations},
+    geometry::{atlas, bevel, cuts, inset, operations},
     painting::PaintImage,
 };
 impl Editor {
     pub(super) fn topology_menu(&mut self, ui: &mut egui::Ui) {
-        let active = self.modeling.preview.is_none() && !self.modeling.selection.ids.is_empty();
+        let available = !self.mesh_operation_active();
+        let active = !self.modeling.selection.ids.is_empty();
         for (label, tip, op) in [
             (
                 "Corte em loop (Shift+R)",
@@ -28,6 +29,11 @@ impl Editor {
                 Operation::Extrude,
             ),
             (
+                "Criar borda interna (Shift+U)",
+                "Cria uma moldura no plano original e seleciona a região interna.",
+                Operation::Inset,
+            ),
+            (
                 "Criar face ou aresta (Shift+F)",
                 "Use pontos ordenados ou as bordas de uma abertura fechada.",
                 Operation::Create,
@@ -38,13 +44,14 @@ impl Editor {
                 Operation::Flip,
             ),
         ] {
-            let enabled = self.operation_available(op)
+            let enabled = available
+                && self.operation_available(op)
                 && (active || matches!(op, Operation::Loop | Operation::Knife));
             if ui
                 .add_enabled(enabled, egui::Button::new(label))
                 .on_hover_text(tip)
                 .on_disabled_hover_text(
-                    "Escolha componentes no modo compatível e conclua a operação em andamento.",
+                    "Escolha componentes no modo compatível; termine ou cancele o arrasto atual.",
                 )
                 .clicked()
             {
@@ -53,30 +60,87 @@ impl Editor {
             }
         }
     }
+    /// Inline tools: caller owns the single row and the always-accessible overflow menu.
     pub(super) fn topology_toolbar(&mut self, ui: &mut egui::Ui) {
-        use crate::icons::{Icon, button};
-        ui.horizontal_wrapped(|ui|{
-            let available=!self.mesh_operation_active();
-            if self.components_active(){
-                for (icon,label,tip,op) in [
-                    (Icon::Loop,"Corte em loop","Corte em loop (Shift+R): divide uma faixa de quads; aponte a aresta inicial.",Operation::Loop),
-                    (Icon::Bevel,"Arredondar","Arredondar (Shift+B): quinas convexas expostas, com largura e segmentos.",Operation::Bevel),
-                    (Icon::Extrude,"Extrudir","Extrudir (Shift+E): prolonga faces, bordas ou pontos.",Operation::Extrude),
-                    (Icon::Create,"Criar face/aresta","Criar (Shift+F): une pontos ou fecha uma borda plana.",Operation::Create),
-                    (Icon::Flip,"Inverter orientação","Inverter orientação (Shift+N): troca o lado das faces mantendo seus UVs.",Operation::Flip),
-                ] {
-                    let enabled=available&&self.operation_available(op)&&(!self.modeling.selection.ids.is_empty()||op==Operation::Loop);
-                    let response=ui.add_enabled_ui(enabled,|ui|button(ui,icon,label,tip,false,self.preferences.tool_names)).inner;
-                    if response.on_disabled_hover_text("Selecione componentes no modo compatível e conclua a prévia atual.").clicked(){self.begin_mesh_operation(op);}
+        use crate::icons::{Icon, button, width};
+        let names = self.preferences.tool_names;
+        let reserve = width(ui, "Malha", names) + ui.spacing().item_spacing.x;
+        let available = !self.mesh_operation_active();
+        if self.components_active() {
+            for (icon, label, tip, op) in [
+                (
+                    Icon::Loop,
+                    "Corte em loop",
+                    "Corte em loop (Shift+R): clique na faixa de quads para cortar.",
+                    Operation::Loop,
+                ),
+                (
+                    Icon::Bevel,
+                    "Arredondar",
+                    "Arredondar (Shift+B): arraste a largura e solte para aplicar.",
+                    Operation::Bevel,
+                ),
+                (
+                    Icon::Extrude,
+                    "Extrudir",
+                    "Extrudir (Shift+E): arraste a distância; tamanho interno menor que 100% deixa uma moldura.",
+                    Operation::Extrude,
+                ),
+                (
+                    Icon::Inset,
+                    "Criar borda interna",
+                    "Criar borda interna (Shift+U): reduz o contorno interno no plano original.",
+                    Operation::Inset,
+                ),
+                (
+                    Icon::Create,
+                    "Criar face/aresta",
+                    "Criar (Shift+F): une pontos ordenados ou fecha uma borda plana.",
+                    Operation::Create,
+                ),
+                (
+                    Icon::Flip,
+                    "Inverter orientação",
+                    "Inverter orientação (Shift+N): troca o lado da face mantendo os pixels.",
+                    Operation::Flip,
+                ),
+                (
+                    Icon::Knife,
+                    "Bisturi",
+                    "Bisturi (Shift+K): trace o caminho; duplo clique ou Enter conclui.",
+                    Operation::Knife,
+                ),
+            ] {
+                if !self.operation_available(op) {
+                    continue;
                 }
-            }else if ui.add_enabled_ui(available&&!self.selection.ids.is_empty(),|ui|button(ui,Icon::Snap,"Encaixar vértices","Encaixar vértices (Shift+V): escolha origem e destino para mover a seleção inteira ou escalar pelo eixo.",false,self.preferences.tool_names)).inner.clicked(){self.begin_snap();
+                if ui.available_width() < width(ui, label, names) + reserve {
+                    continue;
+                }
+                let enabled = available
+                    && (!self.modeling.selection.ids.is_empty()
+                        || matches!(op, Operation::Loop | Operation::Knife));
+                let selected = self.modeling.preview.as_ref().is_some_and(|p| p.operation == op);
+                let response = ui
+                    .add_enabled_ui(enabled, |ui| button(ui, icon, label, tip, selected, names))
+                    .inner;
+                if response
+                    .on_disabled_hover_text(
+                        "Selecione componentes compatíveis; termine ou cancele o arrasto atual.",
+                    )
+                    .clicked()
+                {
+                    self.begin_mesh_operation(op);
+                }
             }
-            if ui.add_enabled_ui(available&&self.selection.ids.len()==1,|ui|button(ui,Icon::Knife,"Bisturi","Bisturi (Shift+K): corte a superfície clicando em suas bordas.",false,self.preferences.tool_names)).inner.clicked(){self.begin_mesh_operation(Operation::Knife);}
-        });
+        } else if ui.available_width() >= width(ui, "Encaixar vértices", names) + reserve
+            && ui.add_enabled_ui(available&&!self.selection.ids.is_empty(),|ui|button(ui,Icon::Snap,"Encaixar vértices","Encaixar vértices (Shift+V): selecione origem e destino para mover a peça ou escalar pelo eixo.",false,names)).inner.clicked() {
+            self.begin_snap();
+        }
     }
     pub(super) fn operation_available(&self, op: Operation) -> bool {
         match op {
-            Operation::Flip => self.modeling.selection.mode == Mode::Face,
+            Operation::Flip | Operation::Inset => self.modeling.selection.mode == Mode::Face,
             Operation::Bevel => matches!(self.modeling.selection.mode, Mode::Edge | Mode::Vertex),
             Operation::Loop => matches!(self.modeling.selection.mode, Mode::Edge | Mode::Face),
             _ => true,
@@ -107,12 +171,34 @@ impl Editor {
                     preview.values[0],
                     preview.count,
                 ),
-                Operation::Extrude => operations::extrude(
-                    &preview.source,
-                    &preview.selection,
-                    Vec3::from(preview.values),
-                    preview.per_face,
-                ),
+                Operation::Extrude | Operation::Inset => {
+                    let delta = preview.displacement(None);
+                    if preview.selection.mode != Mode::Face {
+                        operations::extrude(&preview.source, &preview.selection, delta, false)
+                    } else if preview.per_face {
+                        let directions = preview
+                            .selection
+                            .ids
+                            .iter()
+                            .map(|&id| (id, preview.displacement(Some(id))))
+                            .collect();
+                        inset::apply_directions(
+                            &preview.source,
+                            &preview.selection,
+                            preview.inner_size,
+                            &directions,
+                            true,
+                        )
+                    } else {
+                        inset::apply(
+                            &preview.source,
+                            &preview.selection,
+                            preview.inner_size,
+                            delta,
+                            false,
+                        )
+                    }
+                }
                 Operation::Create => operations::create(&preview.source, &preview.selection),
                 Operation::Flip => operations::flip(&preview.source, &preview.selection),
                 _ => unreachable!(),
@@ -138,12 +224,16 @@ impl Editor {
             let allocation = allocation?;
             let texture = if let Some((original, size)) = &preview.texture {
                 if allocation.expansion == 2 {
-                    if preview.expanded_texture.is_none() {
+                    if preview
+                        .expanded_texture
+                        .as_deref()
+                        .is_none_or(|id| self.state.project.asset(id).is_none())
+                    {
                         let source = self.state.images.get(original).ok_or(
                             "Textura não carregada; cancele e abra a pintura para recarregar.",
                         )?;
                         let image = expand_image(source)?;
-                        let id = new_id();
+                        let id = preview.expanded_texture.clone().unwrap_or_else(new_id);
                         self.state.project.assets.push(Asset {
                             id: id.clone(),
                             name: format!(
@@ -164,7 +254,7 @@ impl Editor {
                     let _ = size;
                     preview.expanded_texture.clone()
                 } else {
-                    self.remove_preview_texture(&mut preview.expanded_texture);
+                    self.remove_preview_texture(&mut preview.expanded_texture.clone());
                     Some(original.clone())
                 }
             } else {
@@ -175,6 +265,9 @@ impl Editor {
                 .entity_mut(&preview.entity)
                 .ok_or("A peça deixou de existir.")?;
             entity.mesh = Some(allocation.mesh);
+            entity.primitive = None;
+            entity.primitive_parameters = None;
+            entity.dimensions = [1.; 3];
             entity.material.texture = texture;
             self.modeling.selection = output.selection;
             Ok::<(), String>(())
@@ -182,7 +275,7 @@ impl Editor {
         preview.error = result.err();
         self.modeling.preview = Some(preview);
     }
-    fn remove_preview_texture(&mut self, id: &mut Option<Id>) {
+    pub(super) fn remove_preview_texture(&mut self, id: &mut Option<Id>) {
         if let Some(id) = id.take() {
             self.state.project.assets.retain(|a| a.id != id);
             self.state.images.remove(&id);

@@ -8,7 +8,7 @@ mod checks;
 fn native_spatial_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.0/m7/spatial");
+    let output = workspace.join("qa/v0.2.1/m7/spatial");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-spatial-{}", new_id()));
     std::fs::create_dir_all(&fixture).unwrap();
@@ -57,6 +57,7 @@ fn native_spatial_workflow() {
     eframe::run_native(
         "OXY Engine — colisores reais",
         eframe::NativeOptions {
+            persist_window: false,
             renderer: eframe::Renderer::Wgpu,
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1440., 900.])
@@ -71,7 +72,10 @@ fn native_spatial_workflow() {
             let mut qa = NativeQa::new(cc, fixture.join("project.oxy.json"), artifacts, result);
             qa.actions = VecDeque::from([
                 Action::SelectEntity("Personagem"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Wait(3),
                 Action::Check("selected_group_collider"),
                 Action::Screenshot("selected-empty-group-2d.png"),
@@ -106,7 +110,9 @@ fn native_spatial_workflow() {
                 },
                 Action::Check("spatial_cancel"),
                 Action::Click("▶ Jogar"),
+                Action::Click("Visualização"),
                 Action::Click("Colisores"),
+                Action::Click("Visualização"),
                 Action::Check("spatial_floor"),
                 Action::Screenshot("runtime-floor-2d.png"),
                 Action::Click("■ Parar"),
@@ -208,7 +214,10 @@ fn native_spatial_workflow() {
                 Action::OptionalClick("Dispensar"),
                 Action::Click("Gravar poses alteradas"),
                 Action::Check("spatial_collective_keys"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Screenshot("animation-overlay-2d.png"),
                 Action::Key(Key::Z, true),
                 Action::Check("spatial_animation_undo"),

@@ -20,10 +20,15 @@ enum PaintTool {
     Select,
 }
 pub struct Studio {
+    #[cfg(test)]
+    pub(crate) header_top: f32,
+    #[cfg(test)]
+    pub(crate) header_bottom: f32,
     pub tab: StudioTab,
     pub owner: Option<Id>,
     pub playing: bool,
     pub animation: AnimationState,
+    animation_warning: Option<String>,
     color: [u8; 4],
     radius: f32,
     tool: PaintTool,
@@ -37,10 +42,15 @@ pub struct Studio {
 impl Default for Studio {
     fn default() -> Self {
         Self {
+            #[cfg(test)]
+            header_top: 0.,
+            #[cfg(test)]
+            header_bottom: 0.,
             tab: StudioTab::Model,
             owner: None,
             playing: false,
             animation: AnimationState::default(),
+            animation_warning: None,
             color: [198, 82, 63, 255],
             radius: 7.,
             tool: PaintTool::Brush,
@@ -55,33 +65,52 @@ impl Default for Studio {
 }
 impl Editor {
     pub fn studio_ui(&mut self, ui: &mut egui::Ui, dt: f32) {
+        #[cfg(test)]
+        {
+            self.studio.header_top = ui.cursor().top();
+        }
         let previous = self.studio.tab;
-        ui.horizontal_wrapped(|ui| {
-            if self.mesh_operation_active(){ui.disable();}
-            if !Self::compact_layout(ui.ctx()) {
-                ui.heading("Estúdio");
+        // Decide once from the whole Studio area, before its tabs consume horizontal space.
+        // The same decision drives the context menu and the animation properties panel.
+        let context_row_height =
+            30.0_f32.max(ui.spacing().interact_size.y) + ui.spacing().item_spacing.y;
+        let compact_animation =
+            ui.available_width() < 850. || ui.available_height() - context_row_height < 450.;
+        ui.horizontal(|ui| {
+            ui.set_min_height(30.);
+            ui.add_enabled_ui(!self.mesh_operation_active(),|ui| {
+                if ui.available_width()<310. {
+                    let label=match self.studio.tab {StudioTab::Model=>"Modelagem",StudioTab::Paint=>"Pintura",StudioTab::Animation=>"Animação"};
+                    ui.menu_button(label,|ui| {
+                        for (tab,label) in [(StudioTab::Model,"Modelagem"),(StudioTab::Paint,"Pintura"),(StudioTab::Animation,"Animação")] {
+                            if ui.selectable_value(&mut self.studio.tab,tab,label).clicked(){ui.close();}
+                        }
+                    }).response.on_hover_text("Ferramentas do Estúdio: modelagem, pintura e animação.");
+                } else {
+                    ui.selectable_value(&mut self.studio.tab,StudioTab::Model,"Modelagem").on_hover_text("Crie e edite a geometria. Arraste peças na hierarquia para definir articulações.");
+                    ui.selectable_value(&mut self.studio.tab,StudioTab::Paint,"Pintura").on_hover_text("Edite pixels na imagem ou na peça. Ctrl+Z desfaz o traço inteiro.");
+                    ui.selectable_value(&mut self.studio.tab,StudioTab::Animation,"Animação").on_hover_text("Grave poses por peça ou grupo na linha do tempo.");
+                }
+            });
+            if self.studio.tab==StudioTab::Model {
                 ui.separator();
+                self.model_context_controls(ui);
+            } else if self.studio.tab==StudioTab::Animation {
+                self.animation_context_controls(ui,compact_animation);
             }
-            ui.selectable_value(&mut self.studio.tab, StudioTab::Model, "Modelagem").on_hover_text("Crie formas em + Objeto. Arraste peças na hierarquia para definir suas articulações.");
-            ui.selectable_value(&mut self.studio.tab, StudioTab::Paint, "Pintura").on_hover_text("Edite os pixels à esquerda ou pinte diretamente na peça. Ctrl+Z desfaz a pincelada inteira.");
-            ui.selectable_value(&mut self.studio.tab, StudioTab::Animation, "Animação");
+            if ui.available_width()>72.
+                && let Some(id)=if self.studio.tab==StudioTab::Animation {self.studio.owner.as_ref().or(self.selected.as_ref())} else {self.selected.as_ref().or(self.studio.owner.as_ref())}
+                && let Some(entity)=self.scene().entity(id) {
+                ui.add_sized([ui.available_width(),30.],egui::Label::new(&entity.name).truncate()).on_hover_text(format!("Peça em edição: {}",entity.name));
+            }
         });
         if previous != self.studio.tab {
             self.set_spatial_tool(crate::app::Tool::Object);
         }
-        if !Self::compact_layout(ui.ctx())
-            && self.studio.tab != StudioTab::Animation
-            && let Some(id) = self.studio.owner.as_ref().or(self.selected.as_ref())
-            && let Some(entity) = self.scene().entity(id)
-        {
-            ui.label(format!("Modelo: {}", entity.name));
-        }
         match self.studio.tab {
-            StudioTab::Model => {
-                self.viewport(ui, false);
-            }
+            StudioTab::Model => self.viewport(ui, false),
             StudioTab::Paint => self.paint_ui(ui),
-            StudioTab::Animation => self.animation_ui(ui, dt),
+            StudioTab::Animation => self.animation_ui(ui, dt, compact_animation),
         }
     }
 }

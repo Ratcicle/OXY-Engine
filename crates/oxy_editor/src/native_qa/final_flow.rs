@@ -337,7 +337,7 @@ impl NativeQa {
 fn native_final_creation_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.0/m7/full-flow");
+    let output = workspace.join("qa/v0.2.1/m7/full-flow");
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let shared = report.clone();
@@ -345,6 +345,7 @@ fn native_final_creation_workflow() {
     eframe::run_native(
         "OXY Engine — QA criação completa",
         eframe::NativeOptions {
+            persist_window: false,
             renderer: eframe::Renderer::Wgpu,
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1440., 900.])
@@ -378,23 +379,30 @@ fn native_final_creation_workflow() {
                 Action::Key(Key::Enter, false),
                 Action::Check("f7_tube"),
                 Action::Key(Key::Num2, false),
+                Action::OptionalClick("Ferramentas"),
+                Action::Click("Malha"),
                 Action::Click("Converter em malha editável"),
                 Action::Check("f7_converted"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Key(Key::Num3, false),
                 Action::ComponentClick([0., 0., 0.5], false),
                 Action::Chord(Key::R, Modifiers::SHIFT),
+                Action::WorldClick([0., 0., 0.5]),
                 Action::Key(Key::Enter, false),
                 Action::Check("f7_loop"),
                 Action::Screenshot("tube-loop.png"),
                 Action::Key(Key::Num2, false),
                 Action::ComponentClick([0.1767767, 0.25, 0.4267767], false),
                 Action::Chord(Key::E, Modifiers::SHIFT),
+                Action::EditValue("Distância", "0.25"),
                 Action::Key(Key::Enter, false),
                 Action::Check("f7_extruded"),
                 Action::Final("cap_edge"),
                 Action::Chord(Key::B, Modifiers::SHIFT),
-                Action::Click("2"),
+                Action::EditValue("Segmentos", "2"),
                 Action::EditValue("Largura", "0.02"),
                 Action::Check("f7_beveled"),
                 Action::Key(Key::Z, true),
@@ -404,8 +412,14 @@ fn native_final_creation_workflow() {
                 Action::Screenshot("tube-edited.png"),
                 Action::Final("paint_faces"),
                 Action::Click("Pintura"),
+                Action::OptionalClick("Pintar"),
+                Action::OptionalClick("Textura"),
+                Action::Click("Criar textura"),
                 Action::Click("Criar 512×512"),
-                Action::Click("Enquadrar peça"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Check("f7_paint_base"),
                 Action::PaintFace {
                     new: false,
@@ -435,7 +449,10 @@ fn native_final_creation_workflow() {
                 Action::Check("f7_instance"),
                 Action::Key(Key::W, false),
                 Action::GizmoDelta(440.),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Scroll("PROPRIEDADES", 900.),
                 Action::Click("Componentes"),
                 Action::Click("Colisão / área"),
@@ -471,7 +488,9 @@ fn native_final_creation_workflow() {
                 Action::Click("+ Quadro-chave"),
                 Action::Check("f7_animation"),
                 Action::Screenshot("tube-rigid-animation.png"),
+                Action::Click("Modelo"),
                 Action::Click("Pose-base"),
+                Action::Key(Key::Escape, false),
                 Action::Click("Lógica"),
                 Action::Click("Ao iniciar cena"),
                 Action::Click("Pesquisar ação…"),
@@ -503,7 +522,10 @@ fn native_final_creation_workflow() {
                 Action::ReopenProject,
                 Action::SelectEntity("Instância articulada"),
                 Action::Click("Estúdio"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Screenshot("tube-final-reopened.png"),
             ]);
             Ok(Box::new(qa))

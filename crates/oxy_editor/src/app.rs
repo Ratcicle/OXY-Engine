@@ -12,6 +12,7 @@ mod spatial_tools;
 mod textures;
 mod toolbar;
 mod viewport;
+mod viewport_controls;
 use spatial_tools::SpatialTools;
 pub(crate) use spatial_tools::Tool;
 
@@ -125,6 +126,7 @@ pub struct Editor {
     debug: bool,
     show_disabled_colliders: bool,
     grid: bool,
+    snap_grid: bool,
     grid_size: f32,
     gizmo: Gizmo,
     gizmo_drag: Option<GizmoDrag>,
@@ -239,6 +241,7 @@ impl Editor {
             debug: false,
             show_disabled_colliders: false,
             grid: true,
+            snap_grid: true,
             grid_size: 0.25,
             gizmo: Gizmo::Move,
             gizmo_drag: None,
@@ -366,9 +369,10 @@ impl Editor {
     }
     pub fn save(&mut self) -> bool {
         if self.mesh_operation_active() {
-            self.warn("Confirme ou cancele a prévia de modelagem antes de salvar.");
+            self.warn("Termine o gesto de modelagem ou pressione Esc antes de salvar.");
             return false;
         }
+        self.cancel_mesh_operation();
         if !self.history.is_pending() {
             self.history
                 .begin("Finalizar edição", &self.state.project, &self.state.images);
@@ -562,11 +566,16 @@ impl Editor {
                 .images
                 .configure(&self.root(), &self.state.project);
         }
+        self.validate_last_mesh_operation();
     }
     fn undo(&mut self, redo: bool) {
+        if self.cancel_box_selection() {
+            return;
+        }
         if self.cancel_mesh_operation() {
             return;
         }
+        self.forget_last_mesh_operation();
         self.cancel_spatial_drag();
         self.finish_history(true);
         let result = if redo {
@@ -608,9 +617,10 @@ impl Editor {
     }
     fn start(&mut self) {
         if self.mesh_operation_active() {
-            self.warn("Confirme ou cancele a prévia de modelagem antes de jogar.");
+            self.warn("Termine o gesto de modelagem ou pressione Esc antes de jogar.");
             return;
         }
+        self.cancel_mesh_operation();
         self.set_spatial_tool(Tool::Object);
         self.finish_history(true);
         match Runtime::new(&self.state.project, &self.scene_id) {
@@ -647,6 +657,11 @@ impl Editor {
     }
     pub fn select(&mut self, id: Option<Id>) {
         if self.selected != id {
+            self.cancel_box_selection();
+            self.cancel_mesh_operation();
+            self.forget_last_mesh_operation();
+        }
+        if self.selected != id {
             self.reveal_scroll = id.clone();
         }
         self.reveal_selection(id.as_deref());
@@ -664,6 +679,11 @@ impl Editor {
         modifiers: egui::Modifiers,
         hierarchy: bool,
     ) {
+        if self.selected != id {
+            self.cancel_box_selection();
+            self.cancel_mesh_operation();
+            self.forget_last_mesh_operation();
+        }
         self.selection_rotation = [0.; 3];
         self.selection_scale = 1.;
         self.hierarchy_focus = hierarchy;
@@ -739,6 +759,9 @@ impl Editor {
         }
     }
     fn set_scene(&mut self, id: Id) {
+        self.cancel_box_selection();
+        self.cancel_mesh_operation();
+        self.forget_last_mesh_operation();
         self.set_spatial_tool(Tool::Object);
         self.spatial.fit = None;
         if !self.studio.animation.drafts.is_empty() {
@@ -830,25 +853,6 @@ impl Editor {
             });
             return;
         }
-        if !self.capture {
-            ui.horizontal(|ui| {
-                ui.label("PAUSADO · entrada liberada");
-                if ui.button("Retomar jogo").clicked() {
-                    self.capture = true;
-                    if let Some(rt) = &mut self.runtime {
-                        rt.set_paused(false);
-                    }
-                    self.last_time = Instant::now();
-                }
-            });
-        } else {
-            ui.label("EM EXECUÇÃO · Escape pausa e libera a entrada");
-        }
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.debug, "Colisores");
-            ui.checkbox(&mut self.show_disabled_colliders, "Mostrar desativados");
-            ui.label("Somente leitura · mudanças na cena exigem Parar e Jogar novamente.");
-        });
         if !ui.ctx().input(|i| i.focused) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.pause();
         }
@@ -1016,9 +1020,17 @@ impl eframe::App for Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        let mesh_cancelled = self.mesh_operation_active()
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-            && self.cancel_mesh_operation();
+        if !ctx.input(|i| i.focused) {
+            self.cancel_box_selection();
+            if self.mesh_input_gesture_active() {
+                self.cancel_mesh_operation();
+            }
+        }
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let cancel_undo = self.mesh_operation_active()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
+        let mesh_cancelled = (escape || cancel_undo)
+            && (self.cancel_box_selection() || self.cancel_mesh_operation());
         let dialog_open = self.modeling.creation.is_some()
             || mesh_cancelled
             || self.modeling.help

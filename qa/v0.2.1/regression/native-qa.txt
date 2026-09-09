@@ -1,0 +1,268 @@
+Concluído: true
+Erro: None
+
+Verificado: lazy_open
+Captura GPU da janela: editor-scene.png
+Captura editor-scene.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: + Objeto em [131.5 117.8]
+Clique: Retângulo em [135.5 147.5]
+Tecla Enter, Ctrl=false
+Verificado: created
+Verificado: gizmo_baseline
+Arrastar eixo X pelo controle visual
+Verificado: gizmo_moved
+Tecla Z, Ctrl=true
+Verificado: gizmo_undo
+Clique: Lógica em [220.8 80.0]
+Clique: Ao iniciar cena em [287.5 317.5]
+Clique: Pesquisar ação… em [293.0 254.8]
+Digitar: Mensagem
+Clique: Mensagem de diagnóstico em [321.5 318.0]
+Arrastar nó pelo título
+Conectar saída e entrada pelas portas visuais
+Verificado: graph_connected
+Captura GPU da janela: graph.png
+Captura graph.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Delete, Ctrl=false
+Verificado: node_deleted
+Tecla Z, Ctrl=true
+Verificado: node_undo
+Clique: Cena em [32.5 79.5]
+Verificado: play_baseline
+Clique: ▶ Jogar em [326.6 46.5]
+Verificado: playing
+Manter D por 24 quadros
+Verificado: game_moved
+Captura GPU da janela: game.png
+Captura game.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Cena em [32.5 82.5]
+Verificado: left_game_paused
+Clique: Jogo em [89.1 83.5]
+Verificado: return_still_paused
+Clique: ▶ Retomar · Pausado em [364.6 45.0]
+Verificado: playing
+Tecla Escape, Ctrl=false
+Verificado: escape_paused
+Clique: ■ Parar em [477.2 45.5]
+Verificado: stop_isolated
+Redimensionar: [920.0 600.0]
+Captura GPU da janela: editor-small.png
+Captura editor-small.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Redimensionar: [1440.0 900.0]
+Clique: A · Sala de plataforma 2D em [407.4 84.5]
+Clique: B · Oficina 3D e golpe articulado em [434.5 153.0]
+Verificado: scene_3d
+Selecionar hierarquia: Tronco · textura pintável
+Clique: Estúdio em [153.2 79.0]
+Clique: Pintura em [356.7 124.8]
+Clique: Visualização em [582.5 161.8]
+Clique: Enquadrar seleção em [658.5 373.5]
+Verificado: texture_copy_baseline
+Clique: Criar cópia independente em [317.5 227.8]
+Verificado: texture_copied
+Verificado: paint_baseline
+Pincelada real no PNG
+Verificado: paint_changed
+Captura GPU da janela: studio-paint.png
+Captura studio-paint.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Verificado: paint_undo
+Tecla Y, Ctrl=true
+Verificado: paint_redo
+Tecla S, Ctrl=true
+Verificado: saved_roundtrip
+Verificado: texture_controls_baseline
+Clique: Textura em [542.5 161.8]
+Clique: Localizar na biblioteca em [600.0 420.5]
+Tecla Escape, Ctrl=false
+Excluir recurso pelo cartão de sua própria textura
+Verificado: texture_reference_blocked
+Captura GPU da janela: texture-reference.png
+Captura texture-reference.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Cancelar em [278.0 272.7]
+Clique: Textura em [542.5 161.8]
+Clique: Remover textura em [763.4 396.0]
+Tecla Escape, Ctrl=false
+Verificado: texture_unlinked
+Tecla Z, Ctrl=true
+Verificado: texture_unlink_undo
+Clique: Modelagem em [272.5 125.2]
+Captura GPU da janela: studio-3d.png
+Captura studio-3d.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Selecionar hierarquia: Boneco · modelo por peças
+Clique: Animação em [433.3 125.8]
+Verificado: animation_baseline
+Clique: ▶ Reproduzir em [497.5 657.0]
+Reproduzir 16 quadros sem entrada
+Verificado: animation_preview
+Captura GPU da janela: animation.png
+Captura animation.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Redimensionar: [920.0 600.0]
+Clique: Visualização em [618.0 202.5]
+Clique: Enquadrar seleção em [381.5 414.5]
+Captura GPU da janela: animation-small.png
+Captura animation-small.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Animação 920×600: viewport 524×185 pontos
+Verificado: animation_small_layout
+Clique: + Quadro-chave em [451.5 494.0]
+Verificado: key_created
+Tecla Z, Ctrl=true
+Verificado: animation_preview
+Redimensionar: [1440.0 900.0]
+Clique: Modelo em [532.4 124.2]
+Clique: Pose-base em [517.5 197.5]
+Tecla Escape, Ctrl=false
+Clique: + Quadro-chave em [949.9 657.0]
+Verificado: key_created
+Rolar painel QUADRO-CHAVE
+Clique: Copiar quadro em [1236.0 524.0]
+Selecionar hierarquia: Cabeça
+Clique: Colar quadro em [1061.0 657.0]
+Verificado: key_pasted
+Tecla S, Ctrl=true
+Verificado: saved_roundtrip
+Clique: Cena em [32.5 79.5]
+Clique: B · Oficina 3D e golpe articulado em [427.9 84.5]
+Clique: C · Carta, custo, energia e alvo em [428.0 187.0]
+Verificado: play_baseline
+Clique: ▶ Jogar em [326.6 46.5]
+Verificado: playing
+Clique real no botão da carta
+Verificado: card_one
+Clique real no botão da carta
+Verificado: card_two
+Clique real no botão da carta
+Verificado: card_three
+Clique real no botão da carta
+Verificado: card_four
+Captura GPU da janela: card.png
+Captura card.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [492.2 45.5]
+Verificado: stop_isolated
+Clique: + em [569.1 82.8]
+Clique: Cena 3D em [686.1 443.6]
+Clique: Criar cena em [614.5 477.6]
+Clique: + Objeto em [131.5 117.8]
+Clique: Cubo em [120.0 146.5]
+Tecla Enter, Ctrl=false
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Peça A
+Tecla S, Ctrl=true
+Verificado: rename_saved_inline
+Tecla Enter, Ctrl=false
+Verificado: renamed_a
+Tecla Z, Ctrl=true
+Verificado: rename_undo
+Tecla Y, Ctrl=true
+Verificado: renamed_a
+Arrastar eixo X pelo controle visual
+Clique: + Objeto em [131.5 117.8]
+Clique: Cubo em [120.0 146.5]
+Tecla Enter, Ctrl=false
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Peça B
+Tecla Enter, Ctrl=false
+Arrastar eixo X pelo controle visual
+Clique: + Objeto em [131.5 117.8]
+Clique: Grupo vazio em [139.0 323.0]
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Articulação
+Tecla Enter, Ctrl=false
+Clique: + Objeto em [131.5 117.8]
+Clique: Grupo vazio em [139.0 323.0]
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Montagem
+Tecla Enter, Ctrl=false
+Verificado: hierarchy_baseline
+Arrastar hierarquia: Peça A → Articulação
+Arrastar hierarquia: Peça B → Articulação
+Verificado: pieces_parented
+Arrastar hierarquia: Articulação → Montagem
+Verificado: group_parented
+Arrastar hierarquia: Articulação → Raiz da cena · solte aqui
+Verificado: group_root
+Selecionar hierarquia: Peça A
+Selecionar hierarquia: Peça B
+Verificado: multi_baseline
+Tecla W, Ctrl=false
+Arrastar eixo X pelo controle visual
+Verificado: multi_move
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Tecla E, Ctrl=false
+Arrastar eixo X pelo controle visual
+Verificado: multi_rotate
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Tecla R, Ctrl=false
+Arrastar eixo X pelo controle visual
+Verificado: multi_scale
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Escalar seleção pela alça central uniforme
+Verificado: multi_scale_uniform
+Tecla Z, Ctrl=true
+Verificado: multi_undo
+Captura GPU da janela: multi-selection.png
+Captura multi-selection.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Verificado: focus_baseline
+Selecionar hierarquia: Articulação
+Verificado: focused_group
+Clique: Estúdio em [153.2 79.0]
+Clique: Animação em [433.3 125.8]
+Clique: + Nova animação em [295.0 186.2]
+Tecla A, Ctrl=true
+Digitar: Parado
+Tecla Enter, Ctrl=false
+Clique: + Quadro-chave em [946.9 657.0]
+Selecionar hierarquia: Peça A
+Clique: + Quadro-chave em [946.9 657.0]
+Selecionar hierarquia: Articulação
+Clique: + Nova animação em [295.0 186.2]
+Tecla A, Ctrl=true
+Digitar: Ataque
+Tecla Enter, Ctrl=false
+Clique: + Quadro-chave em [946.9 657.0]
+Verificado: authored_clips
+Editar campo visível: Cursor = 0.5
+Tecla W, Ctrl=false
+Verificado: draft_baseline
+Arrastar eixo X pelo controle visual
+Verificado: group_draft
+Tecla S, Ctrl=true
+Verificado: draft_save_refused
+Clique: Nova cena em [365.4 84.0]
+Clique: A · Sala de plataforma 2D em [418.0 119.0]
+Verificado: draft_scene_refused
+Clique: + Quadro-chave em [946.9 657.0]
+Verificado: group_key
+Captura GPU da janela: group-animation.png
+Captura group-animation.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Abrir menu de contexto: Ataque
+Clique: Duplicar animação em [393.5 306.5]
+Verificado: clip_duplicated
+Tecla S, Ctrl=true
+Verificado: saved_roundtrip
+Clique: Cena em [32.5 79.5]
+Clique: Nova cena em [365.4 84.0]
+Clique: B · Oficina 3D e golpe articulado em [434.5 153.0]
+Selecionar hierarquia: Boneco · modelo por peças
+Clique: Estúdio em [153.2 79.0]
+Clique: Animação em [433.3 125.8]
+Verificado: clip_reference_baseline
+Abrir menu de contexto: Ataque
+Clique: Excluir animação em [388.5 294.5]
+Verificado: clip_reference_blocked
+Captura GPU da janela: animation-reference.png
+Captura animation-reference.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Entendi em [275.5 249.7]
+Clique: Cena em [32.5 79.5]
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: [crates\oxy_editor\src\app\notices.rs:81 ]
+Repouso medido: 1 atualizações espontâneas em 500 ms
+
+Capturas: ["editor-scene.png", "graph.png", "game.png", "editor-small.png", "studio-paint.png", "texture-reference.png", "studio-3d.png", "animation.png", "animation-small.png", "card.png", "multi-selection.png", "group-animation.png", "animation-reference.png"]

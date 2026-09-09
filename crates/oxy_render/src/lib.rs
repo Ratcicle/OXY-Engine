@@ -3,10 +3,12 @@
 mod cache;
 pub mod camera;
 pub mod collider_debug;
+mod component_overlay;
 pub mod game_ui;
 pub mod input;
 pub mod labels;
 pub mod mesh;
+pub mod mesh_selection;
 pub use camera::CameraState;
 pub use game_ui::GameUi;
 pub use game_ui::pick_ui;
@@ -93,9 +95,21 @@ pub struct RendererStats {
     pub uniform_uploads: u64,
     /// Vertex, index, instance, line and camera buffers; excludes egui and readback buffers.
     pub buffer_allocations: u64,
+    /// Cumulative component stream/flag uploads; separate from rendered surface uploads.
+    pub component_mesh_uploads: u64,
+    pub component_selection_uploads: u64,
+    /// Component draw submissions in the current frame, including private 2D depth replay.
+    pub component_draw_calls: u64,
+    /// Actual allocated component instance/flag buffer sizes, not measured VRAM.
+    pub component_buffer_bytes: u64,
 }
 
 pub struct Renderer {
+    components: component_overlay::ComponentOverlay,
+    last_draws: Vec<Draw>,
+    last_kind: SceneKind,
+    last_selected_instance: Option<u32>,
+    last_entity_count: usize,
     pipeline_3d: wgpu::RenderPipeline,
     pipeline_2d: wgpu::RenderPipeline,
     pipeline_lines: wgpu::RenderPipeline,
@@ -184,6 +198,15 @@ impl Renderer {
         let white = upload_texture(rs, &texture_layout, 1, 1, &[255; 4], true);
         let target = make_target(rs, [1, 1], None);
         Self {
+            components: component_overlay::ComponentOverlay::new(
+                device,
+                &uniform_layout,
+                &texture_layout,
+            ),
+            last_draws: Vec::new(),
+            last_kind: SceneKind::ThreeD,
+            last_selected_instance: None,
+            last_entity_count: 0,
             pipeline_3d,
             pipeline_2d,
             pipeline_lines,
@@ -213,6 +236,7 @@ impl Renderer {
     pub fn stats(&self) -> RendererStats {
         let (meshes, cached_vertices, cached_triangles) = self.geometry.counts();
         RendererStats {
+            component_buffer_bytes: self.components.bytes(),
             meshes,
             textures: self.textures.len(),
             cached_vertices,
@@ -386,6 +410,7 @@ impl Renderer {
         self.debug_colliders = debug_colliders;
         if self.project_root != root {
             self.textures.clear();
+            self.components.clear();
             self.project_root = root.to_owned();
         }
         let limit = rs.device.limits().max_texture_dimension_2d.min(8192);
@@ -405,13 +430,20 @@ impl Renderer {
             self.stats.uniform_uploads += 1;
         }
         self.stats.visible_objects = 0;
+        self.stats.component_draw_calls = 0;
+        self.last_kind = scene.kind;
+        self.last_selected_instance = None;
         self.stats.draw_calls = 0;
         self.stats.vertices = 0;
         self.stats.triangles = 0;
         let mut instances = Vec::new();
         let mut draws = Vec::new();
         let entities = prepare_scene(scene, camera);
-        for entity in &entities {
+        self.last_entity_count = entities.len();
+        for (order, entity) in entities.iter().enumerate() {
+            if selected.as_ref() == Some(&entity.id) {
+                self.last_selected_instance = Some(order as u32);
+            }
             let world = entity.world;
             let world = world * Mat4::from_scale(Vec3::from(entity.dimensions));
             let (mesh, hit) = self.geometry.get(&rs.device, entity);
@@ -437,7 +469,7 @@ impl Renderer {
                     },
                     0.,
                     0.,
-                    0.,
+                    order as f32,
                 ],
             });
             draws.push(Draw {
@@ -559,6 +591,7 @@ impl Renderer {
             }
         }
         rs.queue.submit([encoder.finish()]);
+        self.last_draws = draws;
         self.target.id
     }
     /// Complete the debug_colliders path after the viewport image/game UI is drawn.
@@ -836,6 +869,11 @@ pub struct ScenePicker<'a> {
 impl<'a> ScenePicker<'a> {
     pub fn new(scene: &'a Scene) -> Self {
         let view = oxy_core::scene_view::SceneView::new(scene);
+        Self::from_view(&view)
+    }
+    /// Reuse a caller's indexed evaluation for a batch of component hover queries.
+    pub fn from_view(view: &oxy_core::scene_view::SceneView<'a>) -> Self {
+        let scene = view.scene;
         let mut entries = Vec::new();
         for entity in &scene.entities {
             if !entity.has_geometry() || entity.ui.is_some() || !view.visible(entity) {

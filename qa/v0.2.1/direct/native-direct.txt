@@ -1,0 +1,130 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Cubo direto
+Clique: Estúdio em [153.2 79.0]
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Tecla Num2, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Edição direta: base
+Atalho E com Modifiers { shift: true }
+Edição direta: armed
+Atalho Escape com Modifiers { alt: true }
+Edição direta: cancel
+Atalho E com Modifiers { shift: true }
+Arrasto real pela alça da operação, sem confirmação extra
+Edição direta: cancel
+Atalho E com Modifiers { shift: true }
+Arrasto real pela alça da operação, sem confirmação extra
+Edição direta: applied
+Captura GPU da janela: extrude-release.png
+Captura extrude-release.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Editar campo visível: Distância = 0.4
+Edição direta: adjusted
+Captura GPU da janela: last-operation.png
+Captura last-operation.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Edição direta: cancel
+Tecla Y, Ctrl=true
+Edição direta: restored
+Selecionar componente pelo ponto projetado na janela
+Edição direta: base
+Atalho U com Modifiers { shift: true }
+Edição direta: armed
+Arrasto real pela alça da operação, sem confirmação extra
+Edição direta: applied
+Captura GPU da janela: inset-frame.png
+Captura inset-frame.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Edição direta: cancel
+Tecla Y, Ctrl=true
+Edição direta: restored
+Tecla S, Ctrl=true
+Edição direta: roundtrip
+Selecionar hierarquia: Face inclinada
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Tecla Num2, Ctrl=false
+Edição direta: inclined_face
+Edição direta: base
+Atalho E com Modifiers { shift: true }
+Edição direta: armed
+Editar campo visível: Tamanho interno = 70
+Edição direta: inset_flat
+Arrasto real pela alça da operação, sem confirmação extra
+Edição direta: inset_positive
+Captura GPU da janela: inclined-inset-70-normal-release.png
+Captura inclined-inset-70-normal-release.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Editar campo visível: Distância = 0.25
+Edição direta: inset_adjusted
+Captura GPU da janela: inclined-inset-70-last-adjusted.png
+Captura inclined-inset-70-last-adjusted.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Editar campo visível: Tamanho interno = 0
+Edição direta: restored
+Tecla Z, Ctrl=true
+Edição direta: cancel
+Tecla Y, Ctrl=true
+Edição direta: restored
+Selecionar hierarquia: Cubo para rebaixo
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Tecla Num2, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Edição direta: base
+Atalho E com Modifiers { shift: true }
+Editar campo visível: Tamanho interno = 70
+Edição direta: inset_flat
+Arrasto real pela alça da operação, sem confirmação extra
+Edição direta: inset_flat
+Arrasto real pela alça da operação, sem confirmação extra
+Edição direta: inset_negative
+Editar campo visível: Distância = -0.15
+Edição direta: inset_recess
+Captura GPU da janela: inset-70-recess-negative.png
+Captura inset-70-recess-negative.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Edição direta: cancel
+Tecla Y, Ctrl=true
+Edição direta: restored
+Selecionar hierarquia: Cubo do bisturi
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Edição direta: base
+Atalho K com Modifiers { shift: true }
+Selecionar componente pelo ponto projetado na janela
+Selecionar componente pelo ponto projetado na janela
+Edição direta: knife_pending
+Captura GPU da janela: knife-before-double-click.png
+Captura knife-before-double-click.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Edição direta: knife_double
+Edição direta: knife_finished
+Captura GPU da janela: knife-double-click-committed.png
+Captura knife-double-click-committed.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Edição direta: cancel
+Tecla Y, Ctrl=true
+Edição direta: restored
+Selecionar hierarquia: Cone com oito lados
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Tecla Num2, Ctrl=false
+Edição direta: cone_box
+Edição direta: cone_selected
+Captura GPU da janela: cone-through-front.png
+Captura cone-through-front.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Pan e zoom reais no viewport
+Edição direta: selection_stable
+Captura GPU da janela: cone-through-orbit.png
+Captura cone-through-orbit.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Janela: 920 × 600 pixels físicos
+Escala de interface 1.6
+Edição direta: selection_stable
+Captura GPU da janela: small-component-editor.png
+Captura small-component-editor.png: 920 × 600 pixels físicos; 1.6 pixels por ponto
+Tecla S, Ctrl=true
+Edição direta: roundtrip
+Edição direta: atlas_amendment
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: [crates\oxy_editor\src\app\notices.rs:81 ]
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Capturas: ["extrude-release.png", "last-operation.png", "inset-frame.png", "inclined-inset-70-normal-release.png", "inclined-inset-70-last-adjusted.png", "inset-70-recess-negative.png", "knife-before-double-click.png", "knife-double-click-committed.png", "cone-through-front.png", "cone-through-orbit.png", "small-component-editor.png"]

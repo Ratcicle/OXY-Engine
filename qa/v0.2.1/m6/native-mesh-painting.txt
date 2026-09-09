@@ -1,0 +1,44 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Peça pintável
+Clique: Estúdio em [153.2 79.0]
+Clique: Pintura em [356.7 124.8]
+Clique: Visualização em [582.5 161.8]
+Clique: Enquadrar seleção em [658.5 373.5]
+Verificado: m6_shared
+Clique: Criar cópia independente em [317.5 227.8]
+Reproduzir 5 quadros sem entrada
+Verificado: m6_base
+Clique: Selecionar faces em [364.0 161.8]
+Clique real na face antiga pela imagem
+Verificado: m6_selected_old
+Captura GPU da janela: uv-old-face.png
+Captura uv-old-face.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique real na face nova pela peça
+Verificado: m6_selected_new
+Captura GPU da janela: uv-new-face.png
+Captura uv-new-face.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: []
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Verificado: m6_cached
+Clique: Pincel em [244.0 161.8]
+Clique real na face nova pela peça
+Reproduzir 5 quadros sem entrada
+Verificado: m6_painted
+Captura GPU da janela: new-face-painted.png
+Captura new-face-painted.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Verificado: m6_undo
+Tecla Y, Ctrl=true
+Verificado: m6_redo
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Peça pintável
+Clique: Estúdio em [153.2 79.0]
+Clique: Pintura em [356.7 124.8]
+Clique: Visualização em [582.5 161.8]
+Clique: Enquadrar seleção em [658.5 373.5]
+Captura GPU da janela: painted-reopened.png
+Captura painted-reopened.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Capturas: ["uv-old-face.png", "uv-new-face.png", "new-face-painted.png", "painted-reopened.png"]

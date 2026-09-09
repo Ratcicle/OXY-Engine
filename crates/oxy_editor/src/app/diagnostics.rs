@@ -39,6 +39,7 @@ impl Editor {
             .as_ref()
             .map_or([0; 4], |r| r.retained_counts());
         let counters = oxy_core::metrics::take();
+        let (component_queries, component_cpu_bytes) = self.component_selection_stats();
         egui::Window::new("Diagnóstico de desempenho").open(&mut self.diagnostics).default_width(340.).show(ctx,|ui| {
             ui.label(format!("FPS de redesenho: {:.1}",1000./self.frame_interval_ms.max(0.001))).on_hover_text("Frequência observada entre as duas últimas atualizações. O editor em repouso redesenha apenas quando necessário.");
             ui.label(format!("Intervalo: {:.2} ms · trabalho CPU: {:.2} ms",self.frame_interval_ms,self.frame_cpu_ms));
@@ -46,6 +47,9 @@ impl Editor {
             ui.label(format!("Geometrias desenhadas: {} · chamadas de desenho: {}",stats.visible_objects,stats.draw_calls));
             ui.label(format!("Vértices: {} · triângulos: {}",stats.vertices,stats.triangles));
             ui.label(format!("Malhas em cache: {} · envios de malha: {}",stats.meshes,stats.mesh_uploads));
+            ui.label(format!("Componentes: {} chamadas · {} envios de geometria · {} envios de seleção",stats.component_draw_calls,stats.component_mesh_uploads,stats.component_selection_uploads));
+            ui.label(format!("Projeções: {} criadas / {} reutilizadas · oclusão: {} criada / {} reutilizada",component_queries.projection_builds,component_queries.projection_hits,component_queries.occlusion_builds,component_queries.occlusion_hits));
+            ui.label(format!("Componentes: CPU estimada {:.2} MiB · buffers GPU alocados {:.2} MiB",component_cpu_bytes as f64/1048576.,stats.component_buffer_bytes as f64/1048576.));
             ui.label(format!("Texturas GPU: {} · pixels editáveis em memória: {}",stats.textures,self.state.images.len()));
             ui.label(format!("Imagens CPU: {:.2} MiB · histórico estimado: {:.2} MiB",self.state.images.resident_bytes() as f64/1048576.,self.history.estimated_bytes() as f64/1048576.));
             ui.label(format!("Nós: {nodes} · tarefas pendentes: {}",self.runtime.as_ref().map_or(0,|r|r.pending_tasks())));

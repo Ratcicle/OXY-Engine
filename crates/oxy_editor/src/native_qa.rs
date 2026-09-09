@@ -2,6 +2,7 @@
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
 mod cuts;
+mod direct;
 mod final_flow;
 mod input_guide;
 mod layout;
@@ -23,6 +24,11 @@ use std::{
 
 #[derive(Clone)]
 enum Action {
+    Direct(&'static str),
+    DirectDrag {
+        pixels: f32,
+        cancel: bool,
+    },
     Final(&'static str),
     Click(&'static str),
     SelectEntity(&'static str),
@@ -61,6 +67,7 @@ enum Action {
     GizmoUniform,
     GizmoZ,
     GizmoDelta(f32),
+    GizmoCancel(f32),
     SpatialDrag {
         face: Option<usize>,
         delta: [f32; 3],
@@ -69,6 +76,7 @@ enum Action {
     Spatial3D,
     InterfaceScale(f32),
     PanZoom,
+    WheelZoom(f32),
     CollapseEntity(&'static str),
     ReopenProject,
     Idle,
@@ -87,6 +95,7 @@ struct TextTarget {
 }
 #[derive(Default)]
 struct Surface {
+    direct_handle: Option<Pos2>,
     texts: Vec<TextTarget>,
     canvas: Option<Rect>,
     png: Option<Rect>,
@@ -151,6 +160,7 @@ impl NativeQa {
         output: PathBuf,
         report: Arc<Mutex<Report>>,
     ) -> Self {
+        let _ = crate::icons::qa_control_rect(&cc.egui_ctx, "");
         let mut editor = Editor::new(cc);
         editor.open(project);
         let initial_entities = editor.scene().entities.len();
@@ -190,7 +200,7 @@ impl NativeQa {
             Action::Check("left_game_paused"),
             Action::Click("Jogo"),
             Action::Check("return_still_paused"),
-            Action::Click("▶ Retomar"),
+            Action::Click("▶ Retomar · Pausado"),
             Action::Check("playing"),
             Action::Key(Key::Escape, false),
             Action::Check("escape_paused"),
@@ -205,7 +215,10 @@ impl NativeQa {
             Action::SelectEntity("Tronco · textura pintável"),
             Action::Click("Estúdio"),
             Action::Click("Pintura"),
-            Action::Click("Enquadrar peça"),
+            Action::OptionalClick("Ferramentas"),
+            Action::OptionalClick("Pintar"),
+            Action::Click("Visualização"),
+            Action::Click("Enquadrar seleção"),
             Action::Check("texture_copy_baseline"),
             Action::OptionalClick("Criar cópia independente"),
             Action::Check("texture_copied"),
@@ -220,12 +233,18 @@ impl NativeQa {
             Action::Key(Key::S, true),
             Action::Check("saved_roundtrip"),
             Action::Check("texture_controls_baseline"),
+            Action::OptionalClick("Pintar"),
+            Action::Click("Textura"),
             Action::Click("Localizar na biblioteca"),
+            Action::Key(Key::Escape, false),
             Action::DeleteTextureAsset,
             Action::Check("texture_reference_blocked"),
             Action::Screenshot("texture-reference.png"),
             Action::Click("Cancelar"),
+            Action::OptionalClick("Pintar"),
+            Action::Click("Textura"),
             Action::Click("Remover textura"),
+            Action::Key(Key::Escape, false),
             Action::Check("texture_unlinked"),
             Action::Key(Key::Z, true),
             Action::Check("texture_unlink_undo"),
@@ -239,7 +258,10 @@ impl NativeQa {
             Action::Check("animation_preview"),
             Action::Screenshot("animation.png"),
             Action::Resize(Vec2::new(920., 600.)),
-            Action::Click("Enquadrar"),
+            Action::OptionalClick("Ferramentas"),
+            Action::OptionalClick("Pintar"),
+            Action::Click("Visualização"),
+            Action::Click("Enquadrar seleção"),
             Action::Screenshot("animation-small.png"),
             Action::Check("animation_small_layout"),
             Action::Click("+ Quadro-chave"),
@@ -247,7 +269,9 @@ impl NativeQa {
             Action::Key(Key::Z, true),
             Action::Check("animation_preview"),
             Action::Resize(Vec2::new(1440., 900.)),
+            Action::Click("Modelo"),
             Action::Click("Pose-base"),
+            Action::Key(Key::Escape, false),
             Action::Click("+ Quadro-chave"),
             Action::Check("key_created"),
             Action::Scroll("QUADRO-CHAVE", -460.),
@@ -465,6 +489,12 @@ impl NativeQa {
             })
             .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
             .map(|target| target.rect.center())
+            .or_else(|| {
+                (!canvas)
+                    .then(|| self.editor.qa_icon_rect(label))
+                    .flatten()
+                    .map(|r| r.center())
+            })
     }
 
     fn click(&mut self, position: Pos2) {
@@ -1397,6 +1427,17 @@ impl NativeQa {
                 }
                 description = "Reabrir projeto no editor e comparar todos os documentos".into();
             }
+            Action::WheelZoom(delta) => {
+                let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
+                self.events
+                    .push_back(vec![Event::PointerMoved(rect.center())]);
+                self.events.push_back(vec![Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0., delta),
+                    modifiers: Modifiers::NONE,
+                }]);
+                description = format!("Zoom pela roda do mouse: {delta}");
+            }
             Action::PanZoom => {
                 let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
                 self.drag(rect.center(), rect.center() + Vec2::new(27., -18.));
@@ -1713,9 +1754,11 @@ impl NativeQa {
                 description = format!("Captura GPU da janela: {name}");
             }
             Action::ResizePhysical(size) => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                    size / ctx.pixels_per_point(),
-                ));
+                let logical_size = size / ctx.pixels_per_point();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(logical_size));
+                ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(logical_size));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(logical_size));
                 self.wait = 20;
                 description = format!("Janela: {} × {} pixels físicos", size.x, size.y);
             }
@@ -1726,6 +1769,57 @@ impl NativeQa {
             Action::Final(label) => {
                 self.final_action(ctx, label)?;
                 description = format!("Fluxo integrado: {label}");
+            }
+            Action::Direct(label) => {
+                self.direct_action(label)?;
+                description = format!("Edição direta: {label}");
+            }
+            Action::DirectDrag { pixels, cancel } => {
+                let from = self
+                    .surface
+                    .direct_handle
+                    .ok_or("Alça da operação não foi desenhada")?;
+                let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
+                let id = self.editor.selected.as_ref().ok_or("Peça ausente")?;
+                let e = self.editor.scene().entity(id).unwrap();
+                let mesh = e.mesh.as_ref().map_or_else(
+                    || oxy_core::geometry::primitives::for_entity(e),
+                    |m| Ok(m.clone()),
+                )?;
+                let vertices = self.editor.mesh_components().vertices(&mesh);
+                let center = vertices
+                    .iter()
+                    .filter_map(|id| mesh.position(*id))
+                    .sum::<glam::Vec3>()
+                    / vertices.len().max(1) as f32;
+                let world = self.editor.scene().world_matrix(id)?;
+                let origin = oxy_render::collider_debug::project(
+                    &self.editor.camera,
+                    rect,
+                    world.transform_point3(center),
+                )
+                .ok_or("Centro não projetado")?;
+                let to = from + (from - origin).normalized() * pixels;
+                self.drag(from, to);
+                if cancel {
+                    let release = self.events.pop_back().unwrap();
+                    self.events.push_back(vec![Event::Key {
+                        key: Key::Escape,
+                        physical_key: Some(Key::Escape),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::ALT | Modifiers::SHIFT,
+                    }]);
+                    self.events.push_back(release);
+                    self.events.push_back(vec![Event::Key {
+                        key: Key::Escape,
+                        physical_key: Some(Key::Escape),
+                        pressed: false,
+                        repeat: false,
+                        modifiers: Modifiers::ALT | Modifiers::SHIFT,
+                    }]);
+                }
+                description = "Arrasto real pela alça da operação, sem confirmação extra".into();
             }
             Action::SelectNode(label) => {
                 let point = self.find(label, true).ok_or("Nó não visível no grafo")?;
@@ -1868,17 +1962,35 @@ impl NativeQa {
                 }
                 description = format!("Atalho {key:?} com {modifiers:?}");
             }
-            Action::GizmoX | Action::GizmoDelta(_) => {
+            Action::GizmoX | Action::GizmoDelta(_) | Action::GizmoCancel(_) => {
                 let from = self
                     .surface
                     .gizmo_x
                     .ok_or("Controle visual vermelho do eixo X não encontrado")?;
-                let delta = if let Action::GizmoDelta(delta) = action {
+                let delta = if let Action::GizmoDelta(delta) | Action::GizmoCancel(delta) = action {
                     delta
                 } else {
                     75.
                 };
                 self.drag(from, from + Vec2::new(delta, 0.));
+                if matches!(action, Action::GizmoCancel(_)) {
+                    let release = self.events.pop_back().unwrap();
+                    self.events.push_back(vec![Event::Key {
+                        key: Key::Escape,
+                        physical_key: Some(Key::Escape),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::ALT | Modifiers::SHIFT,
+                    }]);
+                    self.events.push_back(release);
+                    self.events.push_back(vec![Event::Key {
+                        key: Key::Escape,
+                        physical_key: Some(Key::Escape),
+                        pressed: false,
+                        repeat: false,
+                        modifiers: Modifiers::ALT | Modifiers::SHIFT,
+                    }]);
+                }
                 description = "Arrastar eixo X pelo controle visual".into();
             }
             Action::Idle => {
@@ -1958,6 +2070,38 @@ impl eframe::App for NativeQa {
                 .collect::<Vec<_>>()
         });
         for (name, pixels) in screenshots {
+            self.report.lock().unwrap().steps.push(format!(
+                "Captura {name}: {} × {} pixels físicos; {} pixels por ponto",
+                pixels.width(),
+                pixels.height(),
+                ctx.pixels_per_point()
+            ));
+            let layout_name = name.strip_prefix("names-").unwrap_or(&name);
+            let expected_layout =
+                if layout_name.ends_with("-model.png") || layout_name.ends_with("-paint.png") {
+                    if layout_name.starts_with("1440-") {
+                        Some((1440, 900))
+                    } else if layout_name.starts_with("920-") {
+                        Some((920, 600))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+            if let Some((width, height)) = expected_layout
+                && (pixels.width() != width || pixels.height() != height)
+            {
+                self.fail(
+                    ctx,
+                    format!(
+                        "Captura {name}: janela {} × {}, esperada {width} × {height}",
+                        pixels.width(),
+                        pixels.height()
+                    ),
+                );
+                return;
+            }
             if name == "920-scale160.png" && (pixels.width() != 920 || pixels.height() != 600) {
                 self.fail(
                     ctx,
@@ -2008,6 +2152,13 @@ impl eframe::App for NativeQa {
             if Instant::now() < idle.deadline {
                 if idle.measuring {
                     idle.frames += 1;
+                    if idle.frames < 4 {
+                        self.report
+                            .lock()
+                            .unwrap()
+                            .steps
+                            .push(format!("Causas de repaint: {:?}", ctx.repaint_causes()));
+                    }
                 }
                 return;
             }
@@ -2089,6 +2240,12 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                 surface.gizmo_z = Some(rect.rect.center());
             }
             egui::Shape::Circle(circle)
+                if circle.fill == Color32::from_rgb(112, 239, 213)
+                    && (circle.radius - 6.).abs() < 0.1 =>
+            {
+                surface.direct_handle = Some(circle.center);
+            }
+            egui::Shape::Circle(circle)
                 if circle.fill == Color32::WHITE && circle.radius > 2. && circle.radius < 10. =>
             {
                 surface.ports.push(circle.center);
@@ -2159,7 +2316,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 fn native_editor_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.0/regression");
+    let output = workspace.join("qa/v0.2.1/regression");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-native-qa-{}", new_id()));
     copy_directory(&workspace.join("examples/validacao"), &fixture).unwrap();
@@ -2167,6 +2324,7 @@ fn native_editor_workflow() {
     let result = report.clone();
     let artifacts = output.clone();
     let options = eframe::NativeOptions {
+        persist_window: false,
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("OXY Engine — QA nativo isolado")

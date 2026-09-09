@@ -124,7 +124,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_basic_modeling_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.0/m4");
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m4");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-modeling-qa-{}", new_id()));
     std::fs::create_dir_all(root.join("assets")).unwrap();
@@ -162,6 +162,7 @@ fn native_basic_modeling_workflow() {
     let shared = report.clone();
     let artifacts = output.clone();
     let options = eframe::NativeOptions {
+        persist_window: false,
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("OXY Engine — QA operações de modelagem")
@@ -180,7 +181,11 @@ fn native_basic_modeling_workflow() {
             qa.actions = VecDeque::from([
                 Action::SelectEntity("Peça pintada"),
                 Action::Click("Estúdio"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
+                Action::WheelZoom(-400.),
                 Action::Check("m4_base"),
                 Action::Chord(Key::V, Modifiers::SHIFT),
                 Action::WorldClick([0.5, 0.5, 0.5]),
@@ -202,14 +207,14 @@ fn native_basic_modeling_workflow() {
                 Action::ComponentClick([0., 0., 0.5], false),
                 Action::ComponentClick([0.5, 0., 0.], true),
                 Action::Chord(Key::E, Modifiers::SHIFT),
+                Action::EditValue("Distância", "0.25"),
                 Action::Check("m4_requires_atlas"),
-                Action::Click("Criar cópia ampliada (2×)"),
                 Action::Screenshot("extrusion-preview.png"),
                 Action::Chord(Key::Escape, Modifiers::ALT | Modifiers::SHIFT),
                 Action::Check("m4_cancel"),
                 Action::Chord(Key::E, Modifiers::SHIFT),
+                Action::EditValue("Distância", "0.25"),
                 Action::Click("Criar cópia ampliada (2×)"),
-                Action::Click("Confirmar (Enter)"),
                 Action::Check("m4_extruded"),
                 Action::Key(Key::Z, true),
                 Action::Check("m4_cancel"),
@@ -219,17 +224,18 @@ fn native_basic_modeling_workflow() {
                 Action::ReopenProject,
                 Action::SelectEntity("Peça pintada"),
                 Action::Click("Estúdio"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
             ]);
             // Reopen clears history. Additional object alignment is tested from the saved mesh below.
             qa.actions.extend([
                 Action::Key(Key::Num2, false),
                 Action::ComponentClick([0.1767767, 0., 0.6767767], false),
                 Action::Key(Key::Delete, false),
-                Action::Click("Confirmar (Enter)"),
                 Action::Key(Key::A, true),
                 Action::Chord(Key::F, Modifiers::SHIFT),
-                Action::Click("Confirmar (Enter)"),
                 Action::Check("m4_created_face"),
                 Action::Key(Key::Z, true),
                 Action::Key(Key::Z, true),

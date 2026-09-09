@@ -80,6 +80,8 @@ pub struct CommandHistory {
     past: Vec<Command>,
     future: Vec<Command>,
     pending: Option<Baseline>,
+    // Present only during a live adjustment; committed history still contains deltas.
+    amendment_restore: Option<Baseline>,
     revision: u64,
     saved_revision: u64,
     next_revision: u64,
@@ -98,6 +100,7 @@ impl CommandHistory {
             past: Vec::new(),
             future: Vec::new(),
             pending: None,
+            amendment_restore: None,
             revision: 0,
             saved_revision: 0,
             next_revision: 1,
@@ -117,6 +120,43 @@ impl CommandHistory {
     }
     pub fn is_pending(&self) -> bool {
         self.pending.is_some()
+    }
+    /// Opaque identity for the last applied command, never serialized with a project.
+    pub fn last_command_id(&self) -> Option<u64> {
+        self.past.last().map(|command| command.after_revision)
+    }
+    /// Rebuild the original source from the existing delta, retaining a rollback only
+    /// while the user is adjusting. This never stores an extra permanent snapshot.
+    pub fn begin_amend_last(
+        &mut self,
+        command_id: u64,
+        project: &Project,
+        images: &TextureCache,
+    ) -> Result<bool, String> {
+        if self.amendment_restore.is_some() {
+            return Ok(self.last_command_id() == Some(command_id));
+        }
+        if self.last_command_id() != Some(command_id) || !self.future.is_empty() {
+            return Ok(false);
+        }
+        if self.pending_changed(project, images) {
+            return Err("Conclua a edição atual antes de ajustar a última operação.".into());
+        }
+        let command = self.past.last().unwrap();
+        let mut origin = project.clone();
+        let mut original_images = images.clone();
+        apply_command(command, false, &mut origin, &mut original_images)?;
+        self.pending = Some(Baseline {
+            label: command.label.clone(),
+            project: origin,
+            images: original_images,
+        });
+        self.amendment_restore = Some(Baseline {
+            label: command.label.clone(),
+            project: project.clone(),
+            images: images.clone(),
+        });
+        Ok(true)
     }
     /// Includes edits that are still part of a drag or focused text field.
     pub fn pending_changed(&self, project: &Project, images: &TextureCache) -> bool {
@@ -164,12 +204,19 @@ impl CommandHistory {
         self.past.clear();
         self.future.clear();
         self.pending = None;
+        self.amendment_restore = None;
         self.revision = 0;
         self.saved_revision = 0;
         self.next_revision = 1;
         self.last_texture_changes.clear();
     }
     pub fn cancel(&mut self, project: &mut Project, images: &mut TextureCache) -> bool {
+        if let Some(applied) = self.amendment_restore.take() {
+            *project = applied.project;
+            *images = applied.images;
+            self.pending = None;
+            return true;
+        }
         if let Some(before) = self.pending.take() {
             *project = before.project;
             *images = before.images;
@@ -216,14 +263,24 @@ impl CommandHistory {
         }
         images.prune_removed(project);
         images.finish_gesture();
+        let before_revision = if self.amendment_restore.take().is_some() {
+            let original = self
+                .past
+                .pop()
+                .expect("amendment requires the last command");
+            original.before_revision
+        } else {
+            self.revision
+        };
         if document.is_empty() && deltas.is_empty() && mesh_deltas.is_empty() {
+            self.revision = before_revision;
             return Ok(false);
         }
         let next = self.next_revision;
         self.next_revision = self.next_revision.wrapping_add(1);
         self.past.push(Command {
             label: before.label,
-            before_revision: self.revision,
+            before_revision,
             after_revision: next,
             document,
             images: deltas,

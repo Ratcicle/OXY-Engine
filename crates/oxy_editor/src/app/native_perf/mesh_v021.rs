@@ -120,6 +120,7 @@ struct Bench {
     screenshot: bool,
     screenshot_pending: bool,
     complete: bool,
+    final_only_load: Option<usize>,
 }
 impl Bench {
     fn new(cc: &eframe::CreationContext<'_>, output: PathBuf, report: Arc<Mutex<Report>>) -> Self {
@@ -163,6 +164,7 @@ impl Bench {
             screenshot: false,
             screenshot_pending: false,
             complete: false,
+            final_only_load: None,
         };
         this.set_load(0);
         this
@@ -235,6 +237,8 @@ impl Bench {
             .collect();
         let orbit_changed = (self.editor.camera.yaw - self.camera.yaw).abs() > 0.001;
         let pan_changed = self.editor.camera.target.distance(self.camera.target) > 0.0001;
+        let (component_queries, component_cpu_bytes) = self.editor.component_selection_stats();
+        let renderer = self.editor.renderer.stats();
         self.rows.push(json!({"phase":PHASES[self.phase].0,"measurements":stats,"limited":limited,
             "measured_cycles":self.cycle.saturating_sub(WARMUP),"elapsed_seconds":self.phase_started.elapsed().as_secs_f64(),
             "last_selected_components":self.last_count,"verified_undo_redo_cycles":self.verified,
@@ -243,6 +247,14 @@ impl Bench {
             "content_logical_points":[ctx.content_rect().width(),ctx.content_rect().height()],
             "pixels_per_point":ctx.pixels_per_point(),
             "viewport_logical_points":self.rect.map(|r|[r.width(),r.height()]),
+            "component_counters": {
+                "projection_builds":component_queries.projection_builds,"projection_hits":component_queries.projection_hits,
+                "occlusion_builds":component_queries.occlusion_builds,"occlusion_hits":component_queries.occlusion_hits,
+                "hover_queries":component_queries.hover_queries,"rectangle_queries":component_queries.rectangle_queries,"through_queries":component_queries.through_queries,
+                "geometry_stream_uploads_cumulative":renderer.component_mesh_uploads,"selection_flag_uploads_cumulative":renderer.component_selection_uploads,
+                "draw_submissions_last_frame":renderer.component_draw_calls,"gpu_buffer_allocated_bytes":renderer.component_buffer_bytes,"cpu_cache_estimated_bytes":component_cpu_bytes,
+                "draw_visibility_path":"current-frame GPU depth; drawing does not call CPU rays or GPU readback",
+            },
         }));
         eprintln!(
             "v021 native {} triangles / {}: {} samples, {:.2}s, limited={limited}",
@@ -251,7 +263,11 @@ impl Bench {
             self.cycle.saturating_sub(WARMUP),
             self.phase_started.elapsed().as_secs_f64()
         );
-        std::fs::write(self.output.join("progress.json"),serde_json::to_vec_pretty(&json!({"fixture":self.load,"phases":self.rows})).unwrap()).unwrap();
+        std::fs::write(
+            self.output.join("progress.json"),
+            serde_json::to_vec_pretty(&json!({"fixture":self.load,"phases":self.rows})).unwrap(),
+        )
+        .unwrap();
         if matches!(work, Work::Orbit) && !orbit_changed
             || matches!(work, Work::Pan) && !pan_changed
         {
@@ -269,10 +285,31 @@ impl Bench {
             if self.load < 3 {
                 self.set_load(self.load + 1);
             } else {
-                self.report.lock().unwrap().done = true;
-                self.complete = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.final_only_load = Some(0);
             }
+        }
+    }
+    fn final_only(&mut self, ctx: &egui::Context, load: usize) {
+        self.set_load(load);
+        let core = core_inset(&self.source);
+        let services = self
+            .editor
+            .measure_direct_mesh_services(WARMUP, SAMPLES, 12);
+        let mut report = self.report.lock().unwrap();
+        let row = report.rows[load].as_object_mut().unwrap();
+        row.insert("core_inset_final_only".into(), core);
+        row.insert("editor_direct_services_final_only".into(), services);
+        eprintln!(
+            "v021 final-only inset/history services: {} triangles",
+            self.source.prepared().triangles.len()
+        );
+        if load < 3 {
+            self.final_only_load = Some(load + 1);
+            ctx.request_repaint();
+        } else {
+            report.done = true;
+            self.complete = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 }
@@ -307,6 +344,51 @@ fn core_extrusion(source: &EditableMesh) -> Value {
     json!({"generation_and_validation":summary(&values),"final_face_count":observed_faces,"limited":values.len()<SAMPLES,"limit_seconds":8,"distance_local":0.02,"selected_faces":1})
 }
 
+/// Additional v0.2.1 operation, deliberately never reported as a before/after pair.
+fn core_inset(source: &EditableMesh) -> Value {
+    let face = &source.data().faces[source.data().faces.len() / 3];
+    let selection = Selection {
+        mode: Mode::Face,
+        ids: vec![face.id],
+        through: false,
+    };
+    let mut rows = Vec::new();
+    for distance in [0f32, 0.02, -0.02] {
+        let normal = source.prepared().face_normals[source.prepared().faces[&face.id]];
+        let started = Instant::now();
+        let mut values = Vec::new();
+        let mut observed_faces = 0;
+        let mut error = None;
+        for cycle in 0..WARMUP + SAMPLES {
+            if started.elapsed() > Duration::from_secs(8) {
+                break;
+            }
+            let t = Instant::now();
+            match oxy_core::geometry::inset::apply(
+                std::hint::black_box(source),
+                &selection,
+                70.,
+                normal * distance,
+                false,
+            ) {
+                Ok(output) => {
+                    let elapsed = t.elapsed().as_nanos() as u64;
+                    observed_faces = std::hint::black_box(output.mesh.data().faces.len());
+                    if cycle >= WARMUP {
+                        values.push(elapsed);
+                    }
+                }
+                Err(reason) => {
+                    error = Some(reason);
+                    break;
+                }
+            }
+        }
+        rows.push(json!({"inner_linear_percent":70,"distance_local":distance,"generation_and_validation":summary(&values),"final_face_count":observed_faces,"limited":values.len()<SAMPLES,"limit_seconds":8,"error":error}));
+    }
+    json!({"comparison":"final-only; inset absent from reference","selected_faces":1,"cases":rows})
+}
+
 impl eframe::App for Bench {
     fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
         input
@@ -316,6 +398,10 @@ impl eframe::App for Bench {
         input.modifiers = Modifiers::NONE;
         input.hovered_files.clear();
         input.dropped_files.clear();
+        if self.final_only_load.is_some() {
+            input.events.push(Event::PointerGone);
+            return;
+        }
         if let Some(v) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
             v.focused = Some(true);
         }
@@ -427,6 +513,10 @@ impl eframe::App for Bench {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if self.complete {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if let Some(load) = self.final_only_load {
+            self.final_only(ctx, load);
             return;
         }
         for image in ctx.input(|i| {
@@ -566,7 +656,9 @@ impl eframe::App for Bench {
 #[ignore = "Opt-in v0.2.1 native editor benchmark; bounded phases and isolated RawInput"]
 fn native_component_v021_measurements() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let root = std::env::var_os("OXY_BENCH_ROOT").map(PathBuf::from).unwrap_or_else(||Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let root = std::env::var_os("OXY_BENCH_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
     let label = std::env::var("OXY_BENCH_LABEL").unwrap_or_else(|_| "current".into());
     assert!(
         label
@@ -581,6 +673,7 @@ fn native_component_v021_measurements() {
         "OXY — referência nativa v0.2.1",
         eframe::NativeOptions {
             renderer: eframe::Renderer::Wgpu,
+            persist_window: false,
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1440., 900.])
                 .with_min_inner_size([1440., 900.])

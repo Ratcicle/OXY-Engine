@@ -534,7 +534,91 @@ impl Editor {
             }
         }
     }
-    pub(super) fn animation_ui(&mut self, ui: &mut egui::Ui, dt: f32) {
+    /// Model context lives in the first Studio row; timeline and clip data stay unchanged.
+    pub(super) fn animation_context_controls(&mut self, ui: &mut egui::Ui, compact: bool) {
+        if !self.spatial.base_pose {
+            self.sync_animation_model();
+        }
+        crate::icons::menu_button(
+            ui,
+            crate::icons::Icon::Object,
+            "Modelo",
+            "Modelo animável, pose-base e propriedades da animação.",
+            true,
+            |ui| {
+                ui.label(egui::RichText::new("Modelo:").small().weak());
+                let current = self
+                    .studio
+                    .owner
+                    .as_deref()
+                    .and_then(|id| self.scene().entity(id))
+                    .map(|entity| entity.name.clone())
+                    .unwrap_or_else(|| "Selecione uma peça".into());
+                let mut selected = self.studio.animation.manual_model.clone();
+                egui::ComboBox::from_id_salt("animation_model")
+                    .selected_text(current)
+                    .width(210.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut selected, None, "Automático pela seleção");
+                        for entity in &self.scene().entities {
+                            ui.selectable_value(
+                                &mut selected,
+                                Some(entity.id.clone()),
+                                &entity.name,
+                            );
+                        }
+                    });
+                if selected != self.studio.animation.manual_model {
+                    if self.studio.animation.drafts.is_empty() {
+                        self.studio.animation.manual_model = selected;
+                        self.sync_animation_model();
+                    } else {
+                        self.studio.animation.message =
+                            "Grave ou descarte a pose provisória antes de trocar o modelo.".into();
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        self.studio.animation.drafts.is_empty(),
+                        egui::Button::new("Pose-base"),
+                    )
+                    .on_hover_text(
+                        "Mostra a pose original. Grave ou descarte a pose provisória primeiro.",
+                    )
+                    .clicked()
+                {
+                    self.studio.animation.preview = false;
+                    self.studio.playing = false;
+                }
+                if compact
+                    && ui
+                        .add_enabled(
+                            self.chosen_animation().is_some(),
+                            egui::Button::new("Propriedades"),
+                        )
+                        .on_hover_text("Editar a pose provisória ou o quadro/evento selecionado.")
+                        .clicked()
+                {
+                    self.studio.animation.properties_open = true;
+                }
+                if !self.studio.animation.drafts.is_empty() {
+                    ui.colored_label(
+                        Color32::GOLD,
+                        format!(
+                            "{} pose(s) provisória(s)",
+                            self.studio.animation.drafts.len()
+                        ),
+                    );
+                    if ui.button("Descartar pose provisória").clicked() {
+                        self.studio.animation.drafts.clear();
+                        self.studio.animation.draft_time = None;
+                        self.studio.animation.message.clear();
+                    }
+                }
+            },
+        );
+    }
+    pub(super) fn animation_ui(&mut self, ui: &mut egui::Ui, dt: f32, compact: bool) {
         if self.spatial.base_pose {
             self.viewport(ui, false);
             return;
@@ -545,84 +629,12 @@ impl Editor {
             self.studio.animation.time = time;
         }
         self.sync_animation_model();
-        let compact = ui.available_width() < 850.0 || ui.available_height() < 450.0;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("Modelo:").small().weak());
-            let current = self
-                .studio
-                .owner
-                .as_deref()
-                .and_then(|id| self.scene().entity(id))
-                .map(|entity| entity.name.clone())
-                .unwrap_or_else(|| "Selecione uma peça".into());
-            let mut selected = self.studio.animation.manual_model.clone();
-            egui::ComboBox::from_id_salt("animation_model")
-                .selected_text(current)
-                .width(210.0)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut selected, None, "Automático pela seleção");
-                    for entity in &self.scene().entities {
-                        ui.selectable_value(&mut selected, Some(entity.id.clone()), &entity.name);
-                    }
-                });
-            if selected != self.studio.animation.manual_model {
-                if self.studio.animation.drafts.is_empty() {
-                    self.studio.animation.manual_model = selected;
-                    self.sync_animation_model();
-                } else {
-                    self.studio.animation.message =
-                        "Grave ou descarte a pose provisória antes de trocar o modelo.".into();
-                }
+        let warning = self.studio.animation.message.clone();
+        if self.studio.animation_warning.as_deref() != Some(warning.as_str()) {
+            self.studio.animation_warning = Some(warning.clone());
+            if !warning.is_empty() {
+                self.warn(warning);
             }
-            if ui
-                .add_enabled(
-                    self.studio.animation.drafts.is_empty(),
-                    egui::Button::new("Pose-base"),
-                )
-                .on_hover_text(
-                    "Mostra a pose original. Grave ou descarte a pose provisória primeiro.",
-                )
-                .clicked()
-            {
-                self.studio.animation.preview = false;
-                self.studio.playing = false;
-            }
-            if compact
-                && ui
-                    .add_enabled(
-                        self.chosen_animation().is_some(),
-                        egui::Button::new("Propriedades"),
-                    )
-                    .on_hover_text("Editar a pose provisória ou o quadro/evento selecionado.")
-                    .clicked()
-            {
-                self.studio.animation.properties_open = true;
-            }
-            if !self.studio.animation.drafts.is_empty() {
-                ui.colored_label(
-                    Color32::GOLD,
-                    format!(
-                        "{} pose(s) provisória(s)",
-                        self.studio.animation.drafts.len()
-                    ),
-                );
-                if ui.button("Descartar pose provisória").clicked() {
-                    self.studio.animation.drafts.clear();
-                    self.studio.animation.draft_time = None;
-                    self.studio.animation.message.clear();
-                }
-            }
-        });
-        if !self.studio.animation.message.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    Color32::from_rgb(235, 188, 104),
-                    &self.studio.animation.message,
-                );
-                if ui.small_button("×").clicked() {
-                    self.studio.animation.message.clear();
-                }
-            });
         }
         egui::SidePanel::left(if compact {
             "animation_list_compact"

@@ -15,12 +15,13 @@ fn native_portable_home_workflow() {
             copy_directory(&workspace.join("examples/validacao"), &data).unwrap();
         }
     }
-    let output = workspace.join("qa/v0.2.0/portable");
+    let output = workspace.join("qa/v0.2.1/portable");
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let shared = report.clone();
     let artifacts = output.clone();
     let options = eframe::NativeOptions {
+        persist_window: false,
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("OXY Engine — QA portátil")

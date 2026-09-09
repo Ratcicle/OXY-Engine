@@ -104,14 +104,14 @@ impl NativeQa {
                     .unwrap()
                     .entity(&entity.id)
                     .unwrap();
-                if !pending
+                if pending
                     || entity.mesh.is_none()
                     || entity.transform != original.transform
                     || entity.collider != original.collider
-                    || history != self.initial_entities
+                    || history != self.initial_entities + 1
                 {
                     return Err(
-                        "Prévia alterou transformação/colisor ou já entrou no histórico".into(),
+                        "Gesto alterou transformação/colisor ou não formou um comando único".into(),
                     );
                 }
                 let mesh = entity.mesh.as_ref().unwrap();
@@ -179,7 +179,7 @@ impl NativeQa {
 fn native_mesh_foundation_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.0/m3");
+    let output = workspace.join("qa/v0.2.1/m3");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-mesh-qa-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
@@ -197,6 +197,7 @@ fn native_mesh_foundation_workflow() {
     let shared = report.clone();
     let artifacts = output.clone();
     let options = eframe::NativeOptions {
+        persist_window: false,
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("OXY Engine — QA malhas editáveis")
@@ -215,33 +216,36 @@ fn native_mesh_foundation_workflow() {
             qa.actions = VecDeque::from([
                 Action::SelectEntity("Cubo editável"),
                 Action::Click("Estúdio"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Check("m3_base"),
                 Action::Key(Key::Num2, false),
                 Action::ComponentClick([0., 0., 0.5], false),
                 Action::Check("m3_face"),
                 Action::Screenshot("face-selection.png"),
+                Action::GizmoCancel(100.),
+                Action::Check("m3_cancel"),
                 Action::GizmoDelta(100.),
                 Action::Check("m3_preview"),
                 Action::Screenshot("mesh-preview.png"),
-                Action::Chord(Key::Escape, Modifiers::ALT | Modifiers::SHIFT),
-                Action::Check("m3_cancel"),
-                Action::GizmoDelta(100.),
-                Action::Click("Confirmar (Enter)"),
                 Action::Check("m3_commit"),
                 Action::Key(Key::Z, true),
                 Action::Check("m3_cancel"),
                 Action::Key(Key::Y, true),
                 Action::Check("m3_redo"),
                 Action::Key(Key::Delete, false),
-                Action::Click("Confirmar (Enter)"),
                 Action::Check("m3_deleted"),
                 Action::Key(Key::Z, true),
                 Action::Check("m3_redo"),
                 Action::Key(Key::Num4, false),
                 Action::Key(Key::A, true),
                 Action::Check("m3_vertices"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::ComponentBox,
                 Action::Check("m3_visible_vertices"),
                 Action::Chord(Key::X, Modifiers::SHIFT),
@@ -265,7 +269,10 @@ fn native_mesh_foundation_workflow() {
                 Action::Screenshot("tube-parameters.png"),
                 Action::EditValue("Raio externo", "2"),
                 Action::Check("m3_tube"),
-                Action::Click("Enquadrar"),
+                Action::OptionalClick("Ferramentas"),
+                Action::OptionalClick("Pintar"),
+                Action::Click("Visualização"),
+                Action::Click("Enquadrar seleção"),
                 Action::Screenshot("tube-eight-sides.png"),
                 Action::Key(Key::Z, true),
                 Action::SelectEntity("Cubo editável"),
