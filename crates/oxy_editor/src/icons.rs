@@ -13,6 +13,9 @@ pub enum Icon {
     Create,
     Flip,
     Snap,
+    Loop,
+    Knife,
+    Bevel,
 }
 pub fn button(
     ui: &mut Ui,
@@ -77,6 +80,35 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
         p.line_segment([a, b], Stroke::new(1.3, color));
     };
     match icon {
+        Icon::Loop => {
+            for x in [0.1, 0.9] {
+                line(at(x, 0.1), at(x, 0.9));
+            }
+            for y in [0.1, 0.9] {
+                line(at(0.1, y), at(0.9, y));
+            }
+            p.line_segment([at(0., 0.5), at(1., 0.5)], Stroke::new(2., color));
+        }
+        Icon::Knife => {
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.1, 0.95), at(0.38, 0.25), at(0.62, 0.5)],
+                color.gamma_multiply(0.6),
+                Stroke::new(1., color),
+            ));
+            line(at(0.5, 0.35), at(0.86, 0.05));
+            line(at(0.58, 0.43), at(0.96, 0.1));
+        }
+        Icon::Bevel => {
+            line(at(0.1, 0.95), at(0.1, 0.1));
+            line(at(0.1, 0.1), at(0.95, 0.1));
+            let points = (0..=12)
+                .map(|i| {
+                    let a = i as f32 / 12. * std::f32::consts::FRAC_PI_2;
+                    at(0.6 - 0.5 * a.cos(), 0.6 - 0.5 * a.sin())
+                })
+                .collect();
+            p.add(egui::Shape::line(points, Stroke::new(2., color)));
+        }
         Icon::Extrude => {
             for y in [0.45, 0.9] {
                 p.rect_stroke(

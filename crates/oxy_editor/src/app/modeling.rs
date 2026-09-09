@@ -1,6 +1,7 @@
 //! Mesh editing context. Previews share the normal scene renderer and commit one history delta.
 use super::*;
 mod creation;
+mod cutting;
 mod snapping;
 mod topology;
 mod viewport;
@@ -29,6 +30,7 @@ pub(super) struct ModelState {
     pub help: bool,
     global: bool,
     snap: Option<snapping::Snap>,
+    hovered_edge: Option<u32>,
 }
 pub(super) struct Creation {
     candidate: Entity,
@@ -47,6 +49,9 @@ enum Operation {
     Extrude,
     Create,
     Flip,
+    Loop,
+    Knife,
+    Bevel,
 }
 pub(super) struct Preview {
     entity: Id,
@@ -66,6 +71,10 @@ pub(super) struct Preview {
     expanded_texture: Option<Id>,
     allow_expansion: bool,
     needs_space: bool,
+    count: u32,
+    cut_edge: Option<u32>,
+    path: cutting::Path,
+    notes: Vec<String>,
 }
 struct Drag {
     axis: Option<usize>,
@@ -237,11 +246,17 @@ impl Editor {
         if self.modeling.preview.is_some() {
             return;
         }
+        if !self.operation_available(operation) {
+            self.warn("A ferramenta não está disponível neste modo. Arredondar usa Aresta/Vértice; orientação usa Face; corte em loop usa Face/Aresta.");
+            return;
+        }
         if !self.studio.animation.drafts.is_empty() || self.studio.playing {
             self.warn("Pause e grave ou descarte a pose provisória antes de editar a geometria na pose-base.");
             return;
         }
-        if self.modeling.selection.ids.is_empty() {
+        if self.modeling.selection.ids.is_empty()
+            && !matches!(operation, Operation::Knife | Operation::Loop)
+        {
             self.warn("Selecione componentes da malha.");
             return;
         }
@@ -253,6 +268,15 @@ impl Editor {
             }
         };
         let id = self.selected.clone().unwrap();
+        let cut_edge = self.modeling.hovered_edge.or_else(|| {
+            (self.modeling.selection.mode == Mode::Edge)
+                .then(|| self.modeling.selection.ids.first().copied())
+                .flatten()
+        });
+        if operation == Operation::Loop && cut_edge.is_none() {
+            self.warn("Aponte uma aresta da faixa ou selecione-a no modo Aresta para iniciar o corte em loop.");
+            return;
+        }
         let world = match self.scene().world_matrix(&id) {
             Ok(m) if m.is_finite() && m.determinant().abs() > 1e-8 => m,
             _ => {
@@ -291,7 +315,9 @@ impl Editor {
             self.warn(e);
             return;
         }
-        let values = if operation == Operation::Extrude {
+        let values = if operation == Operation::Bevel {
+            [0.05, 0., 0.]
+        } else if operation == Operation::Extrude {
             let normal = if self.modeling.selection.mode == Mode::Face {
                 self.modeling
                     .selection
@@ -333,7 +359,14 @@ impl Editor {
             expanded_texture: None,
             allow_expansion: false,
             needs_space: false,
+            count: 1,
+            cut_edge,
+            path: cutting::Path::default(),
+            notes: Vec::new(),
         });
+        if operation == Operation::Knife {
+            self.modeling.selection.mode = Mode::Edge;
+        }
         self.update_mesh_preview();
     }
     fn update_mesh_preview(&mut self) {
@@ -346,7 +379,12 @@ impl Editor {
         preview.previous = preview.values;
         if matches!(
             preview.operation,
-            Operation::Extrude | Operation::Create | Operation::Flip
+            Operation::Extrude
+                | Operation::Create
+                | Operation::Flip
+                | Operation::Loop
+                | Operation::Knife
+                | Operation::Bevel
         ) {
             self.update_topology_preview();
             return;
@@ -475,6 +513,9 @@ impl Editor {
                 Operation::Extrude=>"Prévia: extrudir seleção",
                 Operation::Create=>"Prévia: criar face ou aresta",
                 Operation::Flip=>"Prévia: inverter orientação",
+                Operation::Loop=>"Prévia: corte em loop",
+                Operation::Knife=>"Prévia: bisturi",
+                Operation::Bevel=>"Prévia: arredondar / chanfrar",
             });
             if matches!(preview.operation,Operation::Transform(_)|Operation::Extrude) {
                 let tool=if let Operation::Transform(t)=preview.operation {t}else{Gizmo::Move};
@@ -490,6 +531,18 @@ impl Editor {
                 });
             }
             if preview.operation==Operation::Extrude && preview.selection.mode==Mode::Face && ui.checkbox(&mut preview.per_face,"Por face independente").changed(){preview.previous=[f32::NAN;3];}
+            if matches!(preview.operation,Operation::Loop|Operation::Bevel){
+                if preview.operation==Operation::Bevel{
+                    ui.horizontal(|ui|{ui.label("Largura");ui.add(egui::DragValue::new(&mut preview.values[0]).range(0.0001..=100.).speed(0.01));});
+                    ui.horizontal_wrapped(|ui|{for n in [1,2,4,8]{if ui.selectable_value(&mut preview.count,n,n.to_string()).changed(){preview.previous=[f32::NAN;3];}}});
+                }else{ui.add(egui::Slider::new(&mut preview.values[1],-1. ..=1.).text("Deslizamento"));}
+                ui.horizontal(|ui|{ui.label(if preview.operation==Operation::Bevel{"Segmentos"}else{"Quantidade de cortes"});if ui.add(egui::DragValue::new(&mut preview.count).range(1..=if preview.operation==Operation::Bevel{16}else{64})).changed(){preview.previous=[f32::NAN;3];}});
+            }
+            if preview.operation==Operation::Knife{
+                ui.label("Clique nas bordas da superfície para traçar. Cada trecho atravessa uma face visível; Enter aplica o percurso.");
+                if ui.button("Recomeçar traçado").clicked(){preview.path=cutting::Path::default();preview.previous=[f32::NAN;3];}
+            }
+            for note in &preview.notes{ui.small(note);}
             if preview.needs_space || preview.allow_expansion {
                 ui.label("A pintura original será preservada. A ampliação cria uma textura independente para esta peça.");
                 if ui.checkbox(&mut preview.allow_expansion,"Criar cópia ampliada (2×)").changed(){preview.previous=[f32::NAN;3];}
@@ -531,6 +584,10 @@ impl Editor {
         if self.modeling.snap.is_some() {
             return true;
         }
+        if ctx.input(|i| i.modifiers == egui::Modifiers::SHIFT && i.key_pressed(egui::Key::K)) {
+            self.begin_mesh_operation(Operation::Knife);
+            return true;
+        }
         if ctx.input(|i| i.modifiers == egui::Modifiers::SHIFT && i.key_pressed(egui::Key::V)) {
             self.begin_snap();
             return true;
@@ -553,6 +610,8 @@ impl Editor {
                 (egui::Key::E, Operation::Extrude),
                 (egui::Key::F, Operation::Create),
                 (egui::Key::N, Operation::Flip),
+                (egui::Key::R, Operation::Loop),
+                (egui::Key::B, Operation::Bevel),
             ] {
                 if ctx.input(|i| i.modifiers == egui::Modifiers::SHIFT && i.key_pressed(key)) {
                     self.begin_mesh_operation(operation);

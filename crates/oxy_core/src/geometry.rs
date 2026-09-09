@@ -1,5 +1,7 @@
 //! Authored polygon topology. GPU triangles, indices and cache identity are derived only.
 pub mod atlas;
+pub mod bevel;
+pub mod cuts;
 pub mod edit;
 pub mod operations;
 pub mod primitives;

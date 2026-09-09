@@ -1,0 +1,62 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Cubo de cortes
+Clique: Estúdio
+Clique: Enquadrar
+Verificado: m5_base
+Atalho K com Modifiers { shift: true }
+Escolher ponto do mundo pelo mouse no viewport
+Escolher ponto do mundo pelo mouse no viewport
+Verificado: m5_knife_one
+Escolher ponto do mundo pelo mouse no viewport
+Verificado: m5_knife_two
+Captura GPU da janela: knife-path.png
+Atalho Escape com Modifiers { alt: true, shift: true }
+Verificado: m5_cancel
+Atalho K com Modifiers { shift: true }
+Escolher ponto do mundo pelo mouse no viewport
+Escolher ponto do mundo pelo mouse no viewport
+Escolher ponto do mundo pelo mouse no viewport
+Clique: Confirmar (Enter)
+Verificado: m5_committed
+Tecla Z, Ctrl=true
+Verificado: m5_cancel
+Tecla Y, Ctrl=true
+Verificado: m5_redo
+Tecla Z, Ctrl=true
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho R com Modifiers { shift: true }
+Verificado: m5_loop
+Captura GPU da janela: loop-preview.png
+Editar campo visível: Quantidade de cortes = 2
+Verificado: m5_loop_confirmed
+Tecla Z, Ctrl=true
+Verificado: m5_cancel
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho B com Modifiers { shift: true }
+Clique: 4
+Clique: Criar cópia ampliada (2×)
+Verificado: m5_bevel
+Captura GPU da janela: bevel-edge.png
+Clique: Confirmar (Enter)
+Verificado: m5_committed
+Tecla Z, Ctrl=true
+Verificado: m5_cancel
+Tecla Y, Ctrl=true
+Verificado: m5_redo
+Tecla Z, Ctrl=true
+Tecla Num4, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho B com Modifiers { shift: true }
+Clique: 4
+Clique: Criar cópia ampliada (2×)
+Verificado: m5_vertex
+Captura GPU da janela: bevel-vertex.png
+Clique: Confirmar (Enter)
+Verificado: m5_committed
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Captura GPU da janela: reopened-model.png
+Capturas: ["knife-path.png", "loop-preview.png", "bevel-edge.png", "bevel-vertex.png", "reopened-model.png"]

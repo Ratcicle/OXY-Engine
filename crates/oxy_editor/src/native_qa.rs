@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
+mod cuts;
 mod input_guide;
 mod mesh;
 mod modeling;
@@ -515,6 +516,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("m5_") {
+            return self.check_cuts(label);
+        }
         if label.starts_with("m4_") {
             return self.check_modeling(label);
         }

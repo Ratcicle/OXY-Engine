@@ -29,6 +29,9 @@ impl Editor {
         if self.snap_viewport(ui, scene, rect, response) {
             return true;
         }
+        if self.knife_viewport(ui, scene, rect, response) {
+            return true;
+        }
         if !self.components_active() {
             return false;
         }
@@ -77,6 +80,10 @@ impl Editor {
             .filter(|p| rect.contains(*p));
         let mut hovered = None;
         let mut nearest = 10f32;
+        let mut nearest_edge = 10f32;
+        if self.modeling.preview.is_none() {
+            self.modeling.hovered_edge = None;
+        }
         let projected: std::collections::HashMap<_, _> = mesh
             .data()
             .vertices
@@ -134,6 +141,13 @@ impl Editor {
                 + mesh.position(edge.vertices[1]).unwrap())
                 * 0.5;
             let front = visible(midpoint);
+            if front && let Some(p) = pointer {
+                let distance = segment_distance(p, a, b);
+                if distance < nearest_edge && self.modeling.preview.is_none() {
+                    nearest_edge = distance;
+                    self.modeling.hovered_edge = Some(edge.id);
+                }
+            }
             let active = self.modeling.selection.mode == Mode::Edge && selected.contains(&edge.id);
             let color = if active {
                 Color32::GOLD

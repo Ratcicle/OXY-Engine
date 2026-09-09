@@ -1,12 +1,27 @@
 use super::*;
 use oxy_core::{
-    geometry::{atlas, operations},
+    geometry::{atlas, bevel, cuts, operations},
     painting::PaintImage,
 };
 impl Editor {
     pub(super) fn topology_menu(&mut self, ui: &mut egui::Ui) {
         let active = self.modeling.preview.is_none() && !self.modeling.selection.ids.is_empty();
         for (label, tip, op) in [
+            (
+                "Corte em loop (Shift+R)",
+                "Divide uma faixa de quads a partir da aresta apontada.",
+                Operation::Loop,
+            ),
+            (
+                "Bisturi (Shift+K)",
+                "Trace entre bordas de faces visíveis e adjacentes.",
+                Operation::Knife,
+            ),
+            (
+                "Arredondar (Shift+B)",
+                "Chanfre ou arredonde quinas convexas com largura e segmentos.",
+                Operation::Bevel,
+            ),
             (
                 "Extrudir (Shift+E)",
                 "Prolonga a região, borda ou pontos selecionados.",
@@ -23,8 +38,8 @@ impl Editor {
                 Operation::Flip,
             ),
         ] {
-            let enabled =
-                active && (op != Operation::Flip || self.modeling.selection.mode == Mode::Face);
+            let enabled = self.operation_available(op)
+                && (active || matches!(op, Operation::Loop | Operation::Knife));
             if ui
                 .add_enabled(enabled, egui::Button::new(label))
                 .on_hover_text(tip)
@@ -44,17 +59,28 @@ impl Editor {
             let available=!self.mesh_operation_active();
             if self.components_active(){
                 for (icon,label,tip,op) in [
+                    (Icon::Loop,"Corte em loop","Corte em loop (Shift+R): divide uma faixa de quads; aponte a aresta inicial.",Operation::Loop),
+                    (Icon::Bevel,"Arredondar","Arredondar (Shift+B): quinas convexas expostas, com largura e segmentos.",Operation::Bevel),
                     (Icon::Extrude,"Extrudir","Extrudir (Shift+E): prolonga faces, bordas ou pontos.",Operation::Extrude),
                     (Icon::Create,"Criar face/aresta","Criar (Shift+F): une pontos ou fecha uma borda plana.",Operation::Create),
                     (Icon::Flip,"Inverter orientação","Inverter orientação (Shift+N): troca o lado das faces mantendo seus UVs.",Operation::Flip),
                 ] {
-                    let enabled=available&&!self.modeling.selection.ids.is_empty()&&(op!=Operation::Flip||self.modeling.selection.mode==Mode::Face);
+                    let enabled=available&&self.operation_available(op)&&(!self.modeling.selection.ids.is_empty()||op==Operation::Loop);
                     let response=ui.add_enabled_ui(enabled,|ui|button(ui,icon,label,tip,false,self.preferences.tool_names)).inner;
                     if response.on_disabled_hover_text("Selecione componentes no modo compatível e conclua a prévia atual.").clicked(){self.begin_mesh_operation(op);}
                 }
             }else if ui.add_enabled_ui(available&&!self.selection.ids.is_empty(),|ui|button(ui,Icon::Snap,"Encaixar vértices","Encaixar vértices (Shift+V): escolha origem e destino para mover a seleção inteira ou escalar pelo eixo.",false,self.preferences.tool_names)).inner.clicked(){self.begin_snap();
             }
+            if ui.add_enabled_ui(available&&self.selection.ids.len()==1,|ui|button(ui,Icon::Knife,"Bisturi","Bisturi (Shift+K): corte a superfície clicando em suas bordas.",false,self.preferences.tool_names)).inner.clicked(){self.begin_mesh_operation(Operation::Knife);}
         });
+    }
+    pub(super) fn operation_available(&self, op: Operation) -> bool {
+        match op {
+            Operation::Flip => self.modeling.selection.mode == Mode::Face,
+            Operation::Bevel => matches!(self.modeling.selection.mode, Mode::Edge | Mode::Vertex),
+            Operation::Loop => matches!(self.modeling.selection.mode, Mode::Edge | Mode::Face),
+            _ => true,
+        }
     }
     pub(super) fn update_topology_preview(&mut self) {
         let Some(mut preview) = self.modeling.preview.take() else {
@@ -62,6 +88,25 @@ impl Editor {
         };
         let result = (|| {
             let output = match preview.operation {
+                Operation::Loop => cuts::loop_cut(
+                    &preview.source,
+                    preview.cut_edge.ok_or("Aresta inicial ausente.")?,
+                    preview.count,
+                    preview.values[1],
+                )
+                .map(|c| {
+                    preview.notes = c.notes;
+                    c.output
+                }),
+                Operation::Knife => {
+                    cuts::knife(&preview.source, &preview.path.segments).map(|c| c.output)
+                }
+                Operation::Bevel => bevel::apply(
+                    &preview.source,
+                    &preview.selection,
+                    preview.values[0],
+                    preview.count,
+                ),
                 Operation::Extrude => operations::extrude(
                     &preview.source,
                     &preview.selection,
