@@ -5,7 +5,9 @@ mod cuts;
 mod input_guide;
 mod mesh;
 mod modeling;
+mod painting;
 mod portable;
+mod recipes;
 mod spatial;
 mod ux;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
@@ -36,6 +38,7 @@ enum Action {
     WorldClick([f32; 3]),
     ComponentBox,
     Hold(Key, usize),
+    HoldSeconds(Key, f32),
     Wait(usize),
     Card,
     Resize(Vec2),
@@ -46,6 +49,10 @@ enum Action {
     SelectNode(&'static str),
     ConnectPorts,
     Paint,
+    PaintFace {
+        new: bool,
+        image: bool,
+    },
     GizmoX,
     GizmoUniform,
     GizmoZ,
@@ -126,6 +133,10 @@ struct NativeQa {
     saved_before_draft: Option<Vec<u8>>,
     finished: bool,
     ux_viewport: Option<Rect>,
+    paint_faces: Option<(u32, u32)>,
+    paint_uploads: u64,
+    held_until: Option<(Key, Instant)>,
+    click_candidate: Option<(&'static str, Pos2, Instant)>,
 }
 
 impl NativeQa {
@@ -405,6 +416,10 @@ impl NativeQa {
             saved_before_draft: None,
             finished: false,
             ux_viewport: None,
+            paint_faces: None,
+            paint_uploads: 0,
+            held_until: None,
+            click_candidate: None,
         }
     }
 
@@ -516,6 +531,12 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("m6_") {
+            return self.check_paint_mesh(label);
+        }
+        if label.starts_with("r6_") {
+            return self.check_recipes(label);
+        }
         if label.starts_with("m5_") {
             return self.check_cuts(label);
         }
@@ -1586,8 +1607,21 @@ impl NativeQa {
                     }
                     return Err(format!("Controle visível não encontrado: {label}"));
                 };
+                // Modal areas animate into their measured size using wall time, not frame count.
+                // Wait for a stable visible target rather than clicking stale intermediate pixels.
+                if self
+                    .click_candidate
+                    .is_none_or(|(text, p, _)| text != label || p.distance(position) > 0.25)
+                {
+                    self.click_candidate = Some((label, position, Instant::now()));
+                    return Ok(false);
+                }
+                if self.click_candidate.unwrap().2.elapsed() < Duration::from_millis(100) {
+                    return Ok(false);
+                }
+                self.click_candidate = None;
                 self.click(position);
-                description = format!("Clique: {label}");
+                description = format!("Clique: {label} em {position:?}");
             }
             Action::Text(text) => {
                 self.events.push_back(vec![Event::Text(text.into())]);
@@ -1596,6 +1630,17 @@ impl NativeQa {
             Action::Key(key, control) => {
                 self.key(key, control);
                 description = format!("Tecla {key:?}, Ctrl={control}");
+            }
+            Action::HoldSeconds(key, seconds) => {
+                self.events.push_back(vec![Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }]);
+                self.held_until = Some((key, Instant::now() + Duration::from_secs_f32(seconds)));
+                description = format!("Entrada real {key:?} durante {seconds}s de simulação");
             }
             Action::Hold(key, frames) => {
                 self.events.push_back(vec![Event::Key {
@@ -1679,6 +1724,46 @@ impl NativeQa {
                 self.click(ports[0]);
                 self.click(ports[1]);
                 description = "Conectar saída e entrada pelas portas visuais".into();
+            }
+            Action::PaintFace { new, image } => {
+                let (old_face, new_face) = self.paint_faces.ok_or("Faces de teste ausentes")?;
+                let mesh = self.editor.model_source()?;
+                let face = mesh
+                    .face(if new { new_face } else { old_face })
+                    .ok_or("Face ausente")?;
+                let p = if image {
+                    let uv = face
+                        .corners
+                        .iter()
+                        .map(|c| glam::Vec2::from(c.uv))
+                        .sum::<glam::Vec2>()
+                        / face.corners.len() as f32;
+                    let rect = self.surface.png.ok_or("Imagem ausente")?;
+                    rect.min + Vec2::new(uv.x, uv.y) * rect.size()
+                } else {
+                    let local = face
+                        .corners
+                        .iter()
+                        .map(|c| mesh.position(c.vertex).unwrap())
+                        .sum::<glam::Vec3>()
+                        / face.corners.len() as f32;
+                    let world = self
+                        .editor
+                        .scene()
+                        .world_matrix(self.editor.selected.as_deref().ok_or("Seleção ausente")?)?;
+                    oxy_render::collider_debug::project(
+                        &self.editor.camera,
+                        self.surface.native_viewport.ok_or("Viewport ausente")?,
+                        world.transform_point3(local),
+                    )
+                    .ok_or("Face fora da projeção")?
+                };
+                self.click(p);
+                description = format!(
+                    "Clique real na face {} pela {}",
+                    if new { "nova" } else { "antiga" },
+                    if image { "imagem" } else { "peça" }
+                );
             }
             Action::Paint => {
                 let rect = self
@@ -1878,6 +1963,20 @@ impl eframe::App for NativeQa {
         }
         self.editor.update(ctx, frame);
         self.surface = capture_surface(ctx);
+        if let Some((key, deadline)) = self.held_until {
+            if Instant::now() < deadline {
+                ctx.request_repaint();
+                return;
+            }
+            self.events.push_back(vec![Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]);
+            self.held_until = None;
+        }
         if let Some(idle) = &mut self.idle {
             if Instant::now() < idle.deadline {
                 if idle.measuring {

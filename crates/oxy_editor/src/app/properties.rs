@@ -153,6 +153,16 @@ impl Editor {
                     ui.label(entity.primitive.map(oxy_render::labels::primitive).unwrap_or("Malha editável"));
                     if entity.mesh.is_none(){vector3(ui,"Dimensões",&mut entity.dimensions,0.05,true);entity.dimensions=entity.dimensions.map(|v|v.max(0.0001));}
                     if entity.primitive.is_some() && ui.button("Parâmetros da forma").clicked(){self.edit_primitive_parameters(&entity.id);}
+                    if let Some(mesh)=&entity.mesh {
+                        use oxy_core::geometry::Shading;
+                        let mut shading=mesh.data().shading;
+                        let response=egui::ComboBox::from_id_salt("mesh_shading").selected_text(match shading {Shading::Flat=>"Plano",Shading::Smooth=>"Suave"}).show_ui(ui,|ui|{
+                            ui.selectable_value(&mut shading,Shading::Flat,"Plano");
+                            ui.selectable_value(&mut shading,Shading::Smooth,"Suave");
+                        });
+                        response.response.on_hover_text("Sombreamento da iluminação. Suave não arredonda a silhueta nem altera os polígonos.");
+                        if shading!=mesh.data().shading {match mesh.with_shading(shading){Ok(next)=>entity.mesh=Some(next),Err(e)=>self.warn(e)}}
+                    }
                     ui.label("Cor base");color_editor(ui, &mut entity.material.color);
                     ui.label("Textura PNG");
                     let selected=entity.material.texture.as_ref().and_then(|id|textures.iter().find(|(i,_)|i==id).map(|(_,n)|n.as_str())).unwrap_or("Sem textura");

@@ -1,0 +1,589 @@
+{
+  "schema_version": 2,
+  "id": "02000000-0000-4000-8000-00000000012c",
+  "name": "Guia · Carta e energia",
+  "start_scene": "02000000-0000-4000-8000-00000000012d",
+  "scenes": [
+    {
+      "id": "02000000-0000-4000-8000-00000000012d",
+      "name": "Cena 2D",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "02000000-0000-4000-8000-000000000136",
+          "name": "Estado da partida",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Energia": {
+              "Number": 3.0
+            }
+          },
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000137",
+          "name": "Alvo",
+          "parent": null,
+          "transform": {
+            "position": [
+              2.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            1.5,
+            2.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.72,
+              0.3,
+              0.27,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Vida": {
+              "Number": 50.0
+            }
+          },
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000138",
+          "name": "Carta Raio",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Custo": {
+              "Number": 2.0
+            }
+          },
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Button",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              140.0
+            ],
+            "size": [
+              330.0,
+              90.0
+            ],
+            "text": "Raio · custo 2 · Clique para causar 20 de dano",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-000000000140",
+                "operation": "event.click",
+                "position": [
+                  0.0,
+                  40.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000141",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  220.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Energia"
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-000000000136"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000142",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  380.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Custo"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000143",
+                "operation": "condition.compare",
+                "position": [
+                  300.0,
+                  220.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 0.0
+                  },
+                  "operator": {
+                    "Text": ">="
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000144",
+                "operation": "condition.branch",
+                "position": [
+                  600.0,
+                  40.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000145",
+                "operation": "math.binary",
+                "position": [
+                  600.0,
+                  300.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 1.0
+                  },
+                  "operator": {
+                    "Text": "-"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000146",
+                "operation": "attribute.set",
+                "position": [
+                  900.0,
+                  40.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Energia"
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-000000000136"
+                  },
+                  "value": {
+                    "Number": 100.0
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000147",
+                "operation": "action.damage",
+                "position": [
+                  1200.0,
+                  40.0
+                ],
+                "params": {
+                  "amount": {
+                    "Number": 20.0
+                  },
+                  "attribute": {
+                    "Text": "Vida"
+                  },
+                  "once": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-000000000137"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000148",
+                "operation": "debug.message",
+                "position": [
+                  900.0,
+                  220.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Energia insuficiente: a carta não alterou energia nem vida."
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-000000000140",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-000000000144",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000141",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-000000000143",
+                "to_port": "a"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000142",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-000000000143",
+                "to_port": "b"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000143",
+                "from_port": "result",
+                "to_node": "02000000-0000-4000-8000-000000000144",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000141",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-000000000145",
+                "to_port": "a"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000142",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-000000000145",
+                "to_port": "b"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000145",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-000000000146",
+                "to_port": "value"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000144",
+                "from_port": "then",
+                "to_node": "02000000-0000-4000-8000-000000000146",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000146",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-000000000147",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000144",
+                "from_port": "else",
+                "to_node": "02000000-0000-4000-8000-000000000148",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000139",
+          "name": "Informação",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              24.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "Energia: {valor}",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "02000000-0000-4000-8000-000000000136",
+            "binding_attribute": "Energia",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-00000000013a",
+          "name": "Informação",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              65.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "Vida do alvo: {valor}",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "02000000-0000-4000-8000-000000000137",
+            "binding_attribute": "Vida",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {},
+  "input_labels": {}
+}

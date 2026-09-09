@@ -1,0 +1,64 @@
+{
+  "gpu": "AdapterInfo { name: \"AMD Radeon RX 6600\", vendor: 4098, device: 29695, device_type: DiscreteGpu, driver: \"AMD proprietary driver\", driver_info: \"26.7.1 (AMD proprietary shader compiler)\", backend: Vulkan }",
+  "method": "Release locked; 3 warmups then 101 samples. CPU Instant around WGPU creation/submission; device drain outside measured interval; no VSync and no GPU timestamps. Buffer sizes are actual descriptor bytes, not VRAM residency. CPU mesh cache warm, GPU buffers cold per sample.",
+  "physical_offscreen_resolution": [
+    920,
+    600
+  ],
+  "rows": [
+    {
+      "buffer_size_bytes": 73568,
+      "cpu_cached_render_submission": {
+        "median_ns": 57700,
+        "p95_ns": 69200,
+        "p99_ns": 80900,
+        "samples": 101
+      },
+      "cpu_create_vertex_index_buffers": {
+        "median_ns": 18200,
+        "p95_ns": 21200,
+        "p99_ns": 25400,
+        "samples": 101
+      },
+      "phase_limit_seconds": 10,
+      "triangles": 968,
+      "warm_mesh_uploads": 0
+    },
+    {
+      "buffer_size_bytes": 744800,
+      "cpu_cached_render_submission": {
+        "median_ns": 56400,
+        "p95_ns": 58200,
+        "p99_ns": 71600,
+        "samples": 101
+      },
+      "cpu_create_vertex_index_buffers": {
+        "median_ns": 110000,
+        "p95_ns": 111500,
+        "p99_ns": 118200,
+        "samples": 101
+      },
+      "phase_limit_seconds": 10,
+      "triangles": 9800,
+      "warm_mesh_uploads": 0
+    },
+    {
+      "buffer_size_bytes": 3794528,
+      "cpu_cached_render_submission": {
+        "median_ns": 156400,
+        "p95_ns": 168900,
+        "p99_ns": 187700,
+        "samples": 101
+      },
+      "cpu_create_vertex_index_buffers": {
+        "median_ns": 852900,
+        "p95_ns": 869500,
+        "p99_ns": 872300,
+        "samples": 101
+      },
+      "phase_limit_seconds": 10,
+      "triangles": 49928,
+      "warm_mesh_uploads": 0
+    }
+  ]
+}

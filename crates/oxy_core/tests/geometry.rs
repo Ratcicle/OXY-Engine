@@ -262,12 +262,19 @@ fn mesh_history_keeps_deltas_and_failed_deformation_is_atomic() {
     };
     assert!(edit::transform(original, &bad, Mat4::from_translation(Vec3::Y * 0.1)).is_err());
     assert!(
-        !project.scenes[0].entities[0]
+        project.scenes[0].entities[0]
             .mesh
             .as_ref()
             .unwrap()
             .shares_storage(after.scenes[0].entities[0].mesh.as_ref().unwrap())
-    ); // History deserializes a fresh validated revision.
+    ); // Undo/redo reuses the already validated immutable revision and its cached geometry.
+    assert!(
+        !project.scenes[0].entities[0]
+            .mesh
+            .as_ref()
+            .unwrap()
+            .shares_storage(original)
+    );
 }
 
 #[test]

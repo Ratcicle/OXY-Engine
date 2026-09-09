@@ -498,6 +498,14 @@ impl Editor {
         }
     }
     pub fn refresh_texture(&mut self, id: &str) {
+        if self
+            .studio
+            .texture_key
+            .as_ref()
+            .is_some_and(|(current, _)| current == id)
+        {
+            self.studio.texture_key = None;
+        }
         if self.thumbnail.as_ref().is_some_and(|(key, _)| key == id) {
             self.thumbnail = None;
         }

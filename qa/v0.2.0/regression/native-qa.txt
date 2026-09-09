@@ -3,8 +3,8 @@ Erro: None
 
 Verificado: lazy_open
 Captura GPU da janela: editor-scene.png
-Clique: + Objeto
-Clique: Retângulo
+Clique: + Objeto em [131.5 117.8]
+Clique: Retângulo em [135.5 147.5]
 Tecla Enter, Ctrl=false
 Verificado: created
 Verificado: gizmo_baseline
@@ -12,11 +12,11 @@ Arrastar eixo X pelo controle visual
 Verificado: gizmo_moved
 Tecla Z, Ctrl=true
 Verificado: gizmo_undo
-Clique: Lógica
-Clique: Ao iniciar cena
-Clique: Pesquisar ação…
+Clique: Lógica em [220.8 80.0]
+Clique: Ao iniciar cena em [287.5 317.5]
+Clique: Pesquisar ação… em [293.0 254.8]
 Digitar: Mensagem
-Clique: Mensagem de diagnóstico
+Clique: Mensagem de diagnóstico em [321.5 318.0]
 Arrastar nó pelo título
 Conectar saída e entrada pelas portas visuais
 Verificado: graph_connected
@@ -25,35 +25,35 @@ Tecla Delete, Ctrl=false
 Verificado: node_deleted
 Tecla Z, Ctrl=true
 Verificado: node_undo
-Clique: Cena
+Clique: Cena em [32.5 79.5]
 Verificado: play_baseline
-Clique: ▶ Jogar
+Clique: ▶ Jogar em [326.6 46.5]
 Verificado: playing
 Manter D por 24 quadros
 Verificado: game_moved
 Captura GPU da janela: game.png
-Clique: Cena
+Clique: Cena em [32.5 79.5]
 Verificado: left_game_paused
-Clique: Jogo
+Clique: Jogo em [89.1 80.5]
 Verificado: return_still_paused
-Clique: ▶ Retomar
+Clique: ▶ Retomar em [335.6 45.5]
 Verificado: playing
 Tecla Escape, Ctrl=false
 Verificado: escape_paused
-Clique: ■ Parar
+Clique: ■ Parar em [419.5 45.5]
 Verificado: stop_isolated
 Redimensionar: [920.0 600.0]
 Captura GPU da janela: editor-small.png
 Redimensionar: [1440.0 900.0]
-Clique: A · Sala de plataforma 2D
-Clique: B · Oficina 3D e golpe articulado
+Clique: A · Sala de plataforma 2D em [407.4 84.5]
+Clique: B · Oficina 3D e golpe articulado em [434.5 153.0]
 Verificado: scene_3d
 Selecionar hierarquia: Tronco · textura pintável
-Clique: Estúdio
-Clique: Pintura
-Clique: Enquadrar peça
+Clique: Estúdio em [153.2 79.0]
+Clique: Pintura em [438.2 123.2]
+Clique: Enquadrar peça em [947.5 296.0]
 Verificado: texture_copy_baseline
-Clique: Criar cópia independente
+Clique: Criar cópia independente em [646.6 259.8]
 Verificado: texture_copied
 Verificado: paint_baseline
 Pincelada real no PNG
@@ -66,49 +66,49 @@ Verificado: paint_redo
 Tecla S, Ctrl=true
 Verificado: saved_roundtrip
 Verificado: texture_controls_baseline
-Clique: Localizar na biblioteca
+Clique: Localizar na biblioteca em [638.1 258.8]
 Excluir recurso pelo cartão de sua própria textura
 Verificado: texture_reference_blocked
 Captura GPU da janela: texture-reference.png
-Clique: Cancelar
-Clique: Remover textura
+Clique: Cancelar em [278.0 272.7]
+Clique: Remover textura em [497.4 259.2]
 Verificado: texture_unlinked
 Tecla Z, Ctrl=true
 Verificado: texture_unlink_undo
-Clique: Modelagem
+Clique: Modelagem em [354.0 123.8]
 Captura GPU da janela: studio-3d.png
 Selecionar hierarquia: Boneco · modelo por peças
-Clique: Animação
+Clique: Animação em [514.8 124.2]
 Verificado: animation_baseline
-Clique: ▶ Reproduzir
+Clique: ▶ Reproduzir em [497.5 657.0]
 Reproduzir 16 quadros sem entrada
 Verificado: animation_preview
 Captura GPU da janela: animation.png
 Redimensionar: [920.0 600.0]
-Clique: Enquadrar
+Clique: Enquadrar em [510.5 289.5]
 Captura GPU da janela: animation-small.png
 Animação 920×600: viewport 524×102 pontos
 Verificado: animation_small_layout
-Clique: + Quadro-chave
+Clique: + Quadro-chave em [451.5 496.0]
 Verificado: key_created
 Tecla Z, Ctrl=true
 Verificado: animation_preview
 Redimensionar: [1440.0 900.0]
-Clique: Pose-base
-Clique: + Quadro-chave
+Clique: Pose-base em [525.7 179.8]
+Clique: + Quadro-chave em [949.9 657.0]
 Verificado: key_created
 Rolar painel QUADRO-CHAVE
-Clique: Copiar quadro
+Clique: Copiar quadro em [1236.0 524.0]
 Selecionar hierarquia: Cabeça
-Clique: Colar quadro
+Clique: Colar quadro em [1061.0 657.0]
 Verificado: key_pasted
 Tecla S, Ctrl=true
 Verificado: saved_roundtrip
-Clique: Cena
-Clique: B · Oficina 3D e golpe articulado
-Clique: C · Carta, custo, energia e alvo
+Clique: Cena em [32.5 79.5]
+Clique: B · Oficina 3D e golpe articulado em [427.9 84.5]
+Clique: C · Carta, custo, energia e alvo em [428.0 187.0]
 Verificado: play_baseline
-Clique: ▶ Jogar
+Clique: ▶ Jogar em [326.6 46.5]
 Verificado: playing
 Clique real no botão da carta
 Verificado: card_one
@@ -119,13 +119,13 @@ Verificado: card_three
 Clique real no botão da carta
 Verificado: card_four
 Captura GPU da janela: card.png
-Clique: ■ Parar
+Clique: ■ Parar em [407.5 45.5]
 Verificado: stop_isolated
-Clique: +
-Clique: Cena 3D
-Clique: Criar cena
-Clique: + Objeto
-Clique: Cubo
+Clique: + em [569.1 82.8]
+Clique: Cena 3D em [686.1 443.6]
+Clique: Criar cena em [614.5 477.6]
+Clique: + Objeto em [131.5 117.8]
+Clique: Cubo em [120.0 146.5]
 Tecla Enter, Ctrl=false
 Tecla F2, Ctrl=false
 Tecla A, Ctrl=true
@@ -139,22 +139,22 @@ Verificado: rename_undo
 Tecla Y, Ctrl=true
 Verificado: renamed_a
 Arrastar eixo X pelo controle visual
-Clique: + Objeto
-Clique: Cubo
+Clique: + Objeto em [131.5 117.8]
+Clique: Cubo em [120.0 146.5]
 Tecla Enter, Ctrl=false
 Tecla F2, Ctrl=false
 Tecla A, Ctrl=true
 Digitar: Peça B
 Tecla Enter, Ctrl=false
 Arrastar eixo X pelo controle visual
-Clique: + Objeto
-Clique: Grupo vazio
+Clique: + Objeto em [131.5 117.8]
+Clique: Grupo vazio em [139.0 323.0]
 Tecla F2, Ctrl=false
 Tecla A, Ctrl=true
 Digitar: Articulação
 Tecla Enter, Ctrl=false
-Clique: + Objeto
-Clique: Grupo vazio
+Clique: + Objeto em [131.5 117.8]
+Clique: Grupo vazio em [139.0 323.0]
 Tecla F2, Ctrl=false
 Tecla A, Ctrl=true
 Digitar: Montagem
@@ -193,53 +193,53 @@ Captura GPU da janela: multi-selection.png
 Verificado: focus_baseline
 Selecionar hierarquia: Articulação
 Verificado: focused_group
-Clique: Estúdio
-Clique: Animação
-Clique: + Nova animação
+Clique: Estúdio em [153.2 79.0]
+Clique: Animação em [514.8 124.2]
+Clique: + Nova animação em [295.0 240.2]
 Tecla A, Ctrl=true
 Digitar: Parado
 Tecla Enter, Ctrl=false
-Clique: + Quadro-chave
+Clique: + Quadro-chave em [946.9 657.0]
 Selecionar hierarquia: Peça A
-Clique: + Quadro-chave
+Clique: + Quadro-chave em [946.9 657.0]
 Selecionar hierarquia: Articulação
-Clique: + Nova animação
+Clique: + Nova animação em [295.0 240.2]
 Tecla A, Ctrl=true
 Digitar: Ataque
 Tecla Enter, Ctrl=false
-Clique: + Quadro-chave
+Clique: + Quadro-chave em [946.9 657.0]
 Verificado: authored_clips
 Editar campo visível: Cursor = 0.5
-Clique: Mover (W)
+Clique: Mover (W) em [474.5 214.8]
 Verificado: draft_baseline
 Arrastar eixo X pelo controle visual
 Verificado: group_draft
 Tecla S, Ctrl=true
 Verificado: draft_save_refused
-Clique: Nova cena
-Clique: A · Sala de plataforma 2D
+Clique: Nova cena em [365.4 84.0]
+Clique: A · Sala de plataforma 2D em [418.0 119.0]
 Verificado: draft_scene_refused
-Clique: + Quadro-chave
+Clique: + Quadro-chave em [946.9 657.0]
 Verificado: group_key
 Captura GPU da janela: group-animation.png
 Abrir menu de contexto: Ataque
-Clique: Duplicar animação
+Clique: Duplicar animação em [393.5 360.5]
 Verificado: clip_duplicated
 Tecla S, Ctrl=true
 Verificado: saved_roundtrip
-Clique: Cena
-Clique: Nova cena
-Clique: B · Oficina 3D e golpe articulado
+Clique: Cena em [32.5 79.5]
+Clique: Nova cena em [365.4 84.0]
+Clique: B · Oficina 3D e golpe articulado em [434.5 153.0]
 Selecionar hierarquia: Boneco · modelo por peças
-Clique: Estúdio
-Clique: Animação
+Clique: Estúdio em [153.2 79.0]
+Clique: Animação em [514.8 124.2]
 Verificado: clip_reference_baseline
 Abrir menu de contexto: Ataque
-Clique: Excluir animação
+Clique: Excluir animação em [388.5 348.5]
 Verificado: clip_reference_blocked
 Captura GPU da janela: animation-reference.png
-Clique: Entendi
-Clique: Cena
+Clique: Entendi em [275.5 249.7]
+Clique: Cena em [32.5 79.5]
 Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
 Repouso medido: 1 atualizações espontâneas em 500 ms
 

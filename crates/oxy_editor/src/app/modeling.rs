@@ -88,6 +88,13 @@ struct Drag {
 }
 
 impl Editor {
+    pub(crate) fn mesh_components(&self) -> &Components {
+        &self.modeling.selection
+    }
+    pub(crate) fn select_mesh_face(&mut self, face: Option<u32>, toggle: bool) {
+        self.modeling.selection.mode = Mode::Face;
+        self.modeling.selection.click(face, toggle);
+    }
     #[cfg(test)]
     pub(crate) fn qa_mesh_info(&self) -> (Mode, usize, bool, usize) {
         (
@@ -108,7 +115,7 @@ impl Editor {
     pub(super) fn components_active(&self) -> bool {
         self.modeling_active() && self.modeling.selection.mode != Mode::Object
     }
-    fn model_source(&mut self) -> Result<EditableMesh, String> {
+    pub(crate) fn model_source(&mut self) -> Result<EditableMesh, String> {
         if self.selection.ids.len() != 1 {
             return Err("Escolha uma peça para editar seus componentes.".into());
         }

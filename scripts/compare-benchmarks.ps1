@@ -21,6 +21,11 @@ $rows = foreach ($row in $b.rows) {
             before_limit=$u.limit_exceeded; after_limit=$v.limit_exceeded
             before_candidates_per_sample=$u.counters.candidates/$u.samples
             after_candidates_per_sample=$v.counters.candidates/$v.samples
+            before_checksum=$u.checksum; after_checksum=$v.checksum
+            before_steps=$u.counters.steps; after_steps=$v.counters.steps
+            before_entity_scans=$u.counters.entity_scans; after_entity_scans=$v.counters.entity_scans
+            before_matrices=$u.counters.matrices; after_matrices=$v.counters.matrices
+            before_graph_copies=$u.counters.graph_nodes_copied; after_graph_copies=$v.counters.graph_nodes_copied
         }
     }
 }

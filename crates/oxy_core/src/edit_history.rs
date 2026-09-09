@@ -7,6 +7,7 @@ use crate::{
     texture_cache::TextureCache,
 };
 use serde_json::Value;
+mod meshes;
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -66,6 +67,7 @@ struct Command {
     after_revision: u64,
     document: Vec<DocumentDelta>,
     images: Vec<ImageDelta>,
+    meshes: Vec<meshes::Delta>,
 }
 #[derive(Debug)]
 struct Baseline {
@@ -182,14 +184,20 @@ impl CommandHistory {
             return Ok(false);
         };
         let result = (|| {
-            let a = serde_json::to_value(&before.project).map_err(|e| e.to_string())?;
-            let b = serde_json::to_value(project).map_err(|e| e.to_string())?;
+            let (a, before_meshes) = meshes::detach(&before.project);
+            let (b, after_meshes) = meshes::detach(project);
+            let a = serde_json::to_value(a.as_ref()).map_err(|e| e.to_string())?;
+            let b = serde_json::to_value(b.as_ref()).map_err(|e| e.to_string())?;
             let mut document = Vec::new();
             diff_json(&a, &b, &mut Vec::new(), &mut document);
             let deltas = diff_images(&before.project, project, &mut before.images, images)?;
-            Ok::<_, String>((document, deltas))
+            Ok::<_, String>((
+                document,
+                deltas,
+                meshes::diff(&before_meshes, &after_meshes),
+            ))
         })();
-        let (document, deltas) = match result {
+        let (document, deltas, mesh_deltas) = match result {
             Ok(value) => value,
             Err(error) => {
                 self.pending = Some(before);
@@ -208,7 +216,7 @@ impl CommandHistory {
         }
         images.prune_removed(project);
         images.finish_gesture();
-        if document.is_empty() && deltas.is_empty() {
+        if document.is_empty() && deltas.is_empty() && mesh_deltas.is_empty() {
             return Ok(false);
         }
         let next = self.next_revision;
@@ -219,6 +227,7 @@ impl CommandHistory {
             after_revision: next,
             document,
             images: deltas,
+            meshes: mesh_deltas,
         });
         self.revision = next;
         self.future.clear();
@@ -278,11 +287,17 @@ impl CommandHistory {
     /// The transient baseline is deliberately reported separately.
     pub fn estimated_bytes(&self) -> usize {
         let mut images = HashSet::new();
+        let mut meshes = HashSet::new();
         self.past
             .iter()
             .chain(&self.future)
             .map(|command| {
                 std::mem::size_of::<Command>()
+                    + command
+                        .meshes
+                        .iter()
+                        .map(|m| m.bytes(&mut meshes))
+                        .sum::<usize>()
                     + command.label.capacity()
                     + command
                         .document
@@ -696,7 +711,8 @@ fn apply_command(
     project: &mut Project,
     images: &mut TextureCache,
 ) -> Result<(), String> {
-    let mut json = serde_json::to_value(&*project).map_err(|e| e.to_string())?;
+    let (skeleton, meshes) = meshes::detach(project);
+    let mut json = serde_json::to_value(skeleton.as_ref()).map_err(|e| e.to_string())?;
     if forward {
         for delta in &command.document {
             apply_document(delta, true, &mut json)?;
@@ -706,8 +722,9 @@ fn apply_command(
             apply_document(delta, false, &mut json)?;
         }
     }
-    let next_project: Project = serde_json::from_value(json)
+    let mut next_project: Project = serde_json::from_value(json)
         .map_err(|e| format!("Não foi possível restaurar edição: {e}"))?;
+    meshes::apply(&command.meshes, forward, meshes, &mut next_project)?;
     let mut next_images = images.clone();
     let root = images.root().to_owned();
     next_images.configure(&root, &next_project);

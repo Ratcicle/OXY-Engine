@@ -1,48 +1,48 @@
 Concluído: true
 Erro: None
-Clique: Guia de lógica visual
+Clique: Guia de lógica visual em [318.8 147.2]
 Captura GPU da janela: guide-first.png
 Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
 Repouso medido: 1 atualizações espontâneas em 500 ms
-Clique: Abrir cópia da receita: primeira mensagem
+Clique: Abrir cópia da receita: primeira mensagem em [471.5 463.0]
 Verificado: m2_recipe
-Clique: Ações de entrada
-Clique: Mostrar mensagem
+Clique: Ações de entrada em [288.0 123.8]
+Clique: Mostrar mensagem em [474.5 431.5]
 Tecla A, Ctrl=true
 Digitar: Mensagem local
 Tecla Enter, Ctrl=false
-Clique: K
-Clique: L
+Clique: K em [630.5 434.1]
+Clique: L em [877.0 536.0]
 Verificado: m2_binding
-Clique: Excluir ação
+Clique: Excluir ação em [778.5 434.5]
 Verificado: m2_refused
 Captura GPU da janela: input-actions.png
-Clique: Cancelar exclusão
-Clique: Fechar ações de entrada
+Clique: Cancelar exclusão em [471.5 481.1]
+Clique: Fechar ações de entrada em [490.5 517.1]
 Selecionar nó: Ação de entrada
-Clique: ▶ Jogar
+Clique: ▶ Jogar em [326.6 46.5]
 Manter L por 40 quadros
 Reproduzir 20 quadros sem entrada
 Verificado: m2_pressed
-Clique: ■ Parar
-Clique: Pressionar
-Clique: Manter
-Clique: ▶ Jogar
+Clique: ■ Parar em [407.5 45.5]
+Clique: Pressionar em [1246.0 473.5]
+Clique: Manter em [1243.5 541.5]
+Clique: ▶ Jogar em [326.6 46.5]
 Manter L por 40 quadros
 Reproduzir 20 quadros sem entrada
 Verificado: m2_held
-Clique: ■ Parar
-Clique: Manter
-Clique: Soltar
-Clique: ▶ Jogar
+Clique: ■ Parar em [407.5 45.5]
+Clique: Manter em [1236.5 473.5]
+Clique: Soltar em [1239.0 575.0]
+Clique: ▶ Jogar em [326.6 46.5]
 Manter L por 40 quadros
 Reproduzir 20 quadros sem entrada
 Verificado: m2_released
-Clique: ■ Parar
-Clique: Guia de lógica visual
-Clique: Buscar operação ou assunto
+Clique: ■ Parar em [407.5 45.5]
+Clique: Guia de lógica visual em [423.6 123.8]
+Clique: Buscar operação ou assunto em [431.5 69.0]
 Digitar: Esperar
-Clique: Esperar sem bloquear
+Clique: Esperar sem bloquear em [413.5 149.0]
 Captura GPU da janela: guide-node.png
 Tecla Escape, Ctrl=false
 Capturas: ["guide-first.png", "input-actions.png", "guide-node.png"]

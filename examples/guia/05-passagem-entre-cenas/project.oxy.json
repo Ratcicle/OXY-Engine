@@ -1,0 +1,443 @@
+{
+  "schema_version": 2,
+  "id": "02000000-0000-4000-8000-0000000001f4",
+  "name": "Guia · Passagem entre cenas",
+  "start_scene": "02000000-0000-4000-8000-0000000001f5",
+  "scenes": [
+    {
+      "id": "02000000-0000-4000-8000-0000000001f5",
+      "name": "Entrada",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "02000000-0000-4000-8000-0000000001fe",
+          "name": "Personagem",
+          "parent": null,
+          "transform": {
+            "position": [
+              -3.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.6,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.3,
+              0.75,
+              0.68,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.6,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "actions": {
+              "left": "mover_esquerda",
+              "right": "mover_direita",
+              "forward": "mover_frente",
+              "back": "mover_tras",
+              "jump": "pular"
+            },
+            "speed": 5.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000001ff",
+          "name": "Passagem",
+          "parent": null,
+          "transform": {
+            "position": [
+              3.0,
+              0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.8,
+            1.6,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.35,
+              0.7,
+              0.9,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.8,
+              1.4,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.1,
+              0.0
+            ],
+            "is_trigger": true,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-000000000208",
+                "operation": "event.area_enter",
+                "position": [
+                  0.0,
+                  40.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000209",
+                "operation": "action.scene",
+                "position": [
+                  300.0,
+                  40.0
+                ],
+                "params": {
+                  "scene": {
+                    "Text": "02000000-0000-4000-8000-0000000001f6"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-000000000208",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-000000000209",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000200",
+          "name": "Chão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            14.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.23,
+              0.25,
+              0.3,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              14.0,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000201",
+          "name": "Informação",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              24.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "A/D: vá até a passagem azul para abrir a segunda cena",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    },
+    {
+      "id": "02000000-0000-4000-8000-0000000001f6",
+      "name": "Destino",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "02000000-0000-4000-8000-000000000202",
+          "name": "Informação",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              24.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "Você chegou à segunda cena. Parar restaura o documento de edição.",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "pular": "Space"
+  },
+  "input_labels": {
+    "mover_direita": "Mover à direita",
+    "mover_esquerda": "Mover à esquerda",
+    "pular": "Pular"
+  }
+}

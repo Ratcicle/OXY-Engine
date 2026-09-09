@@ -112,6 +112,9 @@ impl Editor {
         self.studio.shared_edit = Some(copy);
     }
     pub fn paint_at_uv(&mut self, uv: [f32; 2]) {
+        if self.studio.tool == PaintTool::Select {
+            return;
+        }
         let Some(id) = self.texture_id() else { return };
         if !self.ensure_texture(&id) {
             return;
@@ -147,6 +150,7 @@ impl Editor {
                 self.studio.color = image.pixel(x, y);
                 false
             }
+            PaintTool::Select => false,
         };
         if changed {
             self.refresh_texture(&id);
@@ -174,6 +178,7 @@ impl Editor {
             ui.selectable_value(&mut self.studio.tool, PaintTool::Brush, "Pincel");
             ui.selectable_value(&mut self.studio.tool, PaintTool::Fill, "Preencher região");
             ui.selectable_value(&mut self.studio.tool, PaintTool::Sample, "Conta-gotas");
+            ui.selectable_value(&mut self.studio.tool, PaintTool::Select,"Selecionar faces").on_hover_text("Escolha uma face na peça ou em sua ilha de textura, sem pintar. Ctrl alterna a seleção.");
             ui.color_edit_button_srgba_unmultiplied(&mut self.studio.color);
             ui.add(egui::Slider::new(&mut self.studio.radius, 0.5..=64.).text("Raio px"));
             if ui.button("Enquadrar peça").clicked() {
@@ -238,24 +243,34 @@ impl Editor {
 if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=Some(id.clone());}});});
         }
         let width = (ui.available_width() * 0.48).max(100.);
+        let mesh = self.model_source().ok();
+        let key = self
+            .state
+            .images
+            .buffer_identity(&id)
+            .map(|identity| (id.clone(), identity));
         egui::SidePanel::left("paint_pixels")
             .resizable(true)
             .default_width(width)
             .width_range(100.0..=1200.0)
             .show_inside(ui, |ui| {
                 if let Some(image) = self.state.images.get(&id) {
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                        [image.width as usize, image.height as usize],
-                        &image.pixels,
-                    );
-                    if let Some(handle) = &mut self.studio.texture {
-                        handle.set(color_image, egui::TextureOptions::NEAREST);
-                    } else {
-                        self.studio.texture = Some(ui.ctx().load_texture(
-                            "oxy_paint",
-                            color_image,
-                            egui::TextureOptions::NEAREST,
-                        ));
+                    if self.studio.texture_key != key || self.studio.texture.is_none() {
+                        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                            [image.width as usize, image.height as usize],
+                            &image.pixels,
+                        );
+                        if let Some(handle) = &mut self.studio.texture {
+                            handle.set(color_image, egui::TextureOptions::NEAREST);
+                        } else {
+                            self.studio.texture = Some(ui.ctx().load_texture(
+                                "oxy_paint",
+                                color_image,
+                                egui::TextureOptions::NEAREST,
+                            ));
+                        }
+                        self.studio.texture_key = key.clone();
+                        self.studio.canvas_uploads += 1;
                     }
                     ui.label(format!("{} × {} · RGBA", image.width, image.height));
                     let ratio = image.width as f32 / image.height as f32;
@@ -286,41 +301,8 @@ if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=S
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
                         Color32::WHITE,
                     );
-                    let primitive = self
-                        .selected
-                        .as_deref()
-                        .and_then(|i| self.scene().entity(i))
-                        .and_then(|e| e.primitive);
-                    let uv_color = Color32::from_rgba_unmultiplied(70, 235, 216, 160);
-                    let rows = if primitive == Some(Primitive::Cube)
-                        || primitive == Some(Primitive::Cylinder)
-                    {
-                        2
-                    } else {
-                        1
-                    };
-                    let cols = if primitive == Some(Primitive::Cube) {
-                        3
-                    } else {
-                        1
-                    };
-                    for row in 0..rows {
-                        for col in 0..cols {
-                            let uv_rect = Rect::from_min_size(
-                                rect.min
-                                    + Vec2::new(
-                                        rect.width() * col as f32 / cols as f32,
-                                        rect.height() * row as f32 / rows as f32,
-                                    ),
-                                Vec2::new(rect.width() / cols as f32, rect.height() / rows as f32),
-                            );
-                            ui.painter().rect_stroke(
-                                uv_rect,
-                                0.,
-                                egui::Stroke::new(1., uv_color),
-                                egui::StrokeKind::Inside,
-                            );
-                        }
+                    if let Some(mesh) = &mesh {
+                        self.draw_uv_islands(ui, rect, mesh);
                     }
                     if let Some(uv) = self.studio.hover_uv {
                         let p = rect.min + Vec2::new(uv[0] * rect.width(), uv[1] * rect.height());
@@ -353,7 +335,13 @@ if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=S
                             (p.x - rect.min.x) / rect.width(),
                             (p.y - rect.min.y) / rect.height(),
                         ];
-                        self.paint_at_uv(uv);
+                        if self.paint_selecting() {
+                            if response.clicked() {
+                                self.select_paint_face(None, uv, ui.input(|i| i.modifiers.ctrl));
+                            }
+                        } else {
+                            self.paint_at_uv(uv);
+                        }
                     }
                 } else {
                     ui.colored_label(

@@ -309,11 +309,22 @@ impl Editor {
             return;
         }
         if painting {
+            self.draw_paint_faces(ui, rect, &scene);
             if (response.dragged_by(egui::PointerButton::Primary) || response.clicked())
                 && let Some(hit) = pick.as_ref()
             {
                 if self.selected.as_ref() == Some(&hit.entity) {
-                    self.paint_at_uv(hit.uv);
+                    if self.paint_selecting() {
+                        if response.clicked() {
+                            self.select_paint_face(
+                                hit.face,
+                                hit.uv,
+                                ui.input(|i| i.modifiers.ctrl),
+                            );
+                        }
+                    } else {
+                        self.paint_at_uv(hit.uv);
+                    }
                 } else if response.clicked() {
                     self.select(Some(hit.entity.clone()));
                 }

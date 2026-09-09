@@ -9,6 +9,7 @@ pub mod ray;
 pub mod selection;
 pub mod snap;
 mod triangulate;
+pub mod uv;
 
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -243,6 +244,16 @@ impl EditableMesh {
     pub fn shares_storage(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+    /// Explicitly replace preserved corner normals with flat or averaged lighting normals.
+    /// Coordinates, topology and UVs are unchanged; smoothing does not round the silhouette.
+    pub fn with_shading(&self, shading: Shading) -> Result<Self, String> {
+        let mut data = self.data().clone();
+        data.shading = shading;
+        for corner in data.faces.iter_mut().flat_map(|face| &mut face.corners) {
+            corner.normal = None;
+        }
+        Self::new(data)
+    }
     /// Logical allocation estimate, excludes allocator metadata and GPU storage.
     pub fn estimated_bytes(&self) -> usize {
         self.data().vertices.capacity() * std::mem::size_of::<Vertex>()
@@ -255,6 +266,23 @@ impl EditableMesh {
                 .map(|f| f.corners.capacity() * std::mem::size_of::<Corner>())
                 .sum::<usize>()
             + self.prepared().triangles.capacity() * std::mem::size_of::<Triangle>()
+            + std::mem::size_of::<Storage>()
+            + self.prepared().acceleration.estimated_bytes()
+            + self.prepared().vertices.capacity()
+                * (std::mem::size_of::<(ComponentId, usize)>() + 1)
+            + self.prepared().edges.capacity() * (std::mem::size_of::<(ComponentId, usize)>() + 1)
+            + self.prepared().faces.capacity() * (std::mem::size_of::<(ComponentId, usize)>() + 1)
+            + self.prepared().edge_pairs.capacity()
+                * (std::mem::size_of::<([ComponentId; 2], usize)>() + 1)
+            + self.prepared().incident_faces.capacity() * std::mem::size_of::<Vec<(usize, usize)>>()
+            + self
+                .prepared()
+                .incident_faces
+                .iter()
+                .map(|f| f.capacity() * std::mem::size_of::<(usize, usize)>())
+                .sum::<usize>()
+            + (self.prepared().face_normals.capacity() + self.prepared().smooth_normals.capacity())
+                * std::mem::size_of::<Vec3>()
     }
 }
 

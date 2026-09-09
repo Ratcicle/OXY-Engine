@@ -8,6 +8,7 @@ pub mod editing;
 pub mod geometry;
 pub mod graph;
 pub mod guide;
+pub mod guide_recipes;
 pub mod history;
 pub mod input_actions;
 pub mod metrics;

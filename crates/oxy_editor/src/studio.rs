@@ -1,5 +1,6 @@
 mod animation;
 mod paint;
+mod uv;
 use crate::app::Editor;
 pub use animation::AnimationState;
 
@@ -16,6 +17,7 @@ enum PaintTool {
     Brush,
     Fill,
     Sample,
+    Select,
 }
 pub struct Studio {
     pub tab: StudioTab,
@@ -29,6 +31,8 @@ pub struct Studio {
     pub hover_uv: Option<[f32; 2]>,
     last_pixel: Option<[f32; 2]>,
     texture: Option<egui::TextureHandle>,
+    pub(crate) texture_key: Option<(Id, usize)>,
+    pub(crate) canvas_uploads: u64,
 }
 impl Default for Studio {
     fn default() -> Self {
@@ -44,6 +48,8 @@ impl Default for Studio {
             hover_uv: None,
             last_pixel: None,
             texture: None,
+            texture_key: None,
+            canvas_uploads: 0,
         }
     }
 }

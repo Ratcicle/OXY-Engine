@@ -25,6 +25,103 @@ fn block_on<T>(future: impl Future<Output = T>) -> T {
     }
 }
 
+#[test]
+#[ignore = "Measures CPU buffer creation and native submission for authored meshes; requires WGPU"]
+fn native_mesh_upload_measurements() {
+    use std::{hint::black_box, time::Instant};
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter =
+        block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    let info = format!("{:?}", adapter.get_info());
+    let (device, queue) =
+        block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let egui_renderer =
+        egui_wgpu::Renderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, Default::default());
+    let rs = RenderState {
+        adapter,
+        available_adapters: Vec::new(),
+        device,
+        queue,
+        target_format: wgpu::TextureFormat::Rgba8Unorm,
+        renderer: Arc::new(egui::epaint::mutex::RwLock::new(egui_renderer)),
+    };
+    let summary = |mut times: Vec<u64>| {
+        times.sort_unstable();
+        let n = times.len();
+        serde_json::json!({"samples":n,"median_ns":times.get(n/2),"p95_ns":if n>=100{times.get(((n-1) as f64*0.95).ceil() as usize)}else{None},"p99_ns":if n>=100{times.get(((n-1) as f64*0.99).ceil() as usize)}else{None}})
+    };
+    let mut rows = Vec::new();
+    for divisions in [22, 70, 158] {
+        let mut p = Project::new("Carga GPU");
+        p.scenes[0].kind = SceneKind::ThreeD;
+        let mesh = oxy_core::geometry::primitives::generate(
+            Primitive::Plane,
+            8,
+            oxy_core::geometry::primitives::Parameters {
+                plane_divisions: [divisions; 2],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let triangles = mesh.prepared().triangles.len();
+        let mut e = Entity::new("Malha", None);
+        e.mesh = Some(mesh);
+        p.scenes[0].entities.push(e);
+        let mut renderer = Renderer::new(&rs);
+        renderer.show_grid = false;
+        let camera = CameraState::for_scene(&p.scenes[0]);
+        let mut cold = Vec::new();
+        let mut warm = Vec::new();
+        let mut bytes = 0;
+        let start = Instant::now();
+        for sample in 0..104 {
+            if start.elapsed() > Duration::from_secs(10) {
+                break;
+            }
+            // The CPU mesh encoding is warm, GPU vertex/index buffers are deliberately fresh.
+            let mut cache = GeometryCache::default();
+            let t = Instant::now();
+            let (gpu, hit) = cache.get(&rs.device, &p.scenes[0].entities[0]);
+            let upload = t.elapsed().as_nanos() as u64;
+            assert!(!hit);
+            bytes = gpu.vertices.size() + gpu.indices.size();
+            black_box(gpu);
+            let before = renderer.stats().mesh_uploads;
+            let t = Instant::now();
+            renderer.render(
+                &rs,
+                &p,
+                &p.scenes[0],
+                Path::new(""),
+                &camera,
+                [920, 600],
+                None,
+                false,
+            );
+            let submission = t.elapsed().as_nanos() as u64;
+            // Drain outside measurement. This is CPU API time, not GPU elapsed time or VSync.
+            rs.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(Duration::from_secs(10)),
+                })
+                .unwrap();
+            if sample >= 3 {
+                assert_eq!(before, renderer.stats().mesh_uploads);
+                cold.push(upload);
+                warm.push(submission);
+            }
+        }
+        assert!(renderer.take_errors().is_empty());
+        let pixels = read_pixels(&renderer, &rs);
+        assert!(pixels.chunks_exact(4).any(|p| p[0] > 30));
+        rows.push(serde_json::json!({"triangles":triangles,"buffer_size_bytes":bytes,"cpu_create_vertex_index_buffers":summary(cold),"cpu_cached_render_submission":summary(warm),"warm_mesh_uploads":0,"phase_limit_seconds":10}));
+    }
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.0/m6");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("mesh-upload.json"),serde_json::to_vec_pretty(&serde_json::json!({"gpu":info,"physical_offscreen_resolution":[920,600],"method":"Release locked; 3 warmups then 101 samples. CPU Instant around WGPU creation/submission; device drain outside measured interval; no VSync and no GPU timestamps. Buffer sizes are actual descriptor bytes, not VRAM residency. CPU mesh cache warm, GPU buffers cold per sample.","rows":rows})).unwrap()).unwrap();
+}
+
 fn read_pixels(renderer: &Renderer, rs: &RenderState) -> Vec<u8> {
     let [width, height] = renderer.target.size;
     let stride = (width * 4).div_ceil(256) * 256;

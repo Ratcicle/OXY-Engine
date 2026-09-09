@@ -189,7 +189,7 @@ impl Editor {
     }
     fn guide_ui(&mut self, ctx: &egui::Context) {
         let mut close = false;
-        let mut open_recipe = false;
+        let mut open_recipe = None;
         let response = egui::Modal::new("logic_guide".into()).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 760.));
             ui.heading("Guia de lógica visual");
@@ -200,6 +200,7 @@ impl Editor {
             );
             egui::ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 150.).max(80.))
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if ui
                         .selectable_label(self.logic_ui.topic.is_empty(), "Primeiro comportamento")
@@ -208,6 +209,26 @@ impl Editor {
                         self.logic_ui.topic.clear();
                     }
                     let query = self.logic_ui.search.to_lowercase();
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, recipe) in oxy_core::guide_recipes::recipes()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, r)| {
+                                query.is_empty()
+                                    || format!("{} {}", r.title, r.setup)
+                                        .to_lowercase()
+                                        .contains(&query)
+                            })
+                        {
+                            let key = format!("recipe:{i}");
+                            if ui
+                                .selectable_label(self.logic_ui.topic == key, recipe.title)
+                                .clicked()
+                            {
+                                self.logic_ui.topic = key;
+                            }
+                        }
+                    });
                     ui.horizontal_wrapped(|ui| {
                         for topic in oxy_core::guide::topics().iter().filter(|t| {
                             query.is_empty()
@@ -230,12 +251,37 @@ impl Editor {
                         }
                     });
                     ui.separator();
-                    if let Some(topic) = oxy_core::guide::topics()
+                    if let Some((index, recipe)) = self
+                        .logic_ui
+                        .topic
+                        .strip_prefix("recipe:")
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .and_then(|i| oxy_core::guide_recipes::recipes().get(i).map(|r| (i, r)))
+                    {
+                        ui.heading(recipe.title);
+                        ui.strong("Preparação");
+                        ui.label(recipe.setup);
+                        ui.strong("Conexões e valores");
+                        ui.label(recipe.flow);
+                        ui.strong("Resultado esperado");
+                        ui.label(recipe.expected);
+                        if ui
+                            .button(format!(
+                                "Abrir cópia da receita: {}",
+                                recipe.title.to_lowercase()
+                            ))
+                            .clicked()
+                        {
+                            open_recipe = Some(index);
+                        }
+                    } else if let Some(topic) = oxy_core::guide::topics()
                         .iter()
                         .find(|t| t.operation.id == self.logic_ui.topic)
                     {
                         ui.heading(topic.operation.label);
                         ui.label(topic.purpose);
+                        ui.strong("Preparação e contexto");
+                        ui.label(topic.requirements());
                         ui.strong("Entradas e saídas");
                         for (side, ports) in [
                             ("Entrada", &topic.operation.inputs),
@@ -260,7 +306,7 @@ impl Editor {
                             .button("Abrir cópia da receita: primeira mensagem")
                             .clicked()
                         {
-                            open_recipe = true;
+                            open_recipe = Some(0);
                         }
                         ui.separator();
                         ui.heading("Execução e dados");
@@ -272,9 +318,9 @@ impl Editor {
         if close || response.should_close() {
             self.logic_ui.guide = false;
         }
-        if open_recipe {
+        if let Some(recipe) = open_recipe {
             let result = (|| {
-                let project = oxy_core::guide::first_recipe()?;
+                let project = oxy_core::guide_recipes::load(recipe)?;
                 let path = std::env::temp_dir()
                     .join(format!("oxy-guide-{}", new_id()))
                     .join(persistence::PROJECT_FILE);

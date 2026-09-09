@@ -1,0 +1,553 @@
+{
+  "schema_version": 2,
+  "id": "02000000-0000-4000-8000-0000000000c8",
+  "name": "Guia · Porta com chave",
+  "start_scene": "02000000-0000-4000-8000-0000000000c9",
+  "scenes": [
+    {
+      "id": "02000000-0000-4000-8000-0000000000c9",
+      "name": "Cena 2D",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "02000000-0000-4000-8000-0000000000d2",
+          "name": "Personagem",
+          "parent": null,
+          "transform": {
+            "position": [
+              -3.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.6,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.3,
+              0.75,
+              0.68,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Chave": {
+              "Bool": true
+            }
+          },
+          "collider": {
+            "size": [
+              0.6,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "actions": {
+              "left": "mover_esquerda",
+              "right": "mover_direita",
+              "forward": "mover_frente",
+              "back": "mover_tras",
+              "jump": "pular"
+            },
+            "speed": 5.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000000d3",
+          "name": "Porta",
+          "parent": null,
+          "transform": {
+            "position": [
+              2.0,
+              0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.5,
+            2.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.72,
+              0.43,
+              0.22,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.5,
+              2.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000000d4",
+          "name": "Área da porta",
+          "parent": "02000000-0000-4000-8000-0000000000d3",
+          "transform": {
+            "position": [
+              -0.7,
+              -0.1,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              1.5,
+              1.2,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": true,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-0000000000dc",
+                "operation": "event.area_enter",
+                "position": [
+                  0.0,
+                  40.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000000dd",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  220.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Chave"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000000de",
+                "operation": "condition.compare",
+                "position": [
+                  300.0,
+                  220.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Bool": true
+                  },
+                  "operator": {
+                    "Text": "=="
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000000df",
+                "operation": "condition.branch",
+                "position": [
+                  600.0,
+                  40.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000000e0",
+                "operation": "action.component",
+                "position": [
+                  900.0,
+                  40.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-0000000000d3"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000000e1",
+                "operation": "action.component",
+                "position": [
+                  1200.0,
+                  40.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-0000000000d3"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000000e2",
+                "operation": "debug.message",
+                "position": [
+                  900.0,
+                  230.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "A porta exige uma chave no objeto que entrou."
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-0000000000dc",
+                "from_port": "context",
+                "to_node": "02000000-0000-4000-8000-0000000000dd",
+                "to_port": "target"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000000dd",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000000de",
+                "to_port": "a"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000000de",
+                "from_port": "result",
+                "to_node": "02000000-0000-4000-8000-0000000000df",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000000dc",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000000df",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000000df",
+                "from_port": "then",
+                "to_node": "02000000-0000-4000-8000-0000000000e0",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000000e0",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000000e1",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000000df",
+                "from_port": "else",
+                "to_node": "02000000-0000-4000-8000-0000000000e2",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000000d5",
+          "name": "Chão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            14.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.23,
+              0.25,
+              0.3,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              14.0,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000000d6",
+          "name": "Informação",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              24.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "A/D: mover · Espaço: pular · Chave: {valor}",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "02000000-0000-4000-8000-0000000000d2",
+            "binding_attribute": "Chave",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "pular": "Space"
+  },
+  "input_labels": {
+    "mover_direita": "Mover à direita",
+    "mover_esquerda": "Mover à esquerda",
+    "pular": "Pular"
+  }
+}

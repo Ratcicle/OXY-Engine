@@ -8,6 +8,46 @@ pub struct Topic {
     pub example: &'static str,
     pub caution: &'static str,
 }
+impl Topic {
+    pub fn requirements(&self) -> &'static str {
+        match self.operation.id {
+            "event.input" => {
+                "Crie uma ação em Ações de entrada, escolha a tecla e vincule-a ao nó. O jogo deve estar rodando com a entrada capturada."
+            }
+            "event.area_enter" => {
+                "O responsável precisa de um colisor ativo marcado como área. O visitante também precisa de colisor; objetos sem caixa não entram na detecção."
+            }
+            "event.animation" => {
+                "O responsável deve ter um clip com o marcador de mesmo nome, iniciado por Reproduzir animação."
+            }
+            "event.click" => {
+                "Escolha um objeto visual clicável ou adicione um botão de interface ao responsável pelo grafo."
+            }
+            "attribute.get" | "attribute.set" | "action.damage" => {
+                "Crie o atributo no painel do objeto correto e escreva o mesmo nome no nó. Dano exige um atributo numérico. Forneça o alvo pela porta ou por referência explícita; vazio usa o responsável."
+            }
+            "action.animation" => {
+                "Crie o clip no Estúdio do modelo e escolha o nome no nó. O alvo deve possuir esse clip."
+            }
+            "action.sound" => {
+                "Importe um WAV válido na Biblioteca e escolha esse recurso no nó. A reprodução requer um dispositivo de áudio disponível."
+            }
+            "action.spawn" | "action.remove" | "action.component" => {
+                "Indique um objeto existente ou conecte uma referência de objeto. Confirme qual componente ou hierarquia será afetado."
+            }
+            "action.scene" => "Crie a cena de destino no projeto e escolha-a no parâmetro do nó.",
+            "condition.branch" | "control.sequence" | "control.wait" | "debug.message" => {
+                "Conecte uma saída de execução à entrada Executar. Forneça os dados pedidos por portas conectadas ou pelos parâmetros do painel."
+            }
+            "event.scene_start" => {
+                "O objeto com este grafo precisa estar na cena iniciada. Ligue a saída Executar à primeira ação."
+            }
+            _ => {
+                "Conecte a saída de dados a uma entrada do tipo correspondente. Esse nó fornece valores quando consultado; sozinho não inicia um comportamento."
+            }
+        }
+    }
+}
 pub fn topics() -> &'static [Topic] {
     static TOPICS: std::sync::OnceLock<Vec<Topic>> = std::sync::OnceLock::new();
     TOPICS.get_or_init(||crate::graph::registry().iter().map(|operation| {
@@ -41,12 +81,7 @@ pub fn topics() -> &'static [Topic] {
     }).collect())
 }
 pub fn first_recipe() -> Result<Project, String> {
-    let project = crate::migration::read(include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/guia/01-primeiro-comportamento/project.oxy.json"
-    )))?;
-    crate::document::validate_project(&project)?;
-    Ok(project)
+    crate::guide_recipes::load(0)
 }
 #[cfg(test)]
 mod tests {
