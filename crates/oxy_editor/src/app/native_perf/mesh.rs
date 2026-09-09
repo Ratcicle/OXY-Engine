@@ -262,14 +262,14 @@ impl MeasuredEditor {
     }
 }
 
-fn summary(values: &[u64]) -> Value {
+pub(super) fn summary(values: &[u64]) -> Value {
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
     let n = sorted.len();
     json!({"samples":n,"median_ns":sorted.get(n/2),"p95_ns":if n>=100{sorted.get(((n-1) as f64*0.95).ceil() as usize)}else{None},"p99_ns":if n>=100{sorted.get(((n-1) as f64*0.99).ceil() as usize)}else{None},"raw_ns":values})
 }
 
-fn system_environment(root: &Path) -> Value {
+pub(super) fn system_environment(root: &Path) -> Value {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     // One bounded, local probe outside every timed sample; no profiler in the product.
@@ -312,7 +312,7 @@ fn system_environment(root: &Path) -> Value {
         None => json!({"source":"system probe unavailable; no RAM estimate substituted"}),
     }
 }
-fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
+pub(super) fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
     Event::Key {
         key,
         physical_key: Some(key),
@@ -321,7 +321,7 @@ fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
         modifiers,
     }
 }
-fn viewport(ctx: &egui::Context) -> Option<Rect> {
+pub(super) fn viewport(ctx: &egui::Context) -> Option<Rect> {
     let shapes = ctx.graphics(|g| g.clone().drain(&[], &Default::default()));
     fn collect(shape: &egui::Shape, largest: &mut Option<Rect>) {
         match shape {
