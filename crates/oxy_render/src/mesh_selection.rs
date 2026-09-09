@@ -405,23 +405,47 @@ impl ProjectedMesh {
 }
 
 /// A screen tile index with a bounded number of cells for unusually large polygons.
-#[derive(Default)]
 struct ScreenGrid {
     cells: HashMap<(i32, i32), Vec<usize>>,
     large: Vec<usize>,
     references: usize,
+    cell_size: f32,
+}
+impl Default for ScreenGrid {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            large: Vec::new(),
+            references: 0,
+            cell_size: 48.,
+        }
+    }
 }
 impl ScreenGrid {
-    fn range(rect: Rect) -> (i32, i32, i32, i32) {
+    fn range(&self, rect: Rect) -> (i32, i32, i32, i32) {
         (
-            (rect.min.x / 48.).floor() as i32,
-            (rect.max.x / 48.).floor() as i32,
-            (rect.min.y / 48.).floor() as i32,
-            (rect.max.y / 48.).floor() as i32,
+            (rect.min.x / self.cell_size).floor() as i32,
+            (rect.max.x / self.cell_size).floor() as i32,
+            (rect.min.y / self.cell_size).floor() as i32,
+            (rect.max.y / self.cell_size).floor() as i32,
         )
     }
+    fn adaptive(bounds: Rect, count: usize) -> Self {
+        let cell_size = if count > 0 && bounds.is_positive() && bounds.area().is_finite() {
+            (bounds.area() / count as f32)
+                .sqrt()
+                .mul_add(2., 0.)
+                .clamp(2., 48.)
+        } else {
+            48.
+        };
+        Self {
+            cell_size,
+            ..Default::default()
+        }
+    }
     fn add(&mut self, index: usize, rect: Rect) {
-        let (x0, x1, y0, y1) = Self::range(rect);
+        let (x0, x1, y0, y1) = self.range(rect);
         let count = i64::from(x1 - x0 + 1) * i64::from(y1 - y0 + 1);
         // A pathological set of screen-filling triangles must not duplicate its
         // IDs into millions of tiles. Overflow stays in the complete large list.
@@ -437,7 +461,7 @@ impl ScreenGrid {
         }
     }
     fn query(&self, rect: Rect) -> Vec<usize> {
-        let (x0, x1, y0, y1) = Self::range(rect);
+        let (x0, x1, y0, y1) = self.range(rect);
         let mut result = self.large.clone();
         for x in x0..=x1 {
             for y in y0..=y1 {
@@ -555,7 +579,6 @@ impl Occlusion {
                 && id == entity.id
             {
                 for surface in &projected.faces {
-                    result.grid.add(result.surfaces.len(), surface.rect);
                     result.surfaces.push(Occluder {
                         surface: surface.clone(),
                         layer: (entity.layer, order),
@@ -582,13 +605,23 @@ impl Occlusion {
                     clips[triangle[2] as usize],
                 ];
                 if let Some(surface) = Surface::new(0, &clips, rect) {
-                    result.grid.add(result.surfaces.len(), surface.rect);
                     result.surfaces.push(Occluder {
                         surface,
                         layer: (entity.layer, order),
                     });
                 }
             }
+        }
+        // Small triangles must not all be compared with hundreds of neighbors
+        // sharing a fixed 48-point tile. This changes only the conservative
+        // candidate index; exact clipping/depth tests below remain identical.
+        let bounds = result
+            .surfaces
+            .iter()
+            .fold(Rect::NOTHING, |bounds, s| bounds.union(s.surface.rect));
+        result.grid = ScreenGrid::adaptive(bounds, result.surfaces.len());
+        for (i, surface) in result.surfaces.iter().enumerate() {
+            result.grid.add(i, surface.surface.rect);
         }
         result
     }
@@ -618,6 +651,13 @@ impl Occlusion {
         );
         !self.grid.query(rect).into_iter().any(|i| {
             let o = &self.surfaces[i];
+            if !o
+                .surface
+                .rect
+                .contains(Pos2::new(point.x as f32, point.y as f32))
+            {
+                return false;
+            }
             let orientation = signed_area(&o.surface.points).signum();
             self.eligible(o, owner)
                 && self.front(o, point) > 0.
@@ -631,9 +671,10 @@ impl Occlusion {
     }
     fn segment_visible(&self, points: [DVec3; 2], owner: &str) -> bool {
         let mut pieces = vec![points];
-        for index in self.grid.query(bounds(&points)) {
+        let segment_bounds = bounds(&points);
+        for index in self.grid.query(segment_bounds) {
             let o = &self.surfaces[index];
-            if !self.eligible(o, owner) {
+            if !self.eligible(o, owner) || !o.surface.rect.intersects(segment_bounds) {
                 continue;
             }
             let mut next = Vec::new();

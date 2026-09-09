@@ -318,3 +318,107 @@ fn parametric_dimensions_do_not_make_a_plane_occlude_itself() {
         );
     }
 }
+
+#[test]
+fn adaptive_tiles_match_brute_force_rectangle_candidates_and_bound_large_items() {
+    let mut seed = 0x381207u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let rectangles: Vec<_> = (0..600)
+        .map(|_| {
+            Rect::from_min_size(
+                Pos2::new(next() * 1200. - 600., next() * 800. - 400.),
+                egui::Vec2::new(next() * 40. + 0.01, next() * 40. + 0.01),
+            )
+        })
+        .collect();
+    let all = rectangles.iter().fold(Rect::NOTHING, |r, s| r.union(*s));
+    let mut grid = ScreenGrid::adaptive(all, rectangles.len());
+    for (i, r) in rectangles.iter().enumerate() {
+        grid.add(i, *r);
+    }
+    for _ in 0..500 {
+        let query = Rect::from_min_size(
+            Pos2::new(next() * 1400. - 700., next() * 1000. - 500.),
+            egui::Vec2::new(next() * 100., next() * 100.),
+        );
+        let actual = grid.query(query);
+        assert!(actual.windows(2).all(|a| a[0] < a[1]));
+        for (i, r) in rectangles
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.intersects(query))
+        {
+            assert!(
+                actual.binary_search(&i).is_ok(),
+                "Missing intersection {r:?} / {query:?}"
+            );
+        }
+    }
+    let huge = Rect::from_min_max(Pos2::new(-10000., -10000.), Pos2::new(10000., 10000.));
+    for i in 600..800 {
+        grid.add(i, huge);
+    }
+    let actual = grid.query(Rect::from_center_size(Pos2::ZERO, egui::Vec2::splat(1.)));
+    assert!((600..800).all(|i| actual.binary_search(&i).is_ok()));
+    assert!(grid.references <= 1_000_000);
+    assert!(grid.large.len() >= 200);
+}
+
+#[test]
+fn adaptive_tiles_reduce_small_face_candidates_without_changing_exact_visibility() {
+    let rectangles: Vec<_> = (0..100)
+        .flat_map(|y| {
+            (0..100).map(move |x| {
+                Rect::from_min_size(
+                    Pos2::new(x as f32 * 3., y as f32 * 3.),
+                    egui::Vec2::splat(2.),
+                )
+            })
+        })
+        .collect();
+    let all = rectangles.iter().fold(Rect::NOTHING, |a, r| a.union(*r));
+    let mut old = ScreenGrid::default();
+    let mut new = ScreenGrid::adaptive(all, rectangles.len());
+    for (i, r) in rectangles.iter().enumerate() {
+        old.add(i, *r);
+        new.add(i, *r);
+    }
+    let query = rectangles[5050];
+    let before = old.query(query).len();
+    let after = new.query(query).len();
+    assert!(
+        after * 16 < before,
+        "Candidate work did not drop: {before} / {after}"
+    );
+
+    let (scene, id, camera, mesh) = scene_with_target_and_occluder(0.3);
+    let view = SceneView::new(&scene);
+    let p = ProjectedMesh::new(&mesh, camera.matrix([100, 100]), rect());
+    let fast = Occlusion::with_target(&scene, &view, &camera, rect(), 1., (&id, &p));
+    let mut brute = Occlusion::with_target(&scene, &view, &camera, rect(), 1., (&id, &p));
+    brute.grid = ScreenGrid {
+        large: (0..brute.surfaces.len()).collect(),
+        ..Default::default()
+    };
+    for mode in [Mode::Vertex, Mode::Edge, Mode::Face] {
+        for y in 0..10 {
+            for x in 0..10 {
+                let query = Rect::from_min_size(
+                    Pos2::new(x as f32 * 9., y as f32 * 9.),
+                    egui::Vec2::new(17., 13.),
+                );
+                assert_eq!(
+                    p.select(mode, query, Some((&fast, &id))),
+                    p.select(mode, query, Some((&brute, &id)))
+                );
+            }
+        }
+    }
+    eprintln!(
+        "Dense 100x100 rectangles, same probe: fixed48={before} candidates, adaptive={}pt={after}",
+        new.cell_size
+    );
+}

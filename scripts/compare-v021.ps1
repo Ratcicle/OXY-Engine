@@ -35,7 +35,13 @@ $rows = foreach ($oldFixture in $baseline.rows) {
         foreach ($measure in $oldPhase.measurements.PSObject.Properties) {
             $old = $measure.Value
             $new = $newPhase[0].measurements.($measure.Name)
-            if ($null -eq $new) { throw "Medição ausente: $($measure.Name)" }
+            if ($null -eq $new) {
+                if ($newPhase[0].limited -and $newPhase[0].measured_cycles -eq 0) {
+                    # The duration cap may expire during warmup: retain the failure
+                    # to collect a sample instead of inventing a zero duration.
+                    $new = [pscustomobject]@{ samples = 0; median_ns = $null; p95_ns = $null; p99_ns = $null }
+                } else { throw "Medição ausente: $($measure.Name)" }
+            }
             [pscustomobject]@{
                 fixture = $oldFixture.fixture
                 triangles = $oldFixture.triangles

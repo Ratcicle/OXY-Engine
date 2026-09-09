@@ -6,7 +6,7 @@ use super::{
     pair,
     selection::{Mode, Selection},
 };
-use glam::{Mat4, Vec2, Vec3};
+use glam::{DVec3, Mat4, Vec2, Vec3};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 const WORK_LIMIT: usize = 4_000_000;
@@ -108,7 +108,7 @@ pub fn apply_directions(
                 .vertices
                 .iter()
                 .filter(|v| source_ids.contains(&v.id))
-                .map(|v| (v.id, Vec3::from(v.position)))
+                .map(|v| (v.id, Vec3::from(v.position).as_dvec3()))
                 .collect(),
             tolerance: surface.tolerance,
         };
@@ -123,7 +123,7 @@ pub fn apply_directions(
                 .corners
                 .iter()
                 .map(|&i| Sample {
-                    position: mesh.position(face.corners[i].vertex).unwrap(),
+                    position: mesh.position(face.corners[i].vertex).unwrap().as_dvec3(),
                     uv: Vec2::from(face.corners[i].uv),
                     normal: face.corners[i].normal.map(Vec3::from),
                 })
@@ -423,9 +423,16 @@ struct Plane {
     normal: Vec3,
     distance: f32,
 }
+/// Region-relative double-precision calculations keep intersections shared by
+/// adjacent UV triangles identical even when a tiny face is far from the origin.
+#[derive(Clone, Copy)]
+struct ClipPlane {
+    normal: DVec3,
+    origin: DVec3,
+}
 struct Surface {
     normal: Vec3,
-    planes: Vec<Plane>,
+    planes: Vec<ClipPlane>,
     tolerance: f32,
 }
 impl Surface {
@@ -495,29 +502,31 @@ impl Surface {
         if !convex(&points, normal, tolerance) {
             return Err(fail());
         }
-        let origin = points[0];
+        let precise: Vec<_> = points.iter().map(|p| p.as_dvec3()).collect();
+        let precise_normal = normal.as_dvec3();
+        let origin = precise[0];
         let mut weight = 0.;
-        let mut center = Vec3::ZERO;
-        for i in 1..points.len() - 1 {
-            let area = (points[i] - origin)
-                .cross(points[i + 1] - origin)
-                .dot(normal);
-            center += (origin + points[i] + points[i + 1]) / 3. * area;
+        let mut center = DVec3::ZERO;
+        for i in 1..precise.len() - 1 {
+            let area = (precise[i] - origin)
+                .cross(precise[i + 1] - origin)
+                .dot(precise_normal);
+            center += (origin + precise[i] + precise[i + 1]) / 3. * area;
             weight += area;
         }
-        if weight <= tolerance * tolerance {
+        if weight <= f64::from(tolerance).powi(2) {
             return Err(fail());
         }
         center /= weight;
-        let inner: Vec<_> = points
+        let inner: Vec<_> = precise
             .iter()
-            .map(|p| center + (*p - center) * scale)
+            .map(|p| center + (*p - center) * f64::from(scale))
             .collect();
         if inner
             .iter()
             .zip(inner.iter().cycle().skip(1))
             .take(inner.len())
-            .any(|(a, b)| a.distance(*b) < tolerance * 4.)
+            .any(|(a, b)| a.distance(*b) < f64::from(tolerance) * 4.)
             || (1. - scale) * extent < tolerance * 4.
         {
             return Err("O tamanho interno está perto demais de 0% ou 100% para produzir uma borda não degenerada nesta face.".into());
@@ -527,10 +536,10 @@ impl Surface {
             .zip(inner.iter().cycle().skip(1))
             .take(inner.len())
             .map(|(&a, &b)| {
-                let inward = normal.cross(b - a).normalize();
-                Plane {
+                let inward = precise_normal.cross(b - a).normalize();
+                ClipPlane {
                     normal: inward,
-                    distance: inward.dot(a),
+                    origin: a,
                 }
             })
             .collect();
@@ -557,23 +566,23 @@ fn cycle(corners: &[Corner]) -> impl Iterator<Item = (&Corner, &Corner)> {
 }
 #[derive(Clone)]
 struct Sample {
-    position: Vec3,
+    position: DVec3,
     uv: Vec2,
     normal: Option<Vec3>,
 }
 impl Sample {
-    fn lerp(&self, other: &Self, t: f32) -> Self {
+    fn lerp(&self, other: &Self, t: f64) -> Self {
         Self {
             position: self.position.lerp(other.position, t),
-            uv: self.uv.lerp(other.uv, t),
+            uv: self.uv.lerp(other.uv, t as f32),
             normal: self
                 .normal
                 .zip(other.normal)
-                .map(|(a, b)| a.lerp(b, t).normalize_or_zero()),
+                .map(|(a, b)| a.lerp(b, t as f32).normalize_or_zero()),
         }
     }
 }
-fn split(polygon: &[Sample], plane: Plane, tolerance: f32) -> (Vec<Sample>, Vec<Sample>) {
+fn split(polygon: &[Sample], plane: ClipPlane, tolerance: f32) -> (Vec<Sample>, Vec<Sample>) {
     let mut inside = Vec::new();
     let mut outside = Vec::new();
     for (a, b) in polygon
@@ -581,12 +590,12 @@ fn split(polygon: &[Sample], plane: Plane, tolerance: f32) -> (Vec<Sample>, Vec<
         .zip(polygon.iter().cycle().skip(1))
         .take(polygon.len())
     {
-        let mut da = plane.normal.dot(a.position) - plane.distance;
-        let mut db = plane.normal.dot(b.position) - plane.distance;
-        if da.abs() < tolerance {
+        let mut da = plane.normal.dot(a.position - plane.origin);
+        let mut db = plane.normal.dot(b.position - plane.origin);
+        if da.abs() < f64::from(tolerance) {
             da = 0.;
         }
-        if db.abs() < tolerance {
+        if db.abs() < f64::from(tolerance) {
             db = 0.;
         }
         if da >= 0. {
@@ -610,30 +619,35 @@ fn has_area(polygon: &[Sample], tolerance: f32) -> bool {
     let origin = polygon[0].position;
     (1..polygon.len() - 1)
         .map(|i| (polygon[i].position - origin).cross(polygon[i + 1].position - origin))
-        .sum::<Vec3>()
+        .sum::<DVec3>()
         .length()
-        > tolerance * tolerance * 4.
+        > f64::from(tolerance).powi(2) * 4.
 }
 struct Pool {
-    points: Vec<(Id, Vec3)>,
+    points: Vec<(Id, DVec3)>,
     tolerance: f32,
 }
 impl Pool {
-    fn id(&mut self, data: &mut MeshData, p: Vec3, work: &mut usize) -> Result<Id, String> {
+    fn id(&mut self, data: &mut MeshData, p: DVec3, work: &mut usize) -> Result<Id, String> {
         charge(work, self.points.len())?;
         if let Some((id, _)) = self
             .points
             .iter()
-            .find(|(_, q)| p.distance(*q) <= self.tolerance)
+            .find(|(_, q)| p.distance(*q) <= f64::from(self.tolerance))
         {
             return Ok(*id);
         }
-        let id = data.add_vertex(p)?;
+        let id = data.add_vertex(p.as_vec3())?;
         self.points.push((id, p));
         Ok(id)
     }
     fn position(&self, id: Id) -> Vec3 {
-        self.points.iter().find(|(v, _)| *v == id).unwrap().1
+        self.points
+            .iter()
+            .find(|(v, _)| *v == id)
+            .unwrap()
+            .1
+            .as_vec3()
     }
 }
 struct Piece {
@@ -679,13 +693,14 @@ impl Piece {
     }
 }
 fn intermediate(
-    points: &[(Id, Vec3)],
-    a: Vec3,
-    b: Vec3,
+    points: &[(Id, DVec3)],
+    a: DVec3,
+    b: DVec3,
     tolerance: f32,
     work: &mut usize,
-) -> Result<Vec<(f32, Id)>, String> {
+) -> Result<Vec<(f64, Id)>, String> {
     charge(work, points.len())?;
+    let tolerance = f64::from(tolerance);
     let direction = b - a;
     let length = direction.length_squared();
     let mut result = Vec::new();
@@ -702,13 +717,13 @@ fn intermediate(
     result.dedup_by(|(a, _), (b, _)| (*a - *b).abs() * length.sqrt() <= tolerance);
     Ok(result)
 }
-fn interpolate_corner(a: &Corner, b: &Corner, t: f32, vertex: Id) -> Corner {
+fn interpolate_corner(a: &Corner, b: &Corner, t: f64, vertex: Id) -> Corner {
     Corner {
         vertex,
-        uv: Vec2::from(a.uv).lerp(Vec2::from(b.uv), t).to_array(),
+        uv: Vec2::from(a.uv).lerp(Vec2::from(b.uv), t as f32).to_array(),
         normal: a.normal.zip(b.normal).map(|(a, b)| {
             Vec3::from(a)
-                .lerp(Vec3::from(b), t)
+                .lerp(Vec3::from(b), t as f32)
                 .normalize_or_zero()
                 .to_array()
         }),
@@ -716,7 +731,7 @@ fn interpolate_corner(a: &Corner, b: &Corner, t: f32, vertex: Id) -> Corner {
 }
 fn densify(
     corners: &mut Vec<Corner>,
-    points: &[(Id, Vec3)],
+    points: &[(Id, DVec3)],
     tolerance: f32,
     work: &mut usize,
 ) -> Result<(), String> {
@@ -740,7 +755,7 @@ fn densify(
 fn densify_selected_edges(
     corners: &mut Vec<Corner>,
     mesh: &EditableMesh,
-    points: &[(Id, Vec3)],
+    points: &[(Id, DVec3)],
     tolerance: f32,
     touched: &HashSet<[Id; 2]>,
     work: &mut usize,
@@ -751,8 +766,8 @@ fn densify_selected_edges(
         if touched.contains(&pair([a.vertex, b.vertex])) {
             for (t, vertex) in intermediate(
                 points,
-                mesh.position(a.vertex).unwrap(),
-                mesh.position(b.vertex).unwrap(),
+                mesh.position(a.vertex).unwrap().as_dvec3(),
+                mesh.position(b.vertex).unwrap().as_dvec3(),
                 tolerance,
                 work,
             )? {
@@ -806,7 +821,7 @@ fn conform_original_edges(
     pools: &mut [(Pool, Vec3)],
     work: &mut usize,
 ) -> Result<(), String> {
-    let mut cuts = HashMap::<[Id; 2], Vec<(f32, Id, Vec3)>>::new();
+    let mut cuts = HashMap::<[Id; 2], Vec<(f64, Id, DVec3)>>::new();
     let mut remap = HashMap::new();
     let mut region_edges = Vec::new();
     for (region, faces) in groups.iter().enumerate() {
@@ -820,14 +835,14 @@ fn conform_original_edges(
         edges.dedup();
         let tolerance = pools[region].0.tolerance;
         for &edge in &edges {
-            let a = mesh.position(edge[0]).unwrap();
-            let b = mesh.position(edge[1]).unwrap();
+            let a = mesh.position(edge[0]).unwrap().as_dvec3();
+            let b = mesh.position(edge[1]).unwrap().as_dvec3();
             let length = a.distance(b);
             for (t, id) in intermediate(&pools[region].0.points, a, b, tolerance, work)? {
                 let values = cuts.entry(edge).or_default();
                 if let Some((_, other, _)) = values
                     .iter()
-                    .find(|(u, _, _)| (*u - t).abs() * length <= tolerance)
+                    .find(|(u, _, _)| (*u - t).abs() * length <= f64::from(tolerance))
                 {
                     if id != *other {
                         remap.insert(id, *other);

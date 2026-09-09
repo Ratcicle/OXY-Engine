@@ -295,7 +295,21 @@ impl Bench {
         let services = self
             .editor
             .measure_direct_mesh_services(WARMUP, SAMPLES, 12);
+        let operation_errors: Vec<_> = [&core, &services]
+            .into_iter()
+            .flat_map(|value| value["cases"].as_array().into_iter().flatten())
+            .filter_map(|case| case["error"].as_str())
+            .map(str::to_owned)
+            .collect();
         let mut report = self.report.lock().unwrap();
+        if !operation_errors.is_empty() {
+            let error = format!("Final-only fixture {load}: {}", operation_errors.join("; "));
+            if let Some(previous) = &mut report.error {
+                previous.push_str(&format!(" | {error}"));
+            } else {
+                report.error = Some(error);
+            }
+        }
         let row = report.rows[load].as_object_mut().unwrap();
         row.insert("core_inset_final_only".into(), core);
         row.insert("editor_direct_services_final_only".into(), services);

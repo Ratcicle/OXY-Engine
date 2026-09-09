@@ -125,10 +125,20 @@ impl Editor {
                         let t = Instant::now();
                         self.confirm_mesh_operation();
                         let amend_commit = t.elapsed().as_nanos() as u64;
+                        // The history token is an after-revision: a replacement
+                        // deliberately renews it so stale adjustments are rejected.
                         if self.history.undo_len() != 1
-                            || self.history.last_command_id() != Some(command)
+                            || self.history.last_command_id().is_none()
+                            || self
+                                .modeling
+                                .last_operation
+                                .as_ref()
+                                .map(|last| last.command)
+                                != self.history.last_command_id()
                         {
-                            return Err("Adjustment added another history command".into());
+                            return Err(
+                                "Adjustment did not leave exactly one valid history entry".into()
+                            );
                         }
                         record.extend([
                             ("adjust_generation_validation_atlas", adjust),
