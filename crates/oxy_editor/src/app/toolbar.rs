@@ -114,6 +114,12 @@ impl Editor {
                     self.display_menu(ui);
                 }
                 self.interface_button(ui);
+                ui.menu_button("Ajuda", |ui| {
+                    if ui.button("Guia de lógica visual").clicked() {
+                        self.open_guide("");
+                        ui.close();
+                    }
+                });
                 ui.label(if self.dirty() {
                     "● Não salvo"
                 } else if self.path.is_none() {

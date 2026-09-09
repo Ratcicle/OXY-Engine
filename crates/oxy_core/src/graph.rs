@@ -132,8 +132,11 @@ fn build_registry() -> Vec<OperationDef> {
         ("event.scene_start", "Ao iniciar cena", vec![]),
         (
             "event.input",
-            "Ao pressionar ação",
-            vec![text("action", "Ação", "atacar")],
+            "Ação de entrada",
+            vec![
+                text("action", "Ação", "atacar"),
+                text("mode", "Quando", "pressed"),
+            ],
         ),
         ("event.click", "Ao clicar", vec![]),
         ("event.area_enter", "Ao entrar na área", vec![]),

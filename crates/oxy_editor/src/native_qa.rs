@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
+mod input_guide;
 mod portable;
 mod spatial;
 mod ux;
@@ -35,6 +36,7 @@ enum Action {
     Screenshot(&'static str),
     Check(&'static str),
     DragNode(&'static str),
+    SelectNode(&'static str),
     ConnectPorts,
     Paint,
     GizmoX,
@@ -498,6 +500,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("m2_") {
+            return self.check_input_guide(label);
+        }
         if label.starts_with("ux_") {
             return self.check_ux(label);
         }
@@ -1609,6 +1614,11 @@ impl NativeQa {
             Action::Check(label) => {
                 self.check(label)?;
                 description = format!("Verificado: {label}");
+            }
+            Action::SelectNode(label) => {
+                let point = self.find(label, true).ok_or("Nó não visível no grafo")?;
+                self.click(point);
+                description = format!("Selecionar nó: {label}");
             }
             Action::DragNode(label) => {
                 let from = self

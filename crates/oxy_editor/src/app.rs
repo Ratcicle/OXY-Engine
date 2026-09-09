@@ -2,6 +2,7 @@ mod diagnostics;
 mod hierarchy;
 mod home;
 mod library;
+mod logic;
 mod notices;
 mod preferences;
 mod properties;
@@ -72,6 +73,7 @@ enum Transition {
     Home,
     Create(String, SceneKind),
     Open(PathBuf),
+    Recipe(PathBuf),
     Close,
 }
 
@@ -82,6 +84,7 @@ pub struct Editor {
     pending_preferences: Option<preferences::Preferences>,
     new_project: Option<scenes::NewProject>,
     scene_dialog: Option<scenes::SceneDialog>,
+    logic_ui: logic::LogicUi,
     pub state: Snapshot,
     history: CommandHistory,
     pub path: Option<PathBuf>,
@@ -189,6 +192,7 @@ impl Editor {
             pending_preferences: None,
             new_project: None,
             scene_dialog: None,
+            logic_ui: Default::default(),
             history: CommandHistory::new(),
             state,
             path: None,
@@ -318,8 +322,8 @@ impl Editor {
         } else {
             path
         };
-        match persistence::load_project_lazy(&path) {
-            Ok(project) => {
+        match persistence::load_project_lazy_report(&path) {
+            Ok((project, migrated)) => {
                 let root = path.parent().unwrap_or(Path::new("."));
                 let mut images = TextureCache::default();
                 images.configure(root, &project);
@@ -332,6 +336,10 @@ impl Editor {
                     self.remember_project();
                 }
                 self.log("Projeto aberto e validado.");
+                if let Some(version) = migrated {
+                    self.log(format!("Projeto convertido em memória do formato {version}. O original continua intacto. Ao salvar, será criado um backup identificado; versões antigas da engine não abrirão o novo formato."));
+                    self.notice_last(true);
+                }
             }
             Err(e) => {
                 self.log(format!("Não foi possível abrir: {e}"));
@@ -445,6 +453,14 @@ impl Editor {
                 self.reset_context()
             }
             Transition::Open(path) => self.open(path),
+            Transition::Recipe(path) => {
+                self.open_with_recent(path, false);
+                if !self.home.visible {
+                    self.home.example_copy = true;
+                    self.tab = Tab::Logic;
+                    self.select(self.scene().entities.first().map(|e| e.id.clone()));
+                }
+            }
             Transition::Close => self.allow_close = true,
         }
     }
@@ -931,6 +947,7 @@ impl eframe::App for Editor {
             self.home_ui(ctx);
             self.project_dialogs(ctx);
             self.preferences_ui(ctx);
+            self.logic_dialogs(ctx);
             self.notices_ui(ctx);
             return;
         }
@@ -963,7 +980,9 @@ impl eframe::App for Editor {
         let dialog_open = self.pending_preferences.is_some()
             || self.new_project.is_some()
             || self.scene_dialog.is_some()
-            || self.pending.is_some();
+            || self.pending.is_some()
+            || self.logic_ui.inputs
+            || self.logic_ui.guide;
         if !dialog_open
             && !self.capture
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
@@ -975,6 +994,9 @@ impl eframe::App for Editor {
             && ctx.input(|i| i.focused)
             && !crate::graph_ui::text_input_active(ctx)
         {
+            if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+                self.open_guide("");
+            }
             if ctx.input_mut(|i| {
                 i.consume_key(
                     egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -1057,6 +1079,7 @@ impl eframe::App for Editor {
             Tab::Logic => {
                 self.hierarchy(ctx);
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    self.logic_toolbar(ui);
                     let objects: Vec<_> = self
                         .scene()
                         .entities
@@ -1086,6 +1109,12 @@ impl eframe::App for Editor {
                         {
                             self.graph
                                 .show(ui, &mut e.graph, &objects, &project, &scene, &trace);
+                            if std::mem::take(&mut self.graph.configure_inputs) {
+                                self.logic_ui.inputs = true;
+                            }
+                            if let Some(topic) = self.graph.guide_requested.take() {
+                                self.open_guide(&topic);
+                            }
                         }
                     } else {
                         ui.centered_and_justified(|ui| {
@@ -1105,6 +1134,7 @@ impl eframe::App for Editor {
         self.diagnostics_ui(ctx);
         self.project_dialogs(ctx);
         self.preferences_ui(ctx);
+        self.logic_dialogs(ctx);
         self.notices_ui(ctx);
         if self.pending.is_some() {
             self.pause();

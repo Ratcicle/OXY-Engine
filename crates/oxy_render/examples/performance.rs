@@ -204,6 +204,7 @@ fn main() {
                 );
             }
             let input = InputFrame {
+                released: Default::default(),
                 held: ["mover_direita".into()].into(),
                 pressed: if mode.starts_with("graph") {
                     ["atacar".into()].into()
@@ -238,6 +239,7 @@ fn main() {
         runtime.advance(
             FIXED_DT,
             &InputFrame {
+                released: Default::default(),
                 pressed: ["atacar".into()].into(),
                 ..Default::default()
             },

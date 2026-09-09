@@ -10,6 +10,8 @@ use std::collections::{HashMap, HashSet};
 pub use oxy_render::input::text_input_active;
 
 pub struct GraphView {
+    pub configure_inputs: bool,
+    pub guide_requested: Option<String>,
     pan: Vec2,
     zoom: f32,
     selected: Option<Id>,
@@ -22,6 +24,8 @@ pub struct GraphView {
 impl Default for GraphView {
     fn default() -> Self {
         Self {
+            configure_inputs: false,
+            guide_requested: None,
             pan: Vec2::new(35., 45.),
             zoom: 1.,
             selected: None,
@@ -47,7 +51,9 @@ fn port_color(kind: &PortType) -> Color32 {
 fn operation_description(operation: &str) -> &'static str {
     match operation {
         "event.scene_start" => "Executa quando a cena começa.",
-        "event.input" => "Executa ao pressionar uma ação configurada nos controles do projeto.",
+        "event.input" => {
+            "Executa ao pressionar, manter ou soltar uma ação configurada em Ações de entrada."
+        }
         "event.click" => "Executa ao clicar neste objeto ou em seu botão de interface.",
         "event.area_enter" => {
             "Executa quando um objeto entra na área e fornece esse objeto na saída."
@@ -175,7 +181,7 @@ impl GraphView {
         {
             self.selected_edge = None;
         }
-        if !text_input_active(ui.ctx()) {
+        if !text_input_active(ui.ctx()) && ui.ctx().memory(|m| m.top_modal_layer().is_none()) {
             if ui.input(|input| input.key_pressed(egui::Key::Delete)) {
                 self.delete_selected(graph);
             }
@@ -266,13 +272,19 @@ impl GraphView {
                             .clicked()
                         {
                             let offset = graph.nodes.len() as f32 % 5. * 25.;
-                            let node = Node::new(
+                            let mut node = Node::new(
                                 op.id,
                                 [
                                     (-self.pan.x + 80.) / self.zoom + offset,
                                     (-self.pan.y + 80.) / self.zoom + offset,
                                 ],
                             );
+                            if op.id == "event.input" {
+                                node.params.insert(
+                                    "action".into(),
+                                    oxy_core::document::Value::Text(String::new()),
+                                );
+                            }
                             self.selected = Some(node.id.clone());
                             self.selected_edge = None;
                             graph.nodes.push(node);
@@ -287,7 +299,10 @@ impl GraphView {
             egui::ScrollArea::vertical().show(ui,|ui| {
                 if let Some(node)=graph.nodes.iter_mut().find(|n|Some(&n.id)==self.selected.as_ref()) {
                     if let Some(op)=definitions.iter().find(|op|op.id==node.operation) {
-                        ui.strong(op.label);ui.label(egui::RichText::new(operation_description(op.id)).small().weak());ui.separator();
+                        ui.strong(op.label);ui.label(egui::RichText::new(operation_description(op.id)).small().weak());
+                        if ui.button("Ajuda deste nó").clicked() {self.guide_requested=Some(op.id.into());}
+                        if op.id=="event.input" && ui.button("Configurar ações de entrada").clicked() {self.configure_inputs=true;}
+                        ui.separator();
                         for param in &op.params {
                             ui.label(match (node.operation.as_str(), param.id) {
                                 ("action.animation", "clip") => "Animação",
@@ -490,6 +505,12 @@ impl GraphView {
                     );
                     let response =
                         ui.interact(title, ui.id().with(&node.id), Sense::click_and_drag());
+                    response.context_menu(|ui| {
+                        if ui.button("Ajuda deste nó").clicked() {
+                            self.guide_requested = Some(op.id.into());
+                            ui.close();
+                        }
+                    });
                     if response.clicked() || response.drag_started_by(egui::PointerButton::Primary)
                     {
                         self.selected = Some(node.id.clone());

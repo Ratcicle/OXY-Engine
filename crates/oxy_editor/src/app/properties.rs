@@ -99,8 +99,6 @@ impl Editor {
                 let Some(id)=self.selected.clone() else {
                     ui.heading("Projeto");ui.text_edit_singleline(&mut self.state.project.name);
 
-                    ui.separator();ui.strong("Controles do jogo");
-                    for (action,key) in &mut self.state.project.input_bindings {ui.horizontal_wrapped(|ui|{ui.label(action.replace('_'," "));egui::ComboBox::from_id_salt(action).selected_text(crate::labels::key(key)).show_ui(ui,|ui| { for candidate in egui::Key::ALL { if !matches!(candidate,egui::Key::Escape|egui::Key::F3) { ui.selectable_value(key,candidate.name().into(),crate::labels::key(candidate.name())); } } });});}
                     return
                 };
                 if self.selection.ids.len() > 1 { self.multiple_properties(ui); return; }
@@ -170,7 +168,11 @@ impl Editor {
                         });
                         if entity.controller.is_some()&&entity.collider.as_ref().is_some_and(|c|c.is_trigger){ui.colored_label(Color32::YELLOW,"Personagem com área de detecção: esta caixa detecta entradas; um colisor sólido representa bloqueios. A configuração não foi alterada.");}
                     }
-                    ui.separator();component_switch(ui,"Controlador de movimento",&mut entity.controller,Controller::default());
+                    ui.separator();component_switch(ui,"Controlador de movimento",&mut entity.controller,Controller::default());                    if self.scene().entity(&id).is_some_and(|e|e.controller.is_none()) && let Some(c)=&entity.controller {
+                        let kind=self.scene().kind;
+                        oxy_core::input_actions::ensure_controller(&mut self.state.project,&c.actions,kind);
+                    }
+                    if entity.controller.is_some() && ui.button("Configurar ações na Lógica").clicked() {self.pause();self.tab=Tab::Logic;self.logic_ui.inputs=true;}
                     if let Some(c)=&mut entity.controller{ui.checkbox(&mut c.enabled,"Controlador ativo");ui.add(egui::DragValue::new(&mut c.speed).range(0.0..=100.0).prefix("Velocidade "));ui.add(egui::DragValue::new(&mut c.jump).range(0.0..=100.0).prefix("Pulo "));ui.add(egui::DragValue::new(&mut c.gravity).range(0.0..=200.0).prefix("Gravidade "));}
                     ui.separator();component_switch(ui,"Câmera de jogo",&mut entity.camera,Camera::default());
                     if let Some(c)=&mut entity.camera{ui.checkbox(&mut c.active,"Câmera ativa");ui.add(egui::DragValue::new(&mut c.orthographic_size).range(0.1..=500.).prefix("Meia altura 2D ")).on_hover_text("Metade da altura visível em unidades da cena.");ui.add(egui::Slider::new(&mut c.fov,10.0..=150.).text("Campo de visão 3D"));ui.small("A câmera olha para -Z local. Ative apenas a câmera desejada.");}

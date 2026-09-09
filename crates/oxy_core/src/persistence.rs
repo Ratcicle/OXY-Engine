@@ -13,14 +13,17 @@ use std::{
 
 pub const PROJECT_FILE: &str = "project.oxy.json";
 pub fn load_project(path: &Path) -> Result<Project, String> {
-    load_project_with(path, false)
+    load_project_with(path, false).map(|(project, _)| project)
 }
 /// Validates document, relative paths and asset headers without decoding PNG pixels.
 /// A damaged pixel stream is diagnosed when the texture is first requested.
 pub fn load_project_lazy(path: &Path) -> Result<Project, String> {
+    load_project_with(path, true).map(|(project, _)| project)
+}
+pub fn load_project_lazy_report(path: &Path) -> Result<(Project, Option<u32>), String> {
     load_project_with(path, true)
 }
-fn load_project_with(path: &Path, lazy: bool) -> Result<Project, String> {
+fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), String> {
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
     } else {
@@ -32,8 +35,7 @@ fn load_project_with(path: &Path, lazy: bool) -> Result<Project, String> {
         return Err("O documento excede o limite de leitura de 64 MB".into());
     }
     let bytes = fs::read(&path).map_err(|e| format!("Falha ao ler projeto: {e}"))?;
-    let project: Project =
-        serde_json::from_slice(&bytes).map_err(|e| format!("Documento OXY inválido: {e}"))?;
+    let (project, migrated) = crate::migration::read_report(&bytes)?;
     validate_project(&project)?;
     let root = path.parent().unwrap_or(Path::new("."));
     if lazy {
@@ -45,7 +47,7 @@ fn load_project_with(path: &Path, lazy: bool) -> Result<Project, String> {
     } else {
         validate_asset_files(&project, root)?;
     }
-    Ok(project)
+    Ok((project, migrated))
 }
 pub fn save_project(path: &Path, project: &Project) -> Result<(), String> {
     validate_project(project)?;
@@ -56,11 +58,12 @@ pub fn save_project(path: &Path, project: &Project) -> Result<(), String> {
     };
     let root = path.parent().unwrap_or(Path::new("."));
     validate_asset_files(project, root)?;
-    safe_write(
-        &path,
-        &serde_json::to_vec_pretty(project)
-            .map_err(|e| format!("Não foi possível serializar: {e}"))?,
-    )
+    let mut writes: Vec<_> = crate::migration::backup(&path)?.into_iter().collect();
+    writes.push((
+        path,
+        serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?,
+    ));
+    transaction_write(writes)
 }
 /// Paint buffers stay in memory until the whole save has been staged successfully.
 /// The manifest is replaced last; every previous file has a rollback copy.
@@ -97,6 +100,7 @@ pub fn save_bundle(
         }
     }
     let bytes = serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?;
+    writes.extend(crate::migration::backup(&path)?);
     writes.push((path, bytes));
     transaction_write(writes)
 }
@@ -188,6 +192,7 @@ fn save_cached_bundle_from(
             validate_asset_header(asset, &target)?;
         }
     }
+    writes.extend(crate::migration::backup(&path)?);
     writes.push((
         path.clone(),
         serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?,

@@ -1,0 +1,116 @@
+{
+  "schema_version": 2,
+  "id": "00b22e36-5347-4a00-b00c-9c6aa9ab896b",
+  "name": "Guia · Primeiro comportamento",
+  "start_scene": "4e823456-f60f-4ce0-bd83-af8f5fd6ddc3",
+  "scenes": [
+    {
+      "id": "4e823456-f60f-4ce0-bd83-af8f5fd6ddc3",
+      "name": "Cena 2D",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "bfe812bc-e825-4059-8596-bbf09a74b519",
+          "name": "Objeto responsável",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            2.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "527b0650-8d44-4640-8c6b-2fce84c6e2a8",
+                "operation": "event.input",
+                "position": [
+                  60.0,
+                  80.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "aa93589e-96fd-4472-a624-f0489d382c8a"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "ab475a72-324b-4637-ba56-061ff5d4d228",
+                "operation": "debug.message",
+                "position": [
+                  350.0,
+                  80.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Minha primeira ação funciona!"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "527b0650-8d44-4640-8c6b-2fce84c6e2a8",
+                "from_port": "exec",
+                "to_node": "ab475a72-324b-4637-ba56-061ff5d4d228",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {
+    "aa93589e-96fd-4472-a624-f0489d382c8a": "K"
+  },
+  "input_labels": {
+    "aa93589e-96fd-4472-a624-f0489d382c8a": "Mostrar mensagem"
+  }
+}

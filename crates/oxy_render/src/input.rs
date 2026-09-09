@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 struct CaptureState {
     suppressed: HashSet<Key>,
     enabled: bool,
+    active: HashSet<Key>,
 }
 
 pub fn text_input_active(ctx: &Context) -> bool {
@@ -41,6 +42,7 @@ pub fn collect_input(
     });
     state.suppressed.retain(|key| down.contains(key));
     let mut ordinary_pressed = HashSet::new();
+    let mut ordinary_released = HashSet::new();
     for event in events {
         if let Event::Key {
             key,
@@ -55,6 +57,8 @@ pub fn collect_input(
                 state.suppressed.insert(key);
             } else if pressed && !repeat {
                 ordinary_pressed.insert(key);
+            } else if !pressed {
+                ordinary_released.insert(key);
             }
         }
     }
@@ -63,6 +67,7 @@ pub fn collect_input(
         state.suppressed.extend(down.iter().copied());
         state.suppressed.extend(ordinary_pressed.iter().copied());
         state.enabled = false;
+        state.active.clear();
         ctx.data_mut(|data| data.insert_temp(state_id, state));
         return InputFrame::default();
     }
@@ -89,7 +94,16 @@ pub fn collect_input(
         if ordinary_pressed.contains(&key) {
             frame.pressed.insert(action.clone());
         }
+        if ordinary_released.contains(&key)
+            && (state.active.contains(&key) || ordinary_pressed.contains(&key))
+        {
+            frame.released.insert(action.clone());
+        }
     }
+    state.active = down
+        .into_iter()
+        .filter(|k| !state.suppressed.contains(k))
+        .collect();
     ctx.data_mut(|data| data.insert_temp(state_id, state));
     frame
 }
@@ -97,6 +111,60 @@ pub fn collect_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_transition_is_once_and_inactive_keys_do_not_replay() {
+        let ctx = Context::default();
+        let keys = bindings();
+        let pressed = frame(
+            &ctx,
+            &keys,
+            true,
+            Modifiers::NONE,
+            vec![key(Key::J, true, Modifiers::NONE)],
+        );
+        assert!(pressed.pressed("atacar"));
+        assert!(pressed.released.is_empty());
+        let released = frame(
+            &ctx,
+            &keys,
+            true,
+            Modifiers::NONE,
+            vec![key(Key::J, false, Modifiers::NONE)],
+        );
+        assert!(released.released.contains("atacar"));
+        assert!(
+            frame(&ctx, &keys, true, Modifiers::NONE, vec![])
+                .released
+                .is_empty()
+        );
+        frame(
+            &ctx,
+            &keys,
+            false,
+            Modifiers::NONE,
+            vec![key(Key::J, true, Modifiers::NONE)],
+        );
+        let resumed = frame(
+            &ctx,
+            &keys,
+            true,
+            Modifiers::NONE,
+            vec![key(Key::J, false, Modifiers::NONE)],
+        );
+        assert!(resumed.released.is_empty() && resumed.pressed.is_empty());
+        let fast = frame(
+            &ctx,
+            &keys,
+            true,
+            Modifiers::NONE,
+            vec![
+                key(Key::J, true, Modifiers::NONE),
+                key(Key::J, false, Modifiers::NONE),
+            ],
+        );
+        assert!(fast.pressed("atacar") && fast.released.contains("atacar"));
+    }
 
     fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
         Event::Key {

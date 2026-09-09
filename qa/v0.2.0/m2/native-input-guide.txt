@@ -1,0 +1,48 @@
+Concluído: true
+Erro: None
+Clique: Guia de lógica visual
+Captura GPU da janela: guide-first.png
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Clique: Abrir cópia da receita: primeira mensagem
+Verificado: m2_recipe
+Clique: Ações de entrada
+Clique: Mostrar mensagem
+Tecla A, Ctrl=true
+Digitar: Mensagem local
+Tecla Enter, Ctrl=false
+Clique: K
+Clique: L
+Verificado: m2_binding
+Clique: Excluir ação
+Verificado: m2_refused
+Captura GPU da janela: input-actions.png
+Clique: Cancelar exclusão
+Clique: Fechar ações de entrada
+Selecionar nó: Ação de entrada
+Clique: ▶ Jogar
+Manter L por 40 quadros
+Reproduzir 20 quadros sem entrada
+Verificado: m2_pressed
+Clique: ■ Parar
+Clique: Pressionar
+Clique: Manter
+Clique: ▶ Jogar
+Manter L por 40 quadros
+Reproduzir 20 quadros sem entrada
+Verificado: m2_held
+Clique: ■ Parar
+Clique: Manter
+Clique: Soltar
+Clique: ▶ Jogar
+Manter L por 40 quadros
+Reproduzir 20 quadros sem entrada
+Verificado: m2_released
+Clique: ■ Parar
+Clique: Guia de lógica visual
+Clique: Buscar operação ou assunto
+Digitar: Esperar
+Clique: Esperar sem bloquear
+Captura GPU da janela: guide-node.png
+Tecla Escape, Ctrl=false
+Capturas: ["guide-first.png", "input-actions.png", "guide-node.png"]

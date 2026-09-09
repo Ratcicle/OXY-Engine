@@ -161,6 +161,9 @@ impl Editor {
                     ui.horizontal_wrapped(|ui| {
                         self.interface_button(ui);
                         self.notices_button(ui);
+                        if ui.button("Guia de lógica visual").clicked() {
+                            self.open_guide("");
+                        }
                         if ui.button("Console").clicked() {
                             self.console = !self.console;
                         }

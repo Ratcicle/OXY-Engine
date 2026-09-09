@@ -5,7 +5,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub type Id = String;
 pub fn new_id() -> Id {
     uuid::Uuid::new_v4().to_string()
@@ -144,6 +144,8 @@ impl Default for Collider {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Controller {
+    #[serde(default)]
+    pub actions: crate::input_actions::MovementActions,
     pub speed: f32,
     pub jump: f32,
     pub gravity: f32,
@@ -152,6 +154,7 @@ pub struct Controller {
 impl Default for Controller {
     fn default() -> Self {
         Self {
+            actions: Default::default(),
             speed: 5.,
             jump: 8.,
             gravity: 22.,
@@ -219,6 +222,7 @@ impl Default for UiElement {
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Entity {
     pub id: Id,
     pub name: String,
@@ -528,6 +532,7 @@ pub struct Asset {
     pub model: Option<Vec<Entity>>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Project {
     pub schema_version: u32,
     pub id: Id,
@@ -536,6 +541,8 @@ pub struct Project {
     pub scenes: Vec<Scene>,
     pub assets: Vec<Asset>,
     pub input_bindings: BTreeMap<String, String>,
+    #[serde(default)]
+    pub input_labels: BTreeMap<String, String>,
 }
 impl Project {
     pub fn new(name: impl Into<String>) -> Self {
@@ -547,6 +554,7 @@ impl Project {
             start_scene: scene.id.clone(),
             scenes: vec![scene],
             assets: Vec::new(),
+            input_labels: BTreeMap::new(),
             input_bindings: BTreeMap::from([
                 ("mover_esquerda".into(), "A".into()),
                 ("mover_direita".into(), "D".into()),
@@ -660,6 +668,14 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
     }
     if project.id.is_empty() || project.name.trim().is_empty() {
         return Err("Projeto deve possuir identificador e nome".into());
+    }
+    if project.input_bindings.len() > 1024 || project.input_labels.len() > 1024 {
+        return Err("Limite de 1024 ações de entrada excedido.".into());
+    }
+    for (id, name) in &project.input_labels {
+        if !project.input_bindings.contains_key(id) || name.trim().is_empty() {
+            return Err(format!("Nome de ação sem vínculo válido: {id}"));
+        }
     }
     let mut identifiers = HashSet::new();
     identifiers.insert(project.id.clone());

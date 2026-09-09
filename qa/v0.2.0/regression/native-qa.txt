@@ -86,7 +86,7 @@ Captura GPU da janela: animation.png
 Redimensionar: [920.0 600.0]
 Clique: Enquadrar
 Captura GPU da janela: animation-small.png
-Animação 920×600: viewport 524×146 pontos
+Animação 920×600: viewport 524×102 pontos
 Verificado: animation_small_layout
 Clique: + Quadro-chave
 Verificado: key_created

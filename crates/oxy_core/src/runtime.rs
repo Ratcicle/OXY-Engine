@@ -21,6 +21,7 @@ pub const MAX_NODE_WORK: usize = 1024;
 pub struct InputFrame {
     pub held: BTreeSet<String>,
     pub pressed: BTreeSet<String>,
+    pub released: BTreeSet<String>,
 }
 impl InputFrame {
     pub fn held(&self, action: &str) -> bool {
@@ -35,6 +36,8 @@ impl InputFrame {
 pub enum RuntimeEvent {
     SceneStart,
     Input(String),
+    InputHeld(String),
+    InputReleased(String),
     Click(Id),
     AreaEnter {
         area: Id,
@@ -87,6 +90,8 @@ pub struct Runtime {
     source: Project,
     accumulator: f32,
     pending_pressed: BTreeSet<String>,
+    pending_released: BTreeSet<String>,
+    input_modes: OnceLock<BTreeMap<String, u8>>,
     ready: VecDeque<Task>,
     waiting: Vec<Task>,
     bodies: HashMap<Id, BodyState>,
@@ -119,6 +124,8 @@ impl Runtime {
             source: project.clone(),
             accumulator: 0.0,
             pending_pressed: BTreeSet::new(),
+            pending_released: BTreeSet::new(),
+            input_modes: OnceLock::new(),
             ready: VecDeque::new(),
             waiting: Vec::new(),
             bodies: HashMap::new(),
@@ -165,6 +172,7 @@ impl Runtime {
     pub fn scene_mut(&mut self) -> &mut Scene {
         self.index.take();
         self.graphs.clear();
+        self.input_modes.take();
         self.scene_mut_internal()
     }
     fn scene_mut_internal(&mut self) -> &mut Scene {
@@ -192,6 +200,7 @@ impl Runtime {
         self.paused = paused;
         self.accumulator = 0.0;
         self.pending_pressed.clear();
+        self.pending_released.clear();
     }
     pub fn stop(&mut self) {
         self.stopped = true;
@@ -215,12 +224,14 @@ impl Runtime {
         if self.stopped || self.paused {
             self.accumulator = 0.0;
             self.pending_pressed.clear();
+            self.pending_released.clear();
             return;
         }
         if !elapsed.is_finite() || elapsed < 0.0 {
             return;
         }
         self.pending_pressed.extend(input.pressed.iter().cloned());
+        self.pending_released.extend(input.released.iter().cloned());
         self.accumulator = (self.accumulator + elapsed.min(0.25)).min(FIXED_DT * MAX_STEPS as f32);
         let mut steps = 0;
         let mut budget = MAX_NODE_WORK;
@@ -228,6 +239,7 @@ impl Runtime {
             let frame = InputFrame {
                 held: input.held.clone(),
                 pressed: std::mem::take(&mut self.pending_pressed),
+                released: std::mem::take(&mut self.pending_released),
             };
             self.fixed_step(&frame, &mut budget);
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
@@ -241,6 +253,16 @@ impl Runtime {
         for action in &input.pressed {
             self.emit(RuntimeEvent::Input(action.clone()));
         }
+        for action in &input.held {
+            if self.input_mode_used(action, 1) {
+                self.emit(RuntimeEvent::InputHeld(action.clone()));
+            }
+        }
+        for action in &input.released {
+            if self.input_mode_used(action, 2) {
+                self.emit(RuntimeEvent::InputReleased(action.clone()));
+            }
+        }
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
         crate::metrics::timed(|| self.move_controllers(input), |c, ns| c.movement_ns += ns);
         crate::metrics::timed(|| self.advance_animations(), |c, ns| c.animation_ns += ns);
@@ -253,6 +275,25 @@ impl Runtime {
         if self.logs.len() > 500 {
             self.logs.drain(..100);
         }
+    }
+    fn input_mode_used(&self, action: &str, bit: u8) -> bool {
+        let modes = self.input_modes.get_or_init(|| {
+            let mut result = BTreeMap::new();
+            for entity in &self.scene().entities {
+                for node in &entity.graph.nodes {
+                    if node.operation == "event.input" {
+                        let mode = match node.text("mode") {
+                            "held" => 1,
+                            "released" => 2,
+                            _ => 0,
+                        };
+                        *result.entry(node.text("action").to_owned()).or_insert(0) |= mode;
+                    }
+                }
+            }
+            result
+        });
+        modes.get(action).is_some_and(|m| m & bit != 0)
     }
     fn next_serial(&mut self) -> u64 {
         self.serial = self.serial.wrapping_add(1).max(1);
@@ -308,7 +349,19 @@ impl Runtime {
                 let matches = match &event {
                     RuntimeEvent::SceneStart => node.operation == "event.scene_start",
                     RuntimeEvent::Input(action) => {
-                        node.operation == "event.input" && node.text("action") == action
+                        node.operation == "event.input"
+                            && node.text("action") == action
+                            && matches!(node.text("mode"), "" | "pressed")
+                    }
+                    RuntimeEvent::InputHeld(action) => {
+                        node.operation == "event.input"
+                            && node.text("action") == action
+                            && node.text("mode") == "held"
+                    }
+                    RuntimeEvent::InputReleased(action) => {
+                        node.operation == "event.input"
+                            && node.text("action") == action
+                            && node.text("mode") == "released"
                     }
                     RuntimeEvent::Click(id) => entity.id == *id && node.operation == "event.click",
                     RuntimeEvent::AreaEnter { area, .. } => {
@@ -700,6 +753,7 @@ impl Runtime {
             "action.spawn" => {
                 let template = self.target(&graph, node, &context, budget, 0)?;
                 self.index.take();
+                self.input_modes.take();
                 let root = self.scene_mut_internal().duplicate_subtree(&template)?;
                 // The editor duplicate offset is not part of a runtime spawn's explicit offset.
                 let delta = Vec3::new(
@@ -779,6 +833,7 @@ impl Runtime {
     pub fn remove_object(&mut self, id: &str) {
         let ids: HashSet<_> = self.scene().descendants(id).into_iter().collect();
         self.index.take();
+        self.input_modes.take();
         self.scene_mut_internal().remove_subtree(id);
         self.graphs.retain(|owner, _| !ids.contains(owner));
         self.area_hits.retain(|owner, _| !ids.contains(owner));
@@ -799,6 +854,7 @@ impl Runtime {
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();
+        self.input_modes.take();
         self.graphs.clear();
         let scene = self
             .source
@@ -820,6 +876,7 @@ impl Runtime {
         self.damage_hits.clear();
         self.area_hits.clear();
         self.pending_pressed.clear();
+        self.pending_released.clear();
         self.sounds.clear();
         self.emit(RuntimeEvent::SceneStart);
         Ok(())
@@ -871,17 +928,18 @@ impl Runtime {
         );
         for (id, controller) in controllers {
             let mut body_state = self.bodies.get(&id).copied().unwrap_or_default();
-            let horizontal =
-                i32::from(input.held("mover_direita")) - i32::from(input.held("mover_esquerda"));
+            let horizontal = i32::from(input.held(&controller.actions.right))
+                - i32::from(input.held(&controller.actions.left));
             body_state.velocity.x = horizontal as f32 * controller.speed;
             body_state.velocity.z = if dimensions == 3 {
-                (i32::from(input.held("mover_tras")) - i32::from(input.held("mover_frente"))) as f32
+                (i32::from(input.held(&controller.actions.back))
+                    - i32::from(input.held(&controller.actions.forward))) as f32
                     * controller.speed
             } else {
                 0.0
             };
             body_state.velocity.y -= controller.gravity * FIXED_DT;
-            if input.pressed("pular") && body_state.grounded {
+            if input.pressed(&controller.actions.jump) && body_state.grounded {
                 body_state.velocity.y = controller.jump;
                 body_state.grounded = false;
             }
@@ -1163,6 +1221,7 @@ mod tests {
         let input = InputFrame {
             pressed: BTreeSet::from(["pular".into()]),
             held: BTreeSet::new(),
+            released: BTreeSet::new(),
         };
         runtime.advance(FIXED_DT, &input);
         assert!(runtime.scene().entity(&id).unwrap().transform.position[1] > 0.5);

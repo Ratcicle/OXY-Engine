@@ -728,6 +728,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
             .unwrap();
     let mut runtime = Runtime::new(project, &platform.id)?;
     let right = InputFrame {
+        released: Default::default(),
         held: BTreeSet::from(["mover_direita".into()]),
         pressed: BTreeSet::new(),
     };
@@ -740,6 +741,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
         Value::Bool(true)
     );
     let input = InputFrame {
+        released: Default::default(),
         pressed: BTreeSet::from(["atacar".into(), "interagir".into()]),
         held: BTreeSet::new(),
     };
@@ -780,6 +782,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
     runtime.advance(
         FIXED_DT,
         &InputFrame {
+            released: Default::default(),
             pressed: BTreeSet::from(["atacar".into()]),
             held: BTreeSet::new(),
         },

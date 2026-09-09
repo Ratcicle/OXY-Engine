@@ -109,6 +109,7 @@ fn saved_2d_project_collects_opens_door_and_hits_through_marker() {
         runtime.advance(
             FIXED_DT,
             &InputFrame {
+                released: Default::default(),
                 held: BTreeSet::from(["mover_direita".into()]),
                 pressed: BTreeSet::new(),
             },
@@ -121,6 +122,7 @@ fn saved_2d_project_collects_opens_door_and_hits_through_marker() {
     runtime.advance(
         FIXED_DT,
         &InputFrame {
+            released: Default::default(),
             held: BTreeSet::new(),
             pressed: BTreeSet::from(["atacar".into(), "interagir".into()]),
         },
@@ -185,6 +187,7 @@ fn saved_textured_3d_hierarchy_uses_same_runtime_and_hit_rules() {
     runtime.advance(
         FIXED_DT,
         &InputFrame {
+            released: Default::default(),
             held: BTreeSet::new(),
             pressed: BTreeSet::from(["atacar".into()]),
         },

@@ -197,6 +197,7 @@ fn main() {
         let p = cycle_project(n);
         let mut runtime = oxy_core::runtime::Runtime::new(&p, &p.start_scene).unwrap();
         let input = oxy_core::runtime::InputFrame {
+            released: Default::default(),
             pressed: ["atacar".into()].into(),
             ..Default::default()
         };
@@ -298,6 +299,7 @@ fn main() {
         rt.advance(
             oxy_core::runtime::FIXED_DT,
             &oxy_core::runtime::InputFrame {
+                released: Default::default(),
                 pressed,
                 ..Default::default()
             },
@@ -313,6 +315,7 @@ fn main() {
     rt.advance(
         oxy_core::runtime::FIXED_DT,
         &oxy_core::runtime::InputFrame {
+            released: Default::default(),
             pressed: ["desativar_area".into()].into(),
             ..Default::default()
         },
@@ -343,6 +346,7 @@ fn main() {
             runtime.advance(
                 oxy_core::runtime::FIXED_DT,
                 &oxy_core::runtime::InputFrame {
+                    released: Default::default(),
                     held: ["mover_direita".into()].into(),
                     pressed: if mode.starts_with("graph") {
                         ["atacar".into()].into()

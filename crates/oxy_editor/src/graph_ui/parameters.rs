@@ -199,12 +199,28 @@ pub(super) fn parameter_editor(
                     .map(|(action, key)| {
                         (
                             action.clone(),
-                            format!("{action} · {}", crate::labels::key(key)),
+                            format!(
+                                "{} · {}",
+                                oxy_core::input_actions::label(context.project, action),
+                                crate::labels::key(key)
+                            ),
                         )
                     })
                     .collect();
                 named_choice(ui, selected, &choices, salt.clone());
-                ui.small("A tecla é definida nos mapeamentos de entrada do projeto.");
+                specialized = true;
+            }
+            ("event.input", "mode") => {
+                enum_choice(
+                    ui,
+                    selected,
+                    &[
+                        ("pressed", "Pressionar"),
+                        ("held", "Manter"),
+                        ("released", "Soltar"),
+                    ],
+                    salt.clone(),
+                );
                 specialized = true;
             }
             ("action.component", "component") => {
