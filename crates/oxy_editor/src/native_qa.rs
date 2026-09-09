@@ -3,6 +3,7 @@
 use crate::app::{Editor, Snapshot, Tab};
 mod input_guide;
 mod mesh;
+mod modeling;
 mod portable;
 mod spatial;
 mod ux;
@@ -31,6 +32,7 @@ enum Action {
     Key(Key, bool),
     Chord(Key, Modifiers),
     ComponentClick([f32; 3], bool),
+    WorldClick([f32; 3]),
     ComponentBox,
     Hold(Key, usize),
     Wait(usize),
@@ -513,6 +515,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("m4_") {
+            return self.check_modeling(label);
+        }
         if label.starts_with("m3_") {
             return self.check_mesh(label);
         }
@@ -1717,6 +1722,18 @@ impl NativeQa {
                     }]);
                 }
                 description = "Selecionar componente pelo ponto projetado na janela".into();
+            }
+            Action::WorldClick(world) => {
+                let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;
+                let p = oxy_render::collider_debug::project(
+                    &self.editor.camera,
+                    rect,
+                    glam::Vec3::from(world),
+                )
+                .filter(|p| rect.contains(*p))
+                .ok_or("Ponto fora do viewport")?;
+                self.click(p);
+                description = "Escolher ponto do mundo pelo mouse no viewport".into();
             }
             Action::ComponentBox => {
                 let rect = self.surface.native_viewport.ok_or("Viewport ausente")?;

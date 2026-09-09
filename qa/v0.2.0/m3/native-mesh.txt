@@ -28,6 +28,7 @@ Verificado: m3_redo
 Tecla Num4, Ctrl=false
 Tecla A, Ctrl=true
 Verificado: m3_vertices
+Clique: Enquadrar
 Selecionar componentes com uma caixa no viewport
 Verificado: m3_visible_vertices
 Atalho X com Modifiers { shift: true }

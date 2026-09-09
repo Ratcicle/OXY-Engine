@@ -241,6 +241,7 @@ fn native_mesh_foundation_workflow() {
                 Action::Key(Key::Num4, false),
                 Action::Key(Key::A, true),
                 Action::Check("m3_vertices"),
+                Action::Click("Enquadrar"),
                 Action::ComponentBox,
                 Action::Check("m3_visible_vertices"),
                 Action::Chord(Key::X, Modifiers::SHIFT),

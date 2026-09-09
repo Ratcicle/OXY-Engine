@@ -80,6 +80,11 @@ impl Editor {
         self.last_object_click = if plain { id } else { None };
     }
     fn transform_tool_buttons(&mut self, ui: &mut egui::Ui) {
+        ui.add_enabled_ui(!self.mesh_operation_active(), |ui| {
+            self.draw_transform_tool_buttons(ui)
+        });
+    }
+    fn draw_transform_tool_buttons(&mut self, ui: &mut egui::Ui) {
         for (tool, label) in [
             (Gizmo::Move, "Mover (W)"),
             (Gizmo::Rotate, "Girar (E)"),

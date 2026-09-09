@@ -93,7 +93,10 @@ impl Editor {
         }
     }
     pub(super) fn properties(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::right("properties").default_width((ctx.content_rect().width()*0.23).clamp(140.,290.)).width_range(130.0..=(ctx.content_rect().width()*0.32).clamp(140.,460.)).resizable(true).show(ctx,|ui| { if self.mesh_operation_active(){ui.disable();}
+        egui::SidePanel::right("properties").default_width((ctx.content_rect().width()*0.23).clamp(140.,290.)).width_range(130.0..=(ctx.content_rect().width()*0.32).clamp(140.,460.)).resizable(true).show(ctx,|ui| {
+            if self.modeling.preview.is_some(){egui::ScrollArea::vertical().show(ui,|ui|self.mesh_preview_panel(ui));return;}
+            if self.snap_panel(ui){return;}
+            if self.mesh_operation_active(){ui.disable();}
             ui.strong("PROPRIEDADES");ui.separator();
             egui::ScrollArea::vertical().show(ui,|ui| {
                 let Some(id)=self.selected.clone() else {

@@ -1,8 +1,11 @@
 //! Authored polygon topology. GPU triangles, indices and cache identity are derived only.
+pub mod atlas;
 pub mod edit;
+pub mod operations;
 pub mod primitives;
 pub mod ray;
 pub mod selection;
+pub mod snap;
 mod triangulate;
 
 use glam::{Vec2, Vec3};

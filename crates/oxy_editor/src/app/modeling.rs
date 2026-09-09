@@ -1,6 +1,8 @@
 //! Mesh editing context. Previews share the normal scene renderer and commit one history delta.
 use super::*;
 mod creation;
+mod snapping;
+mod topology;
 mod viewport;
 use glam::Mat4;
 use oxy_core::geometry::{
@@ -26,6 +28,7 @@ pub(super) struct ModelState {
     box_start: Option<Pos2>,
     pub help: bool,
     global: bool,
+    snap: Option<snapping::Snap>,
 }
 pub(super) struct Creation {
     candidate: Entity,
@@ -41,6 +44,9 @@ enum Operation {
     Transform(Gizmo),
     Delete,
     Triangulate,
+    Extrude,
+    Create,
+    Flip,
 }
 pub(super) struct Preview {
     entity: Id,
@@ -55,6 +61,11 @@ pub(super) struct Preview {
     keep_edges: bool,
     error: Option<String>,
     drag: Option<Drag>,
+    per_face: bool,
+    texture: Option<(Id, [u32; 2])>,
+    expanded_texture: Option<Id>,
+    allow_expansion: bool,
+    needs_space: bool,
 }
 struct Drag {
     axis: Option<usize>,
@@ -78,7 +89,9 @@ impl Editor {
         )
     }
     pub(crate) fn mesh_operation_active(&self) -> bool {
-        self.modeling.preview.is_some() || self.modeling.creation.is_some()
+        self.modeling.preview.is_some()
+            || self.modeling.creation.is_some()
+            || self.modeling.snap.is_some()
     }
     pub(super) fn modeling_active(&self) -> bool {
         self.tab == Tab::Studio && self.studio.tab == StudioTab::Model
@@ -125,7 +138,7 @@ impl Editor {
         Ok(mesh)
     }
     fn model_mode(&mut self, mode: Mode) {
-        if self.modeling.preview.is_some() {
+        if self.mesh_operation_active() {
             self.warn("Confirme ou cancele a operação antes de trocar de modo.");
             return;
         }
@@ -164,32 +177,38 @@ impl Editor {
                 ));
             }
         }
-        if self.components_active() && self.modeling.preview.is_none() {
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        !self.modeling.selection.ids.is_empty(),
-                        egui::Button::new("Transformar seleção"),
-                    )
-                    .clicked()
-                {
-                    self.begin_mesh_operation(Operation::Transform(self.gizmo));
-                }
-                ui.menu_button("Componentes", |ui| {
-                    if ui.button("Excluir componentes").clicked() {
-                        self.begin_mesh_operation(Operation::Delete);
-                        ui.close();
+        if self.components_active() {
+            ui.add_enabled_ui(self.modeling.preview.is_none(), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.modeling.selection.ids.is_empty(),
+                            egui::Button::new("Transformar seleção"),
+                        )
+                        .clicked()
+                    {
+                        self.begin_mesh_operation(Operation::Transform(self.gizmo));
                     }
-                    if ui.button("Triangular faces").clicked() {
-                        self.begin_mesh_operation(Operation::Triangulate);
-                        ui.close();
-                    }
+                    ui.menu_button("Componentes", |ui| {
+                        self.topology_menu(ui);
+                        if ui.button("Excluir componentes").clicked() {
+                            self.begin_mesh_operation(Operation::Delete);
+                            ui.close();
+                        }
+                        if ui.button("Triangular faces").clicked() {
+                            self.begin_mesh_operation(Operation::Triangulate);
+                            ui.close();
+                        }
+                    });
                 });
             });
         }
-        self.mesh_preview_panel(ui);
+        self.topology_toolbar(ui);
     }
     fn convert_selected_mesh(&mut self) {
+        if self.mesh_operation_active() {
+            return;
+        }
         if !self.studio.animation.drafts.is_empty() || self.studio.playing {
             self.warn("Pause e grave ou descarte a pose provisória antes de editar a geometria na pose-base.");
             return;
@@ -247,6 +266,19 @@ impl Editor {
             .filter_map(|id| source.position(*id))
             .sum::<Vec3>()
             / vertices.len().max(1) as f32;
+        let texture = self
+            .scene()
+            .entity(&id)
+            .and_then(|e| e.material.texture.clone());
+        let texture = if let Some(texture) = texture {
+            if !self.ensure_texture(&texture) {
+                return;
+            }
+            let image = self.state.images.get(&texture).unwrap();
+            Some((texture, [image.width, image.height]))
+        } else {
+            None
+        };
         self.finish_history(true);
         self.history.begin(
             "Editar componentes da malha",
@@ -259,7 +291,26 @@ impl Editor {
             self.warn(e);
             return;
         }
-        let values = if operation == Operation::Transform(Gizmo::Scale) {
+        let values = if operation == Operation::Extrude {
+            let normal = if self.modeling.selection.mode == Mode::Face {
+                self.modeling
+                    .selection
+                    .ids
+                    .iter()
+                    .filter_map(|id| source.prepared().faces.get(id))
+                    .map(|&i| source.prepared().face_normals[i])
+                    .sum::<Vec3>()
+                    .normalize_or_zero()
+            } else {
+                Vec3::Y
+            };
+            (if normal.length_squared() > 0.5 {
+                normal
+            } else {
+                Vec3::Y
+            } * 0.25)
+                .to_array()
+        } else if operation == Operation::Transform(Gizmo::Scale) {
             [1.; 3]
         } else {
             [0.; 3]
@@ -277,6 +328,11 @@ impl Editor {
             keep_edges: true,
             error: None,
             drag: None,
+            per_face: false,
+            texture,
+            expanded_texture: None,
+            allow_expansion: false,
+            needs_space: false,
         });
         self.update_mesh_preview();
     }
@@ -288,6 +344,13 @@ impl Editor {
             return;
         }
         preview.previous = preview.values;
+        if matches!(
+            preview.operation,
+            Operation::Extrude | Operation::Create | Operation::Flip
+        ) {
+            self.update_topology_preview();
+            return;
+        }
         let center = if preview.global {
             preview.world.transform_point3(preview.center)
         } else {
@@ -328,6 +391,7 @@ impl Editor {
             Operation::Triangulate => {
                 oxy_core::geometry::edit::triangulate(&preview.source, &preview.selection)
             }
+            _ => unreachable!(),
         };
         match result {
             Ok(mesh) => {
@@ -348,6 +412,13 @@ impl Editor {
                 }
             });
         }
+        if let Some(snap) = self.modeling.snap.take() {
+            self.history
+                .cancel(&mut self.state.project, &mut self.state.images);
+            self.selection = snap.selection;
+            self.selected = snap.selected;
+            return true;
+        }
         if let Some(creation) = self.modeling.creation.take() {
             self.history
                 .cancel(&mut self.state.project, &mut self.state.images);
@@ -357,6 +428,10 @@ impl Editor {
             return true;
         }
         if let Some(preview) = self.modeling.preview.take() {
+            if let Some(id) = &preview.expanded_texture {
+                self.renderer.clear_texture_override(id);
+                self.game_ui.clear_texture_override(id);
+            }
             self.history
                 .cancel(&mut self.state.project, &mut self.state.images);
             self.modeling.selection = preview.selection;
@@ -384,7 +459,7 @@ impl Editor {
         self.finish_history(true);
         let _ = self.model_source();
     }
-    fn mesh_preview_panel(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn mesh_preview_panel(&mut self, ui: &mut egui::Ui) {
         let Some(preview) = self.modeling.preview.as_mut() else {
             return;
         };
@@ -397,8 +472,13 @@ impl Editor {
                 Operation::Transform(Gizmo::Scale) => "Prévia: escalar componentes",
                 Operation::Delete => "Prévia: excluir componentes",
                 Operation::Triangulate => "Prévia: triangular faces",
+                Operation::Extrude=>"Prévia: extrudir seleção",
+                Operation::Create=>"Prévia: criar face ou aresta",
+                Operation::Flip=>"Prévia: inverter orientação",
             });
-            if let Operation::Transform(tool) = preview.operation {
+            if matches!(preview.operation,Operation::Transform(_)|Operation::Extrude) {
+                let tool=if let Operation::Transform(t)=preview.operation {t}else{Gizmo::Move};
+                if preview.operation==Operation::Extrude {ui.label("Direção × distância (local)").on_hover_text("Os três valores definem o deslocamento. Em regiões não planas, todas as faces seguem esta mesma direção explícita.");}
                 ui.horizontal_wrapped(|ui| {
                     for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                         ui.add(
@@ -408,6 +488,11 @@ impl Editor {
                         );
                     }
                 });
+            }
+            if preview.operation==Operation::Extrude && preview.selection.mode==Mode::Face && ui.checkbox(&mut preview.per_face,"Por face independente").changed(){preview.previous=[f32::NAN;3];}
+            if preview.needs_space || preview.allow_expansion {
+                ui.label("A pintura original será preservada. A ampliação cria uma textura independente para esta peça.");
+                if ui.checkbox(&mut preview.allow_expansion,"Criar cópia ampliada (2×)").changed(){preview.previous=[f32::NAN;3];}
             }
             if preview.operation == Operation::Delete
                 && ui
@@ -443,6 +528,13 @@ impl Editor {
         if self.modeling.preview.is_some() {
             return true;
         }
+        if self.modeling.snap.is_some() {
+            return true;
+        }
+        if ctx.input(|i| i.modifiers == egui::Modifiers::SHIFT && i.key_pressed(egui::Key::V)) {
+            self.begin_snap();
+            return true;
+        }
         if ctx.input(|i| i.modifiers.is_none()) {
             for (key, mode) in [
                 (egui::Key::Num1, Mode::Object),
@@ -457,6 +549,16 @@ impl Editor {
             }
         }
         if self.components_active() {
+            for (key, operation) in [
+                (egui::Key::E, Operation::Extrude),
+                (egui::Key::F, Operation::Create),
+                (egui::Key::N, Operation::Flip),
+            ] {
+                if ctx.input(|i| i.modifiers == egui::Modifiers::SHIFT && i.key_pressed(key)) {
+                    self.begin_mesh_operation(operation);
+                    return true;
+                }
+            }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::I)) {
                 if let Ok(mesh) = self.model_source() {
                     self.modeling.selection.invert(&mesh);

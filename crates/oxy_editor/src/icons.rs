@@ -9,6 +9,10 @@ pub enum Icon {
     Move,
     Rotate,
     Scale,
+    Extrude,
+    Create,
+    Flip,
+    Snap,
 }
 pub fn button(
     ui: &mut Ui,
@@ -73,6 +77,47 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
         p.line_segment([a, b], Stroke::new(1.3, color));
     };
     match icon {
+        Icon::Extrude => {
+            for y in [0.45, 0.9] {
+                p.rect_stroke(
+                    Rect::from_min_max(at(0.1, y - 0.3), at(0.7, y)),
+                    0.,
+                    Stroke::new(1.3, color),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            line(at(0.1, 0.45), at(0.1, 0.9));
+            line(at(0.7, 0.45), at(0.7, 0.9));
+            p.arrow(
+                at(0.9, 0.85),
+                at(0.9, 0.05) - at(0.9, 0.85),
+                Stroke::new(1.5, color),
+            );
+        }
+        Icon::Create => {
+            let v = [at(0.1, 0.85), at(0.8, 0.85), at(0.7, 0.1)];
+            for i in 0..3 {
+                line(v[i], v[(i + 1) % 3]);
+                p.circle_filled(v[i], 2., color);
+            }
+            line(at(0.1, 0.2), at(0.4, 0.2));
+            line(at(0.25, 0.05), at(0.25, 0.35));
+        }
+        Icon::Flip => {
+            line(at(0.5, 0.15), at(0.5, 0.85));
+            for (a, b) in [(at(0.1, 0.3), at(0.9, 0.3)), (at(0.9, 0.7), at(0.1, 0.7))] {
+                p.arrow(a, b - a, Stroke::new(1.4, color));
+            }
+        }
+        Icon::Snap => {
+            p.circle_stroke(at(0.15, 0.75), 3., Stroke::new(1.4, color));
+            p.circle_filled(at(0.8, 0.25), 3., color);
+            p.arrow(
+                at(0.3, 0.65),
+                at(0.7, 0.35) - at(0.3, 0.65),
+                Stroke::new(1.4, color),
+            );
+        }
         Icon::Object | Icon::Face | Icon::Edge | Icon::Vertex => {
             let points = [
                 at(0.05, 0.25),

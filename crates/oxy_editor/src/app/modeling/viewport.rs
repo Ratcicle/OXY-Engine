@@ -26,6 +26,9 @@ impl Editor {
         rect: Rect,
         response: &egui::Response,
     ) -> bool {
+        if self.snap_viewport(ui, scene, rect, response) {
+            return true;
+        }
         if !self.components_active() {
             return false;
         }
@@ -239,6 +242,7 @@ impl Editor {
                 .click(hovered, ui.input(|i| i.modifiers.ctrl));
         }
         response.context_menu(|ui| {
+            self.topology_menu(ui);
             if ui.button("Transformar seleção").clicked() {
                 self.begin_mesh_operation(Operation::Transform(self.gizmo));
                 ui.close();
