@@ -13,7 +13,7 @@ fn legacy_load_never_writes_and_save_keeps_exact_backup_and_ids() {
     let bytes = serde_json::to_vec_pretty(&original).unwrap();
     std::fs::write(&file, &bytes).unwrap();
     let converted = persistence::load_project_lazy(&file).unwrap();
-    assert_eq!(converted.schema_version, 2);
+    assert_eq!(converted.schema_version, SCHEMA_VERSION);
     assert_eq!(converted.id, original.id);
     assert_eq!(converted.scenes, original.scenes);
     assert_eq!(converted.input_bindings, original.input_bindings);

@@ -174,6 +174,7 @@ impl Editor {
                     self.texture_controls(ui,&mut entity,false);
                 });}
                 ui.collapsing("Componentes",|ui| {
+                    if self.scene().kind==SceneKind::ThreeD {self.physics_properties(ui,&mut entity);}
                     component_switch(ui,"Colisão / área",&mut entity.collider,Collider{size:entity.dimensions,..Default::default()});
                     if let Some(c)=&mut entity.collider{ui.checkbox(&mut c.enabled,"Colisor ativo");ui.checkbox(&mut c.is_trigger,"Área de detecção").on_hover_text("Área detecta entradas sem bloquear movimento. Desativada, esta caixa é um colisor sólido.");vector3(ui,"Tamanho da caixa",&mut c.size,0.05,true);c.size=c.size.map(|v|v.max(0.0001));vector3(ui,"Deslocamento",&mut c.offset,0.05,false);ui.small("Caixa alinhada aos eixos").on_hover_text("Girar a aparência não gira a caixa física. Não é uma colisão precisa da malha.");}
                     if entity.collider.is_some(){

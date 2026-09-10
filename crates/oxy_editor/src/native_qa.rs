@@ -9,6 +9,7 @@ mod layout;
 mod mesh;
 mod modeling;
 mod painting;
+mod physics;
 mod portable;
 mod recipes;
 mod spatial;
@@ -567,6 +568,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("phys_") {
+            return self.check_physics(label);
+        }
         if label.starts_with("f7_") {
             return self.check_final_flow(label);
         }

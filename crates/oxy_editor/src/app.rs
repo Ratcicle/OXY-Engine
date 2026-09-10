@@ -5,6 +5,7 @@ mod library;
 mod logic;
 mod modeling;
 mod notices;
+mod physics;
 mod preferences;
 mod properties;
 mod scenes;
@@ -96,6 +97,7 @@ pub struct Editor {
     scene_dialog: Option<scenes::SceneDialog>,
     logic_ui: logic::LogicUi,
     modeling: modeling::ModelState,
+    physics_ui: physics::PhysicsUi,
     compact_panel: CompactPanel,
     pub state: Snapshot,
     history: CommandHistory,
@@ -211,6 +213,7 @@ impl Editor {
             scene_dialog: None,
             logic_ui: Default::default(),
             modeling: Default::default(),
+            physics_ui: Default::default(),
             compact_panel: Default::default(),
             history: CommandHistory::new(),
             state,

@@ -9,7 +9,7 @@ rust-version = "1.92"
 license = "MIT"
 
 [workspace.dependencies]
-serde = { version = "=1.0.228", features = ["derive"] }
+serde = { version = "=1.0.228", features = ["derive", "rc"] }
 serde_json = "=1.0.145"
 uuid = { version = "=1.18.1", features = ["v4", "serde"] }
 glam = { version = "=0.30.9", features = ["serde"] }
@@ -21,6 +21,7 @@ egui-wgpu = "=0.33.3"
 bytemuck = { version = "=1.24.0", features = ["derive"] }
 rfd = "=0.15.4"
 hound = "=3.5.1"
+rapier3d = { version = "=0.35.3", default-features = false, features = ["dim3", "f32", "std"] }
 oxy_core = { path = "crates/oxy_core" }
 oxy_render = { path = "crates/oxy_render" }
 

@@ -11,7 +11,7 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), String> {
     let version = value["schema_version"]
         .as_u64()
         .ok_or("Versão de projeto ausente ou inválida")?;
-    if version != 1 && version != u64::from(SCHEMA_VERSION) {
+    if !(1..=u64::from(SCHEMA_VERSION)).contains(&version) {
         return Err(format!(
             "Versão de projeto {version} incompatível; esta OXY Engine lê 1 a {SCHEMA_VERSION}. O arquivo foi preservado."
         ));
@@ -36,6 +36,9 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), String> {
                 migrate_entities(&mut asset["model"]);
             }
         }
+    }
+    if version < u64::from(SCHEMA_VERSION) {
+        value["schema_version"] = SCHEMA_VERSION.into();
     }
     let project =
         serde_json::from_value(value).map_err(|e| format!("Documento OXY inválido: {e}"))?;

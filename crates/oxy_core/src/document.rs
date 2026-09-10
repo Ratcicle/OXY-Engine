@@ -5,7 +5,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 pub type Id = String;
 pub fn new_id() -> Id {
     uuid::Uuid::new_v4().to_string()
@@ -243,6 +243,8 @@ pub struct Entity {
     pub layer: i32,
     pub attributes: BTreeMap<String, Value>,
     pub collider: Option<Collider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physics3d: Option<crate::physics3d::Collider3d>,
     pub controller: Option<Controller>,
     pub camera: Option<Camera>,
     pub ui: Option<UiElement>,
@@ -270,6 +272,7 @@ impl Entity {
             layer: 0,
             attributes: BTreeMap::new(),
             collider: None,
+            physics3d: None,
             controller: None,
             camera: None,
             ui: None,
@@ -782,6 +785,16 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
             return Err(format!("Cor inválida: {}", e.name));
         }
         view.world_matrix(&e.id)?;
+        if let Some(collider) = &e.physics3d {
+            if scene.kind != SceneKind::ThreeD {
+                return Err(format!("{}: formas físicas 3D exigem uma cena 3D.", e.name));
+            }
+            collider
+                .validate()
+                .map_err(|error| format!("{}: {error}", e.name))?;
+            crate::physics3d::world_pose(view.world_matrix(&e.id)?)
+                .map_err(|error| format!("{}: {error}", e.name))?;
+        }
         for texture in [
             e.material.texture.as_ref(),
             e.ui.as_ref().and_then(|u| u.texture.as_ref()),

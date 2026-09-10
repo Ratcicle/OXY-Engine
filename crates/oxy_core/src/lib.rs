@@ -15,6 +15,7 @@ pub mod metrics;
 pub mod migration;
 pub mod painting;
 pub mod persistence;
+pub mod physics3d;
 mod prepared_graph;
 pub mod runtime;
 pub mod scene_view;

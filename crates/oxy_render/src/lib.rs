@@ -131,6 +131,7 @@ pub struct Renderer {
     /// Grid is normally visible for editing and disabled for gameplay.
     pub show_grid: bool,
     debug_colliders: bool,
+    physics_debug: std::cell::RefCell<Option<oxy_core::physics3d::PhysicsWorld>>,
 }
 
 impl Renderer {
@@ -230,6 +231,7 @@ impl Renderer {
             errors: Vec::new(),
             show_grid: true,
             debug_colliders: false,
+            physics_debug: Default::default(),
         }
     }
 
@@ -605,7 +607,7 @@ impl Renderer {
         selected: &[Id],
         show_disabled: bool,
     ) -> collider_debug::OverlayFrame {
-        collider_debug::draw(
+        let mut overlay = collider_debug::draw(
             ui,
             scene,
             camera,
@@ -613,7 +615,84 @@ impl Renderer {
             self.debug_colliders,
             selected,
             show_disabled,
-        )
+        );
+        if scene.entities.iter().any(|e| e.physics3d.is_some()) {
+            let mut cache = self.physics_debug.borrow_mut();
+            let world = cache.get_or_insert_with(oxy_core::physics3d::PhysicsWorld::new);
+            if let Err(error) = world.sync_scene(scene, true) {
+                overlay.errors.push(error);
+                return overlay;
+            }
+            let painter = ui.painter().with_clip_rect(rect);
+            let view = oxy_core::scene_view::SceneView::new(scene);
+            for body in world.debug_shapes() {
+                let Some(entity) = view.entity(body.id) else {
+                    continue;
+                };
+                let Some(config) = &entity.physics3d else {
+                    continue;
+                };
+                let active = selected.iter().any(|id| id == body.id);
+                if !(active || self.debug_colliders && (config.enabled || show_disabled)) {
+                    continue;
+                }
+                let color = if config.sensor {
+                    egui::Color32::YELLOW
+                } else {
+                    egui::Color32::LIGHT_GREEN
+                };
+                let color = if config.enabled {
+                    color
+                } else {
+                    color.gamma_multiply(0.45)
+                };
+                let points: Vec<_> = body
+                    .geometry
+                    .vertices
+                    .iter()
+                    .map(|p| {
+                        collider_debug::project(
+                            camera,
+                            rect,
+                            body.position + body.rotation * glam::Vec3::from(*p),
+                        )
+                    })
+                    .collect();
+                let mut edges = Vec::new();
+                for [a, b] in &body.geometry.edges {
+                    if let (Some(a), Some(b)) = (points[*a as usize], points[*b as usize]) {
+                        painter.line_segment(
+                            [a, b],
+                            egui::Stroke::new(if active { 2. } else { 1. }, color),
+                        );
+                        edges.push([a, b]);
+                    }
+                }
+                if active && let Some(center) = collider_debug::project(camera, rect, body.position)
+                {
+                    painter.text(
+                        center,
+                        egui::Align2::LEFT_BOTTOM,
+                        format!(
+                            "{} · {}{}",
+                            entity.name,
+                            if config.sensor {
+                                "Área 3D"
+                            } else {
+                                "Colisor 3D"
+                            },
+                            if config.enabled { "" } else { " · desativado" }
+                        ),
+                        egui::FontId::proportional(12.),
+                        color,
+                    );
+                }
+                overlay.outlines.push((body.id.to_owned(), edges));
+            }
+        } else {
+            self.physics_debug.borrow_mut().take();
+        }
+        overlay
     }
 }
 
