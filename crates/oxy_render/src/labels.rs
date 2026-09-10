@@ -34,6 +34,13 @@ pub fn anchor(anchor: UiAnchor) -> &'static str {
 }
 pub fn key(key: &str) -> &str {
     match key {
+        "MouseLeft" => "Botão esquerdo do mouse",
+        "MouseRight" => "Botão direito do mouse",
+        "MouseMiddle" => "Botão central do mouse",
+        "Mouse4" => "Botão lateral 1 do mouse",
+        "Mouse5" => "Botão lateral 2 do mouse",
+        "WheelUp" => "Roda para cima (impulso)",
+        "WheelDown" => "Roda para baixo (impulso)",
         "Space" => "Espaço",
         "ArrowLeft" => "Seta para a esquerda",
         "ArrowRight" => "Seta para a direita",

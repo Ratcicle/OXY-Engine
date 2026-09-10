@@ -61,6 +61,7 @@ impl Editor {
                 }
                 ui.separator();
                 ui.menu_button("Projeto", |ui| {
+                    if self.capture {self.pause();oxy_render::input::release_cursor(ctx);}
                     if ui.button("Tela inicial").clicked() {
                         self.pause();
                         self.transition(Transition::Home);

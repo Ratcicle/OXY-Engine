@@ -29,7 +29,7 @@ use oxy_core::{
     editing::{self, Selection},
     painting::PaintImage,
     persistence,
-    runtime::{InputFrame, Runtime},
+    runtime::Runtime,
     texture_cache::TextureCache,
 };
 use oxy_render::{CameraState, Renderer};
@@ -859,7 +859,16 @@ impl Editor {
         if !ui.ctx().input(|i| i.focused) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.pause();
         }
-        let input = read_input(ui.ctx(), &self.state.project, self.capture);
+        let relative = self
+            .runtime
+            .as_ref()
+            .is_some_and(Runtime::wants_relative_mouse);
+        let input = oxy_render::input::collect_game_input(
+            ui.ctx(),
+            &self.state.project.input_bindings,
+            self.capture,
+            relative,
+        );
         let available = [
             ui.available_width().max(1.) as u32,
             ui.available_height().max(1.) as u32,
@@ -870,7 +879,7 @@ impl Editor {
             rt.advance(if resized { 0. } else { dt }, &input);
         }
         let scene = self.runtime.as_ref().unwrap().scene().clone();
-        let camera = CameraState::for_game(&scene);
+        let camera = CameraState::for_runtime(self.runtime.as_ref().unwrap());
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
@@ -900,7 +909,7 @@ impl Editor {
             .draw(ui, &self.state.project, &scene, &self.root(), rect);
         self.renderer
             .draw_colliders(ui, &scene, &camera, rect, &[], self.show_disabled_colliders);
-        if self.capture {
+        if self.capture && oxy_render::input::accepts_game_click(ui.ctx()) {
             let mut targets = clicks;
             if targets.is_empty()
                 && response.clicked()
@@ -982,6 +991,9 @@ impl Editor {
 impl eframe::App for Editor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_started = Instant::now();
+        if !self.capture || self.tab != Tab::Game {
+            oxy_render::input::release_cursor(ctx);
+        }
         self.frame_interval_ms = self.last_time.elapsed().as_secs_f32() * 1000.;
         let dt = (self.frame_interval_ms / 1000.).min(0.1);
         self.last_time = Instant::now();
@@ -1043,6 +1055,10 @@ impl eframe::App for Editor {
             || self.pending.is_some()
             || self.logic_ui.inputs
             || self.logic_ui.guide;
+        if dialog_open && self.capture {
+            self.pause();
+            oxy_render::input::release_cursor(ctx);
+        }
         if !dialog_open
             && !self.mesh_operation_active()
             && !self.capture
@@ -1125,6 +1141,9 @@ impl eframe::App for Editor {
                 .begin("Gesto de edição", &self.state.project, &self.state.images);
         }
         self.toolbar(ctx);
+        if !self.capture || self.tab != Tab::Game {
+            oxy_render::input::release_cursor(ctx);
+        }
         self.console(ctx);
         let compact = Self::compact_layout(ctx);
         let panel = if self.mesh_operation_active() {
@@ -1332,9 +1351,6 @@ pub fn vector3(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64
             }
         }
     });
-}
-fn read_input(ctx: &egui::Context, project: &Project, enabled: bool) -> InputFrame {
-    oxy_render::input::collect_input(ctx, &project.input_bindings, enabled)
 }
 
 #[cfg(all(test, target_os = "windows"))]

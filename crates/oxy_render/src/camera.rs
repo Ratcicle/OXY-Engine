@@ -13,6 +13,7 @@ pub struct CameraState {
     pub orthographic_size: f32,
     pub fov: f32,
     game_view: Option<Mat4>,
+    pub hidden: Vec<oxy_core::document::Id>,
 }
 
 impl CameraState {
@@ -26,6 +27,7 @@ impl CameraState {
             orthographic_size: 7.5,
             fov: 60.,
             game_view: None,
+            hidden: Vec::new(),
         };
         if scene.kind == SceneKind::TwoD {
             camera.target = Vec3::ZERO;
@@ -48,6 +50,18 @@ impl CameraState {
             result.target = position;
             result.orthographic_size = camera.orthographic_size.max(0.05);
             result.fov = camera.fov.clamp(10., 150.);
+        }
+        result
+    }
+
+    pub fn for_runtime(runtime: &oxy_core::runtime::Runtime) -> Self {
+        let mut result = Self::for_game(runtime.scene());
+        if let Some(pose) = runtime.game_camera_pose() {
+            result.game_view =
+                Some(Mat4::from_rotation_translation(pose.rotation, pose.position).inverse());
+            result.target = pose.position;
+            result.fov = pose.fov;
+            result.hidden = pose.hidden;
         }
         result
     }

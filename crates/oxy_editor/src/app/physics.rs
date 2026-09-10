@@ -40,6 +40,7 @@ impl PhysicsUi {
 
 impl Editor {
     pub(super) fn physics_properties(&mut self, ui: &mut egui::Ui, entity: &mut Entity) {
+        self.character_properties(ui, entity);
         ui.collapsing("Colisor 3D · formas reais",|ui| {
             if entity.physics3d.is_none() && ui.button("Adicionar colisor 3D").on_hover_text("Cria uma forma física independente da aparência. O controlador legado continua usando sua caixa antiga.").clicked() {
                 entity.physics3d=Some(Collider3d{shape:CollisionShape::Box{size:entity.dimensions},..Default::default()});
@@ -85,6 +86,47 @@ impl Editor {
             if let Err(error)=config.validate(){ui.colored_label(Color32::YELLOW,error);}
             if ui.button("Remover colisor 3D").clicked(){entity.physics3d=None;}
             if let Some(convex)=refresh {match generate_collider(entity,convex){Ok(next)=>entity.physics3d.as_mut().unwrap().shape=next.shape,Err(e)=>self.warn(e)}}
+        });
+    }
+
+    fn character_properties(&mut self, ui: &mut egui::Ui, entity: &mut Entity) {
+        use oxy_core::character::{CameraRig, CharacterConfig, MovementReference};
+        ui.collapsing("Personagem 3D",|ui| {
+            if entity.character3d.is_none() {
+                let compatible=entity.controller.is_none() && entity.collider.is_none() && entity.physics3d.is_none();
+                if ui.add_enabled(compatible,egui::Button::new("Adicionar personagem 3D")).on_hover_text("Cria o controlador e sua cápsula com origem nos pés. Para converter um objeto legado, remova explicitamente seus componentes antigos primeiro; nenhuma configuração é convertida silenciosamente.").clicked() {
+                    let config=CharacterConfig::default();
+                    oxy_core::input_actions::ensure_controller(&mut self.state.project,&config.actions,SceneKind::ThreeD);
+                    entity.character3d=Some(config);
+                    entity.physics3d=Some(Collider3d{shape:CollisionShape::Capsule{height:1.8,radius:0.3},center:[0.,0.9,0.],..Default::default()});
+                }
+            }
+            if let Some(config)=&mut entity.character3d {
+                ui.checkbox(&mut config.enabled,"Simular personagem");
+                ui.checkbox(&mut config.automatic_input,"Ler ações de movimento automaticamente").on_hover_text("Desative para enviar a intenção e os pedidos de pulo por nós. A simulação continua independente da entrada.");
+                egui::ComboBox::from_id_salt("movement_reference").selected_text(match config.reference {MovementReference::World=>"Eixos da cena",MovementReference::Body=>"Direção do corpo",MovementReference::Camera=>"Direção da câmera"}).show_ui(ui,|ui|{ui.selectable_value(&mut config.reference,MovementReference::World,"Eixos da cena");ui.selectable_value(&mut config.reference,MovementReference::Body,"Direção do corpo");ui.selectable_value(&mut config.reference,MovementReference::Camera,"Direção da câmera");});
+                for (value,label,max) in [(&mut config.speed,"Velocidade (m/s) ",100.),(&mut config.gravity,"Gravidade (m/s²) ",200.),(&mut config.jump_speed,"Impulso do pulo (m/s) ",100.)] {ui.add(egui::DragValue::new(value).speed(0.1).range(0. ..=max).prefix(label));}
+                ui.collapsing("Contato com o cenário",|ui|{
+                    for (value,label,max) in [(&mut config.slope_degrees,"Rampa máxima (°) ",89.),(&mut config.step_height,"Degrau máximo (m) ",2.),(&mut config.step_width,"Largura mínima (m) ",2.),(&mut config.snap,"Aderência ao chão (m) ",2.)] {ui.add(egui::DragValue::new(value).speed(0.01).range(0.001..=max).prefix(label));}
+                });
+                if ui.button("Remover controlador 3D").clicked(){entity.character3d=None;}
+            }
+        });
+        ui.collapsing("Câmera de personagem",|ui|{
+            if entity.camera_rig.is_none() && ui.button("Adicionar câmera em primeira pessoa").clicked() {
+                entity.camera.get_or_insert_with(Camera::default);
+                entity.camera_rig=Some(CameraRig::default());
+            }
+            let Some(rig)=&mut entity.camera_rig else {return;};
+            let targets:Vec<_>=self.scene().entities.iter().filter(|e|e.id!=entity.id).map(|e|(e.id.clone(),e.name.clone())).collect();
+            egui::ComboBox::from_id_salt("rig_target").selected_text(rig.target.as_ref().and_then(|id|targets.iter().find(|(t,_)|t==id).map(|(_,name)|name.as_str())).unwrap_or("Escolha o personagem")).show_ui(ui,|ui|{ui.selectable_value(&mut rig.target,None,"Sem alvo");for (id,name) in &targets{ui.selectable_value(&mut rig.target,Some(id.clone()),name);}});
+            ui.add(egui::DragValue::new(&mut rig.eye_height).speed(0.01).range(0. ..=100.).prefix("Altura dos olhos (m) "));
+            ui.add(egui::DragValue::new(&mut rig.sensitivity).speed(0.005).range(0.001..=10.).prefix("Sensibilidade ")).on_hover_text("Graus por unidade relativa do mouse. Não depende da taxa de quadros nem da escala da interface.");
+            ui.checkbox(&mut rig.invert_x,"Inverter olhar horizontal");ui.checkbox(&mut rig.invert_y,"Inverter olhar vertical");
+            ui.add(egui::Slider::new(&mut rig.pitch_limit,1. ..=89.).text("Limite vertical (°)"));
+            ui.collapsing("Ocultar peças nesta câmera",|ui|{for (id,name) in &targets {let mut hidden=rig.hidden.contains(id);if ui.checkbox(&mut hidden,name).changed(){if hidden{rig.hidden.push(id.clone());}else{rig.hidden.retain(|v|v!=id);}}}});
+            ui.small("Jogar/Retomar captura o mouse. Esc ou sair de Jogo libera a entrada.");
+            if ui.button("Remover controle da câmera").clicked(){entity.camera_rig=None;}
         });
     }
 }

@@ -70,7 +70,7 @@ function Assert-PortablePe([string]$Path) {
 }
 Get-ChildItem -LiteralPath $package -File | Where-Object Extension -In '.exe','.dll' | ForEach-Object { Assert-PortablePe $_.FullName }
 $manifest = Get-Content -LiteralPath (Join-Path $package 'data/project.oxy.json') -Raw | ConvertFrom-Json
-if ($manifest.schema_version -notin @(1,2) -or $manifest.scenes.Count -ne 3) { throw 'As três cenas de exemplo devem estar presentes em formato suportado (schema 1 ou 2).' }
+if ($manifest.schema_version -notin @(1,2,3) -or $manifest.scenes.Count -lt 3) { throw 'As cenas de exemplo devem estar presentes em formato suportado (schema 1, 2 ou 3).' }
 foreach ($asset in $manifest.assets) {
     if ($asset.kind -eq 'Model') { continue }
     $data = [IO.Path]::GetFullPath((Join-Path $package 'data'))

@@ -112,6 +112,7 @@ fn saved_2d_project_collects_opens_door_and_hits_through_marker() {
                 released: Default::default(),
                 held: BTreeSet::from(["mover_direita".into()]),
                 pressed: BTreeSet::new(),
+                ..Default::default()
             },
         );
     }
@@ -125,6 +126,7 @@ fn saved_2d_project_collects_opens_door_and_hits_through_marker() {
             released: Default::default(),
             held: BTreeSet::new(),
             pressed: BTreeSet::from(["atacar".into(), "interagir".into()]),
+            ..Default::default()
         },
     );
     for _ in 0..60 {
@@ -190,6 +192,7 @@ fn saved_textured_3d_hierarchy_uses_same_runtime_and_hit_rules() {
             released: Default::default(),
             held: BTreeSet::new(),
             pressed: BTreeSet::from(["atacar".into()]),
+            ..Default::default()
         },
     );
     for _ in 0..60 {

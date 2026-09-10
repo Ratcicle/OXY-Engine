@@ -127,8 +127,12 @@ impl Editor {
                             }
                         });
                         if let Some(id) = self.selected.clone()
-                            && let Some(mut controller) =
-                                self.scene().entity(&id).and_then(|e| e.controller.clone())
+                            && let Some(mut actions) = self.scene().entity(&id).and_then(|e| {
+                                e.character3d
+                                    .as_ref()
+                                    .map(|c| c.actions.clone())
+                                    .or_else(|| e.controller.as_ref().map(|c| c.actions.clone()))
+                            })
                         {
                             ui.separator();
                             ui.strong("Controlador do objeto selecionado");
@@ -146,11 +150,11 @@ impl Editor {
                                 .collect();
                             let kind = self.scene().kind;
                             for (label, action) in [
-                                ("Esquerda", &mut controller.actions.left),
-                                ("Direita", &mut controller.actions.right),
-                                ("Pular", &mut controller.actions.jump),
-                                ("Frente", &mut controller.actions.forward),
-                                ("Trás", &mut controller.actions.back),
+                                ("Esquerda", &mut actions.left),
+                                ("Direita", &mut actions.right),
+                                ("Pular", &mut actions.jump),
+                                ("Frente", &mut actions.forward),
+                                ("Trás", &mut actions.back),
                             ] {
                                 if kind == SceneKind::TwoD && matches!(label, "Frente" | "Trás") {
                                     continue;
@@ -173,7 +177,12 @@ impl Editor {
                                         });
                                 });
                             }
-                            self.scene_mut().entity_mut(&id).unwrap().controller = Some(controller);
+                            let entity = self.scene_mut().entity_mut(&id).unwrap();
+                            if let Some(c) = &mut entity.character3d {
+                                c.actions = actions;
+                            } else if let Some(c) = &mut entity.controller {
+                                c.actions = actions;
+                            }
                         }
                     });
                 close = ui.button("Fechar ações de entrada").clicked();
@@ -345,6 +354,7 @@ fn key_choice(ui: &mut egui::Ui, key: &mut String, salt: impl std::hash::Hash) {
             for (i,candidate) in common.iter().enumerate() {ui.selectable_value(key,candidate.name().into(),candidate.name());if (i+1)%8==0 {ui.end_row();}}
         });
         ui.selectable_value(key,"Space".into(),"Espaço");
+        ui.collapsing("Mouse",|ui|{for candidate in ["MouseLeft","MouseRight","MouseMiddle","Mouse4","Mouse5","WheelUp","WheelDown"] {ui.selectable_value(key,candidate.into(),crate::labels::key(candidate));}});
         ui.collapsing("Outras teclas",|ui| {for candidate in egui::Key::ALL {
             if !matches!(candidate,egui::Key::Escape|egui::Key::F3) && !common.contains(&candidate) {
                 ui.selectable_value(key,candidate.name().into(),crate::labels::key(candidate.name()));

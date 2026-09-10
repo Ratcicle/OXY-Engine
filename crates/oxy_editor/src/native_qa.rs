@@ -8,6 +8,7 @@ mod input_guide;
 mod layout;
 mod mesh;
 mod modeling;
+mod movement;
 mod painting;
 mod physics;
 mod portable;
@@ -50,6 +51,7 @@ enum Action {
     ComponentBox,
     Hold(Key, usize),
     HoldSeconds(Key, f32),
+    RelativeLook(Vec2),
     Wait(usize),
     Card,
     Resize(Vec2),
@@ -568,6 +570,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("fp_") {
+            return self.check_first_person(label);
+        }
         if label.starts_with("phys_") {
             return self.check_physics(label);
         }
@@ -1704,6 +1709,10 @@ impl NativeQa {
                 }]);
                 self.held_until = Some((key, Instant::now() + Duration::from_secs_f32(seconds)));
                 description = format!("Entrada real {key:?} durante {seconds}s de simulação");
+            }
+            Action::RelativeLook(delta) => {
+                self.events.push_back(vec![Event::MouseMoved(delta)]);
+                description = format!("Deslocamento relativo no RawInput: {delta:?}");
             }
             Action::Hold(key, frames) => {
                 self.events.push_back(vec![Event::Key {

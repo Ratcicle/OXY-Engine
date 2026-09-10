@@ -1157,6 +1157,7 @@ pub fn prepare_scene<'a>(scene: &'a Scene, camera: &CameraState) -> Vec<Prepared
         .entities
         .iter()
         .filter(|entity| entity.has_geometry() && entity.ui.is_none() && view.visible(entity))
+        .filter(|entity| !camera.hidden.contains(&entity.id))
         .collect();
     if scene.kind == SceneKind::TwoD {
         entities.sort_by_key(|entity| entity.layer);

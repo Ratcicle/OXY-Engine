@@ -91,6 +91,13 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
             {
                 found.push(format!("{scope} → {} → controlador", entity.name));
             }
+            if entity
+                .character3d
+                .as_ref()
+                .is_some_and(|c| c.actions.all().iter().any(|(action, _, _)| *action == id))
+            {
+                found.push(format!("{scope} → {} → personagem 3D", entity.name));
+            }
             for node in &entity.graph.nodes {
                 if node.operation == "event.input" && node.text("action") == id {
                     found.push(format!(

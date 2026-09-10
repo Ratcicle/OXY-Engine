@@ -211,6 +211,7 @@ fn main() {
                 } else {
                     Default::default()
                 },
+                ..Default::default()
             };
             for (label, steps) in [("fixed_step", 1), ("accumulated_4_steps", 4)] {
                 let mut runtime = Runtime::new(&p, &p.start_scene).unwrap();

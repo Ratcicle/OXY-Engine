@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
+mod characters;
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
@@ -22,6 +23,11 @@ pub struct InputFrame {
     pub held: BTreeSet<String>,
     pub pressed: BTreeSet<String>,
     pub released: BTreeSet<String>,
+    /// Optional analog intent: right and forward, clamped only to unit length.
+    pub movement: [f32; 2],
+    /// Relative device displacement. Not pointer position or points per second.
+    pub look: [f32; 2],
+    pub wheel: f32,
 }
 impl InputFrame {
     pub fn held(&self, action: &str) -> bool {
@@ -91,6 +97,10 @@ pub struct Runtime {
     accumulator: f32,
     pending_pressed: BTreeSet<String>,
     pending_released: BTreeSet<String>,
+    pending_look: [f32; 2],
+    pending_wheel: f32,
+    characters: characters::Characters,
+    input_timeline: crate::input_timeline::InputTimeline,
     input_modes: OnceLock<BTreeMap<String, u8>>,
     ready: VecDeque<Task>,
     waiting: Vec<Task>,
@@ -125,6 +135,10 @@ impl Runtime {
             accumulator: 0.0,
             pending_pressed: BTreeSet::new(),
             pending_released: BTreeSet::new(),
+            pending_look: [0.; 2],
+            pending_wheel: 0.,
+            characters: Default::default(),
+            input_timeline: Default::default(),
             input_modes: OnceLock::new(),
             ready: VecDeque::new(),
             waiting: Vec::new(),
@@ -197,10 +211,15 @@ impl Runtime {
         ]
     }
     pub fn set_paused(&mut self, paused: bool) {
+        self.input_timeline = Default::default();
         self.paused = paused;
         self.accumulator = 0.0;
         self.pending_pressed.clear();
         self.pending_released.clear();
+        self.pending_look = [0.; 2];
+        self.pending_wheel = 0.;
+        self.characters.intents.clear();
+        self.characters.jumps.clear();
     }
     pub fn stop(&mut self) {
         self.stopped = true;
@@ -214,6 +233,7 @@ impl Runtime {
         self.damage_hits.clear();
         self.overlap_pairs.clear();
         self.bodies.clear();
+        self.characters = Default::default();
     }
     pub fn click(&mut self, entity: &str) {
         if !self.paused && !self.stopped {
@@ -225,6 +245,8 @@ impl Runtime {
             self.accumulator = 0.0;
             self.pending_pressed.clear();
             self.pending_released.clear();
+            self.pending_look = [0.; 2];
+            self.pending_wheel = 0.;
             return;
         }
         if !elapsed.is_finite() || elapsed < 0.0 {
@@ -232,15 +254,28 @@ impl Runtime {
         }
         self.pending_pressed.extend(input.pressed.iter().cloned());
         self.pending_released.extend(input.released.iter().cloned());
+        for axis in 0..2 {
+            if input.look[axis].is_finite() {
+                self.pending_look[axis] += input.look[axis];
+            }
+        }
+        if input.wheel.is_finite() {
+            self.pending_wheel += input.wheel;
+        }
         self.accumulator = (self.accumulator + elapsed.min(0.25)).min(FIXED_DT * MAX_STEPS as f32);
         let mut steps = 0;
         let mut budget = MAX_NODE_WORK;
         while self.accumulator + f32::EPSILON >= FIXED_DT && steps < MAX_STEPS {
-            let frame = InputFrame {
+            let mut frame = InputFrame {
                 held: input.held.clone(),
                 pressed: std::mem::take(&mut self.pending_pressed),
                 released: std::mem::take(&mut self.pending_released),
+                movement: input.movement,
+                look: std::mem::take(&mut self.pending_look),
+                wheel: std::mem::take(&mut self.pending_wheel),
             };
+            self.input_timeline
+                .sample(self.time + f64::from(FIXED_DT), &mut frame);
             self.fixed_step(&frame, &mut budget);
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
@@ -266,9 +301,16 @@ impl Runtime {
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
         crate::metrics::timed(|| self.move_controllers(input), |c, ns| c.movement_ns += ns);
         crate::metrics::timed(|| self.advance_animations(), |c, ns| c.animation_ns += ns);
+        crate::metrics::timed(|| self.move_characters(input), |c, ns| c.movement_ns += ns);
         crate::metrics::timed(|| self.detect_areas(), |c, ns| c.areas_ns += ns);
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
         self.collect_activations();
+    }
+    pub fn queue_timed_input(
+        &mut self,
+        event: crate::input_timeline::TimedInput,
+    ) -> Result<(), String> {
+        self.input_timeline.push(event, self.time)
     }
     fn log(&mut self, message: String) {
         self.logs.push(message);
@@ -866,6 +908,10 @@ impl Runtime {
             .scene_mut(id)
             .ok_or("Cena de destino não existe")? = scene;
         self.scene_id = id.into();
+        self.input_timeline = Default::default();
+        self.characters = Default::default();
+        self.pending_look = [0.; 2];
+        self.pending_wheel = 0.;
         self.ready.clear();
         self.waiting.clear();
         self.bodies.clear();
@@ -1016,13 +1062,19 @@ impl Runtime {
                 .entity(owner)
                 .and_then(|entity| entity.clips.iter().find(|clip| clip.id == player.clip_id))
                 .cloned();
-            if let Some(clip) = clip {
+            if let Some(mut clip) = clip {
                 for marker in player.advance(&clip, FIXED_DT) {
                     events.push(RuntimeEvent::Animation {
                         object: owner.clone(),
                         marker,
                     });
                 }
+                // A physical root is owned by its controller; only visual children
+                // may be animated. The authored clip is never rewritten here.
+                clip.tracks.retain(|track| {
+                    self.entity(&track.target)
+                        .is_none_or(|e| e.character3d.is_none())
+                });
                 player.sample(self.scene_mut_internal(), &clip);
             }
         }
@@ -1222,6 +1274,7 @@ mod tests {
             pressed: BTreeSet::from(["pular".into()]),
             held: BTreeSet::new(),
             released: BTreeSet::new(),
+            ..Default::default()
         };
         runtime.advance(FIXED_DT, &input);
         assert!(runtime.scene().entity(&id).unwrap().transform.position[1] > 0.5);

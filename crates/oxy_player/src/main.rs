@@ -89,10 +89,14 @@ impl Player {
                 self.error = None;
                 self.diagnostics.clear();
                 for (action, key) in &runtime.project().input_bindings {
-                    if egui::Key::from_name(key).is_none() {
+                    if !oxy_render::input::valid_binding(key) {
                         self.diagnostics
                             .push(format!("Ação {action}: tecla desconhecida '{key}'"));
                     }
+                }
+                let mut runtime = runtime;
+                if runtime.wants_relative_mouse() {
+                    runtime.set_paused(true);
                 }
                 self.runtime = Some(runtime);
                 if let Some(renderer) = &mut self.renderer {
@@ -134,6 +138,7 @@ impl eframe::App for Player {
             runtime.set_paused(true)
         }
         if let Some(error) = self.error.clone() {
+            oxy_render::input::release_cursor(ctx);
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.);
@@ -163,10 +168,11 @@ impl eframe::App for Player {
                     .allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
                 let resized = (self.last_size - rect.size()).length() > 0.5;
                 self.last_size = rect.size();
-                let input = oxy_render::input::collect_input(
+                let input = oxy_render::input::collect_game_input(
                     ctx,
                     &runtime.project().input_bindings,
                     !runtime.paused && focused,
+                    runtime.wants_relative_mouse(),
                 );
                 runtime.advance(if resized { 0. } else { elapsed }, &input);
                 let Some(rs) = frame.wgpu_render_state() else {
@@ -175,7 +181,7 @@ impl eframe::App for Player {
                 let Some(renderer) = &mut self.renderer else {
                     return;
                 };
-                let camera = CameraState::for_game(runtime.scene());
+                let camera = CameraState::for_runtime(runtime);
                 let scale = ctx.pixels_per_point();
                 let size = [
                     (rect.width() * scale).round().max(1.) as u32,
@@ -200,7 +206,7 @@ impl eframe::App for Player {
                 let clicks =
                     self.game_ui
                         .draw(ui, runtime.project(), runtime.scene(), &self.root, rect);
-                if !runtime.paused {
+                if !runtime.paused && oxy_render::input::accepts_game_click(ctx) {
                     if clicks.is_empty()
                         && response.clicked()
                         && let Some(pointer) = response.interact_pointer_pos()

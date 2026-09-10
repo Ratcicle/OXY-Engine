@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod audio;
 pub mod broadphase;
+pub mod character;
 pub mod collision;
 pub mod document;
 pub mod edit_history;
@@ -11,6 +12,7 @@ pub mod guide;
 pub mod guide_recipes;
 pub mod history;
 pub mod input_actions;
+pub mod input_timeline;
 pub mod metrics;
 pub mod migration;
 pub mod painting;

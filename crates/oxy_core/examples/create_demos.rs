@@ -731,6 +731,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
         released: Default::default(),
         held: BTreeSet::from(["mover_direita".into()]),
         pressed: BTreeSet::new(),
+        ..Default::default()
     };
     for _ in 0..83 {
         runtime.advance(FIXED_DT, &right);
@@ -744,6 +745,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
         released: Default::default(),
         pressed: BTreeSet::from(["atacar".into(), "interagir".into()]),
         held: BTreeSet::new(),
+        ..Default::default()
     };
     runtime.advance(FIXED_DT, &input);
     for _ in 0..60 {
@@ -785,6 +787,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
             released: Default::default(),
             pressed: BTreeSet::from(["atacar".into()]),
             held: BTreeSet::new(),
+            ..Default::default()
         },
     );
     for _ in 0..45 {

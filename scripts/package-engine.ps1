@@ -37,10 +37,10 @@ Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
-Projetos antigos (schema 1) são convertidos em memória, sem alterar o original
+Projetos antigos (schema 1 e 2) são convertidos em memória, sem alterar o original
 ao abrir. Ao salvar convertido, a OXY preserva um backup do documento original.
-O novo schema 2 requer OXY Engine 0.2.0 ou leitor compatível; não abra esses
-documentos em versões antigas que desconheçam ações de entrada e malhas editáveis.
+O schema 3 requer OXY Engine 0.3.0 ou leitor compatível; não abra esses
+documentos em versões antigas que desconheçam os componentes de movimento 3D.
 Sem instalador, atualização automática ou assinatura digital.
 "@
 [IO.File]::WriteAllText((Join-Path $destinationPath 'LEIA-ME.txt'), $instructions, [Text.Encoding]::UTF8)

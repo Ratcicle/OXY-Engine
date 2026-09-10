@@ -245,6 +245,10 @@ pub struct Entity {
     pub collider: Option<Collider>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physics3d: Option<crate::physics3d::Collider3d>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character3d: Option<crate::character::CharacterConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_rig: Option<crate::character::CameraRig>,
     pub controller: Option<Controller>,
     pub camera: Option<Camera>,
     pub ui: Option<UiElement>,
@@ -273,6 +277,8 @@ impl Entity {
             attributes: BTreeMap::new(),
             collider: None,
             physics3d: None,
+            character3d: None,
+            camera_rig: None,
             controller: None,
             camera: None,
             ui: None,
@@ -404,6 +410,12 @@ impl Scene {
             }
         });
         for e in &mut self.entities {
+            if let Some(rig) = &mut e.camera_rig {
+                if rig.target.as_ref().is_some_and(|id| ids.contains(id)) {
+                    rig.target = None;
+                }
+                rig.hidden.retain(|id| !ids.contains(id));
+            }
             for v in e.attributes.values_mut() {
                 if let Value::Object(Some(target)) = v
                     && ids.contains(target)
@@ -480,6 +492,18 @@ pub fn remap_entities(entities: &mut [Entity], map: &HashMap<Id, Id>) -> Result<
     }
     for e in entities {
         e.id = map.get(&e.id).cloned().unwrap_or_else(|| e.id.clone());
+        if let Some(rig) = &mut e.camera_rig {
+            if let Some(target) = &mut rig.target
+                && let Some(next) = map.get(target)
+            {
+                *target = next.clone();
+            }
+            for id in &mut rig.hidden {
+                if let Some(next) = map.get(id) {
+                    *id = next.clone();
+                }
+            }
+        }
         if let Some(p) = &mut e.parent
             && let Some(v) = map.get(p)
         {
@@ -752,6 +776,8 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     }
     let owned_ids: HashSet<_> = ids.iter().map(|id| (*id).to_owned()).collect();
     for e in &scene.entities {
+        crate::character::validate(scene, e, &view)
+            .map_err(|error| format!("{}: {error}", e.name))?;
         if e.mesh.is_some()
             && (e.primitive.is_some()
                 || e.primitive_parameters.is_some()
