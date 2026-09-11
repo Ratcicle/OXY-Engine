@@ -37,6 +37,17 @@ pub enum MovementProfile {
     Parkour,
     ChainedJumps,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CameraMode {
+    FirstPerson,
+    ThirdPerson,
+    Fixed,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BodyFacing {
+    Movement,
+    Look,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -81,6 +92,8 @@ pub struct CharacterConfig {
     pub slide_duration: f32,
     pub slide_friction: f32,
     pub slide_control: f32,
+    pub facing: BodyFacing,
+    pub angular_speed: f32,
 }
 impl Default for CharacterConfig {
     fn default() -> Self {
@@ -124,6 +137,8 @@ impl Default for CharacterConfig {
             slide_duration: 0.9,
             slide_friction: 0.9,
             slide_control: 3.,
+            facing: BodyFacing::Movement,
+            angular_speed: 720.,
         }
     }
 }
@@ -177,6 +192,7 @@ impl CharacterConfig {
             self.slide_duration,
             self.slide_friction,
             self.slide_control,
+            self.angular_speed,
         ]
         .iter()
         .any(|v| !v.is_finite() || *v < 0.)
@@ -240,6 +256,22 @@ pub struct CameraRig {
     pub hidden: Vec<Id>,
     pub crouched_eye_height: f32,
     pub posture_smoothing: f32,
+    pub mode: CameraMode,
+    pub distance: f32,
+    pub min_distance: f32,
+    pub max_distance: f32,
+    pub follow_height: f32,
+    pub shoulder: f32,
+    pub zoom_step: f32,
+    pub position_smoothing: f32,
+    pub obstruction_return: f32,
+    pub transition_seconds: f32,
+    pub collision_radius: f32,
+    pub collision_margin: f32,
+    pub shoulder_action: Id,
+    pub mode_action: Id,
+    pub rotation_smoothing: f32,
+    pub hide_first_person_only: bool,
 }
 impl Default for CameraRig {
     fn default() -> Self {
@@ -253,18 +285,74 @@ impl Default for CameraRig {
             hidden: Vec::new(),
             crouched_eye_height: 0.85,
             posture_smoothing: 0.10,
+            mode: CameraMode::FirstPerson,
+            distance: 4.,
+            min_distance: 0.4,
+            max_distance: 12.,
+            follow_height: 1.4,
+            shoulder: 0.45,
+            zoom_step: 0.5,
+            position_smoothing: 0.06,
+            obstruction_return: 0.15,
+            transition_seconds: 0.25,
+            collision_radius: 0.15,
+            collision_margin: 0.02,
+            shoulder_action: "trocar_ombro".into(),
+            mode_action: "alternar_camera".into(),
+            rotation_smoothing: 0.,
+            hide_first_person_only: true,
         }
     }
 }
 impl CameraRig {
+    pub fn validate_settings(&self) -> Result<(), String> {
+        if [
+            self.distance,
+            self.min_distance,
+            self.max_distance,
+            self.zoom_step,
+            self.position_smoothing,
+            self.obstruction_return,
+            self.transition_seconds,
+            self.collision_radius,
+            self.collision_margin,
+            self.rotation_smoothing,
+            self.eye_height,
+            self.crouched_eye_height,
+            self.posture_smoothing,
+        ]
+        .iter()
+        .any(|v| !v.is_finite() || *v < 0.)
+            || !self.shoulder.is_finite()
+            || !self.follow_height.is_finite()
+            || self.min_distance > self.max_distance
+            || self.distance < self.min_distance
+            || self.distance > self.max_distance
+            || self.collision_radius < 0.01
+            || self.collision_margin <= 0.
+            || self.collision_margin >= self.collision_radius
+            || !self.sensitivity.is_finite()
+            || !(0.001..=10.).contains(&self.sensitivity)
+            || !self.pitch_limit.is_finite()
+            || !(1. ..89.9).contains(&self.pitch_limit)
+        {
+            return Err(
+                "Câmera: distância, limites, transição e volume de proteção inválidos.".into(),
+            );
+        }
+        Ok(())
+    }
     pub fn look(&self, yaw: f32, pitch: f32, delta: Vec2) -> (f32, f32) {
-        let radians = self.sensitivity.to_radians();
-        let yaw = yaw - delta.x * radians * if self.invert_x { -1. } else { 1. };
-        let pitch = (pitch - delta.y * radians * if self.invert_y { -1. } else { 1. }).clamp(
-            -self.pitch_limit.to_radians(),
-            self.pitch_limit.to_radians(),
+        let radians = f64::from(self.sensitivity).to_radians();
+        let yaw =
+            f64::from(yaw) - f64::from(delta.x) * radians * if self.invert_x { -1. } else { 1. };
+        let pitch = (f64::from(pitch)
+            - f64::from(delta.y) * radians * if self.invert_y { -1. } else { 1. })
+        .clamp(
+            -f64::from(self.pitch_limit).to_radians(),
+            f64::from(self.pitch_limit).to_radians(),
         );
-        (yaw.rem_euclid(std::f32::consts::TAU), pitch)
+        (yaw.rem_euclid(std::f64::consts::TAU) as f32, pitch as f32)
     }
 }
 
@@ -275,6 +363,8 @@ pub struct CharacterState {
     pub velocity: Vec3,
     pub grounded: bool,
     pub yaw: f32,
+    pub previous_yaw: f32,
+    pub look_yaw: f32,
     pub pitch: f32,
     pub movement_blocks: BTreeSet<String>,
     pub look_blocks: BTreeSet<String>,
@@ -329,6 +419,8 @@ impl CharacterState {
             velocity: Vec3::ZERO,
             grounded: false,
             yaw,
+            previous_yaw: yaw,
+            look_yaw: yaw,
             pitch: 0.,
             movement_blocks: BTreeSet::new(),
             look_blocks: BTreeSet::new(),
@@ -355,6 +447,13 @@ pub struct GameCameraPose {
     pub fov: f32,
     pub hidden: Vec<Id>,
 }
+/// Shared optical near plane, in world metres (renderer and camera protection).
+pub const CAMERA_NEAR: f32 = 0.02;
+#[derive(Clone, Debug)]
+pub enum CameraLookAt {
+    Point(Vec3),
+    Object(Id),
+}
 
 pub fn validate(
     scene: &Scene,
@@ -373,6 +472,7 @@ pub fn validate(
         config.motion(entity, scale.x)?;
     }
     if let Some(rig) = &entity.camera_rig {
+        rig.validate_settings()?;
         if scene.kind != SceneKind::ThreeD || entity.camera.is_none() {
             return Err("A câmera de personagem exige um componente de câmera em cena 3D.".into());
         }

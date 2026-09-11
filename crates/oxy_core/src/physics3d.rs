@@ -150,6 +150,7 @@ pub struct MotionResult {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PhysicsCounters {
     pub shapes_prepared: u64,
+    pub shapes_shared: u64,
     pub poses_updated: u64,
     pub tree_updates: u64,
     pub queries: u64,
@@ -244,6 +245,17 @@ impl PhysicsWorld {
         rotation: Quat,
         scale: Vec3,
     ) -> Result<(), String> {
+        self.upsert_prepared(id, config, position, rotation, scale, None)
+    }
+    fn upsert_prepared(
+        &mut self,
+        id: &str,
+        config: &Collider3d,
+        position: Vec3,
+        rotation: Quat,
+        scale: Vec3,
+        shared: Option<SharedShape>,
+    ) -> Result<(), String> {
         if !config.enabled {
             self.remove(id);
             return Ok(());
@@ -259,8 +271,12 @@ impl PhysicsWorld {
         }
         let key = config.shape.key(scale);
         let changed_shape = self.entries.get(id).is_none_or(|e| e.key != key);
+        let reused = shared.is_some();
         let prepared = if changed_shape {
-            Some(config.shape.prepare(scale)?)
+            Some(match shared {
+                Some(shape) => shape,
+                None => config.shape.prepare(scale)?,
+            })
         } else {
             None
         };
@@ -276,7 +292,11 @@ impl PhysicsWorld {
                 entry.key = key;
                 entry.source = config.shape.clone();
                 entry.debug.take();
-                self.counters.shapes_prepared += 1;
+                if reused {
+                    self.counters.shapes_shared += 1;
+                } else {
+                    self.counters.shapes_prepared += 1;
+                }
                 modified = true;
             }
             if entry.position != position || entry.rotation != rotation {
@@ -319,7 +339,11 @@ impl PhysicsWorld {
             );
             self.ids.insert(handle, id.into());
             self.modified.push(handle);
-            self.counters.shapes_prepared += 1;
+            if reused {
+                self.counters.shapes_shared += 1;
+            } else {
+                self.counters.shapes_prepared += 1;
+            }
         }
         Ok(())
     }
@@ -637,6 +661,67 @@ impl PhysicsWorld {
         result.sort();
         result.dedup();
         Ok(result)
+    }
+
+    /// Bounded geometric depenetration for a camera volume. Never moves bodies.
+    /// Failure leaves the caller's last valid pose intact; no arbitrary teleport.
+    pub fn recover_sphere(
+        &self,
+        center: Vec3,
+        radius: f32,
+        limit: f32,
+        options: &QueryOptions,
+    ) -> Result<Vec3, String> {
+        if !center.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.
+            || !limit.is_finite()
+            || limit < 0.
+        {
+            return Err("Volume de proteção da câmera inválido.".into());
+        }
+        let shape = SharedShape::ball(radius);
+        let mut position = center;
+        for _ in 0..8 {
+            let at = pose(position, Quat::IDENTITY);
+            let predicate = |h, _: &Collider| self.accepts(h, options);
+            let queries = self.broad.as_query_pipeline(
+                self.narrow.query_dispatcher(),
+                &self.bodies,
+                &self.colliders,
+                QueryFilter::default().predicate(&predicate),
+            );
+            self.queries.set(self.queries.get() + 1);
+            let mut contacts = Vec::new();
+            for (handle, collider) in queries.intersect_shape(at, &*shape) {
+                let contact = self
+                    .narrow
+                    .query_dispatcher()
+                    .contact(
+                        &at.inv_mul(collider.position()),
+                        &*shape,
+                        collider.shape(),
+                        0.,
+                    )
+                    .map_err(|_| "Não foi possível verificar o espaço da câmera.")?;
+                if let Some(c) = contact.filter(|c| c.dist < -1e-5) {
+                    contacts.push((self.ids[&handle].as_str(), oxy(c.normal1), c.dist));
+                }
+            }
+            if contacts.is_empty() {
+                return Ok(position);
+            }
+            contacts.sort_by(|a, b| a.0.cmp(b.0));
+            for (_, normal, distance) in contacts {
+                position -= normal * (-distance + 0.001);
+                if position.distance(center) > limit {
+                    return Err(
+                        "A câmera não encontrou espaço dentro do limite de recuperação.".into(),
+                    );
+                }
+            }
+        }
+        Err("A câmera não encontrou espaço livre; última vista preservada.".into())
     }
     /// Same prepared shape and pose used by all queries; rendering must not invent another body.
     pub fn debug_shapes(&self) -> impl Iterator<Item = DebugBody<'_>> {

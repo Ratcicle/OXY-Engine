@@ -41,6 +41,8 @@ pub fn legacy_label(id: &str) -> String {
         "pular" => "Pular",
         "correr" => "Correr",
         "agachar" => "Agachar",
+        "trocar_ombro" => "Trocar ombro da câmera",
+        "alternar_camera" => "Alternar primeira/terceira pessoa",
         "atacar" => "Atacar",
         "interagir" => "Interagir",
         _ => return id.replace('_', " "),
@@ -108,6 +110,13 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
                     ));
                 }
             }
+            if entity
+                .camera_rig
+                .as_ref()
+                .is_some_and(|c| c.shoulder_action == id || c.mode_action == id)
+            {
+                found.push(format!("{scope} → {} → câmera de personagem", entity.name));
+            }
         }
     }
     found
@@ -147,6 +156,21 @@ pub fn ensure_character(project: &mut Project, config: &crate::character::Charac
     for (id, name, key) in [
         (&config.sprint_action, "Correr", "Shift"),
         (&config.crouch_action, "Agachar", "C"),
+    ] {
+        project
+            .input_bindings
+            .entry(id.clone())
+            .or_insert_with(|| key.into());
+        project
+            .input_labels
+            .entry(id.clone())
+            .or_insert_with(|| name.into());
+    }
+}
+pub fn ensure_camera(project: &mut Project, rig: &crate::character::CameraRig) {
+    for (id, name, key) in [
+        (&rig.shoulder_action, "Trocar ombro da câmera", "Q"),
+        (&rig.mode_action, "Alternar primeira/terceira pessoa", "V"),
     ] {
         project
             .input_bindings

@@ -1,0 +1,49 @@
+Concluído: true
+Erro: None
+Clique: ▶ Jogar em [326.6 46.5]
+Reproduzir 24 quadros sem entrada
+Verificado: m5_tp
+Captura GPU da janela: third-person-wall.png
+Captura third-person-wall.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla Q, Ctrl=false
+Reproduzir 18 quadros sem entrada
+Verificado: m5_safe
+Captura GPU da janela: other-shoulder.png
+Captura other-shoulder.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Deslocamento relativo no RawInput: [80.0 -80.0]
+Reproduzir 8 quadros sem entrada
+Verificado: m5_safe
+Captura GPU da janela: orbit.png
+Captura orbit.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Deslocamento relativo no RawInput: [-80.0 80.0]
+Tecla V, Ctrl=false
+Reproduzir 24 quadros sem entrada
+Verificado: m5_fp
+Captura GPU da janela: first-person.png
+Captura first-person.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Entrada real W durante 0.7s de simulação
+Tecla C, Ctrl=false
+Reproduzir 3 quadros sem entrada
+Verificado: m5_slide
+Captura GPU da janela: slide.png
+Captura slide.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla V, Ctrl=false
+Reproduzir 24 quadros sem entrada
+Verificado: m5_safe
+Captura GPU da janela: third-person-open.png
+Captura third-person-open.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla V, Ctrl=false
+Reproduzir 24 quadros sem entrada
+Clique: Cena em [32.5 82.5]
+Verificado: fp_paused
+Clique: Jogo em [89.1 83.5]
+Verificado: fp_paused
+Redimensionar: [920.0 600.0]
+Escala de interface 1.2
+Captura GPU da janela: small-paused.png
+Captura small-paused.png: 920 × 600 pixels físicos; 1.2 pixels por ponto
+Clique: ■ Parar em [476.8 45.9]
+Verificado: fp_stopped
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Capturas: ["third-person-wall.png", "other-shoulder.png", "orbit.png", "first-person.png", "slide.png", "third-person-open.png", "small-paused.png"]

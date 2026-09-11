@@ -407,10 +407,10 @@ impl MotorContext<'_> {
         let friction = material.map_or(1., |s| s.friction);
         let traction = material.map_or(1., |s| s.traction);
         let modifier = material.map_or(1., |s| s.speed_multiplier);
-        let yaw = if config.reference == MovementReference::World {
-            0.
-        } else {
-            state.yaw
+        let yaw = match config.reference {
+            MovementReference::World => 0.,
+            MovementReference::Body => state.yaw,
+            MovementReference::Camera => state.look_yaw,
         };
         let axis = wish_direction(input.axis, yaw);
         if state.grounded {

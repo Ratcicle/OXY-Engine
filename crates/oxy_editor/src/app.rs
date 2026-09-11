@@ -876,6 +876,7 @@ impl Editor {
         let resized = self.game_size != Some(available);
         self.game_size = Some(available);
         if let Some(rt) = &mut self.runtime {
+            rt.set_viewport_aspect(available[0] as f32 / available[1] as f32);
             rt.advance(if resized { 0. } else { dt }, &input);
         }
         let scene = self.runtime.as_ref().unwrap().scene().clone();

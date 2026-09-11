@@ -174,6 +174,7 @@ impl eframe::App for Player {
                     !runtime.paused && focused,
                     runtime.wants_relative_mouse(),
                 );
+                runtime.set_viewport_aspect(rect.width() / rect.height());
                 runtime.advance(if resized { 0. } else { elapsed }, &input);
                 let Some(rs) = frame.wgpu_render_state() else {
                     return;

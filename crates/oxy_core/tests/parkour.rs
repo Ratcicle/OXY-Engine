@@ -425,7 +425,10 @@ fn sensor_activation_survives_waits_but_ended_history_and_removed_handles_do_not
     rt.remove_object("damage_area");
     rt.advance(FIXED_DT, &InputFrame::default());
     assert_eq!(rt.retained_counts(), [0; 4]);
-    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    // Removing the followed character now preserves the last safe camera view
+    // and reports the missing target once; physics/task diagnostics stay empty.
+    assert_eq!(rt.logs.len(), 1, "{:?}", rt.logs);
+    assert!(rt.logs[0].starts_with("Câmera "), "{:?}", rt.logs);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
+mod cameras;
 mod cuts;
 mod direct;
 mod final_flow;
@@ -570,6 +571,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("m5_") {
+            return self.check_cameras(label);
+        }
         if label.starts_with("fp_") || label.starts_with("m3_") {
             return self.check_first_person(label);
         }

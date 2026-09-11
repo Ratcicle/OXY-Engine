@@ -85,6 +85,7 @@ pub struct SceneView<'a> {
     pub scene: &'a Scene,
     pub index: Result<SceneIndex, String>,
     matrices: RefCell<Vec<Option<Mat4>>>,
+    overrides: Option<std::sync::Arc<HashMap<Id, Mat4>>>,
 }
 
 /// Owned data for the sequential controller phase. Every moved subtree is
@@ -140,6 +141,15 @@ impl<'a> SceneView<'a> {
             scene,
             index: SceneIndex::new(scene),
             matrices: RefCell::new(vec![None; scene.entities.len()]),
+            overrides: None,
+        }
+    }
+    /// Presentation-only global roots; descendants inherit them exactly once.
+    /// Arc ownership keeps this read phase independent of subsequent runtime updates.
+    pub fn with_worlds(scene: &'a Scene, worlds: std::sync::Arc<HashMap<Id, Mat4>>) -> Self {
+        Self {
+            overrides: Some(worlds),
+            ..Self::new(scene)
         }
     }
     pub fn entity(&self, id: &str) -> Option<&'a Entity> {
@@ -162,6 +172,14 @@ impl<'a> SceneView<'a> {
             if let Some(world) = matrices[current] {
                 metrics::count(|c| c.matrix_hits += 1);
                 break world;
+            }
+            if let Some(world) = self
+                .overrides
+                .as_ref()
+                .and_then(|o| o.get(&self.scene.entities[current].id))
+            {
+                matrices[current] = Some(*world);
+                break *world;
             }
             if !visited.insert(current) {
                 return Err("Ciclo na hierarquia".into());

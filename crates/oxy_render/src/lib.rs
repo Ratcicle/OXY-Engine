@@ -634,19 +634,33 @@ impl Renderer {
         }
         if scene.entities.iter().any(|e| e.physics3d.is_some()) {
             let mut cache = self.physics_debug.borrow_mut();
-            let world = if let Some(world) = runtime_world {
-                world
-            } else {
+            let include_disabled = runtime_world.is_some()
+                && scene.entities.iter().any(|e| {
+                    e.physics3d.as_ref().is_some_and(|c| !c.enabled)
+                        && (show_disabled || selected.contains(&e.id))
+                });
+            if runtime_world.is_none() || include_disabled {
                 let world = cache.get_or_insert_with(oxy_core::physics3d::PhysicsWorld::new);
                 if let Err(error) = world.sync_scene(scene, true) {
                     overlay.errors.push(error);
                     return overlay;
                 }
-                world
-            };
+            }
+            let world = runtime_world.or(cache.as_ref()).unwrap();
+            let disabled = include_disabled.then(|| cache.as_ref()).flatten();
             let painter = ui.painter().with_clip_rect(rect);
-            let view = oxy_core::scene_view::SceneView::new(scene);
-            for body in world.debug_shapes() {
+            let actual = oxy_core::scene_view::SceneView::new(scene);
+            let view = camera.scene_view(scene);
+            for body in world.debug_shapes().chain(
+                disabled
+                    .into_iter()
+                    .flat_map(|w| w.debug_shapes())
+                    .filter(|b| {
+                        view.entity(b.id)
+                            .and_then(|e| e.physics3d.as_ref())
+                            .is_some_and(|c| !c.enabled)
+                    }),
+            ) {
                 let Some(entity) = view.entity(body.id) else {
                     continue;
                 };
@@ -667,6 +681,15 @@ impl Renderer {
                 } else {
                     color.gamma_multiply(0.45)
                 };
+                // Match the visible interpolated root/platform while retaining
+                // the runtime's actual posture/shape. Never rebuild its mesh.
+                let delta = view
+                    .world_matrix(body.id)
+                    .ok()
+                    .zip(actual.world_matrix(body.id).ok())
+                    .map(|(shown, current)| shown * current.inverse())
+                    .unwrap_or(glam::Mat4::IDENTITY);
+                let position = delta.transform_point3(body.position);
                 let points: Vec<_> = body
                     .geometry
                     .vertices
@@ -675,7 +698,9 @@ impl Renderer {
                         collider_debug::project(
                             camera,
                             rect,
-                            body.position + body.rotation * glam::Vec3::from(*p),
+                            delta.transform_point3(
+                                body.position + body.rotation * glam::Vec3::from(*p),
+                            ),
                         )
                     })
                     .collect();
@@ -689,8 +714,7 @@ impl Renderer {
                         edges.push([a, b]);
                     }
                 }
-                if active && let Some(center) = collider_debug::project(camera, rect, body.position)
-                {
+                if active && let Some(center) = collider_debug::project(camera, rect, position) {
                     painter.text(
                         center,
                         egui::Align2::LEFT_BOTTOM,
@@ -951,7 +975,11 @@ pub fn pick(
     size: [u32; 2],
     pixel: [f32; 2],
 ) -> Option<PickHit> {
-    let picker = ScenePicker::new(scene);
+    let view = camera.scene_view(scene);
+    let mut picker = ScenePicker::from_view(&view);
+    picker
+        .entries
+        .retain(|e| !camera.hidden.contains(&e.entity.id));
     let (origin, direction) = camera.ray(size, pixel);
     picker.ray(origin, direction)
 }
@@ -1173,7 +1201,7 @@ impl std::ops::Deref for PreparedEntity<'_> {
 }
 /// CPU visibility, stable ordering and instance transform preparation. No GPU timing.
 pub fn prepare_scene<'a>(scene: &'a Scene, camera: &CameraState) -> Vec<PreparedEntity<'a>> {
-    let view = oxy_core::scene_view::SceneView::new(scene);
+    let view = camera.scene_view(scene);
     let mut entities: Vec<_> = scene
         .entities
         .iter()

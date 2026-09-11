@@ -203,6 +203,14 @@ impl Editor {
                     use oxy_core::character::InheritPlatform;
                     egui::ComboBox::from_id_salt("platform_inheritance").selected_text(match config.inherit_platform{InheritPlatform::None=>"Sem herança",InheritPlatform::Horizontal=>"Herdar velocidade horizontal",InheritPlatform::All=>"Herdar toda a velocidade"}).show_ui(ui,|ui|{ui.selectable_value(&mut config.inherit_platform,InheritPlatform::None,"Sem herança");ui.selectable_value(&mut config.inherit_platform,InheritPlatform::Horizontal,"Herdar velocidade horizontal");ui.selectable_value(&mut config.inherit_platform,InheritPlatform::All,"Herdar toda a velocidade");}).response.on_hover_text("Ao pular ou sair da plataforma, soma esta parte da velocidade do apoio uma única vez.");
                 });
+                ui.collapsing("Orientação do personagem",|ui|{
+                    use oxy_core::character::BodyFacing;
+                    egui::ComboBox::from_id_salt("character_facing").selected_text(match config.facing {BodyFacing::Movement=>"Virar para o movimento",BodyFacing::Look=>"Virar para o olhar"}).show_ui(ui,|ui|{
+                        ui.selectable_value(&mut config.facing,BodyFacing::Movement,"Virar para o movimento");
+                        ui.selectable_value(&mut config.facing,BodyFacing::Look,"Virar para o olhar");
+                    }).response.on_hover_text("Na primeira pessoa, o corpo acompanha diretamente o olhar horizontal. Na terceira pessoa, esta opção controla o corpo sem limitar a órbita da câmera.");
+                    ui.add(egui::DragValue::new(&mut config.angular_speed).speed(5.).range(0. ..=3600.).prefix("Velocidade de giro (°/s) ")).on_hover_text("Zero mantém a orientação do corpo. Não altera a velocidade de olhar com o mouse.");
+                });
                 if ui.button("Remover controlador 3D").clicked(){entity.character3d=None;}
             }
         });
@@ -210,8 +218,15 @@ impl Editor {
             if entity.camera_rig.is_none() && ui.button("Adicionar câmera em primeira pessoa").clicked() {
                 entity.camera.get_or_insert_with(Camera::default);
                 entity.camera_rig=Some(CameraRig::default());
+                oxy_core::input_actions::ensure_camera(&mut self.state.project, entity.camera_rig.as_ref().unwrap());
             }
             let Some(rig)=&mut entity.camera_rig else {return;};
+            use oxy_core::character::CameraMode;
+            egui::ComboBox::from_id_salt("camera_mode").selected_text(match rig.mode {CameraMode::FirstPerson=>"Primeira pessoa",CameraMode::ThirdPerson=>"Terceira pessoa",CameraMode::Fixed=>"Câmera fixa"}).show_ui(ui,|ui|{
+                ui.selectable_value(&mut rig.mode,CameraMode::FirstPerson,"Primeira pessoa");
+                ui.selectable_value(&mut rig.mode,CameraMode::ThirdPerson,"Terceira pessoa");
+                ui.selectable_value(&mut rig.mode,CameraMode::Fixed,"Câmera fixa");
+            });
             let targets:Vec<_>=self.scene().entities.iter().filter(|e|e.id!=entity.id).map(|e|(e.id.clone(),e.name.clone())).collect();
             egui::ComboBox::from_id_salt("rig_target").selected_text(rig.target.as_ref().and_then(|id|targets.iter().find(|(t,_)|t==id).map(|(_,name)|name.as_str())).unwrap_or("Escolha o personagem")).show_ui(ui,|ui|{ui.selectable_value(&mut rig.target,None,"Sem alvo");for (id,name) in &targets{ui.selectable_value(&mut rig.target,Some(id.clone()),name);}});
             ui.add(egui::DragValue::new(&mut rig.eye_height).speed(0.01).range(0. ..=100.).prefix("Altura dos olhos (m) "));
@@ -220,6 +235,26 @@ impl Editor {
             ui.add(egui::DragValue::new(&mut rig.sensitivity).speed(0.005).range(0.001..=10.).prefix("Sensibilidade ")).on_hover_text("Graus por unidade relativa do mouse. Não depende da taxa de quadros nem da escala da interface.");
             ui.checkbox(&mut rig.invert_x,"Inverter olhar horizontal");ui.checkbox(&mut rig.invert_y,"Inverter olhar vertical");
             ui.add(egui::Slider::new(&mut rig.pitch_limit,1. ..=89.).text("Limite vertical (°)"));
+            ui.collapsing("Órbita e acompanhamento",|ui|{
+                ui.add(egui::DragValue::new(&mut rig.min_distance).speed(0.05).range(0. ..=rig.distance).prefix("Distância mínima (m) "));
+                ui.add(egui::DragValue::new(&mut rig.max_distance).speed(0.05).range(rig.distance..=1000.).prefix("Distância máxima (m) "));
+                ui.add(egui::DragValue::new(&mut rig.distance).speed(0.05).range(rig.min_distance..=rig.max_distance).prefix("Distância desejada (m) ")).on_hover_text("A câmera recolhe diante de paredes. A roda ajusta a distância quando não está vinculada a uma ação do jogo.");
+                ui.add(egui::DragValue::new(&mut rig.shoulder).speed(0.02).range(-10. ..=10.).prefix("Deslocamento do ombro (m) "));
+                ui.add(egui::DragValue::new(&mut rig.follow_height).speed(0.02).range(0. ..=100.).prefix("Altura acompanhada (m) "));
+                ui.add(egui::DragValue::new(&mut rig.zoom_step).speed(0.05).range(0. ..=10.).prefix("Zoom por passo da roda (m) "));
+                for(value,label) in [(&mut rig.position_smoothing,"Suavização da posição (s) "),(&mut rig.rotation_smoothing,"Suavização da rotação (s) "),(&mut rig.obstruction_return,"Retorno após obstáculo (s) "),(&mut rig.transition_seconds,"Troca de modo (s) ")] {
+                    ui.add(egui::DragValue::new(value).speed(0.01).range(0. ..=5.).prefix(label)).on_hover_text("Zero aplica imediatamente. A proteção contra obstáculos tem prioridade sobre a suavização.");
+                }
+                for(label,action) in [("Trocar ombro",&mut rig.shoulder_action),("Alternar modo",&mut rig.mode_action)] {
+                    egui::ComboBox::from_id_salt(("camera_action",label)).selected_text(format!("{label}: {}",oxy_core::input_actions::label(&self.state.project,action))).show_ui(ui,|ui|{for id in self.state.project.input_bindings.keys(){ui.selectable_value(action,id.clone(),oxy_core::input_actions::label(&self.state.project,id));}});
+                }
+            });
+            ui.collapsing("Proteção contra obstáculos",|ui|{
+                ui.add(egui::DragValue::new(&mut rig.collision_radius).speed(0.01).range(rig.collision_margin.max(0.01)+0.001..=5.).prefix("Raio mínimo (m) "));
+                ui.add(egui::DragValue::new(&mut rig.collision_margin).speed(0.001).range(0.001..=rig.collision_radius-0.001).prefix("Folga de proteção (m) "));
+                ui.small("O volume também protege os cantos próximos da imagem, conforme o campo de visão e a janela. Colisores podem permitir ou impedir a câmera.");
+            });
+            ui.checkbox(&mut rig.hide_first_person_only,"Ocultar as peças abaixo apenas em primeira pessoa");
             ui.collapsing("Ocultar peças nesta câmera",|ui|{for (id,name) in &targets {let mut hidden=rig.hidden.contains(id);if ui.checkbox(&mut hidden,name).changed(){if hidden{rig.hidden.push(id.clone());}else{rig.hidden.retain(|v|v!=id);}}}});
             ui.small("Jogar/Retomar captura o mouse. Esc ou sair de Jogo libera a entrada.");
             if ui.button("Remover controle da câmera").clicked(){entity.camera_rig=None;}

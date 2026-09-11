@@ -88,6 +88,58 @@ pub fn generate_collider(entity: &Entity, convex: bool) -> Result<Collider3d, St
 }
 
 impl PhysicsWorld {
+    /// Camera BVH uses the same immutable prepared shapes, at the exact global
+    /// poses supplied to rendering. Only camera blockers need a presentation leaf.
+    pub fn sync_presentation(
+        &mut self,
+        source: &PhysicsWorld,
+        scene: &Scene,
+        worlds: Arc<std::collections::HashMap<crate::document::Id, Mat4>>,
+    ) -> Result<(), String> {
+        let actual = SceneView::new(scene);
+        let shown = SceneView::with_worlds(scene, worlds);
+        let mut seen = HashSet::new();
+        for (id, entry) in &source.entries {
+            if entry.sensor || !entry.filter.blocks_camera {
+                continue;
+            }
+            let current = actual.world_matrix(id)?;
+            let displayed = shown.world_matrix(id)?;
+            let delta = displayed * current.inverse();
+            let (_, rotation, scale) = world_pose(delta)?;
+            if !scale.abs_diff_eq(Vec3::ONE, 0.001) {
+                return Err("A apresentação não pode deformar o volume físico da câmera.".into());
+            }
+            let config = Collider3d {
+                shape: entry.source.clone(),
+                center: [0.; 3],
+                enabled: true,
+                sensor: false,
+                filter: entry.filter.clone(),
+                surface: entry.surface.clone(),
+            };
+            self.upsert_prepared(
+                id,
+                &config,
+                delta.transform_point3(entry.position),
+                rotation * entry.rotation,
+                entry.key.scale(),
+                Some(source.colliders[entry.handle].shared_shape().clone()),
+            )?;
+            seen.insert(id.clone());
+        }
+        let removed: Vec<_> = self
+            .entries
+            .keys()
+            .filter(|id| !seen.contains(*id))
+            .cloned()
+            .collect();
+        for id in removed {
+            self.remove(&id);
+        }
+        self.flush();
+        Ok(())
+    }
     /// A simulation phase already evaluated the hierarchy. Character overrides
     /// hold runtime capsule height/pose; authored standing capsules are untouched.
     pub fn sync_evaluated(

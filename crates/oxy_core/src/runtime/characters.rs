@@ -10,8 +10,8 @@ pub use sensors::SensorCrossing;
 
 #[derive(Default)]
 pub(super) struct Characters {
-    world: Option<PhysicsWorld>,
-    states: HashMap<Id, CharacterState>,
+    pub(super) world: Option<PhysicsWorld>,
+    pub(super) states: HashMap<Id, CharacterState>,
     pub(super) intents: HashMap<Id, Vec2>,
     pub(super) jumps: HashSet<Id>,
     pub(super) sprints: HashMap<Id, bool>,
@@ -30,18 +30,51 @@ pub(super) struct Characters {
     sensor_events: Vec<SensorCrossing>,
 }
 impl Characters {
+    pub(super) fn presentation_worlds(&self, alpha: f32) -> HashMap<Id, Mat4> {
+        let mut worlds = HashMap::with_capacity(self.states.len() + self.platforms.len());
+        for (id, platform) in &self.platforms {
+            if !platform.discontinuous {
+                let mut matrix = platform.matrix;
+                let position = matrix.w_axis.truncate() - platform.delta * (1. - alpha);
+                matrix.w_axis = position.extend(1.);
+                worlds.insert(id.clone(), matrix);
+            }
+        }
+        for (id, state) in &self.states {
+            if state.uniform_scale > 0. {
+                let rotation = Quat::from_rotation_y(state.previous_yaw)
+                    .slerp(Quat::from_rotation_y(state.yaw), alpha);
+                worlds.insert(
+                    id.clone(),
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(state.uniform_scale),
+                        rotation,
+                        interpolated_path(
+                            self.paths.get(id),
+                            state.previous_position,
+                            state.position,
+                            alpha,
+                        ),
+                    ),
+                );
+            }
+        }
+        worlds
+    }
     pub(super) fn release_input(&mut self) {
         self.intents.clear();
         self.jumps.clear();
         self.sprints.clear();
         self.crouches.clear();
         self.slides.clear();
+        self.paths.clear();
         for state in self.states.values_mut() {
             state.jump_until = None;
             state.want_crouch = false;
             state.sprinting = false;
             state.previous_position = state.position;
             state.previous_eye_height = state.eye_height;
+            state.previous_yaw = state.yaw;
         }
     }
     fn step(
@@ -49,16 +82,18 @@ impl Characters {
         scene: &mut Scene,
         surfaces: &[crate::surface::SurfaceMaterial],
         input: &InputFrame,
+        control: Option<&super::cameras::CameraControl>,
         time: f64,
         dt: f32,
     ) -> Result<(), String> {
         if scene.kind != SceneKind::ThreeD {
             return Ok(());
         }
-        let has_motion = scene
-            .entities
-            .iter()
-            .any(|e| e.character3d.is_some() || e.platform.as_ref().is_some_and(|p| p.enabled));
+        let has_motion = scene.entities.iter().any(|e| {
+            e.character3d.is_some()
+                || e.camera_rig.is_some()
+                || e.platform.as_ref().is_some_and(|p| p.enabled)
+        });
         if !has_motion {
             *self = Default::default();
             return Ok(());
@@ -119,6 +154,7 @@ impl Characters {
                 state.height = motion.height;
             }
             state.previous_position = state.position;
+            state.previous_yaw = state.yaw;
             let world = Mat4::from_scale_rotation_translation(
                 scale,
                 Quat::from_rotation_y(state.yaw),
@@ -131,11 +167,7 @@ impl Characters {
         }
         let world = self.world.get_or_insert_with(PhysicsWorld::new);
         world.sync_evaluated(scene, &evaluation, &self.overrides)?;
-        let active_rig = scene
-            .entities
-            .iter()
-            .find(|e| e.camera.as_ref().is_some_and(|c| c.active))
-            .and_then(|e| e.camera_rig.clone());
+        let active_rig = control.and_then(|c| c.rig.as_ref());
         let mut lateral = HashSet::new();
         for i in indices {
             let entity = &scene.entities[i];
@@ -145,12 +177,14 @@ impl Characters {
             let standing = config.motion(entity, scale.x)?;
             let state = self.states.get_mut(&id).unwrap();
             let before = state.clone();
-            if let Some(rig) = active_rig
-                .as_ref()
-                .filter(|r| r.target.as_deref() == Some(&id))
-                && state.look_blocks.is_empty()
-            {
-                (state.yaw, state.pitch) = rig.look(state.yaw, state.pitch, Vec2::from(input.look));
+            if let Some(control) = control {
+                state.look_yaw = control.yaw;
+                if active_rig.is_some_and(|r| r.target.as_deref() == Some(&id)) {
+                    state.pitch = control.pitch;
+                    if config.enabled && control.mode == CameraMode::FirstPerson {
+                        state.yaw = control.yaw;
+                    }
+                }
             }
             let automatic = if config.automatic_input {
                 movement_axis(input, &config.actions)
@@ -184,6 +218,34 @@ impl Characters {
                 crouch = false;
                 crouch_pressed = false;
                 crouch_override = Some(false);
+            }
+            let first_person = control.is_some_and(|c| {
+                c.mode == CameraMode::FirstPerson
+                    && c.rig
+                        .as_ref()
+                        .is_some_and(|r| r.target.as_deref() == Some(&id))
+            });
+            if config.enabled && !first_person {
+                let reference = match config.reference {
+                    MovementReference::World => 0.,
+                    MovementReference::Body => state.yaw,
+                    MovementReference::Camera => state.look_yaw,
+                };
+                let direction = wish_direction(axis, reference);
+                let target = if config.facing == BodyFacing::Look {
+                    Some(state.look_yaw)
+                } else if direction.length_squared() > 1e-8 {
+                    Some((-direction.x).atan2(-direction.z))
+                } else {
+                    None
+                };
+                if let Some(target) = target {
+                    let delta = (target - state.yaw).sin().atan2((target - state.yaw).cos());
+                    state.yaw += delta.clamp(
+                        -config.angular_speed.to_radians() * dt,
+                        config.angular_speed.to_radians() * dt,
+                    );
+                }
             }
             let filter = &entity.physics3d.as_ref().unwrap().filter;
             let mut options = QueryOptions {
@@ -331,6 +393,31 @@ impl Characters {
         Ok(())
     }
 }
+/// Follow the resolved route, including an autostep's lift/over/drop waypoints.
+/// Interpolating a straight chord through a step would visibly cross geometry.
+fn interpolated_path(
+    path: Option<&Vec<(Vec3, Vec3)>>,
+    previous: Vec3,
+    current: Vec3,
+    alpha: f32,
+) -> Vec3 {
+    let Some(path) = path.filter(|p| !p.is_empty()) else {
+        return previous.lerp(current, alpha);
+    };
+    let total: f32 = path.iter().map(|(a, b)| a.distance(*b)).sum();
+    if total <= 1e-6 {
+        return current;
+    }
+    let mut remaining = total * alpha;
+    for (a, b) in path {
+        let length = a.distance(*b);
+        if length > 1e-6 && remaining <= length {
+            return a.lerp(*b, remaining / length);
+        }
+        remaining -= length;
+    }
+    current
+}
 fn actual_collider(
     entity: &crate::document::Entity,
     state: &CharacterState,
@@ -345,6 +432,28 @@ fn actual_collider(
 }
 impl Runtime {
     pub(super) fn move_characters(&mut self, input: &InputFrame) {
+        if self.scene().kind != SceneKind::ThreeD {
+            return;
+        }
+        if !self.scene().entities.iter().any(|e| {
+            e.character3d.is_some()
+                || e.camera_rig.is_some()
+                || e.platform.as_ref().is_some_and(|p| p.enabled)
+        }) {
+            return;
+        }
+        let mut cameras = std::mem::take(&mut self.cameras);
+        let control = match cameras.control(self.scene(), &self.characters, input) {
+            Ok(control) => control,
+            Err(e) => {
+                let id = cameras
+                    .active(self.scene())
+                    .map_or_else(|| self.scene_id.clone(), |e| e.id.clone());
+                cameras.report(self, id, e);
+                None
+            }
+        };
+        self.cameras = cameras;
         let mut characters = std::mem::take(&mut self.characters);
         let scene = self
             .project
@@ -352,9 +461,14 @@ impl Runtime {
             .iter_mut()
             .find(|s| s.id == self.scene_id)
             .unwrap();
-        if let Err(error) =
-            characters.step(scene, &self.project.surfaces, input, self.time, FIXED_DT)
-        {
+        if let Err(error) = characters.step(
+            scene,
+            &self.project.surfaces,
+            input,
+            control.as_ref(),
+            self.time,
+            FIXED_DT,
+        ) {
             self.log(format!("Movimento 3D: {error}"));
         }
         for (id, error) in std::mem::take(&mut characters.warnings) {
@@ -373,6 +487,9 @@ impl Runtime {
     }
     pub fn physics_world(&self) -> Option<&PhysicsWorld> {
         self.characters.world.as_ref()
+    }
+    pub fn presentation_worlds(&self) -> Option<Arc<HashMap<Id, Mat4>>> {
+        self.cameras.worlds.clone()
     }
     /// Events from the last fixed step, with data captured at the transition.
     pub fn movement_events(&self) -> &[(Id, MovementEvent)] {
@@ -410,15 +527,14 @@ impl Runtime {
         Ok(())
     }
     pub fn wants_relative_mouse(&self) -> bool {
-        self.scene()
-            .entities
-            .iter()
-            .find(|e| e.camera.as_ref().is_some_and(|c| c.active))
-            .is_some_and(|e| e.camera_rig.is_some())
+        self.cameras.relative(self.scene())
     }
     /// Presentation-only pose. Unconsumed look is displayed immediately, without
     /// changing collision positions or consuming the same delta a second time.
     pub fn game_camera_pose(&self) -> Option<GameCameraPose> {
+        if let Some(pose) = &self.cameras.pose {
+            return Some(pose.clone());
+        }
         let entity = self
             .scene()
             .entities

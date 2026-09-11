@@ -192,7 +192,7 @@ impl Editor {
                     if entity.controller.is_some() && ui.button("Configurar ações na Lógica").clicked() {self.pause();self.tab=Tab::Logic;self.logic_ui.inputs=true;}
                     if let Some(c)=&mut entity.controller{ui.checkbox(&mut c.enabled,"Controlador ativo");ui.add(egui::DragValue::new(&mut c.speed).range(0.0..=100.0).prefix("Velocidade "));ui.add(egui::DragValue::new(&mut c.jump).range(0.0..=100.0).prefix("Pulo "));ui.add(egui::DragValue::new(&mut c.gravity).range(0.0..=200.0).prefix("Gravidade "));}
                     ui.separator();component_switch(ui,"Câmera de jogo",&mut entity.camera,Camera::default());
-                    if let Some(c)=&mut entity.camera{ui.checkbox(&mut c.active,"Câmera ativa");ui.add(egui::DragValue::new(&mut c.orthographic_size).range(0.1..=500.).prefix("Meia altura 2D ")).on_hover_text("Metade da altura visível em unidades da cena.");ui.add(egui::Slider::new(&mut c.fov,10.0..=150.).text("Campo de visão 3D"));ui.small("A câmera olha para -Z local. Ative apenas a câmera desejada.");}
+                    if let Some(c)=&mut entity.camera{ui.checkbox(&mut c.active,"Câmera ativa");ui.add(egui::DragValue::new(&mut c.orthographic_size).range(0.1..=500.).prefix("Meia altura 2D ")).on_hover_text("Metade da altura visível em unidades da cena.");ui.add(egui::Slider::new(&mut c.fov,10.0..=150.).text("Campo de visão vertical 3D (°)"));ui.small("A câmera olha para -Z local. Ative apenas a câmera desejada.");}
                 });
                 ui.collapsing("Atributos personalizados",|ui| {
                     ui.small("Nenhum nome de atributo impõe regras. Os nós configuram o comportamento.");

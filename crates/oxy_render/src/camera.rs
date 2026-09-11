@@ -14,6 +14,7 @@ pub struct CameraState {
     pub fov: f32,
     game_view: Option<Mat4>,
     pub hidden: Vec<oxy_core::document::Id>,
+    pub worlds: Option<std::sync::Arc<std::collections::HashMap<oxy_core::document::Id, Mat4>>>,
 }
 
 impl CameraState {
@@ -28,6 +29,7 @@ impl CameraState {
             fov: 60.,
             game_view: None,
             hidden: Vec::new(),
+            worlds: None,
         };
         if scene.kind == SceneKind::TwoD {
             camera.target = Vec3::ZERO;
@@ -56,6 +58,7 @@ impl CameraState {
 
     pub fn for_runtime(runtime: &oxy_core::runtime::Runtime) -> Self {
         let mut result = Self::for_game(runtime.scene());
+        result.worlds = runtime.presentation_worlds();
         if let Some(pose) = runtime.game_camera_pose() {
             result.game_view =
                 Some(Mat4::from_rotation_translation(pose.rotation, pose.position).inverse());
@@ -64,6 +67,13 @@ impl CameraState {
             result.hidden = pose.hidden;
         }
         result
+    }
+    pub fn scene_view<'a>(&self, scene: &'a Scene) -> oxy_core::scene_view::SceneView<'a> {
+        if let Some(worlds) = &self.worlds {
+            oxy_core::scene_view::SceneView::with_worlds(scene, worlds.clone())
+        } else {
+            oxy_core::scene_view::SceneView::new(scene)
+        }
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -92,7 +102,12 @@ impl CameraState {
             let half = self.orthographic_size;
             Mat4::orthographic_rh(-half * aspect, half * aspect, -half, half, -1000., 1000.)
         } else {
-            Mat4::perspective_rh(self.fov.to_radians(), aspect, 0.02, 2000.)
+            Mat4::perspective_rh(
+                self.fov.to_radians(),
+                aspect,
+                oxy_core::character::CAMERA_NEAR,
+                2000.,
+            )
         };
         projection * self.view()
     }

@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
+mod cameras;
 mod characters;
 pub use characters::SensorCrossing;
 
@@ -106,6 +107,7 @@ pub struct Runtime {
     pending_look: [f32; 2],
     pending_wheel: f32,
     characters: characters::Characters,
+    cameras: cameras::Cameras,
     input_timeline: crate::input_timeline::InputTimeline,
     input_modes: OnceLock<BTreeMap<String, u8>>,
     ready: VecDeque<Task>,
@@ -144,6 +146,7 @@ impl Runtime {
             pending_look: [0.; 2],
             pending_wheel: 0.,
             characters: Default::default(),
+            cameras: Default::default(),
             input_timeline: Default::default(),
             input_modes: OnceLock::new(),
             ready: VecDeque::new(),
@@ -225,6 +228,7 @@ impl Runtime {
         self.pending_look = [0.; 2];
         self.pending_wheel = 0.;
         self.characters.release_input();
+        self.update_presentation(0.);
     }
     pub fn stop(&mut self) {
         self.stopped = true;
@@ -239,6 +243,7 @@ impl Runtime {
         self.overlap_pairs.clear();
         self.bodies.clear();
         self.characters = Default::default();
+        self.cameras = Default::default();
     }
     pub fn click(&mut self, entity: &str) {
         if !self.paused && !self.stopped {
@@ -252,6 +257,7 @@ impl Runtime {
             self.pending_released.clear();
             self.pending_look = [0.; 2];
             self.pending_wheel = 0.;
+            self.update_presentation(0.);
             return;
         }
         if !elapsed.is_finite() || elapsed < 0.0 {
@@ -259,13 +265,20 @@ impl Runtime {
         }
         self.pending_pressed.extend(input.pressed.iter().cloned());
         self.pending_released.extend(input.released.iter().cloned());
-        for axis in 0..2 {
-            if input.look[axis].is_finite() {
-                self.pending_look[axis] += input.look[axis];
+        if self.cameras.accepts_look(self.scene(), &self.characters) {
+            for axis in 0..2 {
+                if input.look[axis].is_finite() {
+                    self.pending_look[axis] = (f64::from(self.pending_look[axis])
+                        + f64::from(input.look[axis]))
+                    .clamp(-f64::from(f32::MAX), f64::from(f32::MAX))
+                        as f32;
+                }
             }
         }
         if input.wheel.is_finite() {
-            self.pending_wheel += input.wheel;
+            self.pending_wheel = (f64::from(self.pending_wheel) + f64::from(input.wheel))
+                .clamp(-f64::from(f32::MAX), f64::from(f32::MAX))
+                as f32;
         }
         self.accumulator = (self.accumulator + elapsed.min(0.25)).min(FIXED_DT * MAX_STEPS as f32);
         let mut steps = 0;
@@ -285,6 +298,7 @@ impl Runtime {
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
         }
+        self.update_presentation(elapsed);
     }
     fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
         self.collect_activations();
@@ -925,6 +939,7 @@ impl Runtime {
         self.scene_id = id.into();
         self.input_timeline = Default::default();
         self.characters = Default::default();
+        self.cameras = Default::default();
         self.pending_look = [0.; 2];
         self.pending_wheel = 0.;
         self.ready.clear();

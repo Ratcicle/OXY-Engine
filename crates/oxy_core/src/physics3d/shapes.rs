@@ -71,6 +71,15 @@ pub(super) struct ShapeKey {
     numbers: [u32; 6],
     geometry: usize,
 }
+impl ShapeKey {
+    pub(super) fn scale(&self) -> Vec3 {
+        Vec3::new(
+            f32::from_bits(self.numbers[3]),
+            f32::from_bits(self.numbers[4]),
+            f32::from_bits(self.numbers[5]),
+        )
+    }
+}
 impl CollisionShape {
     pub(super) fn key(&self, scale: Vec3) -> ShapeKey {
         let (kind, data, geometry) = match self {
