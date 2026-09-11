@@ -9,6 +9,8 @@ struct CaptureState {
     suppressed: HashSet<Key>,
     enabled: bool,
     active: HashSet<Key>,
+    shift_active: bool,
+    shift_suppressed: bool,
 }
 
 pub fn text_input_active(ctx: &Context) -> bool {
@@ -64,6 +66,8 @@ fn collect_keyboard(
     }
     let capture = enabled && focused && !text_input_active(ctx) && !command(modifiers);
     if !capture {
+        state.shift_suppressed = modifiers.shift;
+        state.shift_active = false;
         state.suppressed.extend(down.iter().copied());
         state.suppressed.extend(ordinary_pressed.iter().copied());
         state.enabled = false;
@@ -72,6 +76,7 @@ fn collect_keyboard(
         return InputFrame::default();
     }
     if !state.enabled {
+        state.shift_suppressed = modifiers.shift;
         // Retomar does not treat keys already held while editing/paused as input.
         state.suppressed.extend(
             down.iter()
@@ -80,8 +85,22 @@ fn collect_keyboard(
         );
     }
     state.enabled = true;
+    if !modifiers.shift {
+        state.shift_suppressed = false;
+    }
     let mut frame = InputFrame::default();
     for (action, name) in bindings {
+        if name == "Shift" {
+            if modifiers.shift && !state.shift_suppressed {
+                frame.held.insert(action.clone());
+                if !state.shift_active {
+                    frame.pressed.insert(action.clone());
+                }
+            } else if state.shift_active {
+                frame.released.insert(action.clone());
+            }
+            continue;
+        }
         let Some(key) = Key::from_name(name) else {
             continue;
         };
@@ -104,6 +123,7 @@ fn collect_keyboard(
         .into_iter()
         .filter(|k| !state.suppressed.contains(k))
         .collect();
+    state.shift_active = modifiers.shift && !state.shift_suppressed;
     ctx.data_mut(|data| data.insert_temp(state_id, state));
     frame
 }
@@ -141,7 +161,8 @@ pub fn valid_binding(name: &str) -> bool {
     Key::from_name(name).is_some()
         || matches!(
             name,
-            "MouseLeft"
+            "Shift"
+                | "MouseLeft"
                 | "MouseRight"
                 | "MouseMiddle"
                 | "Mouse4"
@@ -178,7 +199,7 @@ pub fn collect_game_input(
         }));
         ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!capturing));
     }
-    let entering = allowed && !state.enabled;
+    let entering = allowed && (!state.enabled || relative && !state.relative);
     let buttons = [
         egui::PointerButton::Primary,
         egui::PointerButton::Secondary,
@@ -458,6 +479,32 @@ mod tests {
             ("interagir".into(), "E".into()),
             ("mover_direita".into(), "D".into()),
         ])
+    }
+    #[test]
+    fn sprint_modifier_respects_capture_pause_and_command_chords() {
+        let ctx = Context::default();
+        let bindings = BTreeMap::from([("correr".into(), "Shift".into())]);
+        frame(&ctx, &bindings, true, Modifiers::NONE, vec![]);
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        };
+        let first = frame(&ctx, &bindings, true, shift, vec![]);
+        assert!(first.pressed("correr") && first.held("correr"));
+        let next = frame(&ctx, &bindings, true, shift, vec![]);
+        assert!(next.pressed.is_empty() && next.held("correr"));
+        frame(&ctx, &bindings, false, shift, vec![]);
+        assert!(!frame(&ctx, &bindings, true, shift, vec![]).held("correr"));
+        frame(&ctx, &bindings, true, Modifiers::NONE, vec![]);
+        assert!(frame(&ctx, &bindings, true, shift, vec![]).pressed("correr"));
+        let chord = Modifiers {
+            shift: true,
+            ctrl: true,
+            command: true,
+            ..Modifiers::NONE
+        };
+        assert!(frame(&ctx, &bindings, true, chord, vec![]).held.is_empty());
+        assert!(frame(&ctx, &bindings, true, shift, vec![]).held.is_empty());
     }
 
     #[test]

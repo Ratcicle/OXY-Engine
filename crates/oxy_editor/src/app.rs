@@ -907,8 +907,15 @@ impl Editor {
         let clicks = self
             .game_ui
             .draw(ui, &self.state.project, &scene, &self.root(), rect);
-        self.renderer
-            .draw_colliders(ui, &scene, &camera, rect, &[], self.show_disabled_colliders);
+        self.renderer.draw_runtime_colliders(
+            ui,
+            &scene,
+            &camera,
+            rect,
+            &[],
+            self.show_disabled_colliders,
+            self.runtime.as_ref().and_then(Runtime::physics_world),
+        );
         if self.capture && oxy_render::input::accepts_game_click(ui.ctx()) {
             let mut targets = clicks;
             if targets.is_empty()

@@ -22,6 +22,52 @@ fn floor(world: &mut PhysicsWorld) {
 }
 
 #[test]
+fn invalid_query_pose_or_scaled_geometry_preserves_previous_collider() {
+    let mut world = PhysicsWorld::new();
+    floor(&mut world);
+    let before = world.counters().shapes_prepared;
+    let config = Collider3d {
+        shape: CollisionShape::Box {
+            size: [f32::MAX; 3],
+        },
+        ..Default::default()
+    };
+    assert!(
+        world
+            .upsert(
+                "floor",
+                &config,
+                Vec3::ZERO,
+                Quat::IDENTITY,
+                Vec3::splat(2.)
+            )
+            .is_err()
+    );
+    assert!(
+        world
+            .upsert(
+                "floor",
+                &Collider3d::default(),
+                Vec3::ZERO,
+                Quat::from_xyzw(0., 0., 0., 2.),
+                Vec3::ONE
+            )
+            .is_err()
+    );
+    assert_eq!(world.counters().shapes_prepared, before);
+    assert!(
+        (world
+            .ray(Vec3::Y, -Vec3::Y, 10., &QueryOptions::default())
+            .unwrap()
+            .unwrap()
+            .distance
+            - 1.)
+            .abs()
+            < 0.001
+    );
+}
+
+#[test]
 fn capsule_stops_at_thin_wall_without_losing_tangential_motion() {
     let mut world = PhysicsWorld::new();
     floor(&mut world);

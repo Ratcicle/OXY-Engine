@@ -88,6 +88,68 @@ pub fn generate_collider(entity: &Entity, convex: bool) -> Result<Collider3d, St
 }
 
 impl PhysicsWorld {
+    /// A simulation phase already evaluated the hierarchy. Character overrides
+    /// hold runtime capsule height/pose; authored standing capsules are untouched.
+    pub fn sync_evaluated(
+        &mut self,
+        scene: &Scene,
+        evaluation: &crate::scene_view::SceneEvaluation,
+        overrides: &std::collections::HashMap<crate::document::Id, (Collider3d, Mat4)>,
+    ) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for (i, entity) in scene.entities.iter().enumerate() {
+            if entity.physics3d.is_none() && entity.collider.is_none() {
+                continue;
+            }
+            seen.insert(entity.id.clone());
+            let matrix = overrides
+                .get(&entity.id)
+                .map(|(_, w)| *w)
+                .or(evaluation.worlds[i])
+                .ok_or("Transformação física ausente")?;
+            self.sync_entity(entity, matrix, overrides.get(&entity.id).map(|(c, _)| c))?;
+        }
+        let removed: Vec<_> = self
+            .entries
+            .keys()
+            .filter(|id| !seen.contains(*id))
+            .cloned()
+            .collect();
+        for id in removed {
+            self.remove(&id);
+        }
+        self.flush();
+        Ok(())
+    }
+    pub fn sync_entity(
+        &mut self,
+        entity: &Entity,
+        matrix: Mat4,
+        override_config: Option<&Collider3d>,
+    ) -> Result<(), String> {
+        if let Some(config) = override_config.or(entity.physics3d.as_ref()) {
+            let (position, rotation, scale) = world_pose(matrix)?;
+            self.upsert(&entity.id, config, position, rotation, scale)?;
+        } else if let Some(collider) = &entity.collider {
+            let bounds = crate::spatial::bounds_from_world(collider, matrix)?;
+            let config = Collider3d {
+                shape: CollisionShape::Box {
+                    size: (bounds.max - bounds.min).to_array(),
+                },
+                enabled: collider.enabled,
+                sensor: collider.is_trigger,
+                ..Default::default()
+            };
+            self.upsert(
+                &entity.id,
+                &config,
+                (bounds.min + bounds.max) * 0.5,
+                Quat::IDENTITY,
+                Vec3::ONE,
+            )?;
+        }
+        Ok(())
+    }
     /// Once per simulation phase, never per controller/contact. SceneView shares ancestors.
     /// This method does not move characters or create a second simulation authority.
     pub fn sync_scene(&mut self, scene: &Scene, show_disabled: bool) -> Result<(), String> {

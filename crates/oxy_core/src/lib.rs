@@ -22,4 +22,5 @@ mod prepared_graph;
 pub mod runtime;
 pub mod scene_view;
 pub mod spatial;
+pub mod surface;
 pub mod texture_cache;

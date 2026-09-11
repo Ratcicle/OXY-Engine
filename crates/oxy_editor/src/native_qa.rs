@@ -570,7 +570,7 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
-        if label.starts_with("fp_") {
+        if label.starts_with("fp_") || label.starts_with("m3_") {
             return self.check_first_person(label);
         }
         if label.starts_with("phys_") {

@@ -14,6 +14,17 @@ pub enum MovementReference {
     Body,
     Camera,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InheritPlatform {
+    None,
+    Horizontal,
+    All,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Posture {
+    Standing,
+    Crouched,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -30,6 +41,22 @@ pub struct CharacterConfig {
     pub step_height: f32,
     pub step_width: f32,
     pub snap: f32,
+    pub ground_acceleration: f32,
+    pub ground_braking: f32,
+    pub ground_friction: f32,
+    pub air_acceleration: f32,
+    pub air_projected_limit: f32,
+    pub absolute_speed_limit: f32,
+    pub sprint_speed: f32,
+    pub crouch_speed: f32,
+    pub sprint_action: Id,
+    pub crouch_action: Id,
+    pub crouch_height: f32,
+    pub crouch_toggle: bool,
+    pub coyote_ms: f32,
+    pub jump_buffer_ms: f32,
+    pub inherit_platform: InheritPlatform,
+    pub recovery_distance: f32,
 }
 impl Default for CharacterConfig {
     fn default() -> Self {
@@ -46,6 +73,22 @@ impl Default for CharacterConfig {
             step_height: 0.25,
             step_width: 0.2,
             snap: 0.15,
+            ground_acceleration: 40.,
+            ground_braking: 20.,
+            ground_friction: 6.,
+            air_acceleration: 8.,
+            air_projected_limit: 6.,
+            absolute_speed_limit: 150.,
+            sprint_speed: 8.,
+            crouch_speed: 3.,
+            sprint_action: "correr".into(),
+            crouch_action: "agachar".into(),
+            crouch_height: 1.,
+            crouch_toggle: false,
+            coyote_ms: 100.,
+            jump_buffer_ms: 120.,
+            inherit_platform: InheritPlatform::All,
+            recovery_distance: 0.5,
         }
     }
 }
@@ -58,7 +101,7 @@ impl CharacterConfig {
         let CollisionShape::Capsule { height, radius } = collider.shape else {
             return Err("Personagem 3D requer uma cápsula vertical.".into());
         };
-        if collider.sensor || !collider.enabled {
+        if self.enabled && (collider.sensor || !collider.enabled) {
             return Err(
                 "Personagem 3D requer uma cápsula sólida ativa, não uma área de detecção.".into(),
             );
@@ -78,11 +121,36 @@ impl CharacterConfig {
             snap: self.snap,
         };
         motion.validate()?;
-        if [self.speed, self.gravity, self.jump_speed]
-            .iter()
-            .any(|v| !v.is_finite() || *v < 0.)
+        if [
+            self.speed,
+            self.gravity,
+            self.jump_speed,
+            self.ground_acceleration,
+            self.ground_braking,
+            self.ground_friction,
+            self.air_acceleration,
+            self.air_projected_limit,
+            self.sprint_speed,
+            self.crouch_speed,
+            self.coyote_ms,
+            self.jump_buffer_ms,
+            self.recovery_distance,
+        ]
+        .iter()
+        .any(|v| !v.is_finite() || *v < 0.)
         {
             return Err("Velocidade, gravidade e pulo devem ser finitos e não negativos.".into());
+        }
+        if !self.absolute_speed_limit.is_finite()
+            || !(1. ..=10000.).contains(&self.absolute_speed_limit)
+            || !self.crouch_height.is_finite()
+            || self.crouch_height < 2. * radius
+            || self.crouch_height > height
+            || self.coyote_ms > 1000.
+            || self.jump_buffer_ms > 1000.
+            || self.recovery_distance > 10.
+        {
+            return Err("Altura agachada deve caber na cápsula; limite absoluto deve estar entre 1 e 10000 m/s; tolerâncias de pulo entre 0 e 1000 ms.".into());
         }
         Ok(motion)
     }
@@ -99,6 +167,8 @@ pub struct CameraRig {
     pub invert_y: bool,
     pub pitch_limit: f32,
     pub hidden: Vec<Id>,
+    pub crouched_eye_height: f32,
+    pub posture_smoothing: f32,
 }
 impl Default for CameraRig {
     fn default() -> Self {
@@ -110,6 +180,8 @@ impl Default for CameraRig {
             invert_y: false,
             pitch_limit: 85.,
             hidden: Vec::new(),
+            crouched_eye_height: 0.85,
+            posture_smoothing: 0.10,
         }
     }
 }
@@ -135,8 +207,48 @@ pub struct CharacterState {
     pub pitch: f32,
     pub movement_blocks: BTreeSet<String>,
     pub look_blocks: BTreeSet<String>,
+    pub posture: Posture,
+    pub height: f32,
+    pub uniform_scale: f32,
+    pub eye_height: f32,
+    pub previous_eye_height: f32,
+    pub support: Option<Support>,
+    pub sprinting: bool,
+    pub(crate) want_crouch: bool,
+    pub(crate) coyote_until: f64,
+    pub(crate) jump_until: Option<f64>,
+    pub(crate) jump_consumed: bool,
+}
+#[derive(Clone, Debug)]
+pub struct Support {
+    pub object: Id,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub surface: Option<Id>,
+    pub velocity: Vec3,
+}
+#[derive(Clone, Debug)]
+pub enum MovementEvent {
+    Jumped,
+    Landed {
+        impact_speed: f32,
+    },
+    LeftSupport,
+    SurfaceChanged {
+        previous: Option<Id>,
+        current: Option<Id>,
+    },
+    PostureChanged(Posture),
+    SideContact {
+        object: Id,
+        point: Vec3,
+        normal: Vec3,
+    },
 }
 impl CharacterState {
+    pub fn total_velocity(&self) -> Vec3 {
+        self.velocity + self.support.as_ref().map_or(Vec3::ZERO, |s| s.velocity)
+    }
     pub fn new(position: Vec3, yaw: f32) -> Self {
         Self {
             position,
@@ -147,6 +259,17 @@ impl CharacterState {
             pitch: 0.,
             movement_blocks: BTreeSet::new(),
             look_blocks: BTreeSet::new(),
+            posture: Posture::Standing,
+            height: 0.,
+            uniform_scale: 0.,
+            eye_height: 0.,
+            previous_eye_height: 0.,
+            support: None,
+            sprinting: false,
+            want_crouch: false,
+            coyote_until: f64::NEG_INFINITY,
+            jump_until: None,
+            jump_consumed: false,
         }
     }
 }
@@ -192,9 +315,22 @@ pub fn validate(
             || !(0.001..=10.).contains(&rig.sensitivity)
             || !rig.pitch_limit.is_finite()
             || !(1. ..89.9).contains(&rig.pitch_limit)
+            || !rig.crouched_eye_height.is_finite()
+            || rig.crouched_eye_height < 0.
+            || !rig.posture_smoothing.is_finite()
+            || rig.posture_smoothing < 0.
         {
             return Err("Altura, sensibilidade ou limite de olhar inválidos.".into());
         }
+    }
+    if let Some(platform) = &entity.platform
+        && (scene.kind != SceneKind::ThreeD
+            || entity.character3d.is_some()
+            || platform.velocity.iter().any(|v| !v.is_finite())
+            || !platform.max_transport_per_step.is_finite()
+            || !(0.001..=10.).contains(&platform.max_transport_per_step))
+    {
+        return Err("Plataforma exige cena 3D, velocidade finita e limite de transporte entre 0,001 e 10 m por passo; não pode ser um personagem.".into());
     }
     Ok(())
 }

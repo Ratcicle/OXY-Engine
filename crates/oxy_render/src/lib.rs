@@ -607,6 +607,19 @@ impl Renderer {
         selected: &[Id],
         show_disabled: bool,
     ) -> collider_debug::OverlayFrame {
+        self.draw_runtime_colliders(ui, scene, camera, rect, selected, show_disabled, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_runtime_colliders(
+        &self,
+        ui: &egui::Ui,
+        scene: &Scene,
+        camera: &CameraState,
+        rect: egui::Rect,
+        selected: &[Id],
+        show_disabled: bool,
+        runtime_world: Option<&oxy_core::physics3d::PhysicsWorld>,
+    ) -> collider_debug::OverlayFrame {
         let mut overlay = collider_debug::draw(
             ui,
             scene,
@@ -616,13 +629,21 @@ impl Renderer {
             selected,
             show_disabled,
         );
+        if !self.debug_colliders && selected.is_empty() {
+            return overlay;
+        }
         if scene.entities.iter().any(|e| e.physics3d.is_some()) {
             let mut cache = self.physics_debug.borrow_mut();
-            let world = cache.get_or_insert_with(oxy_core::physics3d::PhysicsWorld::new);
-            if let Err(error) = world.sync_scene(scene, true) {
-                overlay.errors.push(error);
-                return overlay;
-            }
+            let world = if let Some(world) = runtime_world {
+                world
+            } else {
+                let world = cache.get_or_insert_with(oxy_core::physics3d::PhysicsWorld::new);
+                if let Err(error) = world.sync_scene(scene, true) {
+                    overlay.errors.push(error);
+                    return overlay;
+                }
+                world
+            };
             let painter = ui.painter().with_clip_rect(rect);
             let view = oxy_core::scene_view::SceneView::new(scene);
             for body in world.debug_shapes() {

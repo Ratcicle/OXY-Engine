@@ -11,6 +11,32 @@ impl NativeQa {
             .find(|e| e.name == "Personagem")
             .ok_or("Personagem ausente")?;
         match label {
+            "m3_standing" | "m3_crouched" => {
+                use oxy_core::character::Posture;
+                let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+                let state = rt.character_state(&body.id).ok_or("Estado ausente")?;
+                let expected = if label == "m3_crouched" {
+                    Posture::Crouched
+                } else {
+                    Posture::Standing
+                };
+                if state.posture != expected
+                    || !state.grounded
+                    || state.support.is_none()
+                    || !rt.logs.is_empty()
+                {
+                    return Err(format!("Postura/apoio: {state:?}; {:?}", rt.logs));
+                }
+                let shape = rt
+                    .physics_world()
+                    .ok_or("Consultas ausentes")?
+                    .debug_shapes()
+                    .find(|b| b.id == body.id)
+                    .ok_or("Cápsula ausente")?;
+                if (shape.position.y - state.position.y - state.height * 0.5).abs() > 0.001 {
+                    return Err("Overlay e cápsula divergem".into());
+                }
+            }
             "fp_author" => {
                 if body.character3d.is_none()
                     || !matches!(
@@ -59,6 +85,117 @@ impl NativeQa {
         }
         Ok(())
     }
+}
+
+#[test]
+#[ignore = "Native WGPU and isolated input; does not certify physical OS capture"]
+fn native_ground_posture_v030() {
+    use oxy_core::{character::CharacterConfig, surface::*};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m3");
+    let folder = output.join("project");
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("project.oxy.json");
+    let mut project = Project::new("Postura e apoio");
+    let surface = SurfaceMaterial::preset(SurfacePreset::Ice);
+    let surface_id = surface.id.clone();
+    project.surfaces.push(surface);
+    let config = CharacterConfig {
+        crouch_toggle: true,
+        ..Default::default()
+    };
+    oxy_core::input_actions::ensure_character(&mut project, &config);
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::ThreeD;
+    scene.name = "Postura e apoio".into();
+    let mut body = Entity::new("Personagem", None);
+    body.transform.position = [0., 0.02, 0.];
+    body.character3d = Some(config);
+    body.physics3d = Some(Collider3d {
+        shape: CollisionShape::Capsule {
+            height: 1.8,
+            radius: 0.3,
+        },
+        center: [0., 0.9, 0.],
+        ..Default::default()
+    });
+    let mut floor = Entity::new("Plataforma de gelo", Some(Primitive::Cube));
+    floor.dimensions = [10., 1., 8.];
+    floor.transform.position = [0., -0.5, 0.];
+    floor.material.color = [0.17, 0.38, 0.5, 1.];
+    floor.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: floor.dimensions,
+        },
+        surface: Some(surface_id),
+        ..Default::default()
+    });
+    floor.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Velocity,
+        velocity: [0.35, 0., 0.],
+        ..Default::default()
+    });
+    let mut camera = Entity::new("Câmera de observação", None);
+    camera.camera = Some(Camera::default());
+    camera.transform = Transform::from_matrix(
+        glam::Mat4::look_at_rh(Vec3::new(4., 3., 7.), Vec3::Y * 0.8, Vec3::Y).inverse(),
+        [0.; 3],
+    );
+    scene.entities = vec![body, camera, floor];
+    oxy_core::persistence::save_project(&path, &project).unwrap();
+    let report = Arc::new(Mutex::new(Report::default()));
+    let shared = report.clone();
+    let artifacts = output.clone();
+    eframe::run_native(
+        "OXY Engine — postura e apoio",
+        eframe::NativeOptions {
+            persist_window: false,
+            renderer: eframe::Renderer::Wgpu,
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1280., 800.])
+                .with_active(false),
+            event_loop_builder: Some(Box::new(|b| {
+                b.with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            let mut qa = NativeQa::new(cc, path, artifacts, shared);
+            qa.actions = VecDeque::from([
+                Action::Click("Visualização"),
+                Action::Click("Colisores"),
+                Action::Key(Key::Escape, false),
+                Action::SelectEntity("Personagem"),
+                Action::Key(Key::S, true),
+                Action::ReopenProject,
+                Action::Click("▶ Jogar"),
+                Action::Wait(18),
+                Action::Check("m3_standing"),
+                Action::Screenshot("standing-runtime.png"),
+                Action::Key(Key::C, false),
+                Action::Wait(18),
+                Action::Check("m3_crouched"),
+                Action::Screenshot("crouched-runtime.png"),
+                Action::Key(Key::C, false),
+                Action::Wait(18),
+                Action::Check("m3_standing"),
+                Action::Click("■ Parar"),
+                Action::Check("fp_stopped"),
+            ]);
+            Ok(Box::new(qa))
+        }),
+    )
+    .unwrap();
+    let report = report.lock().unwrap();
+    let text = format!(
+        "Concluído: {}\nErro: {:?}\n{}\nCapturas: {:?}",
+        report.done,
+        report.error,
+        report.steps.join("\n"),
+        report.screenshots
+    );
+    std::fs::write(output.join("native-posture.txt"), &text).unwrap();
+    assert!(report.done && report.error.is_none(), "{text}");
 }
 #[test]
 #[ignore = "Native WGPU and isolated RawInput. Does not certify physical mouse capture"]

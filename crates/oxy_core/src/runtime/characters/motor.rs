@@ -1,0 +1,500 @@
+use super::*;
+use crate::{
+    physics3d::{CapsuleMotion, CollisionShape, QueryHit},
+    surface::{SurfaceMaterial, VelocitySpace},
+};
+
+pub(super) struct MotorInput {
+    pub axis: Vec2,
+    pub jump: bool,
+    pub sprint: bool,
+    pub crouch: bool,
+    pub crouch_pressed: bool,
+    pub crouch_override: Option<bool>,
+}
+pub(super) struct MotorContext<'a> {
+    pub world: &'a PhysicsWorld,
+    pub config: &'a CharacterConfig,
+    pub standing: CapsuleMotion,
+    pub options: QueryOptions,
+    pub surfaces: &'a [SurfaceMaterial],
+    pub platforms: &'a HashMap<Id, platforms::PlatformFrame>,
+    pub scene: &'a Scene,
+    pub evaluation: &'a SceneEvaluation,
+    pub time: f64,
+    pub dt: f32,
+    pub scale: f32,
+}
+#[derive(Default)]
+pub(super) struct MotorStep {
+    pub events: Vec<MovementEvent>,
+    pub path: Vec<(Vec3, Vec3)>,
+    pub lateral: Vec<QueryHit>,
+    pub warning: Option<String>,
+}
+fn shape(motion: CapsuleMotion) -> CollisionShape {
+    CollisionShape::Capsule {
+        height: motion.height,
+        radius: motion.radius,
+    }
+}
+fn center(feet: Vec3, height: f32) -> Vec3 {
+    feet + Vec3::Y * (height * 0.5)
+}
+fn append_path(
+    path: &mut Vec<(Vec3, Vec3)>,
+    origin: Vec3,
+    result: &crate::physics3d::MotionResult,
+) {
+    path.extend(
+        result
+            .segments
+            .iter()
+            .map(|(a, b)| (origin + *a, origin + *b)),
+    );
+}
+pub(super) fn inherited(velocity: Vec3, policy: InheritPlatform) -> Vec3 {
+    match policy {
+        InheritPlatform::None => Vec3::ZERO,
+        InheritPlatform::Horizontal => Vec3::new(velocity.x, 0., velocity.z),
+        InheritPlatform::All => velocity,
+    }
+}
+fn jump(state: &mut CharacterState, config: &CharacterConfig, events: &mut Vec<MovementEvent>) {
+    state.velocity.y = config.jump_speed;
+    if let Some(support) = state.support.take() {
+        state.velocity += inherited(support.velocity, config.inherit_platform);
+    }
+    state.grounded = false;
+    state.jump_consumed = true;
+    state.coyote_until = f64::NEG_INFINITY;
+    state.jump_until = None;
+    events.push(MovementEvent::Jumped);
+}
+/// Accelerate along the requested projection, preserving perpendicular momentum.
+pub(crate) fn air_accelerate(
+    velocity: Vec3,
+    axis: Vec3,
+    acceleration: f32,
+    limit: f32,
+    dt: f32,
+) -> Vec3 {
+    let intensity = axis.length().min(1.);
+    if intensity <= 1e-6 {
+        return velocity;
+    }
+    let direction = axis.normalize_or_zero();
+    let gain = (limit - velocity.dot(direction))
+        .max(0.)
+        .min(acceleration * intensity * dt);
+    velocity + direction * gain
+}
+fn approach(value: Vec3, target: Vec3, amount: f32) -> Vec3 {
+    let difference = target - value;
+    value + difference.clamp_length_max(amount.max(0.))
+}
+
+impl MotorContext<'_> {
+    fn probe(
+        &self,
+        feet: Vec3,
+        motion: CapsuleMotion,
+        previous: Option<&str>,
+    ) -> Result<Option<QueryHit>, String> {
+        let lift = motion.margin + 0.025;
+        let distance = lift + motion.snap + motion.margin + 0.03;
+        let at = center(feet + Vec3::Y * lift, motion.height);
+        let mut options = self.options.clone();
+        let mut best = None;
+        // Reject walls in the support probe; collision resolution still sees them.
+        for _ in 0..8 {
+            let Some(hit) = self
+                .world
+                .cast(&shape(motion), at, -Vec3::Y * distance, &options)?
+            else {
+                break;
+            };
+            if hit.normal.y >= motion.climb_degrees.to_radians().cos() {
+                best = Some(hit);
+                break;
+            }
+            options.exclude.insert(hit.object);
+        }
+        if let (Some(id), Some(hit)) = (previous, best.as_ref())
+            && id != hit.object
+        {
+            let mut same = self.options.clone();
+            same.only = Some(id.into());
+            if let Some(old) = self
+                .world
+                .cast(&shape(motion), at, -Vec3::Y * distance, &same)?
+                && old.distance <= hit.distance + 0.02
+                && old.normal.y >= motion.climb_degrees.to_radians().cos()
+            {
+                best = Some(old);
+            }
+        }
+        // A short ray at the contact stabilizes exact surface normals near the
+        // capsule margin; it must hit the same collider, not a neighbouring wall.
+        if let Some(hit) = &mut best {
+            let mut same = self.options.clone();
+            same.only = Some(hit.object.clone());
+            if let Some(face) =
+                self.world
+                    .ray(hit.point + hit.normal * 0.025, -hit.normal, 0.05, &same)?
+                && face.normal.y >= motion.climb_degrees.to_radians().cos()
+            {
+                hit.normal = face.normal;
+                hit.point = face.point;
+            }
+        }
+        // A support query may search as far as snap, but distant ground alone
+        // must not grant a jump or suspend gravity. The solver handles snapping.
+        Ok(best.filter(|hit| hit.distance <= lift + motion.margin + 0.02))
+    }
+    fn support(&self, hit: QueryHit) -> Option<Support> {
+        let platform = self.platforms.get(&hit.object);
+        if platform.is_some_and(|p| p.discontinuous) {
+            return None;
+        }
+        let mut velocity = platform.map_or(Vec3::ZERO, |p| p.velocity);
+        if let Some(material) = hit
+            .surface
+            .as_ref()
+            .and_then(|id| self.surfaces.iter().find(|s| s.id == *id))
+        {
+            let mut belt = Vec3::from(material.conveyor);
+            if material.conveyor_space == VelocitySpace::Local
+                && let Some(i) = self.evaluation.index.position(&hit.object)
+                && let Some(matrix) = self.evaluation.worlds[i]
+            {
+                belt = crate::physics3d::world_pose(matrix).ok()?.1 * belt;
+            }
+            velocity += belt - hit.normal * belt.dot(hit.normal);
+        }
+        Some(Support {
+            object: hit.object,
+            point: hit.point,
+            normal: hit.normal,
+            surface: hit.surface,
+            velocity,
+        })
+    }
+    pub fn advance(
+        &self,
+        state: &mut CharacterState,
+        input: MotorInput,
+    ) -> Result<MotorStep, String> {
+        let mut out = MotorStep::default();
+        let config = self.config;
+        let dt = self.dt;
+        let was_grounded = state.grounded;
+        let old_surface = state.support.as_ref().and_then(|s| s.surface.clone());
+        let previous_support = state.support.as_ref().map(|s| s.object.clone());
+        if state.height <= 0. {
+            state.height = self.standing.height;
+        }
+        let crouch_height = config.crouch_height * self.scale;
+        if let Some(wanted) = input.crouch_override {
+            state.want_crouch = wanted;
+        } else if config.crouch_toggle {
+            if input.crouch_pressed {
+                state.want_crouch = !state.want_crouch;
+            }
+        } else {
+            state.want_crouch = input.crouch;
+        }
+        let old_posture = state.posture;
+        let mut motion = self.standing;
+        motion.height = state.height;
+        if state.want_crouch {
+            state.posture = Posture::Crouched;
+            state.height = crouch_height;
+        } else if state.posture == Posture::Crouched
+            && self
+                .world
+                .penetrating(
+                    &shape(self.standing),
+                    center(state.position, self.standing.height),
+                    &self.options,
+                )?
+                .is_empty()
+        {
+            state.posture = Posture::Standing;
+            state.height = self.standing.height;
+        }
+        motion.height = state.height;
+        if old_posture != state.posture {
+            out.events
+                .push(MovementEvent::PostureChanged(state.posture));
+        }
+        state.sprinting = input.sprint && state.posture == Posture::Standing;
+
+        // Carry exactly once, before depenetration. Ignore only the supporting
+        // platform during this sweep; walls/ceilings still stop the passenger.
+        if let Some(support) = state.support.clone() {
+            let exists = self
+                .evaluation
+                .index
+                .position(&support.object)
+                .is_some_and(|i| {
+                    self.scene.entities[i]
+                        .physics3d
+                        .as_ref()
+                        .is_some_and(|c| c.enabled && !c.sensor)
+                        || self.scene.entities[i]
+                            .collider
+                            .as_ref()
+                            .is_some_and(|c| c.enabled && !c.is_trigger)
+                });
+            if !exists
+                || self
+                    .platforms
+                    .get(&support.object)
+                    .is_some_and(|p| p.discontinuous)
+            {
+                state.support = None;
+                state.grounded = false;
+            } else {
+                let base = self
+                    .platforms
+                    .get(&support.object)
+                    .map_or(Vec3::ZERO, |p| p.delta);
+                let platform_velocity = self
+                    .platforms
+                    .get(&support.object)
+                    .map_or(Vec3::ZERO, |p| p.velocity);
+                let fresh = self
+                    .support(QueryHit {
+                        object: support.object.clone(),
+                        point: support.point,
+                        normal: support.normal,
+                        surface: support.surface.clone(),
+                        ..Default::default()
+                    })
+                    .unwrap();
+                let carry = base + (fresh.velocity - platform_velocity) * dt;
+                if carry.length_squared() > 1e-12 {
+                    let mut options = self.options.clone();
+                    options.exclude.insert(support.object.clone());
+                    let mut carry_motion = motion;
+                    carry_motion.snap = 0.;
+                    carry_motion.step_height = 0.;
+                    let resolved = self.world.move_capsule(
+                        state.position,
+                        carry,
+                        dt,
+                        carry_motion,
+                        &options,
+                    )?;
+                    append_path(&mut out.path, state.position, &resolved);
+                    state.position += resolved.delta;
+                    state.velocity += (resolved.delta - carry) / dt;
+                }
+                state.support = Some(fresh);
+            }
+        }
+        // Recover only genuine penetration (touching the floor is allowed).
+        let penetrating = self.world.penetrating(
+            &shape(motion),
+            center(state.position, motion.height),
+            &self.options,
+        )?;
+        if !penetrating.is_empty() {
+            let recovered =
+                self.world
+                    .move_capsule(state.position, Vec3::ZERO, dt, motion, &self.options)?;
+            let recovery = recovered
+                .delta
+                .clamp_length_max(config.recovery_distance * self.scale);
+            let mut path_options = self.options.clone();
+            path_options.exclude.extend(penetrating);
+            let obstacle = self.world.cast(
+                &shape(motion),
+                center(state.position, motion.height),
+                recovery,
+                &path_options,
+            )?;
+            let correction =
+                obstacle.map_or(recovery, |hit| recovery * (hit.fraction - 0.001).max(0.));
+            if correction.length_squared() > 1e-12 {
+                out.path.push((state.position, state.position + correction));
+                state.position += correction;
+            }
+            if !self
+                .world
+                .penetrating(
+                    &shape(motion),
+                    center(state.position, motion.height),
+                    &self.options,
+                )?
+                .is_empty()
+            {
+                state.velocity = Vec3::ZERO;
+                state.support = None;
+                state.grounded = false;
+                out.warning=Some("Personagem sem espaço após recuperação limitada; afaste o obstáculo ou use um ponto livre. Nenhum dano automático foi aplicado.".into());
+                return Ok(out);
+            }
+        }
+
+        let transport_velocity = state.support.as_ref().map_or(Vec3::ZERO, |s| s.velocity);
+        if state.grounded {
+            let contact = self.probe(state.position, motion, previous_support.as_deref())?;
+            state.grounded = contact.is_some();
+            state.support = contact.and_then(|hit| self.support(hit));
+        }
+        if was_grounded && !state.grounded && !state.jump_consumed {
+            state.coyote_until = self.time + f64::from(config.coyote_ms) * 0.001;
+        }
+        if input.jump {
+            state.jump_until = Some(self.time + f64::from(config.jump_buffer_ms) * 0.001);
+        }
+        if state.jump_until.is_some_and(|t| t < self.time) {
+            state.jump_until = None;
+        }
+        if !state.movement_blocks.is_empty() {
+            state.jump_until = None;
+        }
+        let eligible = state.grounded || (!state.jump_consumed && self.time <= state.coyote_until);
+        if state.jump_until.is_some() && eligible {
+            jump(state, config, &mut out.events);
+        }
+
+        let material = state
+            .support
+            .as_ref()
+            .and_then(|s| s.surface.as_ref())
+            .and_then(|id| self.surfaces.iter().find(|s| s.id == *id));
+        let friction = material.map_or(1., |s| s.friction);
+        let traction = material.map_or(1., |s| s.traction);
+        let modifier = material.map_or(1., |s| s.speed_multiplier);
+        let yaw = if config.reference == MovementReference::World {
+            0.
+        } else {
+            state.yaw
+        };
+        let axis = wish_direction(input.axis, yaw);
+        if state.grounded {
+            let normal = state.support.as_ref().map_or(Vec3::Y, |s| s.normal);
+            let speed = if state.posture == Posture::Crouched {
+                config.crouch_speed
+            } else if state.sprinting {
+                config.sprint_speed
+            } else {
+                config.speed
+            };
+            if input.axis.length_squared() > 1e-8 {
+                let direction = (axis - normal * axis.dot(normal)).normalize_or_zero();
+                state.velocity = approach(
+                    state.velocity,
+                    direction * input.axis.length() * speed * modifier,
+                    config.ground_acceleration * traction * dt,
+                );
+            } else {
+                let length = state.velocity.length();
+                let drop =
+                    (config.ground_braking + config.ground_friction * length) * friction * dt;
+                state.velocity *= if length > 0. {
+                    (length - drop).max(0.) / length
+                } else {
+                    0.
+                };
+            }
+        } else {
+            state.velocity = air_accelerate(
+                state.velocity,
+                axis,
+                config.air_acceleration,
+                config.air_projected_limit,
+                dt,
+            );
+        }
+        state.velocity = state.velocity.clamp_length_max(config.absolute_speed_limit);
+        let mut desired_velocity = state.velocity;
+        if state.grounded {
+            desired_velocity.y -= config.gravity * dt;
+        } else {
+            state.velocity.y -= config.gravity * dt;
+            state.velocity = state.velocity.clamp_length_max(config.absolute_speed_limit);
+            desired_velocity = state.velocity;
+        }
+        if !state.grounded && state.velocity.y > 0. {
+            motion.snap = 0.;
+            motion.step_height = 0.;
+        }
+        let before_velocity = state.velocity;
+        let ascending = !state.grounded && state.velocity.y > 0.;
+        let resolved = self.world.move_capsule(
+            state.position,
+            desired_velocity * dt,
+            dt,
+            motion,
+            &self.options,
+        )?;
+        append_path(&mut out.path, state.position, &resolved);
+        state.position += resolved.delta;
+        // Rapier's `is_sliding_down_slope` also describes unconstrained tangents
+        // on almost-flat contacts. Walkability comes from our support normal.
+        state.support = if !ascending {
+            self.probe(state.position, motion, previous_support.as_deref())?
+                .and_then(|hit| self.support(hit))
+        } else {
+            None
+        };
+        state.grounded = state.support.is_some();
+        for hit in &resolved.contacts {
+            if hit.normal.y >= motion.climb_degrees.to_radians().cos() {
+                continue;
+            }
+            if hit.normal.y < -0.5 {
+                state.velocity.y = state.velocity.y.min(0.);
+            } else {
+                let into = state.velocity.dot(hit.normal);
+                if into < 0. {
+                    state.velocity -= hit.normal * into;
+                }
+                out.lateral.push(hit.clone());
+            }
+        }
+        if state.grounded {
+            let normal = state.support.as_ref().map_or(Vec3::Y, |s| s.normal);
+            let speed = Vec3::new(state.velocity.x, 0., state.velocity.z).length();
+            let horizontal = Vec3::new(state.velocity.x, 0., state.velocity.z);
+            state.velocity = (horizontal - normal * horizontal.dot(normal)).normalize_or_zero()
+                * if was_grounded {
+                    state.velocity.length()
+                } else {
+                    speed
+                };
+            state.jump_consumed = false;
+            if !was_grounded {
+                out.events.push(MovementEvent::Landed {
+                    impact_speed: (-before_velocity.dot(normal)).max(0.),
+                });
+            }
+            // A buffered landing jump prepares velocity only; it does not run a
+            // second dt or apply an extra ground-friction update this same tick.
+            if state.jump_until.is_some() && state.movement_blocks.is_empty() {
+                jump(state, config, &mut out.events);
+            }
+        } else if was_grounded && !state.jump_consumed {
+            state.coyote_until = self.time + f64::from(config.coyote_ms) * 0.001;
+            state.velocity += inherited(transport_velocity, config.inherit_platform);
+        }
+        if was_grounded && !state.grounded {
+            out.events.push(MovementEvent::LeftSupport);
+        }
+        let surface = state.support.as_ref().and_then(|s| s.surface.clone());
+        if old_surface != surface {
+            out.events.push(MovementEvent::SurfaceChanged {
+                previous: old_surface,
+                current: surface,
+            });
+        }
+        if !state.position.is_finite() || !state.velocity.is_finite() {
+            return Err("Estado de movimento não finito; verifique forças e dimensões.".into());
+        }
+        Ok(out)
+    }
+}

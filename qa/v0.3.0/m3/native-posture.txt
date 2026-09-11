@@ -1,0 +1,24 @@
+Concluído: true
+Erro: None
+Clique: Visualização em [456.0 124.8]
+Clique: Colisores em [493.0 267.0]
+Tecla Escape, Ctrl=false
+Selecionar hierarquia: Personagem
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Clique: ▶ Jogar em [326.6 46.5]
+Reproduzir 18 quadros sem entrada
+Verificado: m3_standing
+Captura GPU da janela: standing-runtime.png
+Captura standing-runtime.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla C, Ctrl=false
+Reproduzir 18 quadros sem entrada
+Verificado: m3_crouched
+Captura GPU da janela: crouched-runtime.png
+Captura crouched-runtime.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla C, Ctrl=false
+Reproduzir 18 quadros sem entrada
+Verificado: m3_standing
+Clique: ■ Parar em [492.2 45.5]
+Verificado: fp_stopped
+Capturas: ["standing-runtime.png", "crouched-runtime.png"]

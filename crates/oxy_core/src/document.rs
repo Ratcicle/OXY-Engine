@@ -249,6 +249,8 @@ pub struct Entity {
     pub character3d: Option<crate::character::CharacterConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_rig: Option<crate::character::CameraRig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<crate::surface::TranslationPlatform>,
     pub controller: Option<Controller>,
     pub camera: Option<Camera>,
     pub ui: Option<UiElement>,
@@ -279,6 +281,7 @@ impl Entity {
             physics3d: None,
             character3d: None,
             camera_rig: None,
+            platform: None,
             controller: None,
             camera: None,
             ui: None,
@@ -582,6 +585,8 @@ pub struct Project {
     pub input_bindings: BTreeMap<String, String>,
     #[serde(default)]
     pub input_labels: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surfaces: Vec<crate::surface::SurfaceMaterial>,
 }
 impl Project {
     pub fn new(name: impl Into<String>) -> Self {
@@ -594,6 +599,7 @@ impl Project {
             scenes: vec![scene],
             assets: Vec::new(),
             input_labels: BTreeMap::new(),
+            surfaces: Vec::new(),
             input_bindings: BTreeMap::from([
                 ("mover_esquerda".into(), "A".into()),
                 ("mover_direita".into(), "D".into()),
@@ -718,6 +724,26 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
     }
     let mut identifiers = HashSet::new();
     identifiers.insert(project.id.clone());
+    let mut surfaces = HashSet::new();
+    for surface in &project.surfaces {
+        surface.validate()?;
+        if !identifiers.insert(surface.id.clone()) || !surfaces.insert(surface.id.as_str()) {
+            return Err("Identificador de superfície duplicado.".into());
+        }
+    }
+    for entity in project.scenes.iter().flat_map(|s| &s.entities).chain(
+        project
+            .assets
+            .iter()
+            .filter_map(|a| a.model.as_deref())
+            .flatten(),
+    ) {
+        if let Some(id) = entity.physics3d.as_ref().and_then(|c| c.surface.as_deref())
+            && !surfaces.contains(id)
+        {
+            return Err(format!("{}: superfície física ausente ({id})", entity.name));
+        }
+    }
     let assets: HashMap<_, _> = project.assets.iter().map(|a| (a.id.as_str(), a)).collect();
     for asset in &project.assets {
         if asset.id.is_empty() || !identifiers.insert(asset.id.clone()) {
@@ -818,7 +844,11 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
             collider
                 .validate()
                 .map_err(|error| format!("{}: {error}", e.name))?;
-            crate::physics3d::world_pose(view.world_matrix(&e.id)?)
+            let (_, _, scale) = crate::physics3d::world_pose(view.world_matrix(&e.id)?)
+                .map_err(|error| format!("{}: {error}", e.name))?;
+            collider
+                .shape
+                .validate_scale(scale)
                 .map_err(|error| format!("{}: {error}", e.name))?;
         }
         for texture in [

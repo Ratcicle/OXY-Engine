@@ -134,6 +134,7 @@ impl CollisionShape {
     }
     pub(super) fn prepare(&self, scale: Vec3) -> Result<SharedShape, String> {
         self.validate()?;
+        self.validate_scale(scale)?;
         let abs = scale.abs();
         Ok(match self {
             Self::Box { size } => {
@@ -176,5 +177,34 @@ impl CollisionShape {
                     .map_err(|e| format!("Falha ao preparar triângulos físicos: {e}"))?
             }
         })
+    }
+    pub fn validate_scale(&self, scale: Vec3) -> Result<(), String> {
+        let abs = scale.abs();
+        if !scale.is_finite() || abs.min_element() < 1e-6 {
+            return Err("Escala física não invertível ou não finita.".into());
+        }
+        let finite = match self {
+            Self::Box { size } => (Vec3::from(*size) * abs).is_finite(),
+            Self::Capsule { height, radius } => {
+                if abs.max_element() - abs.min_element() > 1e-5 {
+                    return Err("Cápsula exige escala uniforme.".into());
+                }
+                (height * abs.x).is_finite() && (radius * abs.x).is_finite()
+            }
+            Self::Sphere { radius } => {
+                if abs.max_element() - abs.min_element() > 1e-5 {
+                    return Err("Esfera exige escala uniforme.".into());
+                }
+                (radius * abs.x).is_finite()
+            }
+            Self::Convex { geometry } | Self::TriMesh { geometry } => geometry
+                .vertices
+                .iter()
+                .all(|p| (Vec3::from(*p) * scale).is_finite()),
+        };
+        if !finite {
+            return Err("Dimensões físicas fora do intervalo numérico suportado.".into());
+        }
+        Ok(())
     }
 }

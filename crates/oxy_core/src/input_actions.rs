@@ -39,6 +39,8 @@ pub fn legacy_label(id: &str) -> String {
         "mover_frente" => "Mover para frente",
         "mover_tras" => "Mover para trás",
         "pular" => "Pular",
+        "correr" => "Correr",
+        "agachar" => "Agachar",
         "atacar" => "Atacar",
         "interagir" => "Interagir",
         _ => return id.replace('_', " "),
@@ -91,11 +93,11 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
             {
                 found.push(format!("{scope} → {} → controlador", entity.name));
             }
-            if entity
-                .character3d
-                .as_ref()
-                .is_some_and(|c| c.actions.all().iter().any(|(action, _, _)| *action == id))
-            {
+            if entity.character3d.as_ref().is_some_and(|c| {
+                c.sprint_action == id
+                    || c.crouch_action == id
+                    || c.actions.all().iter().any(|(action, _, _)| *action == id)
+            }) {
                 found.push(format!("{scope} → {} → personagem 3D", entity.name));
             }
             for node in &entity.graph.nodes {
@@ -138,5 +140,21 @@ pub fn ensure_controller(project: &mut Project, actions: &MovementActions, kind:
             .input_labels
             .entry((*id).into())
             .or_insert_with(|| (*name).into());
+    }
+}
+pub fn ensure_character(project: &mut Project, config: &crate::character::CharacterConfig) {
+    ensure_controller(project, &config.actions, SceneKind::ThreeD);
+    for (id, name, key) in [
+        (&config.sprint_action, "Correr", "Shift"),
+        (&config.crouch_action, "Agachar", "C"),
+    ] {
+        project
+            .input_bindings
+            .entry(id.clone())
+            .or_insert_with(|| key.into());
+        project
+            .input_labels
+            .entry(id.clone())
+            .or_insert_with(|| name.into());
     }
 }

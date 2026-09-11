@@ -22,7 +22,12 @@ fn fixture() -> Project {
     });
     let mut body = Entity::new("Personagem", None);
     body.id = "00000000-0000-4000-8000-000000000002".into();
-    body.character3d = Some(CharacterConfig::default());
+    // This fixture isolates input/solver sequencing. Acceleration profiles have
+    // separate tests; one tick reaches the requested speed in this fixture.
+    body.character3d = Some(CharacterConfig {
+        ground_acceleration: 600.,
+        ..Default::default()
+    });
     body.physics3d = Some(Collider3d {
         shape: CollisionShape::Capsule {
             height: 1.8,
@@ -317,4 +322,581 @@ fn rig_ids_survive_model_duplication_and_deletion_does_not_break_project() {
     validate_project(&project).unwrap();
     let json = serde_json::to_string(&project).unwrap();
     assert_eq!(project, serde_json::from_str(&json).unwrap());
+}
+
+#[test]
+fn acceleration_braking_and_external_momentum_are_distinct() {
+    let mut project = fixture();
+    project.scenes[0]
+        .entity_mut(BODY)
+        .unwrap()
+        .character3d
+        .as_mut()
+        .unwrap()
+        .ground_acceleration = 40.;
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    rt.advance(
+        FIXED_DT,
+        &InputFrame {
+            movement: [1., 0.],
+            ..Default::default()
+        },
+    );
+    assert!((rt.character_state(BODY).unwrap().velocity.x - 40. * FIXED_DT).abs() < 0.001);
+    for _ in 0..60 {
+        rt.advance(
+            FIXED_DT,
+            &InputFrame {
+                movement: [1., 0.],
+                ..Default::default()
+            },
+        );
+    }
+    assert!((rt.character_state(BODY).unwrap().velocity.x - 6.).abs() < 0.001);
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(rt.character_state(BODY).unwrap().velocity.x > 4.9);
+    rt.add_character_velocity(BODY, Vec3::new(20., 5., 0.))
+        .unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(rt.character_state(BODY).unwrap().velocity.x > 24.);
+    assert!(
+        rt.character_state(BODY).unwrap().velocity.y > 4.,
+        "{:?}",
+        rt.character_state(BODY)
+    );
+}
+
+#[test]
+fn independent_input_blocks_do_not_freeze_gravity_or_inertia() {
+    let project = fixture();
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    rt.add_character_velocity(BODY, Vec3::new(12., 5., 0.))
+        .unwrap();
+    rt.block_character_input(BODY, false, "menu", true).unwrap();
+    rt.block_character_input(BODY, false, "atordoado", true)
+        .unwrap();
+    rt.block_character_input(BODY, false, "menu", false)
+        .unwrap();
+    rt.block_character_input(BODY, true, "menu", true).unwrap();
+    let yaw = rt.character_state(BODY).unwrap().yaw;
+    rt.advance(
+        FIXED_DT,
+        &InputFrame {
+            movement: [-1., 0.],
+            look: [700., 0.],
+            pressed: ["pular".into()].into(),
+            ..Default::default()
+        },
+    );
+    let state = rt.character_state(BODY).unwrap();
+    assert_eq!(state.movement_blocks.len(), 1);
+    assert_eq!(state.yaw, yaw);
+    assert!((state.velocity.x - 12.).abs() < 1e-5 && state.position.x > 0.19);
+    assert!(state.velocity.y < 5. && state.velocity.y > 4.);
+}
+
+#[test]
+fn crouching_preserves_feet_and_requires_entire_standing_capsule_free() {
+    let project = fixture();
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let feet = rt.character_state(BODY).unwrap().position;
+    rt.request_crouch(BODY, true).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    let state = rt.character_state(BODY).unwrap();
+    assert_eq!(state.posture, Posture::Crouched);
+    assert!(state.position.abs_diff_eq(feet, 0.002));
+    let mut ceiling = Entity::new("Teto", None);
+    ceiling.id = "ceiling".into();
+    ceiling.transform.position = [0., 1.4, 0.];
+    ceiling.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [4., 0.2, 4.],
+        },
+        ..Default::default()
+    });
+    rt.scene_mut().entities.push(ceiling);
+    rt.request_crouch(BODY, false).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert_eq!(rt.character_state(BODY).unwrap().posture, Posture::Crouched);
+    rt.scene_mut().remove_subtree("ceiling");
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert_eq!(rt.character_state(BODY).unwrap().posture, Posture::Standing);
+    // The actual runtime query body agrees with posture; authored collider remains standing.
+    let body = rt
+        .physics_world()
+        .unwrap()
+        .debug_shapes()
+        .into_iter()
+        .find(|b| b.id == BODY)
+        .unwrap();
+    assert!((body.position.y - feet.y - 0.9).abs() < 0.002);
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
+fn surfaces_preserve_reference_integrity_and_change_ground_response() {
+    use oxy_core::surface::*;
+    let mut project = fixture();
+    let ice = SurfaceMaterial::preset(SurfacePreset::Ice);
+    let id = ice.id.clone();
+    project.surfaces.push(ice);
+    project.scenes[0].entities[0]
+        .physics3d
+        .as_mut()
+        .unwrap()
+        .surface = Some(id.clone());
+    assert!(remove(&mut project, &id).is_err());
+    let copy = duplicate(&mut project, &id).unwrap();
+    assert_ne!(copy, id);
+    remove(&mut project, &copy).unwrap();
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    rt.set_character_velocity(BODY, Vec3::X * 6.).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(rt.character_state(BODY).unwrap().velocity.x > 5.9);
+    let json = serde_json::to_string(&project).unwrap();
+    assert_eq!(project, serde_json::from_str(&json).unwrap());
+}
+
+#[test]
+fn platform_carry_is_once_and_jump_inheritance_is_configurable() {
+    use oxy_core::surface::*;
+    for policy in [
+        InheritPlatform::None,
+        InheritPlatform::Horizontal,
+        InheritPlatform::All,
+    ] {
+        let mut project = fixture();
+        project.scenes[0].entities[0].platform = Some(TranslationPlatform {
+            mode: PlatformMode::Velocity,
+            velocity: [2., 1., 0.],
+            ..Default::default()
+        });
+        project.scenes[0]
+            .entity_mut(BODY)
+            .unwrap()
+            .character3d
+            .as_mut()
+            .unwrap()
+            .inherit_platform = policy;
+        let mut rt = runtime(&project);
+        settle(&mut rt);
+        assert!(
+            rt.character_state(BODY).unwrap().grounded,
+            "{:?} {:?}",
+            rt.character_state(BODY),
+            rt.logs
+        );
+        let before = rt.character_state(BODY).unwrap().position;
+        for _ in 0..30 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        let state = rt.character_state(BODY).unwrap();
+        assert!(
+            state
+                .position
+                .abs_diff_eq(before + Vec3::new(1., 0.5, 0.), 0.01),
+            "before={before:?} {state:?}"
+        );
+        assert!(state.velocity.length() < 0.01, "{state:?}");
+        assert!(
+            state
+                .total_velocity()
+                .abs_diff_eq(Vec3::new(2., 1., 0.), 0.002)
+        );
+        rt.request_jump(BODY).unwrap();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let state = rt.character_state(BODY).unwrap();
+        assert!(
+            (state.velocity.x
+                - if policy == InheritPlatform::None {
+                    0.
+                } else {
+                    2.
+                })
+            .abs()
+                < 0.003,
+            "{state:?}"
+        );
+        assert!(
+            (state.velocity.y
+                - (8.
+                    + if policy == InheritPlatform::All {
+                        1.
+                    } else {
+                        0.
+                    }
+                    - 22. * FIXED_DT))
+                .abs()
+                < 0.003,
+            "{state:?}"
+        );
+        assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    }
+}
+
+#[test]
+fn conveyor_is_tangential_and_pause_clears_requested_posture() {
+    use oxy_core::surface::*;
+    let mut project = fixture();
+    let surface = SurfaceMaterial::preset(SurfacePreset::Conveyor);
+    project.scenes[0].entities[0]
+        .physics3d
+        .as_mut()
+        .unwrap()
+        .surface = Some(surface.id.clone());
+    project.surfaces.push(surface);
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let before = rt.character_state(BODY).unwrap().position;
+    for _ in 0..30 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    assert!(
+        (rt.character_state(BODY).unwrap().position.x - before.x - 1.).abs() < 0.003,
+        "{before:?} {:?}",
+        rt.character_state(BODY)
+    );
+    rt.request_crouch(BODY, true).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    rt.set_paused(true);
+    rt.set_paused(false);
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert_eq!(rt.character_state(BODY).unwrap().posture, Posture::Standing);
+}
+
+#[test]
+fn landing_buffer_emits_once_without_integrating_an_extra_tick() {
+    for buffer in [0., 120.] {
+        let mut project = fixture();
+        let body = project.scenes[0].entity_mut(BODY).unwrap();
+        body.transform.position[1] = 0.15;
+        body.character3d.as_mut().unwrap().jump_buffer_ms = buffer;
+        let mut rt = runtime(&project);
+        rt.set_character_velocity(BODY, -Vec3::Y * 3.).unwrap();
+        rt.request_jump(BODY).unwrap();
+        let mut jumped = 0;
+        let mut landed = 0;
+        for _ in 0..8 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+            for (_, event) in rt.movement_events() {
+                match event {
+                    MovementEvent::Jumped => jumped += 1,
+                    MovementEvent::Landed { impact_speed } => {
+                        landed += 1;
+                        assert!(
+                            *impact_speed > 3.,
+                            "impact={impact_speed} {:?}",
+                            rt.character_state(BODY)
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            if jumped > 0 {
+                let s = rt.character_state(BODY).unwrap();
+                assert!(s.position.y < 0.03, "{s:?}");
+                assert_eq!(s.velocity.y, 8.);
+                break;
+            }
+        }
+        assert_eq!(landed, 1);
+        assert_eq!(jumped, if buffer > 0. { 1 } else { 0 });
+    }
+}
+
+#[test]
+fn coyote_time_zero_disables_delayed_edge_jump() {
+    for grace in [0., 100.] {
+        let mut project = fixture();
+        project.scenes[0]
+            .entity_mut(BODY)
+            .unwrap()
+            .character3d
+            .as_mut()
+            .unwrap()
+            .coyote_ms = grace;
+        let mut rt = runtime(&project);
+        settle(&mut rt);
+        let floor = rt.scene().entities[0].id.clone();
+        rt.scene_mut().remove_subtree(&floor);
+        for _ in 0..3 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        rt.request_jump(BODY).unwrap();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(
+            rt.character_state(BODY).unwrap().velocity.y > 0.,
+            grace > 0.
+        );
+        if grace > 0. {
+            rt.request_jump(BODY).unwrap();
+            rt.advance(FIXED_DT, &InputFrame::default());
+            assert!(
+                rt.movement_events()
+                    .iter()
+                    .all(|(_, e)| !matches!(e, MovementEvent::Jumped))
+            );
+        }
+    }
+}
+
+#[test]
+fn platform_discontinuity_detaches_without_launch_and_diagnostics_are_bounded() {
+    use oxy_core::surface::*;
+    let mut project = fixture();
+    project.scenes[0].entities[0].platform = Some(TranslationPlatform::default());
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let before = rt.character_state(BODY).unwrap().position;
+    rt.scene_mut().entities[0].transform.position[0] = 5.;
+    rt.advance(FIXED_DT, &InputFrame::default());
+    let s = rt.character_state(BODY).unwrap();
+    assert!(
+        !s.grounded && s.velocity.x.abs() < 0.001 && (s.position.x - before.x).abs() < 0.01,
+        "{s:?}"
+    );
+    assert!(!rt.logs.is_empty());
+    for _ in 0..10 {
+        rt.scene_mut().entities[0].transform.rotation[1] += 0.2;
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    assert_eq!(rt.logs.len(), 1);
+    assert!(rt.character_state(BODY).unwrap().velocity.length() < 10.);
+}
+
+#[test]
+fn elevator_cannot_push_character_through_a_ceiling() {
+    use oxy_core::surface::*;
+    let mut project = fixture();
+    project.scenes[0].entities[0].platform = Some(TranslationPlatform {
+        mode: PlatformMode::Velocity,
+        velocity: [0., 1., 0.],
+        ..Default::default()
+    });
+    let mut ceiling = Entity::new("Teto sólido", None);
+    ceiling.id = "ceiling".into();
+    ceiling.transform.position = [0., 3., 0.];
+    ceiling.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [50., 1., 50.],
+        },
+        ..Default::default()
+    });
+    project.scenes[0].entities.push(ceiling);
+    let mut rt = runtime(&project);
+    for _ in 0..150 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+        assert!(
+            rt.character_state(BODY).unwrap().position.y < 0.72,
+            "{:?}",
+            rt.character_state(BODY)
+        );
+    }
+    assert!(
+        !rt.logs.is_empty(),
+        "A capsule trapped between surfaces must report bounded recovery"
+    );
+}
+
+#[test]
+fn moving_obstacle_recovers_an_idle_character_with_finite_bounded_motion() {
+    use oxy_core::surface::*;
+    let project = fixture();
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let mut wall = Entity::new("Empurrador", None);
+    wall.id = "pusher".into();
+    wall.transform.position = [-0.6, 1., 0.];
+    wall.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [0.5, 2., 3.],
+        },
+        ..Default::default()
+    });
+    wall.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Velocity,
+        velocity: [1., 0., 0.],
+        ..Default::default()
+    });
+    rt.scene_mut().entities.push(wall);
+    for _ in 0..40 {
+        let before = rt.character_state(BODY).unwrap().position;
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let after = rt.character_state(BODY).unwrap().position;
+        assert!(after.distance(before) < 0.1, "{before:?} -> {after:?}");
+    }
+    assert!(
+        rt.character_state(BODY).unwrap().position.x > 0.5,
+        "{:?} {:?}",
+        rt.character_state(BODY),
+        rt.logs
+    );
+}
+
+#[test]
+fn walkable_slopes_project_intent_without_energy_gain_and_steep_slopes_slide() {
+    for degrees in [25_f32, 60.] {
+        let mut project = fixture();
+        let floor = &mut project.scenes[0].entities[0];
+        floor.physics3d.as_mut().unwrap().shape = CollisionShape::Box {
+            size: [50., 1., 50.],
+        };
+        floor.transform.rotation[2] = degrees.to_radians();
+        project.scenes[0]
+            .entity_mut(BODY)
+            .unwrap()
+            .transform
+            .position = [0., 3., 0.];
+        let mut rt = runtime(&project);
+        for _ in 0..90 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        if degrees < 45. {
+            assert!(
+                rt.character_state(BODY).unwrap().grounded,
+                "{:?}",
+                rt.character_state(BODY)
+            );
+            let start = rt.character_state(BODY).unwrap().position;
+            for _ in 0..30 {
+                rt.advance(
+                    FIXED_DT,
+                    &InputFrame {
+                        movement: [1., 0.],
+                        ..Default::default()
+                    },
+                );
+                let s = rt.character_state(BODY).unwrap();
+                assert!(s.velocity.length() < 6.05, "{s:?}");
+            }
+            assert!(rt.character_state(BODY).unwrap().position.y > start.y + 0.5);
+        } else {
+            let s = rt.character_state(BODY).unwrap();
+            assert!(!s.grounded && s.position.x < -1., "{s:?}");
+        }
+        assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    }
+}
+
+#[test]
+fn surfaces_capsules_and_platforms_undo_redo_without_image_snapshots() {
+    use oxy_core::{history::CommandHistory, surface::*, texture_cache::TextureCache};
+    let mut project = fixture();
+    let base = project.clone();
+    let mut textures = TextureCache::default();
+    let mut history = CommandHistory::new();
+    history.begin("Material e transporte", &project, &textures);
+    let surface = SurfaceMaterial::preset(SurfacePreset::Ice);
+    project.scenes[0].entities[0]
+        .physics3d
+        .as_mut()
+        .unwrap()
+        .surface = Some(surface.id.clone());
+    project.surfaces.push(surface);
+    project.scenes[0].entities[0].platform = Some(TranslationPlatform::default());
+    history.commit(&project, &mut textures).unwrap();
+    let changed = project.clone();
+    history.undo(&mut project, &mut textures).unwrap();
+    assert_eq!(project, base);
+    history.redo(&mut project, &mut textures).unwrap();
+    assert_eq!(project, changed);
+    validate_project(&project).unwrap();
+}
+
+#[test]
+fn changing_character_ancestor_does_not_steal_physical_authority_or_move_visual_children_twice() {
+    let mut project = fixture();
+    let mut parent = Entity::new("Montagem", None);
+    parent.id = "assembly".into();
+    parent.transform.scale = [2.; 3];
+    project.scenes[0].entity_mut(BODY).unwrap().parent = Some(parent.id.clone());
+    project.scenes[0].entities.push(parent);
+    let mut part = Entity::new("Peça visual", Some(Primitive::Cube));
+    part.id = "part".into();
+    part.parent = Some(BODY.into());
+    part.transform.position = [0., 0.5, 0.];
+    project.scenes[0].entities.push(part);
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let before = rt.scene().world_matrix("part").unwrap();
+    let feet = rt.character_state(BODY).unwrap().position;
+    rt.scene_mut()
+        .entity_mut("assembly")
+        .unwrap()
+        .transform
+        .position = [3., 7., -4.];
+    rt.scene_mut()
+        .entity_mut("assembly")
+        .unwrap()
+        .transform
+        .rotation = [0.2, 0.6, 0.1];
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(
+        rt.scene()
+            .world_matrix("part")
+            .unwrap()
+            .abs_diff_eq(before, 0.002)
+    );
+    assert!(
+        rt.character_state(BODY)
+            .unwrap()
+            .position
+            .abs_diff_eq(feet, 0.002)
+    );
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
+fn step_height_and_headroom_are_both_required() {
+    for (step_height, tunnel, passes) in [
+        (0.15, false, true),
+        (0.65, false, false),
+        (0.15, true, false),
+    ] {
+        let mut project = fixture();
+        let mut step = Entity::new("Degrau", None);
+        step.id = "step".into();
+        step.transform.position = [0., step_height * 0.5, -2.];
+        step.physics3d = Some(Collider3d {
+            shape: CollisionShape::Box {
+                size: [8., step_height, 2.],
+            },
+            ..Default::default()
+        });
+        project.scenes[0].entities.push(step);
+        if tunnel {
+            let mut roof = Entity::new("Teto baixo", None);
+            roof.id = "roof".into();
+            roof.transform.position = [0., 2., -2.];
+            roof.physics3d = Some(Collider3d {
+                shape: CollisionShape::Box {
+                    size: [8., 0.2, 2.],
+                },
+                ..Default::default()
+            });
+            project.scenes[0].entities.push(roof);
+        }
+        let mut rt = runtime(&project);
+        settle(&mut rt);
+        for _ in 0..60 {
+            rt.advance(
+                FIXED_DT,
+                &InputFrame {
+                    movement: [0., 1.],
+                    ..Default::default()
+                },
+            );
+        }
+        let state = rt.character_state(BODY).unwrap();
+        assert_eq!(
+            state.position.z < -3.2,
+            passes,
+            "height={step_height}, tunnel={tunnel}, {state:?}"
+        );
+        assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    }
 }

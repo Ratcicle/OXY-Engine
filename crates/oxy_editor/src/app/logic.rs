@@ -354,6 +354,7 @@ fn key_choice(ui: &mut egui::Ui, key: &mut String, salt: impl std::hash::Hash) {
             for (i,candidate) in common.iter().enumerate() {ui.selectable_value(key,candidate.name().into(),candidate.name());if (i+1)%8==0 {ui.end_row();}}
         });
         ui.selectable_value(key,"Space".into(),"Espaço");
+        ui.selectable_value(key,"Shift".into(),"Shift (segurar)");
         ui.collapsing("Mouse",|ui|{for candidate in ["MouseLeft","MouseRight","MouseMiddle","Mouse4","Mouse5","WheelUp","WheelDown"] {ui.selectable_value(key,candidate.into(),crate::labels::key(candidate));}});
         ui.collapsing("Outras teclas",|ui| {for candidate in egui::Key::ALL {
             if !matches!(candidate,egui::Key::Escape|egui::Key::F3) && !common.contains(&candidate) {

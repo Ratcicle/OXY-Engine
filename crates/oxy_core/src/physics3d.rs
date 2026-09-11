@@ -48,6 +48,7 @@ pub struct QueryOptions {
     pub include_sensors: bool,
     pub camera: bool,
     pub exclude: HashSet<Id>,
+    pub only: Option<Id>,
 }
 impl Default for QueryOptions {
     fn default() -> Self {
@@ -57,6 +58,7 @@ impl Default for QueryOptions {
             include_sensors: false,
             camera: false,
             exclude: HashSet::new(),
+            only: None,
         }
     }
 }
@@ -244,6 +246,7 @@ impl PhysicsWorld {
         }
         if !position.is_finite()
             || !rotation.is_finite()
+            || (rotation.length_squared() - 1.).abs() > 1e-4
             || !scale.is_finite()
             || !Vec3::from(config.center).is_finite()
             || scale.abs().min_element() < 1e-6
@@ -258,6 +261,9 @@ impl PhysicsWorld {
             None
         };
         let position = position + rotation * (scale * Vec3::from(config.center));
+        if !position.is_finite() {
+            return Err("Centro físico fora do intervalo numérico suportado.".into());
+        }
         if let Some(entry) = self.entries.get_mut(id) {
             let collider = &mut self.colliders[entry.handle];
             let mut modified = false;
@@ -339,6 +345,7 @@ impl PhysicsWorld {
             return false;
         };
         !options.exclude.contains(id)
+            && options.only.as_ref().is_none_or(|only| only == id)
             && (options.include_sensors || !e.sensor)
             && (!options.camera || e.filter.blocks_camera)
             && (options.camera || e.filter.blocks_character)
@@ -536,6 +543,49 @@ impl PhysicsWorld {
         if !result.delta.is_finite() {
             return Err("Resolvedor retornou movimento inválido; posição preservada.".into());
         }
+        Ok(result)
+    }
+    /// Unlike `overlaps`, exact tangency is free space. Used for standing up,
+    /// safe teleports and bounded recovery, not for sensor overlap events.
+    pub fn penetrating(
+        &self,
+        shape: &CollisionShape,
+        position: Vec3,
+        options: &QueryOptions,
+    ) -> Result<Vec<Id>, String> {
+        if !position.is_finite() {
+            return Err("Consulta: posição inválida.".into());
+        }
+        let shape = shape.prepare(Vec3::ONE)?;
+        let at = pose(position, Quat::IDENTITY);
+        let predicate = |h, _: &Collider| self.accepts(h, options);
+        let queries = self.broad.as_query_pipeline(
+            self.narrow.query_dispatcher(),
+            &self.bodies,
+            &self.colliders,
+            QueryFilter::default().predicate(&predicate),
+        );
+        self.queries.set(self.queries.get() + 1);
+        let mut result = Vec::new();
+        for (handle, collider) in queries.intersect_shape(at, &*shape) {
+            let contact = self
+                .narrow
+                .query_dispatcher()
+                .contact(
+                    &at.inv_mul(collider.position()),
+                    &*shape,
+                    collider.shape(),
+                    0.,
+                )
+                .map_err(|_| "Não foi possível verificar a profundidade de contato desta forma.")?;
+            if contact.is_some_and(|c| c.dist < -1e-5)
+                && let Some(id) = self.ids.get(&handle)
+            {
+                result.push(id.clone());
+            }
+        }
+        result.sort();
+        result.dedup();
         Ok(result)
     }
     /// Same prepared shape and pose used by all queries; rendering must not invent another body.

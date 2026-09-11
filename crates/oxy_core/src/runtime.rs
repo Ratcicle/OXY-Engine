@@ -218,8 +218,7 @@ impl Runtime {
         self.pending_released.clear();
         self.pending_look = [0.; 2];
         self.pending_wheel = 0.;
-        self.characters.intents.clear();
-        self.characters.jumps.clear();
+        self.characters.release_input();
     }
     pub fn stop(&mut self) {
         self.stopped = true;
@@ -1063,18 +1062,55 @@ impl Runtime {
                 .and_then(|entity| entity.clips.iter().find(|clip| clip.id == player.clip_id))
                 .cloned();
             if let Some(mut clip) = clip {
+                let previous_cycle = (player.time / f64::from(clip.duration)).floor();
                 for marker in player.advance(&clip, FIXED_DT) {
                     events.push(RuntimeEvent::Animation {
                         object: owner.clone(),
                         marker,
                     });
                 }
+                if clip.looping && (player.time / f64::from(clip.duration)).floor() > previous_cycle
+                {
+                    for track in &clip.tracks {
+                        if let (Some(first), Some(last)) =
+                            (track.keyframes.first(), track.keyframes.last())
+                            && !first
+                                .transform
+                                .matrix()
+                                .abs_diff_eq(last.transform.matrix(), 1e-4)
+                        {
+                            let descendants = self
+                                .index()
+                                .map(|i| i.descendants(self.scene(), &track.target))
+                                .unwrap_or_default();
+                            self.characters.looped.extend(descendants);
+                        }
+                    }
+                }
                 // A physical root is owned by its controller; only visual children
                 // may be animated. The authored clip is never rewritten here.
+                let mut ignored = Vec::new();
                 clip.tracks.retain(|track| {
-                    self.entity(&track.target)
-                        .is_none_or(|e| e.character3d.is_none())
+                    let keep = self.entity(&track.target).is_none_or(|e| {
+                        e.character3d.is_none()
+                            && !e.platform.as_ref().is_some_and(|p| {
+                                p.enabled && p.mode == crate::surface::PlatformMode::Velocity
+                            })
+                    });
+                    if !keep {
+                        ignored.push(track.target.clone());
+                    }
+                    keep
                 });
+                for target in ignored {
+                    if self.characters.ignored_tracks.insert((
+                        owner.clone(),
+                        clip.id.clone(),
+                        target.clone(),
+                    )) {
+                        self.log(format!("Animação {}: trilha de {target} ignorada porque a raiz tem movimento físico próprio; anime as peças filhas.",clip.name));
+                    }
+                }
                 player.sample(self.scene_mut_internal(), &clip);
             }
         }
