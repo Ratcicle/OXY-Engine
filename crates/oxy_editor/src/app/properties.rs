@@ -197,11 +197,11 @@ impl Editor {
                 ui.collapsing("Atributos personalizados",|ui| {
                     ui.small("Nenhum nome de atributo impõe regras. Os nós configuram o comportamento.");
                     let mut delete=None;
-                    for (name,value) in &mut entity.attributes{ui.push_id(name,|ui|{ui.horizontal(|ui|{ui.strong(name);if ui.small_button("×").clicked(){delete=Some(name.clone());}});value_editor(ui,value,&objects,name);});}
+                    for (name,value) in &mut entity.attributes{ui.push_id(name,|ui|{ui.horizontal(|ui|{ui.strong(name);if ui.small_button("×").clicked(){delete=Some(name.clone());}});value_editor(ui,value,&objects,&self.state.project.surfaces,name);});}
                     if let Some(name)=delete{entity.attributes.remove(&name);}
                     ui.separator();ui.add(egui::TextEdit::singleline(&mut self.attribute_name).hint_text("Nome do atributo"));
-                    egui::ComboBox::from_id_salt("attrtype").selected_text(["Número","Texto","Booleano","Objeto"][self.attribute_type as usize]).show_ui(ui,|ui|{for (i,name) in ["Número","Texto","Booleano","Objeto"].into_iter().enumerate(){ui.selectable_value(&mut self.attribute_type,i as u8,name);}});
-                    if ui.add_enabled(!self.attribute_name.trim().is_empty(),egui::Button::new("Adicionar atributo")).clicked(){let value=match self.attribute_type{0=>Value::Number(0.),1=>Value::Text(String::new()),2=>Value::Bool(false),_=>Value::Object(None)};entity.attributes.entry(self.attribute_name.trim().into()).or_insert(value);self.attribute_name.clear();}
+                    egui::ComboBox::from_id_salt("attrtype").selected_text(["Número","Texto","Booleano","Objeto","Vetor2","Vetor3","Superfície física"][self.attribute_type as usize]).show_ui(ui,|ui|{for (i,name) in ["Número","Texto","Booleano","Objeto","Vetor2","Vetor3","Superfície física"].into_iter().enumerate(){ui.selectable_value(&mut self.attribute_type,i as u8,name);}});
+                    if ui.add_enabled(!self.attribute_name.trim().is_empty(),egui::Button::new("Adicionar atributo")).clicked(){let value=match self.attribute_type{0=>Value::Number(0.),1=>Value::Text(String::new()),2=>Value::Bool(false),4=>Value::Vector2([0.;2]),5=>Value::Vector3([0.;3]),6=>Value::Surface(None),_=>Value::Object(None)};entity.attributes.entry(self.attribute_name.trim().into()).or_insert(value);self.attribute_name.clear();}
                 });
                 if let Some(element)=&mut entity.ui {ui.collapsing("Interface do jogo",|ui| {
                     egui::ComboBox::from_id_salt("ui_kind").selected_text(crate::labels::ui_kind(element.kind)).show_ui(ui,|ui|{for kind in [UiKind::Text,UiKind::Image,UiKind::Button,UiKind::Bar]{ui.selectable_value(&mut element.kind,kind,crate::labels::ui_kind(kind));}});

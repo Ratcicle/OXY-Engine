@@ -64,6 +64,17 @@ impl Editor {
                 self.scene_mut().entity_mut(&id).unwrap().camera = Some(Camera::default());
                 ui.close();
             }
+            if self.scene().kind==SceneKind::ThreeD && self.tab==Tab::Scene {
+                ui.separator();
+                use oxy_core::movement_presets::{self,MovementPreset};
+                for(preset,label)in[(MovementPreset::FirstPerson,"Personagem em primeira pessoa"),(MovementPreset::ThirdPerson,"Personagem em terceira pessoa"),(MovementPreset::Platform,"Plataforma móvel")]{
+                    if ui.button(label).on_hover_text("Cria componentes, peças e referências editáveis. A criação inteira pode ser desfeita.").clicked(){
+                        let scene=self.scene().id.clone();
+                        match movement_presets::create(&mut self.state.project,&scene,preset,Vec3::new(0.,0.02,0.)) {Ok(id)=>self.select(Some(id)),Err(error)=>self.warn(error)}
+                        ui.close();
+                    }
+                }
+            }
             ui.separator();
             for (kind, name) in [
                 (UiKind::Text, "Texto de interface"),

@@ -198,6 +198,15 @@ impl Editor {
                     {
                         self.open_example();
                     }
+                    if ui.add(egui::Button::new("Laboratório 3D · movimento").min_size(Vec2::new(170.,44.))).on_hover_text("Pista editável da 0.3.0: câmera, rampas, gelo, deslize, plataformas e checkpoints por nós.").clicked() {
+                        let result = (|| {
+                            let project = oxy_core::guide_recipes::movement_laboratory()?;
+                            let path = std::env::temp_dir().join(format!("oxy-laboratory-{}",new_id())).join(persistence::PROJECT_FILE);
+                            persistence::save_project(&path,&project)?;
+                            Ok::<_,String>(path)
+                        })();
+                        match result {Ok(path)=>self.transition(Transition::Recipe(path)),Err(e)=>self.home.error=Some(e)}
+                    }
                     });
                     ui.label("Cenas 2D e 3D · Modelagem · Pintura · Animação · Lógica visual");
                     ui.add_space(24.);

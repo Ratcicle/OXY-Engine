@@ -11,6 +11,24 @@ pub struct Topic {
 impl Topic {
     pub fn requirements(&self) -> &'static str {
         match self.operation.id {
+            "event.step" => {
+                "Conecte Executar às ações que devem ocorrer antes do movimento, uma vez por passo fixo."
+            }
+            "event.character" => {
+                "Escolha um personagem 3D e a transição desejada. Os dados do evento preservam aquele instante mesmo após Esperar."
+            }
+            id if id.starts_with("character.") => {
+                "O alvo precisa do componente Personagem 3D e cápsula compatível. Alvo vazio usa o responsável; uma referência conectada deve conter um objeto válido. Ações exigem entrada Executar."
+            }
+            id if id.starts_with("camera.") => {
+                "Use uma câmera de jogo. Para seguir um personagem, configure seu rig e alvo. Ler câmera fornece a ativa e a orientação do controle; as ações usam a entrada Executar."
+            }
+            id if id.starts_with("query.") => {
+                "Use numa cena 3D, com origem e direção em coordenadas mundiais. Conecte Executar e verifique Consulta válida antes de usar o contato. Limite de 256 consultas explícitas por passo."
+            }
+            "surface.get" | "surface.apply" => {
+                "O alvo precisa de Colisor 3D. Crie a superfície física no inspetor e vincule seu ID; Aplicar exige entrada Executar."
+            }
             "event.input" => {
                 "Crie uma ação em Ações de entrada, escolha a tecla e vincule-a ao nó. O jogo deve estar rodando com a entrada capturada."
             }
@@ -77,7 +95,7 @@ pub fn topics() -> &'static [Topic] {
             "control.sequence"=>("Dispara as saídas 1, 2 e 3 nessa ordem.","Inicie som e animação a partir do mesmo evento.","Não aguarda que um ramo termine. Para esperar antes da próxima ação, conecte-as em um mesmo ramo através de Esperar."),
             "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é da simulação: pausar o jogo suspende a espera. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
             "debug.message"=>("Registra uma mensagem no Console durante o teste.","Ligue à ação K para verificar seu primeiro fluxo.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução."),
-            _=>("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante."),
+            _=>crate::graph::movement_help(operation.id).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
         };Topic {operation,purpose,example,caution}
     }).collect())
 }

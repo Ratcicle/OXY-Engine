@@ -29,7 +29,7 @@ pub(super) struct MotorContext<'a> {
 }
 #[derive(Default)]
 pub(super) struct MotorStep {
-    pub events: Vec<MovementEvent>,
+    pub events: Vec<(MovementEvent, Arc<CharacterState>)>,
     pub path: Vec<(Vec3, Vec3)>,
     pub lateral: Vec<QueryHit>,
     pub warning: Option<String>,
@@ -62,7 +62,18 @@ pub(super) fn inherited(velocity: Vec3, policy: InheritPlatform) -> Vec3 {
         InheritPlatform::All => velocity,
     }
 }
-fn jump(state: &mut CharacterState, config: &CharacterConfig, events: &mut Vec<MovementEvent>) {
+fn record(
+    events: &mut Vec<(MovementEvent, Arc<CharacterState>)>,
+    event: MovementEvent,
+    state: &CharacterState,
+) {
+    events.push((event, Arc::new(state.clone())));
+}
+fn jump(
+    state: &mut CharacterState,
+    config: &CharacterConfig,
+    events: &mut Vec<(MovementEvent, Arc<CharacterState>)>,
+) {
     state.velocity.x *= config.jump_retention;
     state.velocity.z *= config.jump_retention;
     state.velocity.y = config.jump_speed;
@@ -75,9 +86,13 @@ fn jump(state: &mut CharacterState, config: &CharacterConfig, events: &mut Vec<M
     state.jump_until = None;
     if state.posture == Posture::Sliding {
         state.posture = Posture::Crouched;
-        events.push(MovementEvent::PostureChanged(Posture::Crouched));
+        record(
+            events,
+            MovementEvent::PostureChanged(Posture::Crouched),
+            state,
+        );
     }
-    events.push(MovementEvent::Jumped);
+    record(events, MovementEvent::Jumped, state);
 }
 /// Accelerate along the requested projection, preserving perpendicular momentum.
 pub(crate) fn air_accelerate(
@@ -263,8 +278,11 @@ impl MotorContext<'_> {
         }
         motion.height = state.height;
         if old_posture != state.posture {
-            out.events
-                .push(MovementEvent::PostureChanged(state.posture));
+            record(
+                &mut out.events,
+                MovementEvent::PostureChanged(state.posture),
+                state,
+            );
         }
         state.sprinting = input.sprint && state.posture == Posture::Standing;
 
@@ -528,9 +546,16 @@ impl MotorContext<'_> {
                 };
             state.jump_consumed = false;
             if !was_grounded {
-                out.events.push(MovementEvent::Landed {
-                    impact_speed: (-before_velocity.dot(normal)).max(0.),
-                });
+                let mut snapshot = state.clone();
+                snapshot.velocity =
+                    before_velocity - snapshot.support.as_ref().map_or(Vec3::ZERO, |s| s.velocity);
+                record(
+                    &mut out.events,
+                    MovementEvent::Landed {
+                        impact_speed: (-before_velocity.dot(normal)).max(0.),
+                    },
+                    &snapshot,
+                );
                 // A buffered/automatic re-jump avoids landing loss and extra
                 // ground friction; ordinary landings apply their own retention.
                 if state.jump_until.is_none() {
@@ -547,14 +572,18 @@ impl MotorContext<'_> {
             state.velocity += inherited(transport_velocity, config.inherit_platform);
         }
         if was_grounded && !state.grounded {
-            out.events.push(MovementEvent::LeftSupport);
+            record(&mut out.events, MovementEvent::LeftSupport, state);
         }
         let surface = state.support.as_ref().and_then(|s| s.surface.clone());
         if old_surface != surface {
-            out.events.push(MovementEvent::SurfaceChanged {
-                previous: old_surface,
-                current: surface,
-            });
+            record(
+                &mut out.events,
+                MovementEvent::SurfaceChanged {
+                    previous: old_surface,
+                    current: surface,
+                },
+                state,
+            );
         }
         if !state.position.is_finite() || !state.velocity.is_finite() {
             return Err("Estado de movimento não finito; verifique forças e dimensões.".into());

@@ -17,8 +17,40 @@ pub enum Value {
     Text(String),
     Bool(bool),
     Object(Option<Id>),
+    Vector2([f32; 2]),
+    Vector3([f32; 3]),
+    Surface(Option<Id>),
 }
 impl Value {
+    pub fn is_finite(&self) -> bool {
+        match self {
+            Self::Number(v) => v.is_finite(),
+            Self::Vector2(v) => v.iter().all(|v| v.is_finite()),
+            Self::Vector3(v) => v.iter().all(|v| v.is_finite()),
+            _ => true,
+        }
+    }
+    pub fn vector2(&self) -> Option<glam::Vec2> {
+        if let Self::Vector2(v) = self {
+            Some((*v).into())
+        } else {
+            None
+        }
+    }
+    pub fn vector3(&self) -> Option<Vec3> {
+        if let Self::Vector3(v) = self {
+            Some((*v).into())
+        } else {
+            None
+        }
+    }
+    pub fn surface(&self) -> Option<&str> {
+        if let Self::Surface(Some(id)) = self {
+            Some(id)
+        } else {
+            None
+        }
+    }
     pub fn number(&self) -> Option<f64> {
         if let Self::Number(v) = self {
             Some(*v)
@@ -585,10 +617,23 @@ pub struct Project {
     pub input_bindings: BTreeMap<String, String>,
     #[serde(default)]
     pub input_labels: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub collision_groups: BTreeMap<u8, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surfaces: Vec<crate::surface::SurfaceMaterial>,
 }
 impl Project {
+    pub fn collision_group_label(&self, bit: u8) -> String {
+        self.collision_groups
+            .get(&bit)
+            .cloned()
+            .unwrap_or_else(|| match bit {
+                0 => "Cenário padrão".into(),
+                1 => "Personagens".into(),
+                2 => "Áreas".into(),
+                _ => format!("Grupo {}", bit + 1),
+            })
+    }
     pub fn new(name: impl Into<String>) -> Self {
         let scene = Scene::new("Cena 2D", SceneKind::TwoD);
         Self {
@@ -599,6 +644,7 @@ impl Project {
             scenes: vec![scene],
             assets: Vec::new(),
             input_labels: BTreeMap::new(),
+            collision_groups: BTreeMap::new(),
             surfaces: Vec::new(),
             input_bindings: BTreeMap::from([
                 ("mover_esquerda".into(), "A".into()),
@@ -702,6 +748,13 @@ impl Project {
     }
 }
 pub fn validate_project(project: &Project) -> Result<(), String> {
+    if project
+        .collision_groups
+        .iter()
+        .any(|(bit, name)| *bit >= 32 || name.trim().is_empty())
+    {
+        return Err("Grupos de colisão precisam de nome e posição entre 1 e 32.".into());
+    }
     if project.schema_version != SCHEMA_VERSION {
         return Err(format!(
             "Versão de projeto {} incompatível; esta OXY Engine aceita {}",
@@ -742,6 +795,20 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
             && !surfaces.contains(id)
         {
             return Err(format!("{}: superfície física ausente ({id})", entity.name));
+        }
+        for value in entity
+            .attributes
+            .values()
+            .chain(entity.graph.nodes.iter().flat_map(|n| n.params.values()))
+        {
+            if let Some(id) = value.surface()
+                && !surfaces.contains(id)
+            {
+                return Err(format!(
+                    "{}: referência de superfície ausente ({id})",
+                    entity.name
+                ));
+            }
         }
     }
     let assets: HashMap<_, _> = project.assets.iter().map(|a| (a.id.as_str(), a)).collect();
@@ -873,6 +940,9 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
             return Err(format!("Modelo de origem ausente: {}", e.name));
         }
         for (key, value) in &e.attributes {
+            if !value.is_finite() {
+                return Err(format!("Valor não finito em {}.{key}", e.name));
+            }
             match value {
                 Value::Number(v) if !v.is_finite() => {
                     return Err(format!("Número inválido em {}.{key}", e.name));

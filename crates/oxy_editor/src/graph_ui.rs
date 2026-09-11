@@ -1,6 +1,6 @@
 mod parameters;
 use parameters::{ParameterContext, parameter_editor};
-pub use parameters::{object_picker, value_editor};
+pub use parameters::{collision_filter_picker, object_picker, value_editor};
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use oxy_core::document::{Id, Project, Scene, new_id};
@@ -45,6 +45,9 @@ fn port_color(kind: &PortType) -> Color32 {
         PortType::Text => Color32::from_rgb(205, 172, 230),
         PortType::Object => Color32::from_rgb(229, 192, 115),
         PortType::Any => Color32::from_gray(160),
+        PortType::Vector2 => Color32::from_rgb(98, 204, 164),
+        PortType::Vector3 => Color32::from_rgb(89, 168, 132),
+        PortType::Surface => Color32::from_rgb(193, 148, 101),
     }
 }
 

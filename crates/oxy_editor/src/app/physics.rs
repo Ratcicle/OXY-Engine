@@ -134,8 +134,15 @@ impl Editor {
             self.surface_properties(ui,&mut config.surface);
             ui.collapsing("Filtros de colisão",|ui| {
                 ui.checkbox(&mut config.filter.blocks_character,"Bloqueia personagem novo");ui.checkbox(&mut config.filter.blocks_camera,"Bloqueia câmera");
-                ui.add(egui::DragValue::new(&mut config.filter.category).prefix("Categoria (bits) ")).on_hover_text("Grupo físico por bits; não é a camada de desenho 2D.");
-                ui.add(egui::DragValue::new(&mut config.filter.mask).prefix("Máscara (bits) ")).on_hover_text("Categorias com que esta forma pode interagir. 1 = cenário padrão; todos os bits aceitam todas as categorias.");
+                crate::graph_ui::collision_filter_picker(ui,&mut config.filter.category,&self.state.project,"Pertence aos grupos…");
+                crate::graph_ui::collision_filter_picker(ui,&mut config.filter.mask,&self.state.project,"Interage com grupos…");
+                ui.collapsing("Nomes dos grupos no projeto",|ui|{
+                    ui.small("Renomear organiza as escolhas; não muda vínculos nem colisões existentes.");
+                    egui::ScrollArea::vertical().max_height(160.).show(ui,|ui|{for bit in 0..32_u8 {
+                        let mut name=self.state.project.collision_group_label(bit);
+                        ui.horizontal(|ui|{ui.label(format!("{}",bit+1)); if ui.text_edit_singleline(&mut name).changed() && !name.trim().is_empty() {self.state.project.collision_groups.insert(bit,name);}});
+                    }});
+                });
             });
             if let Err(error)=config.validate(){ui.colored_label(Color32::YELLOW,error);}
             if ui.add_enabled(entity.character3d.is_none(),egui::Button::new("Remover colisor 3D")).on_hover_text("Remova primeiro o controlador que depende desta cápsula.").clicked(){entity.physics3d=None;}

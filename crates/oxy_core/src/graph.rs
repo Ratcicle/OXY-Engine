@@ -3,6 +3,8 @@
 use crate::document::{Value, new_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+mod movement;
+pub use movement::{movement_choices, movement_help};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortType {
@@ -11,6 +13,9 @@ pub enum PortType {
     Text,
     Bool,
     Object,
+    Vector2,
+    Vector3,
+    Surface,
     Any,
 }
 impl PortType {
@@ -21,6 +26,9 @@ impl PortType {
             Self::Text => "Texto",
             Self::Bool => "Booleano",
             Self::Object => "Objeto",
+            Self::Vector2 => "Vetor2",
+            Self::Vector3 => "Vetor3",
+            Self::Surface => "Superfície física",
             Self::Any => "Qualquer dado",
         }
     }
@@ -369,6 +377,7 @@ fn build_registry() -> Vec<OperationDef> {
         outputs: exec(),
         params: vec![text("message", "Mensagem", "Ação executada")],
     });
+    result.extend(movement::definitions());
     result
 }
 
@@ -430,9 +439,7 @@ impl Graph {
                         node.id
                     ));
                 }
-                if let Value::Number(value) = value
-                    && !value.is_finite()
-                {
+                if !value.is_finite() {
                     return Err(format!(
                         "Nó {}: parâmetro numérico inválido em {key}",
                         node.id
@@ -559,6 +566,9 @@ pub fn value_type(value: &Value) -> PortType {
         Value::Text(_) => PortType::Text,
         Value::Bool(_) => PortType::Bool,
         Value::Object(_) => PortType::Object,
+        Value::Vector2(_) => PortType::Vector2,
+        Value::Vector3(_) => PortType::Vector3,
+        Value::Surface(_) => PortType::Surface,
     }
 }
 pub fn compatible(output: PortType, input: PortType) -> bool {

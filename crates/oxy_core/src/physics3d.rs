@@ -52,6 +52,7 @@ pub struct QueryOptions {
     pub exclude: HashSet<Id>,
     pub only: Option<Id>,
     pub only_sensors: bool,
+    pub ignore_roles: bool,
 }
 impl Default for QueryOptions {
     fn default() -> Self {
@@ -63,6 +64,7 @@ impl Default for QueryOptions {
             exclude: HashSet::new(),
             only: None,
             only_sensors: false,
+            ignore_roles: false,
         }
     }
 }
@@ -376,8 +378,8 @@ impl PhysicsWorld {
             && options.only.as_ref().is_none_or(|only| only == id)
             && (options.include_sensors || !e.sensor)
             && (!options.only_sensors || e.sensor)
-            && (e.sensor || !options.camera || e.filter.blocks_camera)
-            && (e.sensor || options.camera || e.filter.blocks_character)
+            && (options.ignore_roles || e.sensor || !options.camera || e.filter.blocks_camera)
+            && (options.ignore_roles || e.sensor || options.camera || e.filter.blocks_character)
             && e.filter.category & options.mask != 0
             && options.category & e.filter.mask != 0
     }
@@ -627,6 +629,42 @@ impl PhysicsWorld {
         position: Vec3,
         options: &QueryOptions,
     ) -> Result<Vec<Id>, String> {
+        let mut ids = Vec::new();
+        self.visit_penetrations(shape, position, options, |id, _, _, _| ids.push(id.clone()))?;
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+    /// Actual contact on the obstacle, with its outward normal. Negative
+    /// distance is penetration depth; tangency is deliberately excluded.
+    pub fn penetration_contacts(
+        &self,
+        shape: &CollisionShape,
+        position: Vec3,
+        options: &QueryOptions,
+    ) -> Result<Vec<QueryHit>, String> {
+        let mut result = Vec::new();
+        self.visit_penetrations(shape, position, options, |id, point, normal, distance| {
+            result.push(QueryHit {
+                object: id.clone(),
+                point,
+                normal,
+                distance,
+                surface: self.entries[id].surface.clone(),
+                ..Default::default()
+            });
+        })?;
+        result.sort_by(|a, b| a.object.cmp(&b.object));
+        result.dedup_by(|a, b| a.object == b.object);
+        Ok(result)
+    }
+    fn visit_penetrations(
+        &self,
+        shape: &CollisionShape,
+        position: Vec3,
+        options: &QueryOptions,
+        mut visit: impl FnMut(&Id, Vec3, Vec3, f32),
+    ) -> Result<(), String> {
         if !position.is_finite() {
             return Err("Consulta: posição inválida.".into());
         }
@@ -640,7 +678,6 @@ impl PhysicsWorld {
             QueryFilter::default().predicate(&predicate),
         );
         self.queries.set(self.queries.get() + 1);
-        let mut result = Vec::new();
         for (handle, collider) in queries.intersect_shape(at, &*shape) {
             let contact = self
                 .narrow
@@ -652,15 +689,18 @@ impl PhysicsWorld {
                     0.,
                 )
                 .map_err(|_| "Não foi possível verificar a profundidade de contato desta forma.")?;
-            if contact.is_some_and(|c| c.dist < -1e-5)
+            if let Some(contact) = contact.filter(|c| c.dist < -1e-5)
                 && let Some(id) = self.ids.get(&handle)
             {
-                result.push(id.clone());
+                visit(
+                    id,
+                    oxy(collider.position() * contact.point2),
+                    -oxy(contact.normal1),
+                    contact.dist,
+                );
             }
         }
-        result.sort();
-        result.dedup();
-        Ok(result)
+        Ok(())
     }
 
     /// Bounded geometric depenetration for a camera volume. Never moves bodies.

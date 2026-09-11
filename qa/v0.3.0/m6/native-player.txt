@@ -1,0 +1,4 @@
+Concluído: true
+Erro: None
+Player: 56 objetos visíveis, 1236 triângulos; movimento/olhar/TP a 1.400 s
+R restaurou checkpoint por nós; Escape/Retomar, 920×600 a 120%, arquivo reaberto intacto. RawInput isolado, sem certificar mouse físico.

@@ -9,7 +9,7 @@ impl NativeQa {
             return Err(format!("{:?}", rt.logs));
         }
         match label {
-            "m5_tp" => {
+            "camera3d_tp" => {
                 if rt.camera_mode(camera) != Some(CameraMode::ThirdPerson) || pose.position.z > 1.8
                 {
                     return Err(format!(
@@ -18,13 +18,13 @@ impl NativeQa {
                     ));
                 }
             }
-            "m5_fp" => {
+            "camera3d_fp" => {
                 if rt.camera_mode(camera) != Some(CameraMode::FirstPerson) || pose.hidden.len() != 2
                 {
                     return Err("Primeira pessoa não ocultou a cabeça".into());
                 }
             }
-            "m5_slide" => {
+            "camera3d_slide" => {
                 let body = rt
                     .scene()
                     .entities
@@ -38,7 +38,7 @@ impl NativeQa {
                     ));
                 }
             }
-            "m5_safe" => {}
+            "camera3d_safe" => {}
             _ => return Err("Verificação desconhecida".into()),
         }
         Ok(())
@@ -155,29 +155,29 @@ fn native_cameras_v030() {
             qa.actions = VecDeque::from([
                 Action::Click("▶ Jogar"),
                 Action::Wait(24),
-                Action::Check("m5_tp"),
+                Action::Check("camera3d_tp"),
                 Action::Screenshot("third-person-wall.png"),
                 Action::Key(Key::Q, false),
                 Action::Wait(18),
-                Action::Check("m5_safe"),
+                Action::Check("camera3d_safe"),
                 Action::Screenshot("other-shoulder.png"),
                 Action::RelativeLook(Vec2::new(80., -80.)),
                 Action::Wait(8),
-                Action::Check("m5_safe"),
+                Action::Check("camera3d_safe"),
                 Action::Screenshot("orbit.png"),
                 Action::RelativeLook(Vec2::new(-80., 80.)),
                 Action::Key(Key::V, false),
                 Action::Wait(24),
-                Action::Check("m5_fp"),
+                Action::Check("camera3d_fp"),
                 Action::Screenshot("first-person.png"),
                 Action::HoldSeconds(Key::W, 0.7),
                 Action::Key(Key::C, false),
                 Action::Wait(3),
-                Action::Check("m5_slide"),
+                Action::Check("camera3d_slide"),
                 Action::Screenshot("slide.png"),
                 Action::Key(Key::V, false),
                 Action::Wait(24),
-                Action::Check("m5_safe"),
+                Action::Check("camera3d_safe"),
                 Action::Screenshot("third-person-open.png"),
                 Action::Key(Key::V, false),
                 Action::Wait(24),

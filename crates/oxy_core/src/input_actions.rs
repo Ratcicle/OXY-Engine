@@ -103,7 +103,9 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
                 found.push(format!("{scope} → {} → personagem 3D", entity.name));
             }
             for node in &entity.graph.nodes {
-                if node.operation == "event.input" && node.text("action") == id {
+                if matches!(node.operation.as_str(), "event.input" | "input.read")
+                    && node.text("action") == id
+                {
                     found.push(format!(
                         "{scope} → {} → ação de entrada ({})",
                         entity.name, node.id

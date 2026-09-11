@@ -6,6 +6,7 @@ mod commands;
 mod motor;
 mod platforms;
 mod sensors;
+mod teleport;
 pub use sensors::SensorCrossing;
 
 #[derive(Default)]
@@ -22,6 +23,8 @@ pub(super) struct Characters {
     platforms: HashMap<Id, platforms::PlatformFrame>,
     overrides: HashMap<Id, (crate::physics3d::Collider3d, Mat4)>,
     events: Vec<(Id, MovementEvent)>,
+    records: Vec<MovementRecord>,
+    pending_records: Vec<MovementRecord>,
     paths: HashMap<Id, Vec<(Vec3, Vec3)>>,
     lateral: HashSet<(Id, Id)>,
     warnings: Vec<(Id, String)>,
@@ -114,7 +117,13 @@ impl Characters {
                 && evaluation.index.position(target).is_some()
         });
         self.looped.clear();
+        self.records = std::mem::take(&mut self.pending_records);
         self.events.clear();
+        self.events.extend(
+            self.records
+                .iter()
+                .map(|r| (r.object.clone(), r.event.clone())),
+        );
         self.paths.clear();
         self.states.retain(|id, _| {
             evaluation
@@ -269,6 +278,8 @@ impl Characters {
                 dt,
                 scale: scale.x,
             };
+            let events_before = self.events.len();
+            let records_before = self.records.len();
             let result = if config.enabled {
                 context.advance(
                     state,
@@ -296,12 +307,27 @@ impl Characters {
                     if let Some(warning) = result.warning {
                         self.warnings.push((id.clone(), warning));
                     }
-                    self.events
-                        .extend(result.events.into_iter().map(|event| (id.clone(), event)));
+                    for (event, snapshot) in result.events {
+                        self.events.push((id.clone(), event.clone()));
+                        self.records.push(MovementRecord {
+                            object: id.clone(),
+                            event,
+                            state: snapshot,
+                        });
+                    }
                     self.paths.insert(id.clone(), result.path);
                     for hit in result.lateral {
                         let pair = (id.clone(), hit.object.clone());
                         if lateral.insert(pair.clone()) && !self.lateral.contains(&pair) {
+                            self.records.push(MovementRecord {
+                                object: id.clone(),
+                                event: MovementEvent::SideContact {
+                                    object: hit.object.clone(),
+                                    point: hit.point,
+                                    normal: hit.normal,
+                                },
+                                state: Arc::new(state.clone()),
+                            });
                             self.events.push((
                                 id.clone(),
                                 MovementEvent::SideContact {
@@ -355,6 +381,10 @@ impl Characters {
                     .abs_diff_eq(parent.inverse() * next_world, 1e-4)
             {
                 *state = before;
+                self.events.truncate(events_before);
+                self.records.truncate(records_before);
+                self.paths.remove(&id);
+                lateral.retain(|(owner, _)| owner != &id);
                 self.warnings.push((id,"O parentesco animado produziria deformação da raiz física; anime as peças filhas.".into()));
                 continue;
             }
@@ -443,7 +473,8 @@ impl Runtime {
             return;
         }
         let mut cameras = std::mem::take(&mut self.cameras);
-        let control = match cameras.control(self.scene(), &self.characters, input) {
+        let control = match cameras.control(self.scene(), &self.characters, &InputFrame::default())
+        {
             Ok(control) => control,
             Err(e) => {
                 let id = cameras
@@ -461,14 +492,16 @@ impl Runtime {
             .iter_mut()
             .find(|s| s.id == self.scene_id)
             .unwrap();
-        if let Err(error) = characters.step(
+        let result = characters.step(
             scene,
             &self.project.surfaces,
             input,
             control.as_ref(),
             self.time,
             FIXED_DT,
-        ) {
+        );
+        let failed = result.is_err();
+        if let Err(error) = result {
             self.log(format!("Movimento 3D: {error}"));
         }
         for (id, error) in std::mem::take(&mut characters.warnings) {
@@ -481,6 +514,7 @@ impl Runtime {
             .reported
             .retain(|id, _| self.entity(id).is_some());
         self.characters = characters;
+        self.physics_dirty = failed;
     }
     pub fn character_state(&self, id: &str) -> Option<&CharacterState> {
         self.characters.states.get(id)
@@ -494,6 +528,9 @@ impl Runtime {
     /// Events from the last fixed step, with data captured at the transition.
     pub fn movement_events(&self) -> &[(Id, MovementEvent)] {
         &self.characters.events
+    }
+    pub fn movement_records(&self) -> &[MovementRecord] {
+        &self.characters.records
     }
     pub fn sensor_events(&self) -> &[SensorCrossing] {
         &self.characters.sensor_events

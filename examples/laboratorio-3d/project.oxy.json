@@ -1,0 +1,7119 @@
+{
+  "schema_version": 3,
+  "id": "03000000-0000-4000-8000-0000000493e0",
+  "name": "Laboratório de movimento 3D",
+  "start_scene": "03000000-0000-4000-8000-0000000493e1",
+  "scenes": [
+    {
+      "id": "03000000-0000-4000-8000-0000000493e1",
+      "name": "Laboratório de movimento 3D",
+      "kind": "ThreeD",
+      "entities": [
+        {
+          "id": "03000000-0000-4000-8000-0000000493e2",
+          "name": "Personagem 3D",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.02,
+              4.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Checkpoint": {
+              "Text": "Início"
+            },
+            "Destino": {
+              "Vector3": [
+                0.0,
+                0.02,
+                4.0
+              ]
+            },
+            "Giro salvo": {
+              "Number": 0.0
+            },
+            "Olhar salvo": {
+              "Vector2": [
+                0.0,
+                0.0
+              ]
+            },
+            "Tempo": {
+              "Number": 0.0
+            },
+            "Velocidade": {
+              "Number": 0.0
+            }
+          },
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Capsule": {
+                "height": 1.8,
+                "radius": 0.3
+              }
+            },
+            "center": [
+              0.0,
+              0.9,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "character3d": {
+            "enabled": true,
+            "automatic_input": true,
+            "actions": {
+              "left": "mover_esquerda",
+              "right": "mover_direita",
+              "forward": "mover_frente",
+              "back": "mover_tras",
+              "jump": "pular"
+            },
+            "reference": "Camera",
+            "speed": 6.0,
+            "gravity": 22.0,
+            "jump_speed": 8.0,
+            "margin": 0.01,
+            "slope_degrees": 45.0,
+            "step_height": 0.25,
+            "step_width": 0.2,
+            "snap": 0.15,
+            "ground_acceleration": 45.0,
+            "ground_braking": 12.0,
+            "ground_friction": 4.0,
+            "air_acceleration": 20.0,
+            "air_projected_limit": 6.0,
+            "absolute_speed_limit": 150.0,
+            "sprint_speed": 8.0,
+            "crouch_speed": 3.0,
+            "sprint_action": "correr",
+            "crouch_action": "agachar",
+            "crouch_height": 1.0,
+            "crouch_toggle": false,
+            "coyote_ms": 100.0,
+            "jump_buffer_ms": 120.0,
+            "inherit_platform": "All",
+            "recovery_distance": 0.5,
+            "jump_mode": "Manual",
+            "air_resistance": 0.02,
+            "horizontal_limit": 24.0,
+            "jump_retention": 1.0,
+            "landing_retention": 0.92,
+            "slide_enabled": true,
+            "slide_min_speed": 6.0,
+            "slide_exit_speed": 2.0,
+            "slide_duration": 0.9,
+            "slide_friction": 0.9,
+            "slide_control": 3.0,
+            "facing": "Movement",
+            "angular_speed": 720.0
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-0000000493e3",
+                "operation": "event.step",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493e4",
+                "operation": "character.state",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493e5",
+                "operation": "time.read",
+                "position": [
+                  630.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493e6",
+                "operation": "attribute.set",
+                "position": [
+                  930.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Velocidade"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493e7",
+                "operation": "attribute.set",
+                "position": [
+                  30.0,
+                  628.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Tempo"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493e8",
+                "operation": "event.input",
+                "position": [
+                  330.0,
+                  628.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "reiniciar"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493e9",
+                "operation": "attribute.get",
+                "position": [
+                  630.0,
+                  628.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Destino"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493ea",
+                "operation": "attribute.get",
+                "position": [
+                  930.0,
+                  628.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Giro salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493eb",
+                "operation": "attribute.get",
+                "position": [
+                  30.0,
+                  866.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Olhar salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493ec",
+                "operation": "character.teleport",
+                "position": [
+                  330.0,
+                  866.0
+                ],
+                "params": {
+                  "keep_velocity": {
+                    "Bool": false
+                  },
+                  "look": {
+                    "Vector2": [
+                      0.0,
+                      0.0
+                    ]
+                  },
+                  "position": {
+                    "Vector3": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  },
+                  "restore_look": {
+                    "Bool": true
+                  },
+                  "restore_yaw": {
+                    "Bool": true
+                  },
+                  "search": {
+                    "Number": 0.5
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "yaw": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493ed",
+                "operation": "condition.branch",
+                "position": [
+                  630.0,
+                  866.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493ee",
+                "operation": "debug.message",
+                "position": [
+                  930.0,
+                  866.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Destino ocupado: o reinício foi recusado; ajuste o checkpoint ou libere o espaço."
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493ef",
+                "operation": "event.input",
+                "position": [
+                  30.0,
+                  1248.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "1"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f0",
+                "operation": "character.profile",
+                "position": [
+                  330.0,
+                  1248.0
+                ],
+                "params": {
+                  "allow_limit": {
+                    "Bool": true
+                  },
+                  "profile": {
+                    "Text": "direct"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f1",
+                "operation": "event.input",
+                "position": [
+                  630.0,
+                  1248.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "2"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f2",
+                "operation": "character.profile",
+                "position": [
+                  930.0,
+                  1248.0
+                ],
+                "params": {
+                  "allow_limit": {
+                    "Bool": true
+                  },
+                  "profile": {
+                    "Text": "parkour"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f3",
+                "operation": "event.input",
+                "position": [
+                  30.0,
+                  1486.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "3"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f4",
+                "operation": "character.profile",
+                "position": [
+                  330.0,
+                  1486.0
+                ],
+                "params": {
+                  "allow_limit": {
+                    "Bool": true
+                  },
+                  "profile": {
+                    "Text": "chained"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f5",
+                "operation": "event.input",
+                "position": [
+                  630.0,
+                  1486.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "I"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f6",
+                "operation": "character.velocity",
+                "position": [
+                  930.0,
+                  1486.0
+                ],
+                "params": {
+                  "mode": {
+                    "Text": "add"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "velocity": {
+                    "Vector3": [
+                      0.0,
+                      6.0,
+                      -8.0
+                    ]
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f7",
+                "operation": "event.input",
+                "position": [
+                  30.0,
+                  1724.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "T"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f8",
+                "operation": "character.option",
+                "position": [
+                  330.0,
+                  1724.0
+                ],
+                "params": {
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "option": {
+                    "Text": "automatic_jump"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493f9",
+                "operation": "event.input",
+                "position": [
+                  630.0,
+                  1724.0
+                ],
+                "params": {
+                  "action": {
+                    "Text": "Y"
+                  },
+                  "mode": {
+                    "Text": "pressed"
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-0000000493fa",
+                "operation": "character.option",
+                "position": [
+                  930.0,
+                  1724.0
+                ],
+                "params": {
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "option": {
+                    "Text": "automatic_jump"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493e3",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493e6",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493e4",
+                "from_port": "speed",
+                "to_node": "03000000-0000-4000-8000-0000000493e6",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493e6",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493e7",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493e5",
+                "from_port": "time",
+                "to_node": "03000000-0000-4000-8000-0000000493e7",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493e8",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493ec",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493e9",
+                "from_port": "value",
+                "to_node": "03000000-0000-4000-8000-0000000493ec",
+                "to_port": "position"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493ea",
+                "from_port": "value",
+                "to_node": "03000000-0000-4000-8000-0000000493ec",
+                "to_port": "yaw"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493eb",
+                "from_port": "value",
+                "to_node": "03000000-0000-4000-8000-0000000493ec",
+                "to_port": "look"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493ec",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493ed",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493ec",
+                "from_port": "success",
+                "to_node": "03000000-0000-4000-8000-0000000493ed",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493ed",
+                "from_port": "else",
+                "to_node": "03000000-0000-4000-8000-0000000493ee",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493ef",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493f0",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493f1",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493f2",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493f3",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493f4",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493f5",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493f6",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493f7",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493f8",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-0000000493f9",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-0000000493fa",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-0000000493fb",
+          "name": "Aparência editável",
+          "parent": "03000000-0000-4000-8000-0000000493e2",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-0000000493fc",
+          "name": "Câmera do personagem",
+          "parent": "03000000-0000-4000-8000-0000000493e2",
+          "transform": {
+            "position": [
+              0.0,
+              1.6,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "camera_rig": {
+            "target": "03000000-0000-4000-8000-0000000493e2",
+            "eye_height": 1.6,
+            "sensitivity": 0.12,
+            "invert_x": false,
+            "invert_y": false,
+            "pitch_limit": 85.0,
+            "hidden": [
+              "03000000-0000-4000-8000-0000000493fb"
+            ],
+            "crouched_eye_height": 0.85,
+            "posture_smoothing": 0.1,
+            "mode": "FirstPerson",
+            "distance": 4.0,
+            "min_distance": 0.4,
+            "max_distance": 12.0,
+            "follow_height": 1.4,
+            "shoulder": 0.45,
+            "zoom_step": 0.5,
+            "position_smoothing": 0.06,
+            "obstruction_return": 0.15,
+            "transition_seconds": 0.25,
+            "collision_radius": 0.15,
+            "collision_margin": 0.02,
+            "shoulder_action": "trocar_ombro",
+            "mode_action": "alternar_camera",
+            "rotation_smoothing": 0.0,
+            "hide_first_person_only": true
+          },
+          "controller": null,
+          "camera": {
+            "active": true,
+            "orthographic_size": 7.5,
+            "fov": 60.0
+          },
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-0000000493fd",
+          "name": "Tronco",
+          "parent": "03000000-0000-4000-8000-0000000493fb",
+          "transform": {
+            "position": [
+              0.0,
+              1.03,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.44,
+            0.62,
+            0.28
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.13,
+              0.49,
+              0.57,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-0000000493fe",
+          "name": "Cabeça",
+          "parent": "03000000-0000-4000-8000-0000000493fb",
+          "transform": {
+            "position": [
+              0.0,
+              1.56,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Sphere",
+          "dimensions": [
+            0.36,
+            0.36,
+            0.34
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.82,
+              0.6,
+              0.36,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-0000000493ff",
+          "name": "Braço esquerdo",
+          "parent": "03000000-0000-4000-8000-0000000493fb",
+          "transform": {
+            "position": [
+              -0.28,
+              1.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.13,
+            0.62,
+            0.17
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.59,
+              0.64,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049400",
+          "name": "Braço direito",
+          "parent": "03000000-0000-4000-8000-0000000493fb",
+          "transform": {
+            "position": [
+              0.28,
+              1.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.13,
+            0.62,
+            0.17
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.59,
+              0.64,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049401",
+          "name": "Perna esquerda",
+          "parent": "03000000-0000-4000-8000-0000000493fb",
+          "transform": {
+            "position": [
+              -0.12,
+              0.35,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.18,
+            0.7,
+            0.2
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.2,
+              0.24,
+              0.32,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049402",
+          "name": "Perna direita",
+          "parent": "03000000-0000-4000-8000-0000000493fb",
+          "transform": {
+            "position": [
+              0.12,
+              0.35,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.18,
+            0.7,
+            0.2
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.2,
+              0.24,
+              0.32,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049403",
+          "name": "Piso inicial",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            16.0,
+            1.0,
+            18.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.22,
+              0.26,
+              0.3,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  16.0,
+                  1.0,
+                  18.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049404",
+          "name": "Ajuda de movimento",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              16.0,
+              12.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "WASD mover · Espaço pular · Shift correr · C agachar/deslizar",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049405",
+          "name": "Ajuda da câmera",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              16.0,
+              40.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "Mouse olhar · V primeira/terceira pessoa · Q ombro · R checkpoint",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049406",
+          "name": "Velocímetro",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              16.0,
+              72.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "Velocidade horizontal: {valor} m/s",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "03000000-0000-4000-8000-0000000493e2",
+            "binding_attribute": "Velocidade",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049407",
+          "name": "Cronômetro",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              16.0,
+              100.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "Simulação: {valor} s",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "03000000-0000-4000-8000-0000000493e2",
+            "binding_attribute": "Tempo",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049408",
+          "name": "Checkpoint atual",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              16.0,
+              128.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "Checkpoint: {valor}",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "03000000-0000-4000-8000-0000000493e2",
+            "binding_attribute": "Checkpoint",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049409",
+          "name": "Rampa caminhável · 20 graus",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              1.6,
+              -14.0
+            ],
+            "rotation": [
+              0.34906584,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            5.0,
+            0.35,
+            10.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.35,
+              0.42,
+              0.51,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  5.0,
+                  0.35,
+                  10.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004940a",
+          "name": "Rampa íngreme · 60 graus",
+          "parent": null,
+          "transform": {
+            "position": [
+              5.5,
+              2.0,
+              -12.0
+            ],
+            "rotation": [
+              1.0471976,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.0,
+            0.35,
+            5.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.63,
+              0.32,
+              0.25,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.0,
+                  0.35,
+                  5.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004940b",
+          "name": "Degrau 1 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.1,
+              -8.5
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            0.2,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  0.2,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004940c",
+          "name": "Degrau 2 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.2,
+              -9.1
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            0.4,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  0.4,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004940d",
+          "name": "Degrau 3 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.3,
+              -9.7
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            0.6,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  0.6,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004940e",
+          "name": "Degrau 4 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.4,
+              -10.3
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            0.8,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  0.8,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004940f",
+          "name": "Degrau 5 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.5,
+              -10.9
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            1.0,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  1.0,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049410",
+          "name": "Degrau 6 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.6,
+              -11.5
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            1.2,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  1.2,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049411",
+          "name": "Degrau 7 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.7,
+              -12.1
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            1.4,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  1.4,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049412",
+          "name": "Degrau 8 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.8,
+              -12.700001
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            1.6,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  1.6,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049413",
+          "name": "Degrau 9 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              0.90000004,
+              -13.3
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            1.8000001,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  1.8000001,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049414",
+          "name": "Degrau 10 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              1.0,
+              -13.9
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            2.0,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  2.0,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049415",
+          "name": "Degrau 11 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              1.1,
+              -14.5
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            2.2,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  2.2,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049416",
+          "name": "Degrau 12 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              1.2,
+              -15.1
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            2.4,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  2.4,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049417",
+          "name": "Degrau 13 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              1.3000001,
+              -15.700001
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            2.6000001,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  2.6000001,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049418",
+          "name": "Degrau 14 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              1.4,
+              -16.3
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            2.8,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  2.8,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049419",
+          "name": "Degrau 15 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              1.5,
+              -16.900002
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            3.0,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  3.0,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004941a",
+          "name": "Degrau 16 · 20 cm",
+          "parent": null,
+          "transform": {
+            "position": [
+              -5.5,
+              1.6,
+              -17.5
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            2.5,
+            3.2,
+            0.6
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.43,
+              0.5,
+              0.6,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  2.5,
+                  3.2,
+                  0.6
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004941b",
+          "name": "Terraço da rampa",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              2.95,
+              -22.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            12.0,
+            0.6,
+            8.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.28,
+              0.36,
+              0.45,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  12.0,
+                  0.6,
+                  8.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004941c",
+          "name": "Trecho de salto",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -0.4,
+              -29.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            12.0,
+            0.8,
+            4.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.2,
+              0.27,
+              0.31,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  12.0,
+                  0.8,
+                  4.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004941d",
+          "name": "Recepção após vão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -0.4,
+              -36.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            12.0,
+            0.8,
+            6.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.2,
+              0.27,
+              0.31,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  12.0,
+                  0.8,
+                  6.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004941e",
+          "name": "Pista de superfície",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -0.4,
+              -47.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            12.0,
+            0.8,
+            16.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.2,
+              0.27,
+              0.31,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  12.0,
+                  0.8,
+                  16.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004941f",
+          "name": "Final",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -0.4,
+              -60.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            12.0,
+            0.8,
+            10.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.2,
+              0.27,
+              0.31,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  12.0,
+                  0.8,
+                  10.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049420",
+          "name": "Piso comum",
+          "parent": null,
+          "transform": {
+            "position": [
+              -4.0,
+              0.05,
+              -46.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.6,
+            0.1,
+            13.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.34,
+              0.38,
+              0.41,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.6,
+                  0.1,
+                  13.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": "03000000-0000-4000-8000-000000049465"
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049421",
+          "name": "Gelo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.05,
+              -46.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.6,
+            0.1,
+            13.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.38,
+              0.72,
+              0.87,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.6,
+                  0.1,
+                  13.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": "03000000-0000-4000-8000-000000049466"
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049422",
+          "name": "Lama",
+          "parent": null,
+          "transform": {
+            "position": [
+              4.0,
+              0.05,
+              -46.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.6,
+            0.1,
+            13.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.42,
+              0.27,
+              0.17,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.6,
+                  0.1,
+                  13.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": "03000000-0000-4000-8000-000000049467"
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049423",
+          "name": "Esteira local",
+          "parent": null,
+          "transform": {
+            "position": [
+              4.0,
+              0.05,
+              -58.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.5,
+            0.1,
+            5.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.6,
+              0.45,
+              0.23,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.5,
+                  0.1,
+                  5.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": "03000000-0000-4000-8000-000000049468"
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049424",
+          "name": "Túnel baixo · altura livre 1,15 m",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              1.6,
+              -46.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.5,
+            0.7,
+            5.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.2,
+              0.32,
+              0.42,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.5,
+                  0.7,
+                  5.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049425",
+          "name": "Parede do túnel",
+          "parent": null,
+          "transform": {
+            "position": [
+              -1.8,
+              0.85,
+              -46.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.2,
+            1.7,
+            5.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.27,
+              0.4,
+              0.48,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  0.2,
+                  1.7,
+                  5.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049426",
+          "name": "Parede do túnel",
+          "parent": null,
+          "transform": {
+            "position": [
+              1.8,
+              0.85,
+              -46.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.2,
+            1.7,
+            5.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.27,
+              0.4,
+              0.48,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  0.2,
+                  1.7,
+                  5.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049427",
+          "name": "Plataforma horizontal",
+          "parent": null,
+          "transform": {
+            "position": [
+              -8.0,
+              3.0,
+              -22.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.0,
+            0.4,
+            3.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.23,
+              0.47,
+              0.5,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.0,
+                  0.4,
+                  3.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "platform": {
+            "enabled": true,
+            "mode": "Animation",
+            "velocity": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "space": "World",
+            "max_transport_per_step": 1.0
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-000000049429",
+                "operation": "event.scene_start",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004942a",
+                "operation": "action.animation",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "clip": {
+                    "Text": "03000000-0000-4000-8000-000000049428"
+                  },
+                  "restart": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-000000049429",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004942a",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [
+            {
+              "id": "03000000-0000-4000-8000-000000049428",
+              "name": "Translação de ida e volta",
+              "duration": 6.0,
+              "looping": true,
+              "tracks": [
+                {
+                  "target": "03000000-0000-4000-8000-000000049427",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "transform": {
+                        "position": [
+                          -8.0,
+                          3.0,
+                          -22.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 3.0,
+                      "transform": {
+                        "position": [
+                          -13.0,
+                          3.0,
+                          -22.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 6.0,
+                      "transform": {
+                        "position": [
+                          -8.0,
+                          3.0,
+                          -22.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    }
+                  ]
+                }
+              ],
+              "events": []
+            }
+          ],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004942b",
+          "name": "Pouso lateral",
+          "parent": null,
+          "transform": {
+            "position": [
+              -16.0,
+              3.0,
+              -22.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            4.0,
+            0.4,
+            6.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.24,
+              0.41,
+              0.46,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  4.0,
+                  0.4,
+                  6.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004942c",
+          "name": "Elevador",
+          "parent": null,
+          "transform": {
+            "position": [
+              7.5,
+              0.0,
+              -58.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            3.0,
+            0.4,
+            3.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.23,
+              0.47,
+              0.5,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  3.0,
+                  0.4,
+                  3.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "platform": {
+            "enabled": true,
+            "mode": "Animation",
+            "velocity": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "space": "World",
+            "max_transport_per_step": 1.0
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-00000004942e",
+                "operation": "event.scene_start",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004942f",
+                "operation": "action.animation",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "clip": {
+                    "Text": "03000000-0000-4000-8000-00000004942d"
+                  },
+                  "restart": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-00000004942e",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004942f",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [
+            {
+              "id": "03000000-0000-4000-8000-00000004942d",
+              "name": "Translação de ida e volta",
+              "duration": 6.0,
+              "looping": true,
+              "tracks": [
+                {
+                  "target": "03000000-0000-4000-8000-00000004942c",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "transform": {
+                        "position": [
+                          7.5,
+                          0.0,
+                          -58.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 3.0,
+                      "transform": {
+                        "position": [
+                          7.5,
+                          3.0,
+                          -58.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    },
+                    {
+                      "time": 6.0,
+                      "transform": {
+                        "position": [
+                          7.5,
+                          0.0,
+                          -58.0
+                        ],
+                        "rotation": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ],
+                        "scale": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "pivot": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "interpolation": "Linear"
+                    }
+                  ]
+                }
+              ],
+              "events": []
+            }
+          ],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049430",
+          "name": "Piso do corredor",
+          "parent": null,
+          "transform": {
+            "position": [
+              -9.0,
+              -0.3,
+              -56.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            4.0,
+            0.6,
+            18.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.25,
+              0.28,
+              0.33,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  4.0,
+                  0.6,
+                  18.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049431",
+          "name": "Corredor estreito da câmera",
+          "parent": null,
+          "transform": {
+            "position": [
+              -10.5,
+              1.75,
+              -56.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.3,
+            3.5,
+            18.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.37,
+              0.31,
+              0.46,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  0.3,
+                  3.5,
+                  18.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049432",
+          "name": "Corredor estreito da câmera",
+          "parent": null,
+          "transform": {
+            "position": [
+              -7.5,
+              1.75,
+              -56.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.3,
+            3.5,
+            18.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.37,
+              0.31,
+              0.46,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  0.3,
+                  3.5,
+                  18.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049433",
+          "name": "Ligação ao corredor",
+          "parent": null,
+          "transform": {
+            "position": [
+              -6.0,
+              -0.3,
+              -60.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            4.0,
+            0.6,
+            4.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.25,
+              0.28,
+              0.33,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  4.0,
+                  0.6,
+                  4.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": false,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049434",
+          "name": "Marco esquerdo",
+          "parent": "03000000-0000-4000-8000-000000049437",
+          "transform": {
+            "position": [
+              -4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049435",
+          "name": "Marco direito",
+          "parent": "03000000-0000-4000-8000-000000049437",
+          "transform": {
+            "position": [
+              4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049436",
+          "name": "Travessa do marco",
+          "parent": "03000000-0000-4000-8000-000000049437",
+          "transform": {
+            "position": [
+              0.0,
+              1.4,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            8.0,
+            0.12,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049437",
+          "name": "Terraço",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              4.8,
+              -22.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            8.0,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.22,
+              0.65,
+              0.71,
+              0.2
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  8.0,
+                  2.8,
+                  0.12
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": true,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-000000049438",
+                "operation": "event.area_enter",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049439",
+                "operation": "transform.read",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "space": {
+                    "Text": "world"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004943a",
+                "operation": "camera.read",
+                "position": [
+                  630.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004943b",
+                "operation": "attribute.set",
+                "position": [
+                  930.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Destino"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Vector3": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004943c",
+                "operation": "attribute.set",
+                "position": [
+                  30.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Giro salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004943d",
+                "operation": "attribute.set",
+                "position": [
+                  330.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Olhar salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Vector2": [
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004943e",
+                "operation": "attribute.set",
+                "position": [
+                  630.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Checkpoint"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Text": "Terraço"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-000000049438",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049439",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049438",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-00000004943b",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049439",
+                "from_port": "position",
+                "to_node": "03000000-0000-4000-8000-00000004943b",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049438",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004943b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049438",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-00000004943c",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049439",
+                "from_port": "yaw",
+                "to_node": "03000000-0000-4000-8000-00000004943c",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004943b",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004943c",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049438",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-00000004943d",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004943a",
+                "from_port": "look",
+                "to_node": "03000000-0000-4000-8000-00000004943d",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004943c",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004943d",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049438",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-00000004943e",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004943d",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004943e",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004943f",
+          "name": "Marco esquerdo",
+          "parent": "03000000-0000-4000-8000-000000049442",
+          "transform": {
+            "position": [
+              -4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049440",
+          "name": "Marco direito",
+          "parent": "03000000-0000-4000-8000-000000049442",
+          "transform": {
+            "position": [
+              4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049441",
+          "name": "Travessa do marco",
+          "parent": "03000000-0000-4000-8000-000000049442",
+          "transform": {
+            "position": [
+              0.0,
+              1.4,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            8.0,
+            0.12,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049442",
+          "name": "Após o salto",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              1.4,
+              -35.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            8.0,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.22,
+              0.65,
+              0.71,
+              0.2
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  8.0,
+                  2.8,
+                  0.12
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": true,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-000000049443",
+                "operation": "event.area_enter",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049444",
+                "operation": "transform.read",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "space": {
+                    "Text": "world"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049445",
+                "operation": "camera.read",
+                "position": [
+                  630.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049446",
+                "operation": "attribute.set",
+                "position": [
+                  930.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Destino"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Vector3": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049447",
+                "operation": "attribute.set",
+                "position": [
+                  30.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Giro salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049448",
+                "operation": "attribute.set",
+                "position": [
+                  330.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Olhar salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Vector2": [
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049449",
+                "operation": "attribute.set",
+                "position": [
+                  630.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Checkpoint"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Text": "Após o salto"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-000000049443",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049444",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049443",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049446",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049444",
+                "from_port": "position",
+                "to_node": "03000000-0000-4000-8000-000000049446",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049443",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049446",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049443",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049447",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049444",
+                "from_port": "yaw",
+                "to_node": "03000000-0000-4000-8000-000000049447",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049446",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049447",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049443",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049448",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049445",
+                "from_port": "look",
+                "to_node": "03000000-0000-4000-8000-000000049448",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049447",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049448",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049443",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049449",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049448",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049449",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004944a",
+          "name": "Marco esquerdo",
+          "parent": "03000000-0000-4000-8000-00000004944d",
+          "transform": {
+            "position": [
+              -4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004944b",
+          "name": "Marco direito",
+          "parent": "03000000-0000-4000-8000-00000004944d",
+          "transform": {
+            "position": [
+              4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004944c",
+          "name": "Travessa do marco",
+          "parent": "03000000-0000-4000-8000-00000004944d",
+          "transform": {
+            "position": [
+              0.0,
+              1.4,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            8.0,
+            0.12,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004944d",
+          "name": "Final",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              1.4,
+              -60.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            8.0,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.22,
+              0.65,
+              0.71,
+              0.2
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  8.0,
+                  2.8,
+                  0.12
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": true,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-00000004944e",
+                "operation": "event.area_enter",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004944f",
+                "operation": "transform.read",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "space": {
+                    "Text": "world"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049450",
+                "operation": "camera.read",
+                "position": [
+                  630.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049451",
+                "operation": "attribute.set",
+                "position": [
+                  930.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Destino"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Vector3": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049452",
+                "operation": "attribute.set",
+                "position": [
+                  30.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Giro salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049453",
+                "operation": "attribute.set",
+                "position": [
+                  330.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Olhar salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Vector2": [
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049454",
+                "operation": "attribute.set",
+                "position": [
+                  630.0,
+                  292.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Checkpoint"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Text": "Final"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944e",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-00000004944f",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944e",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049451",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944f",
+                "from_port": "position",
+                "to_node": "03000000-0000-4000-8000-000000049451",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944e",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049451",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944e",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049452",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944f",
+                "from_port": "yaw",
+                "to_node": "03000000-0000-4000-8000-000000049452",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049451",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049452",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944e",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049453",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049450",
+                "from_port": "look",
+                "to_node": "03000000-0000-4000-8000-000000049453",
+                "to_port": "value"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049452",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049453",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004944e",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049454",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049453",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049454",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049455",
+          "name": "Reinício ao cair · camada fina",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -5.0,
+              -20.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            130.0,
+            0.02,
+            160.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.22,
+              0.65,
+              0.71,
+              0.2
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": false,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  130.0,
+                  0.02,
+                  160.0
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": true,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-000000049456",
+                "operation": "event.area_enter",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049457",
+                "operation": "attribute.get",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Destino"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049458",
+                "operation": "attribute.get",
+                "position": [
+                  630.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Giro salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049459",
+                "operation": "attribute.get",
+                "position": [
+                  930.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Olhar salvo"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004945a",
+                "operation": "character.teleport",
+                "position": [
+                  30.0,
+                  268.0
+                ],
+                "params": {
+                  "keep_velocity": {
+                    "Bool": false
+                  },
+                  "look": {
+                    "Vector2": [
+                      0.0,
+                      0.0
+                    ]
+                  },
+                  "position": {
+                    "Vector3": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  },
+                  "restore_look": {
+                    "Bool": true
+                  },
+                  "restore_yaw": {
+                    "Bool": true
+                  },
+                  "search": {
+                    "Number": 0.5
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "yaw": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004945b",
+                "operation": "condition.branch",
+                "position": [
+                  330.0,
+                  268.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "03000000-0000-4000-8000-00000004945c",
+                "operation": "debug.message",
+                "position": [
+                  630.0,
+                  268.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Destino ocupado: o reinício foi recusado; ajuste o checkpoint ou libere o espaço."
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-000000049456",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049457",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049456",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049458",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049456",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049459",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049456",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-00000004945a",
+                "to_port": "target"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049456",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004945a",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049457",
+                "from_port": "value",
+                "to_node": "03000000-0000-4000-8000-00000004945a",
+                "to_port": "position"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049458",
+                "from_port": "value",
+                "to_node": "03000000-0000-4000-8000-00000004945a",
+                "to_port": "yaw"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049459",
+                "from_port": "value",
+                "to_node": "03000000-0000-4000-8000-00000004945a",
+                "to_port": "look"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004945a",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-00000004945b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004945a",
+                "from_port": "success",
+                "to_node": "03000000-0000-4000-8000-00000004945b",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-00000004945b",
+                "from_port": "else",
+                "to_node": "03000000-0000-4000-8000-00000004945c",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004945d",
+          "name": "Ajuda de perfis",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              16.0,
+              168.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "1 Direto · 2 Parkour · 3 Encadeados · T/Y pulo automático/manual · I impulso",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004945e",
+          "name": "Percurso",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              16.0,
+              198.0
+            ],
+            "size": [
+              700.0,
+              28.0
+            ],
+            "text": "Siga -Z: rampas / vão / gelo e túnel / final. R volta ao último marco azul.",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-00000004945f",
+          "name": "Marco esquerdo",
+          "parent": "03000000-0000-4000-8000-000000049462",
+          "transform": {
+            "position": [
+              -4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049460",
+          "name": "Marco direito",
+          "parent": "03000000-0000-4000-8000-000000049462",
+          "transform": {
+            "position": [
+              4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            0.12,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049461",
+          "name": "Travessa do marco",
+          "parent": "03000000-0000-4000-8000-000000049462",
+          "transform": {
+            "position": [
+              0.0,
+              1.4,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Cube",
+          "dimensions": [
+            8.0,
+            0.12,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.18,
+              0.65,
+              0.7,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "03000000-0000-4000-8000-000000049462",
+          "name": "Conclusão da pista",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              1.4,
+              -63.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            8.0,
+            2.8,
+            0.12
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.22,
+              0.65,
+              0.71,
+              0.2
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "physics3d": {
+            "shape": {
+              "Box": {
+                "size": [
+                  8.0,
+                  2.8,
+                  0.12
+                ]
+              }
+            },
+            "center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "enabled": true,
+            "sensor": true,
+            "filter": {
+              "category": 1,
+              "mask": 4294967295,
+              "blocks_character": true,
+              "blocks_camera": true
+            },
+            "surface": null
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "03000000-0000-4000-8000-000000049463",
+                "operation": "event.area_enter",
+                "position": [
+                  30.0,
+                  30.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "03000000-0000-4000-8000-000000049464",
+                "operation": "attribute.set",
+                "position": [
+                  330.0,
+                  30.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Checkpoint"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Text": "Pista concluída"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "03000000-0000-4000-8000-000000049463",
+                "from_port": "exec",
+                "to_node": "03000000-0000-4000-8000-000000049464",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03000000-0000-4000-8000-000000049463",
+                "from_port": "context",
+                "to_node": "03000000-0000-4000-8000-000000049464",
+                "to_port": "target"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {
+    "1": "1",
+    "2": "2",
+    "3": "3",
+    "I": "I",
+    "T": "T",
+    "Y": "Y",
+    "agachar": "C",
+    "alternar_camera": "V",
+    "atacar": "J",
+    "correr": "Shift",
+    "interagir": "E",
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "mover_frente": "W",
+    "mover_tras": "S",
+    "pular": "Space",
+    "reiniciar": "R",
+    "trocar_ombro": "Q"
+  },
+  "input_labels": {
+    "1": "Escolher perfil",
+    "2": "Escolher perfil",
+    "3": "Escolher perfil",
+    "I": "Impulso de teste",
+    "T": "Pulo automático",
+    "Y": "Pulo manual",
+    "agachar": "Agachar",
+    "alternar_camera": "Alternar primeira/terceira pessoa",
+    "correr": "Correr",
+    "mover_direita": "Mover à direita",
+    "mover_esquerda": "Mover à esquerda",
+    "mover_frente": "Mover para frente",
+    "mover_tras": "Mover para trás",
+    "pular": "Pular",
+    "reiniciar": "Voltar ao checkpoint",
+    "trocar_ombro": "Trocar ombro da câmera"
+  },
+  "surfaces": [
+    {
+      "id": "03000000-0000-4000-8000-000000049465",
+      "name": "Comum",
+      "friction": 1.0,
+      "traction": 1.0,
+      "speed_multiplier": 1.0,
+      "conveyor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "conveyor_space": "Local"
+    },
+    {
+      "id": "03000000-0000-4000-8000-000000049466",
+      "name": "Gelo",
+      "friction": 0.025,
+      "traction": 0.15,
+      "speed_multiplier": 1.0,
+      "conveyor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "conveyor_space": "Local"
+    },
+    {
+      "id": "03000000-0000-4000-8000-000000049467",
+      "name": "Lama",
+      "friction": 1.8,
+      "traction": 0.65,
+      "speed_multiplier": 0.55,
+      "conveyor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "conveyor_space": "Local"
+    },
+    {
+      "id": "03000000-0000-4000-8000-000000049468",
+      "name": "Esteira",
+      "friction": 1.0,
+      "traction": 1.0,
+      "speed_multiplier": 1.0,
+      "conveyor": [
+        0.0,
+        0.0,
+        -2.0
+      ],
+      "conveyor_space": "Local"
+    }
+  ]
+}

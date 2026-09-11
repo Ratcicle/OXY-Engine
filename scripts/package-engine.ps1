@@ -15,6 +15,9 @@ if ($metadata.ProductName -ne 'OXY Engine' -or $metadata.ProductVersion -ne $ver
     throw "Executável incorreto ou antigo: $($metadata.ProductName) $($metadata.ProductVersion); esperado OXY Engine $version."
 }
 Copy-Item -LiteralPath (Join-Path $workspace 'LICENSE') -Destination $destinationPath
+$lab = Join-Path $destinationPath 'laboratorio-3d'
+New-Item -ItemType Directory -Path $lab -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $workspace 'examples/laboratorio-3d/project.oxy.json') -Destination $lab
 $instructions = @"
 OXY Engine $version — Windows x64 portátil
 
@@ -26,7 +29,9 @@ Novo projeto: escolha a primeira cena 2D/3D e use Salvar para escolher sua pasta
 Abrir projeto: escolha project.oxy.json de um projeto existente.
 Projetos recentes: lista local em %LOCALAPPDATA%\OXY Engine.
 Projeto de exemplo: sala 2D, oficina 3D e cartas; Salvar cria sua cópia.
-Ajuda > Guia de lógica visual: consulte os nós e abra cópias de cinco receitas
+Laboratório 3D · movimento: pista editável da 0.3.0; WASD, mouse, Espaço, Shift e C.
+V alterna primeira/terceira pessoa; Q muda ombro; R retorna ao checkpoint.
+Ajuda > Guia de lógica visual: consulte os nós e abra cópias de doze receitas
 editáveis, disponíveis offline dentro do executável.
 Estúdio > Modelagem: crie formas, edite faces/arestas/vértices, pinte e anime
 peças rígidas. Soltar a alça aplica a edição; Esc cancela o gesto inteiro.

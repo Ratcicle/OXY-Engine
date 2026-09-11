@@ -381,6 +381,7 @@ pub struct CharacterState {
     pub(crate) jump_consumed: bool,
     pub(crate) slide_elapsed: f32,
     pub(crate) slide_latched: bool,
+    pub(crate) trajectory: u64,
 }
 #[derive(Clone, Debug)]
 pub struct Support {
@@ -407,6 +408,13 @@ pub enum MovementEvent {
         point: Vec3,
         normal: Vec3,
     },
+}
+#[derive(Clone, Debug)]
+pub struct MovementRecord {
+    pub object: Id,
+    pub event: MovementEvent,
+    /// Immutable state at the transition; waits may retain this snapshot.
+    pub state: std::sync::Arc<CharacterState>,
 }
 impl CharacterState {
     pub fn total_velocity(&self) -> Vec3 {
@@ -437,6 +445,7 @@ impl CharacterState {
             jump_consumed: false,
             slide_elapsed: 0.,
             slide_latched: false,
+            trajectory: 0,
         }
     }
 }
@@ -453,6 +462,16 @@ pub const CAMERA_NEAR: f32 = 0.02;
 pub enum CameraLookAt {
     Point(Vec3),
     Object(Id),
+}
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TeleportOptions {
+    pub keep_velocity: bool,
+    /// Optional world yaw in radians. Graph/UI adapters expose degrees.
+    pub yaw: Option<f32>,
+    /// Optional world yaw/pitch in radians, restoring the player's view.
+    pub look: Option<[f32; 2]>,
+    /// Zero rejects occupied destinations. Maximum supported local search: 2 m.
+    pub search_radius: f32,
 }
 
 pub fn validate(

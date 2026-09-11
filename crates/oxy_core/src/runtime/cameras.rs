@@ -203,17 +203,19 @@ impl Cameras {
         if let Some(focus) = &state.look_at {
             let view = SceneView::new(scene);
             let point = focus_point(focus, &view)?;
-            let origin = self
-                .pose
-                .as_ref()
-                .map(|p| p.position)
-                .or_else(|| {
-                    rig.target
-                        .as_ref()
-                        .and_then(|id| view.world_matrix(id).ok())
-                        .map(|m| m.w_axis.truncate() + Vec3::Y * rig.eye_height)
-                })
-                .unwrap_or(Vec3::ZERO);
+            let origin = {
+                rig.target
+                    .as_ref()
+                    .and_then(|id| view.world_matrix(id).ok())
+                    .map(|m| {
+                        m.w_axis.truncate()
+                            + Vec3::Y
+                                * target
+                                    .filter(|s| s.eye_height > 0.)
+                                    .map_or(rig.eye_height, |s| s.eye_height)
+                    })
+            }
+            .unwrap_or(Vec3::ZERO);
             if let Some(rotation) = look_rotation(origin, point) {
                 (state.yaw, state.pitch) = angles(rotation);
             }
@@ -479,6 +481,90 @@ fn sweep_camera(
     Ok(from + delta * fraction)
 }
 impl Runtime {
+    pub(in crate::runtime) fn begin_camera_input(&mut self, input: &InputFrame) {
+        if self.scene().kind != SceneKind::ThreeD
+            || !self.scene().entities.iter().any(|e| e.camera_rig.is_some())
+        {
+            return;
+        }
+        let mut cameras = std::mem::take(&mut self.cameras);
+        if let Err(error) = cameras.control(self.scene(), &self.characters, input) {
+            let id = cameras
+                .active(self.scene())
+                .map_or_else(|| self.scene_id.clone(), |e| e.id.clone());
+            cameras.report(self, id, error);
+        }
+        self.cameras = cameras;
+    }
+    /// Unsmoothened simulation look. Independent of presentation interpolation,
+    /// obstruction distance, frame rate and editor navigation.
+    pub fn camera_orientation(&self) -> Result<Quat, String> {
+        let entity = self
+            .cameras
+            .active(self.scene())
+            .ok_or("Câmera ativa ausente")?;
+        if self.cameras.mode(entity) == CameraMode::Fixed {
+            return crate::physics3d::world_pose(self.scene().world_matrix(&entity.id)?)
+                .map(|(_, r, _)| r);
+        }
+        let state = self
+            .cameras
+            .states
+            .get(&entity.id)
+            .ok_or("Controle de câmera ainda não inicializado")?;
+        Ok(Quat::from_rotation_y(state.yaw) * Quat::from_rotation_x(state.pitch))
+    }
+    pub(in crate::runtime) fn reset_camera_after_teleport(
+        &mut self,
+        target: &str,
+        look: Option<[f32; 2]>,
+    ) {
+        let ids: Vec<_> = self
+            .scene()
+            .entities
+            .iter()
+            .filter(|e| {
+                e.camera_rig
+                    .as_ref()
+                    .is_some_and(|r| r.target.as_deref() == Some(target))
+            })
+            .map(|e| e.id.clone())
+            .collect();
+        let active = self.active_camera().map(str::to_owned);
+        for id in &ids {
+            if let Some(state) = self.cameras.states.get_mut(id) {
+                state.pivot = None;
+                state.rotation = None;
+                state.shown_distance = None;
+                if let Some([yaw, pitch]) = look {
+                    state.yaw = yaw.rem_euclid(std::f32::consts::TAU);
+                    state.pitch = pitch;
+                    state.look_at = None;
+                }
+            }
+        }
+        if active.as_ref().is_some_and(|id| ids.contains(id)) {
+            self.cameras.pose = None;
+            self.cameras.key = None;
+            self.cameras.transition = None;
+            self.cameras.next_transition = None;
+            self.pending_look = [0.; 2];
+            self.pending_wheel = 0.;
+            if let Some(rig) = active
+                .as_ref()
+                .and_then(|id| self.entity(id))
+                .and_then(|e| e.camera_rig.clone())
+                && let Some(state) = self.characters.states.get_mut(target)
+            {
+                state.eye_height = if state.posture == Posture::Standing {
+                    rig.eye_height
+                } else {
+                    rig.crouched_eye_height
+                } * state.uniform_scale;
+                state.previous_eye_height = state.eye_height;
+            }
+        }
+    }
     pub fn set_viewport_aspect(&mut self, aspect: f32) {
         if aspect.is_finite() && aspect > 0. && self.cameras.aspect != aspect {
             self.cameras.aspect = aspect;
@@ -500,6 +586,7 @@ impl Runtime {
         }
         let mut cameras = std::mem::take(&mut self.cameras);
         let result = (|| {
+            self.refresh_character_queries()?;
             if cameras
                 .active(self.scene())
                 .is_some_and(|e| e.camera_rig.is_some() && !cameras.states.contains_key(&e.id))
@@ -671,6 +758,43 @@ impl Runtime {
             .ok_or("Objeto não possui câmera.")?
             .fov = degrees;
         self.update_presentation(0.);
+        Ok(())
+    }
+    pub fn set_camera_setting(
+        &mut self,
+        id: &str,
+        setting: &str,
+        value: f32,
+        seconds: f32,
+    ) -> Result<(), String> {
+        if !value.is_finite() || !seconds.is_finite() || seconds < 0. {
+            return Err("Valor/transição da câmera inválidos.".into());
+        }
+        let before = self.cameras.pose.clone();
+        match setting {
+            "fov" => self.set_camera_fov(id, value)?,
+            "distance" | "shoulder" => {
+                let mut rig = self
+                    .entity(id)
+                    .and_then(|e| e.camera_rig.clone())
+                    .ok_or("Objeto não possui câmera de personagem")?;
+                if setting == "distance" {
+                    rig.distance = value;
+                } else {
+                    rig.shoulder = value;
+                }
+                self.configure_camera(id, rig)?;
+            }
+            _ => return Err("Ajuste de câmera não permitido.".into()),
+        }
+        if self.active_camera() == Some(id) {
+            self.cameras.transition = before.filter(|_| seconds > 0.).map(|from| Transition {
+                from,
+                elapsed: 0.,
+                duration: seconds,
+            });
+            self.update_presentation(0.);
+        }
         Ok(())
     }
 }

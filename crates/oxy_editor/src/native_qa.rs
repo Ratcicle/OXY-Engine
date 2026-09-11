@@ -10,6 +10,7 @@ mod layout;
 mod mesh;
 mod modeling;
 mod movement;
+mod movement_lab;
 mod painting;
 mod physics;
 mod portable;
@@ -571,7 +572,10 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
-        if label.starts_with("m5_") {
+        if label.starts_with("lab3d_") {
+            return self.check_movement_lab(label);
+        }
+        if label.starts_with("camera3d_") {
             return self.check_cameras(label);
         }
         if label.starts_with("fp_") || label.starts_with("m3_") {

@@ -1,6 +1,7 @@
 //! Opt-in GPU test of the real standalone host. No OS input or foreground request.
 use crate::Player;
 mod mesh;
+mod movement;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
 use oxy_core::{
     document::{Id, UiKind, new_id},

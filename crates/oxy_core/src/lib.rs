@@ -15,6 +15,7 @@ pub mod input_actions;
 pub mod input_timeline;
 pub mod metrics;
 pub mod migration;
+pub mod movement_presets;
 pub mod painting;
 pub mod persistence;
 pub mod physics3d;

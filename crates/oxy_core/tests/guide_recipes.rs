@@ -15,9 +15,9 @@ fn ticks(runtime: &mut Runtime, n: usize) {
     }
 }
 #[test]
-fn all_five_embedded_recipes_are_valid_editable_documents() {
-    assert_eq!(guide_recipes::recipes().len(), 5);
-    for i in 0..5 {
+fn all_embedded_recipes_are_valid_editable_documents() {
+    assert_eq!(guide_recipes::recipes().len(), 12);
+    for i in 0..12 {
         let p = guide_recipes::load(i).unwrap();
         let before = p.clone();
         let mut runtime = Runtime::new(&p, &p.start_scene).unwrap();

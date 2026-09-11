@@ -84,6 +84,12 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
                     e.physics3d
                         .as_ref()
                         .is_some_and(|c| c.surface.as_deref() == Some(id))
+                        || e.attributes.values().any(|v| v.surface() == Some(id))
+                        || e.graph
+                            .nodes
+                            .iter()
+                            .flat_map(|n| n.params.values())
+                            .any(|v| v.surface() == Some(id))
                 })
                 .map(move |e| format!("{scope} → {}", e.name))
         })

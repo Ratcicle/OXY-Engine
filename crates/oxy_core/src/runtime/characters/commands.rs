@@ -2,6 +2,19 @@
 //! only in the isolated runtime; none of these commands edit project assets.
 use super::*;
 impl Runtime {
+    pub(in crate::runtime) fn initialize_character_states(&mut self) -> Result<(), String> {
+        let ids: Vec<_> = self
+            .scene()
+            .entities
+            .iter()
+            .filter(|e| e.character3d.is_some())
+            .map(|e| e.id.clone())
+            .collect();
+        for id in ids {
+            self.ensure_character_state(&id)?;
+        }
+        Ok(())
+    }
     pub fn request_slide(&mut self, id: &str) -> Result<(), String> {
         self.ensure_character_state(id)?;
         if !self
@@ -18,7 +31,7 @@ impl Runtime {
         self.characters.slides.insert(id.into());
         Ok(())
     }
-    fn ensure_character_state(&mut self, id: &str) -> Result<(), String> {
+    pub(in crate::runtime) fn ensure_character_state(&mut self, id: &str) -> Result<(), String> {
         if self.characters.states.contains_key(id) {
             return Ok(());
         }
@@ -101,6 +114,13 @@ impl Runtime {
             state.jump_until = None;
         }
         state.velocity = next;
+        if detach {
+            self.characters.pending_records.push(MovementRecord {
+                object: id.into(),
+                event: MovementEvent::LeftSupport,
+                state: Arc::new(state.clone()),
+            });
+        }
         Ok(())
     }
     pub fn add_character_velocity(&mut self, id: &str, delta: Vec3) -> Result<(), String> {
@@ -134,6 +154,11 @@ impl Runtime {
             state.jump_consumed = true;
             state.coyote_until = f64::NEG_INFINITY;
             state.jump_until = None;
+            self.characters.pending_records.push(MovementRecord {
+                object: id.into(),
+                event: MovementEvent::LeftSupport,
+                state: Arc::new(state.clone()),
+            });
         }
         Ok(())
     }

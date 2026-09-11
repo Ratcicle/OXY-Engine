@@ -8,7 +8,7 @@ pub struct Recipe {
     pub bytes: &'static [u8],
 }
 pub fn recipes() -> &'static [Recipe] {
-    static RECIPES: [Recipe; 5] = [
+    static RECIPES: [Recipe; 12] = [
         Recipe {
             title: "Primeira mensagem",
             setup: "Um retângulo contém o grafo. Na Lógica, a ação Mostrar mensagem está ligada a K, no modo Pressionar.",
@@ -59,12 +59,90 @@ pub fn recipes() -> &'static [Recipe] {
                 "/../../examples/guia/05-passagem-entre-cenas/project.oxy.json"
             )),
         },
+        Recipe {
+            title: "Primeira pessoa por nós",
+            setup: "Crie uma cena 3D, chão sólido e grupo com Personagem 3D e cápsula nos pés. Crie a câmera com alvo nesse grupo e peças visuais filhas; desative Entrada automática no personagem.",
+            flow: "A cada passo → Definir intenção; Ler eixos: Movimento → Intenção. Ação Pular → Solicitar pulo. Ler ação Correr/Agachar: Mantida → Comando de postura. O mouse pertence ao rig da câmera.",
+            expected: "WASD move e Espaço pula. Remova a conexão de intenção: ela expira no próximo passo, sem velocidade desejada presa.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/06-movimento-3d/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Trocar câmera por nós",
+            setup: "Personagem e câmera usam os mesmos componentes da primeira receita. Crie ações 1 e 2; o alvo dos nós é a câmera.",
+            flow: "Ação 1 → Trocar modo: Primeira pessoa. Ação 2 → Trocar modo: Terceira pessoa. Transição 0,25 s; o controle de colisão continua no personagem.",
+            expected: "Troque enquanto pula: velocidade e apoio continuam. Q muda o ombro; o volume da câmera evita paredes.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/07-movimento-3d/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Gelo e piso comum",
+            setup: "O piso possui colisor 3D e vínculo de superfície. As duas superfícies são recursos editáveis do projeto.",
+            flow: "Ação 1 → Aplicar superfície: Comum. Ação 2 → Aplicar superfície: Gelo. O alvo é o piso, e a referência de superfície usa porta própria.",
+            expected: "Ande e solte a direção. Gelo freia menos. A cor do material visual não muda nem controla o atrito.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/08-movimento-3d/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Pulo e impulso",
+            setup: "O grupo tem Personagem 3D. Crie Solicitar salto em K e Impulso em I.",
+            flow: "K → Solicitar pulo. I → Alterar velocidade: Somar, vetor mundial (0, 7, -8) m/s. A operação soma à velocidade atual, sem multiplicar por dt.",
+            expected: "K respeita chão e antecipação. I também atua no ar e preserva o embalo lateral; o Console informa parâmetros inválidos.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/09-movimento-3d/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Checkpoint e reinício",
+            setup: "A área azul tem sensor e o personagem possui Destino (Vetor3), Giro salvo (Número), Olhar salvo (Vetor2) e Checkpoint (Texto).",
+            flow: "Ao entrar: Objeto do evento → Ler posição/rotação e alvos de Alterar atributo. Guarde posição/giro e Ler câmera: Olhar. R → Teleportar, recebendo os atributos; mantenha Restabelecer giro/olhar e consulte Sucesso.",
+            expected: "Atravesse a área, olhe para outro lado e pressione R. Posição, orientação e olhar voltam; velocidade/buffers anteriores são descartados. Um destino ocupado é recusado ou usa busca local até 0,5 m.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/10-movimento-3d/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Bloquear entrada durante queda",
+            setup: "O personagem começa acima do chão. Crie ações B e N. Bloquear entrada atua por motivo, não desliga o componente.",
+            flow: "B → Bloquear movimento, motivo teste de queda. N → Liberar movimento com o mesmo motivo. Gravidade, apoio e impulsos continuam simulando.",
+            expected: "Pressione B enquanto cai: o corpo aterrissa normalmente, mas WASD não cria intenção. N libera apenas o bloqueio desse motivo.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/11-movimento-3d/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Saltos manuais e automáticos",
+            setup: "Aplique o perfil Saltos encadeados; os valores continuam editáveis. Crie ações 1 e 2.",
+            flow: "1 → Alterar opção: Pulo automático desligado. 2 → a mesma opção ligada. Movimento e olhar continuam nas ações remapeáveis.",
+            expected: "No modo manual, manter Espaço não salta de novo. No automático, saltos encadeiam nos pousos. Mouse sozinho não gera velocidade.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/12-movimento-3d/project.oxy.json"
+            )),
+        },
     ];
     &RECIPES
 }
 pub fn load(index: usize) -> Result<Project, String> {
     let recipe = recipes().get(index).ok_or("Receita não encontrada.")?;
     let project = crate::migration::read(recipe.bytes)?;
+    crate::document::validate_project(&project)?;
+    Ok(project)
+}
+pub fn movement_laboratory() -> Result<Project, String> {
+    let project = crate::migration::read(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/laboratorio-3d/project.oxy.json"
+    )))?;
     crate::document::validate_project(&project)?;
     Ok(project)
 }

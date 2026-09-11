@@ -126,7 +126,7 @@ impl GameUi {
             let value = view
                 .entity(element.binding_object.as_deref().unwrap_or(&entity.id))
                 .and_then(|bound| bound.attributes.get(&element.binding_attribute));
-            let text = display_text(element, value, scene);
+            let text = display_text(element, value, scene, &project.surfaces);
             let texture = element.texture.as_deref().and_then(|id| {
                 if !self.textures.contains_key(id) && !self.failed.iter().any(|failed| failed == id)
                 {
@@ -318,7 +318,12 @@ pub fn pick_ui(scene: &Scene, viewport: Rect, pointer: Pos2) -> Option<Id> {
         .map(|entity| entity.id.clone())
 }
 
-fn display_text(element: &UiElement, value: Option<&Value>, scene: &Scene) -> String {
+fn display_text(
+    element: &UiElement,
+    value: Option<&Value>,
+    scene: &Scene,
+    surfaces: &[oxy_core::surface::SurfaceMaterial],
+) -> String {
     let Some(value) = value else {
         return element.text.clone();
     };
@@ -342,6 +347,12 @@ fn display_text(element: &UiElement, value: Option<&Value>, scene: &Scene) -> St
             .entity(id)
             .map_or_else(|| "objeto ausente".into(), |entity| entity.name.clone()),
         Value::Object(None) => "nenhum".into(),
+        Value::Vector2([x, y]) => format!("({x:.2}; {y:.2})"),
+        Value::Vector3([x, y, z]) => format!("({x:.2}; {y:.2}; {z:.2})"),
+        Value::Surface(id) => id
+            .as_ref()
+            .and_then(|id| surfaces.iter().find(|s| &s.id == id))
+            .map_or_else(|| "sem superfície".into(), |s| s.name.clone()),
     };
     if element.text.contains("{value}") || element.text.contains("{valor}") {
         element
@@ -387,12 +398,12 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            display_text(&element, Some(&value), scene),
+            display_text(&element, Some(&value), scene, &[]),
             "Selecionado: Alvo de treino"
         );
         scene.entity_mut(&target_id).unwrap().name = "Alvo renomeado".into();
         assert_eq!(
-            display_text(&element, Some(&value), scene),
+            display_text(&element, Some(&value), scene, &[]),
             "Selecionado: Alvo renomeado"
         );
         assert_eq!(
@@ -401,11 +412,11 @@ mod tests {
             "The persisted reference remains stable after renaming"
         );
         scene.entities.clear();
-        let missing = display_text(&element, Some(&value), scene);
+        let missing = display_text(&element, Some(&value), scene, &[]);
         assert_eq!(missing, "Selecionado: objeto ausente");
         assert!(!missing.contains(&target_id));
         assert_eq!(
-            display_text(&element, Some(&Value::Object(None)), scene),
+            display_text(&element, Some(&Value::Object(None)), scene, &[]),
             "Selecionado: nenhum"
         );
     }
@@ -421,7 +432,8 @@ mod tests {
             display_text(
                 &element,
                 Some(&Value::Number(42.)),
-                &Project::new("Vínculo").scenes[0]
+                &Project::new("Vínculo").scenes[0],
+                &[]
             ),
             "Vida 42"
         );

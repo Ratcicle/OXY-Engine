@@ -8,6 +8,7 @@ pub fn value_editor(
     ui: &mut egui::Ui,
     value: &mut Value,
     objects: &[(Id, String)],
+    surfaces: &[oxy_core::surface::SurfaceMaterial],
     salt: impl std::hash::Hash,
 ) {
     match value {
@@ -22,6 +23,43 @@ pub fn value_editor(
         }
         Value::Object(v) => {
             object_picker(ui, v, objects, salt);
+        }
+        Value::Vector2(v) => {
+            ui.horizontal(|ui| {
+                for (axis, value) in ["X", "Y"].iter().zip(v) {
+                    ui.add(
+                        egui::DragValue::new(value)
+                            .speed(0.05)
+                            .prefix(format!("{axis} ")),
+                    );
+                }
+            });
+        }
+        Value::Vector3(v) => {
+            ui.horizontal_wrapped(|ui| {
+                for (axis, value) in ["X", "Y", "Z"].iter().zip(v) {
+                    ui.add(
+                        egui::DragValue::new(value)
+                            .speed(0.05)
+                            .prefix(format!("{axis} ")),
+                    );
+                }
+            });
+        }
+        Value::Surface(value) => {
+            egui::ComboBox::from_id_salt(salt)
+                .selected_text(
+                    value
+                        .as_ref()
+                        .and_then(|id| surfaces.iter().find(|s| &s.id == id))
+                        .map_or("Sem superfície", |s| s.name.as_str()),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(value, None, "Sem superfície");
+                    for surface in surfaces {
+                        ui.selectable_value(value, Some(surface.id.clone()), &surface.name);
+                    }
+                });
         }
     }
 }
@@ -116,6 +154,16 @@ pub(super) fn parameter_editor(
         .cloned()
         .unwrap_or_else(|| param.default.clone());
     let salt = (node.id.clone(), param.id);
+    if node.operation.starts_with("query.")
+        && matches!(param.id, "category" | "mask")
+        && let Value::Number(number) = &mut value
+    {
+        let mut bits = (*number).clamp(0., f64::from(u32::MAX)) as u32;
+        collision_filter_picker(ui, &mut bits, context.project, param.label);
+        *number = f64::from(bits);
+        node.params.insert(param.id.into(), value);
+        return;
+    }
     let explicit_target = node
         .params
         .get("target")
@@ -124,6 +172,11 @@ pub(super) fn parameter_editor(
     let target = explicit_target.as_deref().or(context.owner);
     let mut specialized = false;
     if let Value::Text(selected) = &mut value {
+        if let Some(choices) = oxy_core::graph::movement_choices(&node.operation, param.id) {
+            enum_choice(ui, selected, choices, salt.clone());
+            node.params.insert(param.id.into(), value);
+            return;
+        }
         match (node.operation.as_str(), param.id) {
             ("action.animation", "clip") => {
                 let choices: Vec<_> = context
@@ -191,7 +244,7 @@ pub(super) fn parameter_editor(
                 named_choice(ui, selected, &choices, salt.clone());
                 specialized = true;
             }
-            ("event.input", "action") => {
+            ("event.input" | "input.read", "action") => {
                 let choices: Vec<_> = context
                     .project
                     .input_bindings
@@ -345,13 +398,35 @@ pub(super) fn parameter_editor(
                 Value::Text(_) => 1,
                 Value::Bool(_) => 2,
                 Value::Object(_) => 3,
+                Value::Vector2(_) => 4,
+                Value::Vector3(_) => 5,
+                Value::Surface(_) => 6,
             };
             let mut selected_kind = kind;
             egui::ComboBox::from_id_salt((salt.clone(), "type"))
-                .selected_text(["Número", "Texto", "Booleano", "Objeto"][kind])
+                .selected_text(
+                    [
+                        "Número",
+                        "Texto",
+                        "Booleano",
+                        "Objeto",
+                        "Vetor2",
+                        "Vetor3",
+                        "Superfície física",
+                    ][kind],
+                )
                 .show_ui(ui, |ui| {
-                    for (kind, label) in
-                        ["Número", "Texto", "Booleano", "Objeto"].iter().enumerate()
+                    for (kind, label) in [
+                        "Número",
+                        "Texto",
+                        "Booleano",
+                        "Objeto",
+                        "Vetor2",
+                        "Vetor3",
+                        "Superfície física",
+                    ]
+                    .iter()
+                    .enumerate()
                     {
                         ui.selectable_value(&mut selected_kind, kind, *label);
                     }
@@ -361,11 +436,56 @@ pub(super) fn parameter_editor(
                     0 => Value::Number(0.0),
                     1 => Value::Text(String::new()),
                     2 => Value::Bool(false),
+                    4 => Value::Vector2([0.; 2]),
+                    5 => Value::Vector3([0.; 3]),
+                    6 => Value::Surface(None),
                     _ => Value::Object(None),
                 };
             }
         }
-        value_editor(ui, &mut value, context.objects, salt);
+        value_editor(
+            ui,
+            &mut value,
+            context.objects,
+            &context.project.surfaces,
+            salt,
+        );
     }
     node.params.insert(param.id.into(), value);
+}
+
+/// The persisted mask is unchanged; friendly names are project metadata only.
+pub fn collision_filter_picker(ui: &mut egui::Ui, bits: &mut u32, project: &Project, label: &str) {
+    ui.menu_button(label, |ui| {
+        ui.horizontal(|ui| {
+            if ui.button("Todos").clicked() {
+                *bits = u32::MAX;
+            }
+            if ui.button("Nenhum").clicked() {
+                *bits = 0;
+            }
+        });
+        egui::ScrollArea::vertical()
+            .max_height(250.)
+            .show(ui, |ui| {
+                for bit in 0..32_u8 {
+                    let flag = 1_u32 << bit;
+                    let mut selected = (*bits & flag) != 0;
+                    if ui
+                        .checkbox(&mut selected, project.collision_group_label(bit))
+                        .changed()
+                    {
+                        if selected {
+                            *bits |= flag;
+                        } else {
+                            *bits &= !flag;
+                        }
+                    }
+                }
+            });
+    })
+    .response
+    .on_hover_text(
+        "Escolha grupos físicos. Os nomes não alteram as regras e não são camadas de desenho.",
+    );
 }

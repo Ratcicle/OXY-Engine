@@ -14,7 +14,9 @@ type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
 mod cameras;
 mod characters;
+mod movement_nodes;
 pub use characters::SensorCrossing;
+pub use movement_nodes::{SceneQuery, SceneQueryShape};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
@@ -42,6 +44,8 @@ impl InputFrame {
 
 #[derive(Clone, Debug)]
 pub enum RuntimeEvent {
+    FixedStep,
+    Movement(crate::character::MovementRecord),
     SceneStart,
     Input(String),
     InputHeld(String),
@@ -76,6 +80,7 @@ struct Context {
     activation: u64,
     outputs: Arc<BTreeMap<(Id, String), Value>>,
     hits: Option<HitLease>,
+    trajectory: Option<(Id, u64)>,
 }
 #[derive(Clone, Debug)]
 struct Task {
@@ -108,8 +113,12 @@ pub struct Runtime {
     pending_wheel: f32,
     characters: characters::Characters,
     cameras: cameras::Cameras,
+    physics_dirty: bool,
     input_timeline: crate::input_timeline::InputTimeline,
     input_modes: OnceLock<BTreeMap<String, u8>>,
+    event_operations: OnceLock<HashSet<String>>,
+    step_input: InputFrame,
+    query_work: usize,
     ready: VecDeque<Task>,
     waiting: Vec<Task>,
     bodies: HashMap<Id, BodyState>,
@@ -147,8 +156,12 @@ impl Runtime {
             pending_wheel: 0.,
             characters: Default::default(),
             cameras: Default::default(),
+            physics_dirty: true,
             input_timeline: Default::default(),
             input_modes: OnceLock::new(),
+            event_operations: OnceLock::new(),
+            step_input: InputFrame::default(),
+            query_work: 0,
             ready: VecDeque::new(),
             waiting: Vec::new(),
             bodies: HashMap::new(),
@@ -161,6 +174,8 @@ impl Runtime {
             serial: 0,
             stopped: false,
         };
+        runtime.initialize_character_states()?;
+        runtime.begin_camera_input(&InputFrame::default());
         runtime.emit(RuntimeEvent::SceneStart);
         let mut budget = MAX_NODE_WORK;
         runtime.process_tasks(&mut budget);
@@ -193,9 +208,11 @@ impl Runtime {
         Some(&mut self.scene_mut_internal().entities[i])
     }
     pub fn scene_mut(&mut self) -> &mut Scene {
+        self.physics_dirty = true;
         self.index.take();
         self.graphs.clear();
         self.input_modes.take();
+        self.event_operations.take();
         self.scene_mut_internal()
     }
     fn scene_mut_internal(&mut self) -> &mut Scene {
@@ -228,6 +245,7 @@ impl Runtime {
         self.pending_look = [0.; 2];
         self.pending_wheel = 0.;
         self.characters.release_input();
+        self.step_input = InputFrame::default();
         self.update_presentation(0.);
     }
     pub fn stop(&mut self) {
@@ -301,9 +319,15 @@ impl Runtime {
         self.update_presentation(elapsed);
     }
     fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
+        self.step_input = input.clone();
+        self.query_work = 0;
+        self.begin_camera_input(input);
         self.collect_activations();
         crate::metrics::count(|c| c.steps += 1);
         self.time += f64::from(FIXED_DT);
+        if self.event_used("event.step") {
+            self.emit(RuntimeEvent::FixedStep);
+        }
         for action in &input.pressed {
             self.emit(RuntimeEvent::Input(action.clone()));
         }
@@ -318,9 +342,21 @@ impl Runtime {
             }
         }
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
-        crate::metrics::timed(|| self.move_controllers(input), |c, ns| c.movement_ns += ns);
+        let movement_input = self.step_input.clone();
+        crate::metrics::timed(
+            || self.move_controllers(&movement_input),
+            |c, ns| c.movement_ns += ns,
+        );
         crate::metrics::timed(|| self.advance_animations(), |c, ns| c.animation_ns += ns);
-        crate::metrics::timed(|| self.move_characters(input), |c, ns| c.movement_ns += ns);
+        crate::metrics::timed(
+            || self.move_characters(&movement_input),
+            |c, ns| c.movement_ns += ns,
+        );
+        if self.event_used("event.character") {
+            for record in self.movement_records().to_vec() {
+                self.emit(RuntimeEvent::Movement(record));
+            }
+        }
         crate::metrics::timed(|| self.detect_areas(), |c, ns| c.areas_ns += ns);
         crate::metrics::timed(|| self.detect_character_sensors(), |c, ns| c.areas_ns += ns);
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
@@ -411,6 +447,17 @@ impl Runtime {
             }
             for node in &entity.graph.nodes {
                 let matches = match &event {
+                    RuntimeEvent::FixedStep => node.operation == "event.step",
+                    RuntimeEvent::Movement(record) => {
+                        node.operation == "event.character"
+                            && node
+                                .params
+                                .get("target")
+                                .and_then(Value::object)
+                                .unwrap_or(&entity.id)
+                                == record.object
+                            && node.text("kind") == movement_nodes::event_kind(&record.event)
+                    }
                     RuntimeEvent::SceneStart => node.operation == "event.scene_start",
                     RuntimeEvent::Input(action) => {
                         node.operation == "event.input"
@@ -442,6 +489,9 @@ impl Runtime {
                 };
                 if matches {
                     let (other, activation) = match &event {
+                        RuntimeEvent::Movement(record) => {
+                            (Some(record.object.clone()), generated_activation)
+                        }
                         RuntimeEvent::AreaEnter {
                             other, activation, ..
                         }
@@ -454,6 +504,30 @@ impl Runtime {
                         }
                         _ => (Some(entity.id.clone()), generated_activation),
                     };
+                    let trajectory = match &event {
+                        RuntimeEvent::Movement(record) => {
+                            Some((record.object.clone(), record.state.trajectory))
+                        }
+                        RuntimeEvent::AreaEnter { other, .. }
+                        | RuntimeEvent::AreaExit { other, .. } => self
+                            .characters
+                            .states
+                            .get(other)
+                            .map(|s| (other.clone(), s.trajectory)),
+                        RuntimeEvent::FixedStep
+                        | RuntimeEvent::Input(_)
+                        | RuntimeEvent::InputHeld(_)
+                        | RuntimeEvent::InputReleased(_) => self
+                            .characters
+                            .states
+                            .get(&entity.id)
+                            .map(|s| (entity.id.clone(), s.trajectory)),
+                        _ => None,
+                    };
+                    let values = movement_nodes::event_values(&event, self.time)
+                        .into_iter()
+                        .map(|(key, value)| ((node.id.clone(), key.into()), value))
+                        .collect();
                     found.push(Task {
                         due: self.time,
                         owner: entity.id.clone(),
@@ -462,8 +536,9 @@ impl Runtime {
                             owner: entity.id.clone(),
                             other,
                             activation,
-                            outputs: Arc::new(BTreeMap::new()),
+                            outputs: Arc::new(values),
                             hits: None,
+                            trajectory,
                         },
                     });
                 }
@@ -496,6 +571,19 @@ impl Runtime {
         }
         self.waiting = future;
         while let Some(task) = self.ready.pop_front() {
+            if task
+                .context
+                .trajectory
+                .as_ref()
+                .is_some_and(|(id, generation)| {
+                    self.characters
+                        .states
+                        .get(id)
+                        .is_none_or(|s| s.trajectory != *generation)
+                })
+            {
+                continue;
+            }
             if self.disabled_behaviors.contains(&task.owner) || self.entity(&task.owner).is_none() {
                 continue;
             }
@@ -564,6 +652,7 @@ impl Runtime {
         depth: usize,
     ) -> Result<Id, String> {
         match self.input_value(graph, node, "target", context, budget, depth)? {
+            Value::Object(None) if graph.input(&node.id,"target").is_some() => Err("A porta Objeto recebeu uma referência vazia; o responsável não será usado como substituto.".into()),
             Value::Object(value) => Ok(value.unwrap_or_else(|| context.owner.clone())),
             _ => Err("Entrada objeto precisa de referência de objeto".into()),
         }
@@ -590,7 +679,8 @@ impl Runtime {
             };
         }
         match node.operation.as_str() {
-            "value.number" | "value.text" | "value.bool" | "value.object" => node
+            "value.number" | "value.text" | "value.bool" | "value.object" | "value.vector2"
+            | "value.vector3" | "value.surface" => node
                 .params
                 .get("value")
                 .cloned()
@@ -651,9 +741,7 @@ impl Runtime {
                 };
                 Ok(Value::Bool(result))
             }
-            _ => Err(format!(
-                "Dados da saída {output} indisponíveis; execute a ação produtora antes"
-            )),
+            _ => self.movement_data(graph, node, output, context, budget, depth),
         }
     }
     fn outputs(
@@ -740,6 +828,14 @@ impl Runtime {
             "attribute.set" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
+                if !value.is_finite() {
+                    return Err("Novo valor de atributo não finito.".into());
+                }
+                if let Some(id) = value.surface()
+                    && !self.project.surfaces.iter().any(|s| s.id == id)
+                {
+                    return Err("Nova referência de superfície não existe.".into());
+                }
                 if let Value::Object(Some(id)) = &value
                     && self.entity(id).is_none()
                 {
@@ -822,8 +918,10 @@ impl Runtime {
             }
             "action.spawn" => {
                 let template = self.target(&graph, node, &context, budget, 0)?;
+                self.physics_dirty = true;
                 self.index.take();
                 self.input_modes.take();
+                self.event_operations.take();
                 let root = self.scene_mut_internal().duplicate_subtree(&template)?;
                 // The editor duplicate offset is not part of a runtime spawn's explicit offset.
                 let delta = Vec3::new(
@@ -866,6 +964,7 @@ impl Runtime {
                 }
             }
             "action.component" => {
+                self.physics_dirty = true;
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let enabled = node.boolean("enabled", true);
                 match node.text("component") {
@@ -895,16 +994,24 @@ impl Runtime {
                 self.change_scene(node.text("scene"))?;
                 return Ok(());
             }
-            _ => return Err(format!("Operação {} não é executável", node.operation)),
+            _ => {
+                if !self.movement_action(&graph, node, &mut context, budget)? {
+                    return Err(format!("Operação {} não é executável", node.operation));
+                }
+            }
         }
         self.outputs(&graph, node, &ports, context, delay);
         Ok(())
     }
     pub fn remove_object(&mut self, id: &str) {
+        self.physics_dirty = true;
         let ids: HashSet<_> = self.scene().descendants(id).into_iter().collect();
-        self.characters.remove_entities(&ids);
+        let mut characters = std::mem::take(&mut self.characters);
+        characters.remove_entities(&ids, self.scene(), self.time);
+        self.characters = characters;
         self.index.take();
         self.input_modes.take();
+        self.event_operations.take();
         self.scene_mut_internal().remove_subtree(id);
         self.graphs.retain(|owner, _| !ids.contains(owner));
         self.area_hits.retain(|owner, _| !ids.contains(owner));
@@ -926,6 +1033,7 @@ impl Runtime {
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();
         self.input_modes.take();
+        self.event_operations.take();
         self.graphs.clear();
         let scene = self
             .source
@@ -954,6 +1062,11 @@ impl Runtime {
         self.pending_pressed.clear();
         self.pending_released.clear();
         self.sounds.clear();
+        self.physics_dirty = true;
+        self.step_input = InputFrame::default();
+        self.query_work = 0;
+        self.initialize_character_states()?;
+        self.begin_camera_input(&InputFrame::default());
         self.emit(RuntimeEvent::SceneStart);
         Ok(())
     }
@@ -1085,6 +1198,9 @@ impl Runtime {
         }
     }
     fn advance_animations(&mut self) {
+        if !self.animations.is_empty() && self.scene().kind == SceneKind::ThreeD {
+            self.physics_dirty = true;
+        }
         let mut players = std::mem::take(&mut self.animations);
         let mut events = Vec::new();
         for (owner, player) in &mut players {
