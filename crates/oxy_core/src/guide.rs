@@ -14,7 +14,7 @@ impl Topic {
             "event.input" => {
                 "Crie uma ação em Ações de entrada, escolha a tecla e vincule-a ao nó. O jogo deve estar rodando com a entrada capturada."
             }
-            "event.area_enter" => {
+            "event.area_enter" | "event.area_exit" => {
                 "O responsável precisa de um colisor ativo marcado como área. O visitante também precisa de colisor; objetos sem caixa não entram na detecção."
             }
             "event.animation" => {
@@ -56,6 +56,7 @@ pub fn topics() -> &'static [Topic] {
             "event.input"=>("Inicia um fluxo ao pressionar, manter ou soltar uma ação configurada na Lógica.","Escolha Mostrar mensagem, tecla K, modo Pressionar; conecte a Mensagem de diagnóstico.","Pressionar e Soltar são transições únicas. Manter executa uma vez por passo fixo; é adequado para ações contínuas. Pausa e campos de texto não recebem controles do jogo."),
             "event.click"=>("Inicia o comportamento ao clicar no objeto ou em seu botão de interface.","Um botão de carta inicia uma condição de energia antes de aplicar o efeito.","O grafo precisa pertencer ao objeto clicado; uma referência visual não cria uma ligação de clique."),
             "event.area_enter"=>("Detecta entrada em uma área e fornece o objeto que entrou.","Ligue Objeto à leitura do atributo Chave do visitante.","Adicione um colisor ativo marcado como área ao responsável. Não procure o visitante por um nome fixo."),
+            "event.area_exit"=>("Executa quando o visitante sai de uma área e fornece esse objeto.","Use a referência do visitante para desativar um efeito temporário ao sair.","Uma cápsula 3D rápida pode entrar e sair no mesmo passo, nessa ordem. Desativar ou remover uma área cancela a ocupação; não simula uma travessia. Objetos legados usam a sobreposição entre passos."),
             "event.animation"=>("Inicia um fluxo quando a reprodução atravessa um marcador de animação.","Use Impacto para ativar a área do golpe.","O marcador precisa existir no clip reproduzido pelo responsável. Ficar parado perto do instante não repete o evento."),
             "value.number"=>("Fornece um número constante.","Use 2 como custo de uma carta.","Conecte a uma entrada numérica; textos não viram números automaticamente."),
             "value.text"=>("Fornece um texto constante.","Defina uma mensagem ou conteúdo textual para um atributo.","O texto não procura objetos pelo nome; use referências de objeto."),

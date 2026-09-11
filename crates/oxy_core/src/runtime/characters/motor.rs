@@ -11,6 +11,8 @@ pub(super) struct MotorInput {
     pub crouch: bool,
     pub crouch_pressed: bool,
     pub crouch_override: Option<bool>,
+    pub jump_held: bool,
+    pub slide: bool,
 }
 pub(super) struct MotorContext<'a> {
     pub world: &'a PhysicsWorld,
@@ -61,6 +63,8 @@ pub(super) fn inherited(velocity: Vec3, policy: InheritPlatform) -> Vec3 {
     }
 }
 fn jump(state: &mut CharacterState, config: &CharacterConfig, events: &mut Vec<MovementEvent>) {
+    state.velocity.x *= config.jump_retention;
+    state.velocity.z *= config.jump_retention;
     state.velocity.y = config.jump_speed;
     if let Some(support) = state.support.take() {
         state.velocity += inherited(support.velocity, config.inherit_platform);
@@ -69,6 +73,10 @@ fn jump(state: &mut CharacterState, config: &CharacterConfig, events: &mut Vec<M
     state.jump_consumed = true;
     state.coyote_until = f64::NEG_INFINITY;
     state.jump_until = None;
+    if state.posture == Posture::Sliding {
+        state.posture = Posture::Crouched;
+        events.push(MovementEvent::PostureChanged(Posture::Crouched));
+    }
     events.push(MovementEvent::Jumped);
 }
 /// Accelerate along the requested projection, preserving perpendicular momentum.
@@ -204,10 +212,40 @@ impl MotorContext<'_> {
         } else {
             state.want_crouch = input.crouch;
         }
+        if input.slide {
+            state.want_crouch = true;
+            state.slide_latched = false;
+        }
         let old_posture = state.posture;
         let mut motion = self.standing;
         motion.height = state.height;
-        if state.want_crouch {
+        if !state.want_crouch {
+            state.slide_latched = false;
+        }
+        let horizontal_speed = Vec2::new(state.velocity.x, state.velocity.z).length();
+        if state.posture == Posture::Sliding {
+            state.slide_elapsed += dt;
+            if !config.slide_enabled
+                || !state.grounded
+                || !state.want_crouch
+                || state.slide_elapsed >= config.slide_duration
+                || horizontal_speed < config.slide_exit_speed
+            {
+                state.posture = Posture::Crouched;
+            }
+        } else if config.slide_enabled
+            && state.want_crouch
+            && !state.slide_latched
+            && state.grounded
+            && horizontal_speed >= config.slide_min_speed
+        {
+            state.posture = Posture::Sliding;
+            state.slide_elapsed = 0.;
+            state.slide_latched = true;
+        }
+        if state.posture == Posture::Sliding {
+            state.height = crouch_height;
+        } else if state.want_crouch {
             state.posture = Posture::Crouched;
             state.height = crouch_height;
         } else if state.posture == Posture::Crouched
@@ -347,7 +385,7 @@ impl MotorContext<'_> {
         if was_grounded && !state.grounded && !state.jump_consumed {
             state.coyote_until = self.time + f64::from(config.coyote_ms) * 0.001;
         }
-        if input.jump {
+        if input.jump || (config.jump_mode == JumpMode::Automatic && input.jump_held) {
             state.jump_until = Some(self.time + f64::from(config.jump_buffer_ms) * 0.001);
         }
         if state.jump_until.is_some_and(|t| t < self.time) {
@@ -377,14 +415,26 @@ impl MotorContext<'_> {
         let axis = wish_direction(input.axis, yaw);
         if state.grounded {
             let normal = state.support.as_ref().map_or(Vec3::Y, |s| s.normal);
-            let speed = if state.posture == Posture::Crouched {
+            let speed = if state.posture != Posture::Standing {
                 config.crouch_speed
             } else if state.sprinting {
                 config.sprint_speed
             } else {
                 config.speed
             };
-            if input.axis.length_squared() > 1e-8 {
+            if state.posture == Posture::Sliding {
+                let length = state.velocity.length();
+                let next = (length - config.slide_friction * friction * length * dt).max(0.);
+                state.velocity = state.velocity.normalize_or_zero() * next;
+                if input.axis.length_squared() > 1e-8 {
+                    let direction = (axis - normal * axis.dot(normal)).normalize_or_zero();
+                    state.velocity = approach(
+                        state.velocity,
+                        direction * next,
+                        config.slide_control * traction * input.axis.length() * dt,
+                    );
+                }
+            } else if input.axis.length_squared() > 1e-8 {
                 let direction = (axis - normal * axis.dot(normal)).normalize_or_zero();
                 state.velocity = approach(
                     state.velocity,
@@ -402,6 +452,9 @@ impl MotorContext<'_> {
                 };
             }
         } else {
+            let drag = (-config.air_resistance * dt).exp();
+            state.velocity.x *= drag;
+            state.velocity.z *= drag;
             state.velocity = air_accelerate(
                 state.velocity,
                 axis,
@@ -409,6 +462,12 @@ impl MotorContext<'_> {
                 config.air_projected_limit,
                 dt,
             );
+        }
+        if config.horizontal_limit > 0. {
+            let horizontal = Vec2::new(state.velocity.x, state.velocity.z)
+                .clamp_length_max(config.horizontal_limit);
+            state.velocity.x = horizontal.x;
+            state.velocity.z = horizontal.y;
         }
         state.velocity = state.velocity.clamp_length_max(config.absolute_speed_limit);
         let mut desired_velocity = state.velocity;
@@ -472,6 +531,11 @@ impl MotorContext<'_> {
                 out.events.push(MovementEvent::Landed {
                     impact_speed: (-before_velocity.dot(normal)).max(0.),
                 });
+                // A buffered/automatic re-jump avoids landing loss and extra
+                // ground friction; ordinary landings apply their own retention.
+                if state.jump_until.is_none() {
+                    state.velocity *= config.landing_retention;
+                }
             }
             // A buffered landing jump prepares velocity only; it does not run a
             // second dt or apply an extra ground-friction update this same tick.

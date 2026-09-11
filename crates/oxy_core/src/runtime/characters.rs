@@ -5,6 +5,8 @@ use glam::{Mat4, Quat, Vec2};
 mod commands;
 mod motor;
 mod platforms;
+mod sensors;
+pub use sensors::SensorCrossing;
 
 #[derive(Default)]
 pub(super) struct Characters {
@@ -14,6 +16,7 @@ pub(super) struct Characters {
     pub(super) jumps: HashSet<Id>,
     pub(super) sprints: HashMap<Id, bool>,
     pub(super) crouches: HashMap<Id, bool>,
+    pub(super) slides: HashSet<Id>,
     pub(super) looped: HashSet<Id>,
     pub(super) ignored_tracks: HashSet<(Id, Id, Id)>,
     platforms: HashMap<Id, platforms::PlatformFrame>,
@@ -23,6 +26,8 @@ pub(super) struct Characters {
     lateral: HashSet<(Id, Id)>,
     warnings: Vec<(Id, String)>,
     reported: HashMap<Id, String>,
+    sensor_pairs: HashSet<(Id, Id)>,
+    sensor_events: Vec<SensorCrossing>,
 }
 impl Characters {
     pub(super) fn release_input(&mut self) {
@@ -30,6 +35,7 @@ impl Characters {
         self.jumps.clear();
         self.sprints.clear();
         self.crouches.clear();
+        self.slides.clear();
         for state in self.states.values_mut() {
             state.jump_until = None;
             state.want_crouch = false;
@@ -158,6 +164,8 @@ impl Characters {
                 .clamp_length_max(1.);
             let mut jump = self.jumps.remove(&id)
                 || (config.automatic_input && input.pressed(&config.actions.jump));
+            let mut jump_held = config.automatic_input && input.held(&config.actions.jump);
+            let mut slide = self.slides.remove(&id);
             let mut sprint = self
                 .sprints
                 .get(&id)
@@ -170,6 +178,8 @@ impl Characters {
             if !state.movement_blocks.is_empty() {
                 axis = Vec2::ZERO;
                 jump = false;
+                jump_held = false;
+                slide = false;
                 sprint = false;
                 crouch = false;
                 crouch_pressed = false;
@@ -207,6 +217,8 @@ impl Characters {
                         crouch,
                         crouch_pressed,
                         crouch_override,
+                        jump_held,
+                        slide,
                     },
                 )
             } else {
@@ -244,7 +256,7 @@ impl Characters {
                 .as_ref()
                 .filter(|r| r.target.as_deref() == Some(&id))
             {
-                let desired = if state.posture == Posture::Crouched {
+                let desired = if state.posture != Posture::Standing {
                     rig.crouched_eye_height
                 } else {
                     rig.eye_height
@@ -313,6 +325,7 @@ impl Characters {
         self.lateral = lateral;
         self.intents.clear();
         self.jumps.clear();
+        self.slides.clear();
         self.sprints.retain(|id, _| self.states.contains_key(id));
         self.crouches.retain(|id, _| self.states.contains_key(id));
         Ok(())
@@ -364,6 +377,9 @@ impl Runtime {
     /// Events from the last fixed step, with data captured at the transition.
     pub fn movement_events(&self) -> &[(Id, MovementEvent)] {
         &self.characters.events
+    }
+    pub fn sensor_events(&self) -> &[SensorCrossing] {
+        &self.characters.sensor_events
     }
     /// One-tick intent. Commands submitted after movement apply on the next tick.
     pub fn set_movement_intent(&mut self, id: &str, axis: Vec2) -> Result<(), String> {

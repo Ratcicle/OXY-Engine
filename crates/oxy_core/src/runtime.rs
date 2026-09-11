@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
 mod characters;
+pub use characters::SensorCrossing;
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
@@ -46,6 +47,11 @@ pub enum RuntimeEvent {
     InputReleased(String),
     Click(Id),
     AreaEnter {
+        area: Id,
+        other: Id,
+        activation: u64,
+    },
+    AreaExit {
         area: Id,
         other: Id,
         activation: u64,
@@ -302,6 +308,7 @@ impl Runtime {
         crate::metrics::timed(|| self.advance_animations(), |c, ns| c.animation_ns += ns);
         crate::metrics::timed(|| self.move_characters(input), |c, ns| c.movement_ns += ns);
         crate::metrics::timed(|| self.detect_areas(), |c, ns| c.areas_ns += ns);
+        crate::metrics::timed(|| self.detect_character_sensors(), |c, ns| c.areas_ns += ns);
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
         self.collect_activations();
     }
@@ -361,10 +368,12 @@ impl Runtime {
             .area_activations
             .keys()
             .filter(|id| {
-                !self
-                    .entity(id)
-                    .and_then(|e| e.collider.as_ref())
-                    .is_some_and(|c| c.enabled && c.is_trigger)
+                !self.entity(id).is_some_and(|e| {
+                    e.collider
+                        .as_ref()
+                        .is_some_and(|c| c.enabled && c.is_trigger)
+                        || e.physics3d.as_ref().is_some_and(|c| c.enabled && c.sensor)
+                })
             })
             .cloned()
             .collect();
@@ -408,6 +417,9 @@ impl Runtime {
                     RuntimeEvent::AreaEnter { area, .. } => {
                         entity.id == *area && node.operation == "event.area_enter"
                     }
+                    RuntimeEvent::AreaExit { area, .. } => {
+                        entity.id == *area && node.operation == "event.area_exit"
+                    }
                     RuntimeEvent::Animation { object, marker } => {
                         entity.id == *object
                             && node.operation == "event.animation"
@@ -417,6 +429,9 @@ impl Runtime {
                 if matches {
                     let (other, activation) = match &event {
                         RuntimeEvent::AreaEnter {
+                            other, activation, ..
+                        }
+                        | RuntimeEvent::AreaExit {
                             other, activation, ..
                         } => (Some(other.clone()), *activation),
                         RuntimeEvent::Click(id) => (Some(id.clone()), generated_activation),
@@ -873,6 +888,7 @@ impl Runtime {
     }
     pub fn remove_object(&mut self, id: &str) {
         let ids: HashSet<_> = self.scene().descendants(id).into_iter().collect();
+        self.characters.remove_entities(&ids);
         self.index.take();
         self.input_modes.take();
         self.scene_mut_internal().remove_subtree(id);
@@ -1188,6 +1204,29 @@ impl Runtime {
                     });
                 }
                 pairs.insert(pair);
+            }
+        }
+        let mut exited: Vec<_> = self
+            .overlap_pairs
+            .difference(&pairs)
+            .filter(|(area, other)| {
+                index.position(area).is_some_and(|i| {
+                    self.scene().entities[i]
+                        .collider
+                        .as_ref()
+                        .is_some_and(|c| c.enabled && c.is_trigger)
+                }) && index.position(other).is_some()
+            })
+            .cloned()
+            .collect();
+        exited.sort_by_key(|(a, b)| (index.position(a), index.position(b)));
+        for (area, other) in exited {
+            if let Some(&activation) = self.area_activations.get(&area) {
+                events.push(RuntimeEvent::AreaExit {
+                    area,
+                    other,
+                    activation,
+                });
             }
         }
         self.overlap_pairs = pairs;

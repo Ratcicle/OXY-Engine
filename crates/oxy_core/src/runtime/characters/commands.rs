@@ -2,6 +2,22 @@
 //! only in the isolated runtime; none of these commands edit project assets.
 use super::*;
 impl Runtime {
+    pub fn request_slide(&mut self, id: &str) -> Result<(), String> {
+        self.ensure_character_state(id)?;
+        if !self
+            .entity(id)
+            .unwrap()
+            .character3d
+            .as_ref()
+            .unwrap()
+            .slide_enabled
+        {
+            return Err("Deslize desativado na configuração do personagem.".into());
+        }
+        self.characters.crouches.insert(id.into(), true);
+        self.characters.slides.insert(id.into());
+        Ok(())
+    }
     fn ensure_character_state(&mut self, id: &str) -> Result<(), String> {
         if self.characters.states.contains_key(id) {
             return Ok(());

@@ -24,6 +24,18 @@ pub enum InheritPlatform {
 pub enum Posture {
     Standing,
     Crouched,
+    Sliding,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JumpMode {
+    Manual,
+    Automatic,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MovementProfile {
+    Direct,
+    Parkour,
+    ChainedJumps,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -57,6 +69,18 @@ pub struct CharacterConfig {
     pub jump_buffer_ms: f32,
     pub inherit_platform: InheritPlatform,
     pub recovery_distance: f32,
+    pub jump_mode: JumpMode,
+    pub air_resistance: f32,
+    /// Zero disables this optional horizontal cap. The numerical guard is separate.
+    pub horizontal_limit: f32,
+    pub jump_retention: f32,
+    pub landing_retention: f32,
+    pub slide_enabled: bool,
+    pub slide_min_speed: f32,
+    pub slide_exit_speed: f32,
+    pub slide_duration: f32,
+    pub slide_friction: f32,
+    pub slide_control: f32,
 }
 impl Default for CharacterConfig {
     fn default() -> Self {
@@ -89,6 +113,17 @@ impl Default for CharacterConfig {
             jump_buffer_ms: 120.,
             inherit_platform: InheritPlatform::All,
             recovery_distance: 0.5,
+            jump_mode: JumpMode::Manual,
+            air_resistance: 0.,
+            horizontal_limit: 0.,
+            jump_retention: 1.,
+            landing_retention: 1.,
+            slide_enabled: false,
+            slide_min_speed: 6.,
+            slide_exit_speed: 2.,
+            slide_duration: 0.9,
+            slide_friction: 0.9,
+            slide_control: 3.,
         }
     }
 }
@@ -135,6 +170,13 @@ impl CharacterConfig {
             self.coyote_ms,
             self.jump_buffer_ms,
             self.recovery_distance,
+            self.air_resistance,
+            self.horizontal_limit,
+            self.slide_min_speed,
+            self.slide_exit_speed,
+            self.slide_duration,
+            self.slide_friction,
+            self.slide_control,
         ]
         .iter()
         .any(|v| !v.is_finite() || *v < 0.)
@@ -149,10 +191,39 @@ impl CharacterConfig {
             || self.coyote_ms > 1000.
             || self.jump_buffer_ms > 1000.
             || self.recovery_distance > 10.
+            || !self.jump_retention.is_finite()
+            || !(0. ..=1.).contains(&self.jump_retention)
+            || !self.landing_retention.is_finite()
+            || !(0. ..=1.).contains(&self.landing_retention)
+            || self.slide_duration <= 0.
+            || self.slide_exit_speed > self.slide_min_speed
         {
             return Err("Altura agachada deve caber na cápsula; limite absoluto deve estar entre 1 e 10000 m/s; tolerâncias de pulo entre 0 e 1000 ms.".into());
         }
         Ok(motion)
+    }
+    /// Presets write ordinary editable values. Runtime never dispatches on a
+    /// preset name; action IDs, geometry, filters and references are preserved.
+    pub fn apply_profile(&mut self, profile: MovementProfile) {
+        let (accel, brake, friction, air, cap, drag, horizontal, landing, slide) = match profile {
+            MovementProfile::Direct => (40., 20., 6., 8., 6., 0., 0., 1., false),
+            MovementProfile::Parkour => (45., 12., 4., 20., 6., 0.02, 24., 0.92, true),
+            MovementProfile::ChainedJumps => (50., 10., 4., 80., 6., 0., 40., 0.8, true),
+        };
+        self.speed = 6.;
+        self.sprint_speed = 8.;
+        self.crouch_speed = 3.;
+        self.ground_acceleration = accel;
+        self.ground_braking = brake;
+        self.ground_friction = friction;
+        self.air_acceleration = air;
+        self.air_projected_limit = cap;
+        self.air_resistance = drag;
+        self.horizontal_limit = horizontal;
+        self.jump_retention = 1.;
+        self.landing_retention = landing;
+        self.slide_enabled = slide;
+        self.jump_mode = JumpMode::Manual;
     }
 }
 
@@ -218,6 +289,8 @@ pub struct CharacterState {
     pub(crate) coyote_until: f64,
     pub(crate) jump_until: Option<f64>,
     pub(crate) jump_consumed: bool,
+    pub(crate) slide_elapsed: f32,
+    pub(crate) slide_latched: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Support {
@@ -270,6 +343,8 @@ impl CharacterState {
             coyote_until: f64::NEG_INFINITY,
             jump_until: None,
             jump_consumed: false,
+            slide_elapsed: 0.,
+            slide_latched: false,
         }
     }
 }

@@ -156,6 +156,12 @@ impl Editor {
                 }
             }
             if let Some(config)=&mut entity.character3d {
+                ui.menu_button("Aplicar perfil de movimento",|ui|{
+                    use oxy_core::character::MovementProfile;
+                    for(profile,label)in[(MovementProfile::Direct,"Direto"),(MovementProfile::Parkour,"Parkour"),(MovementProfile::ChainedJumps,"Saltos encadeados")]{
+                        if ui.button(label).on_hover_text("Aplica valores iniciais editáveis. Preserva ações, vínculos e geometria; pode ser desfeito.").clicked(){config.apply_profile(profile);ui.close();}
+                    }
+                });
                 ui.checkbox(&mut config.enabled,"Simular personagem");
                 ui.checkbox(&mut config.automatic_input,"Ler ações de movimento automaticamente").on_hover_text("Desative para enviar a intenção e os pedidos de pulo por nós. A simulação continua independente da entrada.");
                 egui::ComboBox::from_id_salt("movement_reference").selected_text(match config.reference {MovementReference::World=>"Eixos da cena",MovementReference::Body=>"Direção do corpo",MovementReference::Camera=>"Direção da câmera"}).show_ui(ui,|ui|{ui.selectable_value(&mut config.reference,MovementReference::World,"Eixos da cena");ui.selectable_value(&mut config.reference,MovementReference::Body,"Direção do corpo");ui.selectable_value(&mut config.reference,MovementReference::Camera,"Direção da câmera");});
@@ -165,6 +171,8 @@ impl Editor {
                     ui.small("A velocidade desejada não elimina impulsos externos.");
                 });
                 ui.collapsing("Pulo e postura",|ui|{
+                    use oxy_core::character::JumpMode;
+                    egui::ComboBox::from_id_salt("jump_mode").selected_text(if config.jump_mode==JumpMode::Manual{"Pulo manual"}else{"Pulo automático ao segurar"}).show_ui(ui,|ui|{ui.selectable_value(&mut config.jump_mode,JumpMode::Manual,"Pulo manual");ui.selectable_value(&mut config.jump_mode,JumpMode::Automatic,"Pulo automático ao segurar");}).response.on_hover_text("Manual exige novo toque. Automático repete ao encontrar chão; não adiciona um passo de simulação ao pousar.");
                     for(value,label) in [(&mut config.coyote_ms,"Tolerância após sair da borda (ms) "),(&mut config.jump_buffer_ms,"Antecipação do pulo (ms) ")] {ui.add(egui::DragValue::new(value).range(0. ..=1000.).prefix(label)).on_hover_text("Zero desativa a tolerância. O pedido é consumido uma única vez.");}
                     let (minimum,maximum)=entity.physics3d.as_ref().and_then(|c|if let CollisionShape::Capsule{height,radius}=c.shape{Some((radius*2.,height))}else{None}).unwrap_or((0.6,1.8));
                     ui.add(egui::DragValue::new(&mut config.crouch_height).speed(0.01).range(minimum..=maximum).prefix("Altura agachado (m) ")).on_hover_text("Os pés ficam no lugar. Só volta a ficar em pé se a cápsula inteira couber.");
@@ -172,6 +180,22 @@ impl Editor {
                     for (label,action) in [("Correr",&mut config.sprint_action),("Agachar",&mut config.crouch_action)] {
                         egui::ComboBox::from_id_salt(("character_extra_action",label)).selected_text(format!("{label}: {}",oxy_core::input_actions::label(&self.state.project,action))).show_ui(ui,|ui|{for id in self.state.project.input_bindings.keys(){ui.selectable_value(action,id.clone(),oxy_core::input_actions::label(&self.state.project,id));}});
                     }
+                });
+                ui.collapsing("Controle no ar e embalo",|ui|{
+                    for(value,label,max)in[(&mut config.air_acceleration,"Aceleração aérea (m/s²) ",1000.),(&mut config.air_projected_limit,"Limite na direção desejada (m/s) ",1000.),(&mut config.air_resistance,"Resistência horizontal do ar ",100.),(&mut config.horizontal_limit,"Limite horizontal absoluto (0 desliga) ",1000.)]{ui.add(egui::DragValue::new(value).speed(0.1).range(0. ..=max).prefix(label));}
+                    ui.small("O limite direcional só limita o acréscimo nessa direção. A velocidade perpendicular é preservada.");
+                    for(value,label)in[(&mut config.jump_retention,"Conservação ao saltar "),(&mut config.landing_retention,"Conservação ao pousar sem re-salto ")]{ui.add(egui::DragValue::new(value).speed(0.01).range(0. ..=1.).prefix(label)).on_hover_text("1 conserva toda a velocidade própria; 0 elimina o embalo horizontal. Um re-salto já elegível evita a perda do pouso.");}
+                    ui.add(egui::DragValue::new(&mut config.absolute_speed_limit).range(1. ..=10000.).prefix("Proteção numérica (m/s) ")).on_hover_text("Limite final separado da velocidade de caminhar e do controle aéreo.");
+                });
+                ui.collapsing("Deslize",|ui|{
+                    ui.checkbox(&mut config.slide_enabled,"Permitir deslize ao agachar com embalo");
+                    ui.add_enabled_ui(config.slide_enabled,|ui|{
+                        ui.add(egui::DragValue::new(&mut config.slide_min_speed).speed(0.1).range(config.slide_exit_speed..=1000.).prefix("Velocidade mínima para iniciar (m/s) "));
+                        ui.add(egui::DragValue::new(&mut config.slide_exit_speed).speed(0.1).range(0. ..=config.slide_min_speed).prefix("Encerrar abaixo de (m/s) "));
+                        ui.add(egui::DragValue::new(&mut config.slide_duration).speed(0.05).range(0.01..=60.).prefix("Duração máxima (s) "));
+                        for(value,label)in[(&mut config.slide_friction,"Atrito do deslize "),(&mut config.slide_control,"Controle direcional (m/s²) ")]{ui.add(egui::DragValue::new(value).speed(0.1).range(0. ..=100.).prefix(label));}
+                    });
+                    ui.small("Atrito e tração do piso continuam valendo. Solte o agachamento para encerrar; sob teto permanece agachado.");
                 });
                 ui.collapsing("Contato com o cenário",|ui|{
                     ui.add(egui::DragValue::new(&mut config.recovery_distance).speed(0.01).range(0. ..=10.).prefix("Recuperação máxima (m) ")).on_hover_text("Limita a correção quando um obstáculo entra no personagem. Se não houver espaço seguro, interrompe o movimento e informa o problema.");

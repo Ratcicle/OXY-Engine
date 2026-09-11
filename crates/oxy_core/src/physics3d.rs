@@ -2,8 +2,10 @@
 //! Library handles and prepared shapes are transient; external identity is always OXY ID.
 mod scene;
 mod shapes;
+mod sweep;
 pub use scene::*;
 pub use shapes::*;
+pub use sweep::SweepSpan;
 
 use crate::document::Id;
 use glam::{Quat, Vec3};
@@ -49,6 +51,7 @@ pub struct QueryOptions {
     pub camera: bool,
     pub exclude: HashSet<Id>,
     pub only: Option<Id>,
+    pub only_sensors: bool,
 }
 impl Default for QueryOptions {
     fn default() -> Self {
@@ -59,6 +62,7 @@ impl Default for QueryOptions {
             camera: false,
             exclude: HashSet::new(),
             only: None,
+            only_sensors: false,
         }
     }
 }
@@ -347,8 +351,9 @@ impl PhysicsWorld {
         !options.exclude.contains(id)
             && options.only.as_ref().is_none_or(|only| only == id)
             && (options.include_sensors || !e.sensor)
-            && (!options.camera || e.filter.blocks_camera)
-            && (options.camera || e.filter.blocks_character)
+            && (!options.only_sensors || e.sensor)
+            && (e.sensor || !options.camera || e.filter.blocks_camera)
+            && (e.sensor || options.camera || e.filter.blocks_character)
             && e.filter.category & options.mask != 0
             && options.category & e.filter.mask != 0
     }
@@ -513,6 +518,8 @@ impl PhysicsWorld {
         self.queries.set(self.queries.get() + 1);
         let mut result = MotionResult::default();
         let mut previous = Vec3::ZERO;
+        let mut previous_wall = false;
+        let mut stair_segments = Vec::new();
         let movement = solver.move_shape(
             dt,
             &queries,
@@ -522,6 +529,9 @@ impl PhysicsWorld {
             |collision| {
                 let current = oxy(collision.translation_applied);
                 if previous.distance_squared(current) > 1e-12 {
+                    if previous_wall {
+                        stair_segments.push(result.segments.len());
+                    }
                     result.segments.push((previous, current));
                     previous = current;
                 }
@@ -532,13 +542,53 @@ impl PhysicsWorld {
                     collision.hit.time_of_impact,
                     current.length(),
                 ));
+                previous_wall =
+                    oxy(collision.hit.normal1).y.abs() < config.climb_degrees.to_radians().cos();
             },
         );
         result.delta = oxy(movement.translation);
         result.grounded = movement.grounded;
         result.sliding = movement.is_sliding_down_slope;
         if previous.distance_squared(result.delta) > 1e-12 {
+            if previous_wall {
+                stair_segments.push(result.segments.len());
+            }
             result.segments.push((previous, result.delta));
+        }
+        // Rapier exposes collision waypoints, but a successful autostep can
+        // combine lift and forward nudge in one waypoint. Define an explicit
+        // clearance-checked route before exposing that movement to sensors.
+        if config.step_height > 0. {
+            let capsule = CollisionShape::Capsule {
+                height: config.height,
+                radius: config.radius,
+            };
+            let original = std::mem::take(&mut result.segments);
+            for (index, (from, to)) in original.into_iter().enumerate() {
+                let delta = to - from;
+                let blocked = stair_segments.contains(&index)
+                    && delta.y > 1e-5
+                    && Vec3::new(delta.x, 0., delta.z).length_squared() > 1e-10
+                    && self
+                        .cast(&capsule, center + from, delta, options)?
+                        .is_some_and(|h| h.fraction < 0.9999);
+                if blocked {
+                    let raised = from + Vec3::Y * (config.step_height + config.margin);
+                    let over = Vec3::new(to.x, raised.y, to.z);
+                    let route = [(from, raised), (raised, over), (over, to)];
+                    for (a, b) in route {
+                        if self
+                            .cast(&capsule, center + a, b - a, options)?
+                            .is_some_and(|h| h.fraction < 0.9999)
+                        {
+                            return Err("Não foi possível validar o trajeto do degrau; movimento preservado.".into());
+                        }
+                        result.segments.push((a, b));
+                    }
+                } else {
+                    result.segments.push((from, to));
+                }
+            }
         }
         if !result.delta.is_finite() {
             return Err("Resolvedor retornou movimento inválido; posição preservada.".into());

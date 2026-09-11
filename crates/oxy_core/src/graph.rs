@@ -140,6 +140,7 @@ fn build_registry() -> Vec<OperationDef> {
         ),
         ("event.click", "Ao clicar", vec![]),
         ("event.area_enter", "Ao entrar na área", vec![]),
+        ("event.area_exit", "Ao sair da área", vec![]),
         (
             "event.animation",
             "Marcador de animação",
