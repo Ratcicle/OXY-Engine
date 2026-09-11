@@ -9,7 +9,6 @@ impl Runtime {
             return Ok(());
         }
         let evaluation = SceneEvaluation::new(self.scene())?;
-        let mut world = self.characters.world.take().unwrap_or_default();
         let mut overrides = HashMap::new();
         for (id, state) in &self.characters.states {
             if let Some(e) = self.entity(id) {
@@ -18,12 +17,22 @@ impl Runtime {
                     .position(id)
                     .and_then(|i| evaluation.worlds[i])
                     .ok_or("Transformação do personagem ausente")?;
+                // Validate structural edits before reusing the authoritative
+                // pose. Never hide a parent that now deforms the physical root.
+                let (_, rotation, scale) = crate::physics3d::world_pose(matrix)?;
+                character_scale(rotation, scale)?;
                 overrides.insert(
                     id.clone(),
-                    (actual_collider(e, state, state.uniform_scale), matrix),
+                    ColliderOverride {
+                        config: actual_collider(e, state, state.uniform_scale),
+                        position: state.position,
+                        rotation: Quat::from_rotation_y(state.yaw),
+                        scale: Vec3::splat(state.uniform_scale),
+                    },
                 );
             }
         }
+        let mut world = self.characters.world.take().unwrap_or_default();
         let result = world.sync_evaluated(self.scene(), &evaluation, &overrides);
         self.characters.world = Some(world);
         result?;

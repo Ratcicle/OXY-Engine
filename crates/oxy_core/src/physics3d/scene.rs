@@ -6,6 +6,20 @@ use crate::{
 use glam::Mat4;
 use std::sync::Arc;
 
+/// Authoritative runtime pose. Keeping its validated scale avoids decomposing
+/// a yaw matrix into slightly different float scale bits on every turn.
+pub struct ColliderOverride {
+    pub config: Collider3d,
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
+}
+impl ColliderOverride {
+    pub fn matrix(&self) -> Mat4 {
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
+    }
+}
+
 /// Reject shear rather than displaying one orientation and solving another.
 pub fn world_pose(matrix: Mat4) -> Result<(Vec3, Quat, Vec3), String> {
     if !matrix.is_finite() || matrix.determinant().abs() < 1e-8 {
@@ -146,7 +160,7 @@ impl PhysicsWorld {
         &mut self,
         scene: &Scene,
         evaluation: &crate::scene_view::SceneEvaluation,
-        overrides: &std::collections::HashMap<crate::document::Id, (Collider3d, Mat4)>,
+        overrides: &std::collections::HashMap<crate::document::Id, ColliderOverride>,
     ) -> Result<(), String> {
         let mut seen = std::collections::HashSet::new();
         for (i, entity) in scene.entities.iter().enumerate() {
@@ -154,12 +168,21 @@ impl PhysicsWorld {
                 continue;
             }
             seen.insert(entity.id.clone());
-            let matrix = overrides
-                .get(&entity.id)
-                .map(|(_, w)| *w)
-                .or(evaluation.worlds[i])
-                .ok_or("Transformação física ausente")?;
-            self.sync_entity(entity, matrix, overrides.get(&entity.id).map(|(c, _)| c))?;
+            if let Some(pose) = overrides.get(&entity.id) {
+                self.upsert(
+                    &entity.id,
+                    &pose.config,
+                    pose.position,
+                    pose.rotation,
+                    pose.scale,
+                )?;
+            } else {
+                self.sync_entity(
+                    entity,
+                    evaluation.worlds[i].ok_or("Transformação física ausente")?,
+                    None,
+                )?;
+            }
         }
         let removed: Vec<_> = self
             .entries

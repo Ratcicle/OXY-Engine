@@ -22,6 +22,11 @@ $package = $editor.DirectoryName
 foreach ($file in @('oxy_player.exe','data/project.oxy.json','LEIA-ME.txt','LICENSE','VERSAO.txt')) {
     if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo ausente: $file" }
 }
+if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).ProductVersion) -ge [version]'0.3.0') {
+    foreach ($file in @('licenses/rapier-0.35.3.txt','licenses/parry-0.30.2.txt','laboratorio-3d/project.oxy.json')) {
+        if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo da 0.3.0 ausente: $file" }
+    }
+}
 if (Get-ChildItem -LiteralPath $package -Filter '*.cmd') { throw 'O pacote portátil não deve depender de launchers .cmd.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName)
 if ($version.ProductName -ne 'OXY Engine' -or $version.OriginalFilename -ne 'OXY Engine.exe' -or !$version.ProductVersion) { throw 'Metadados do editor inválidos.' }

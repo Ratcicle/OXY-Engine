@@ -1,5 +1,7 @@
 use super::*;
 use oxy_core::{character::CameraMode, document::Value};
+#[path = "../../../oxy_core/examples/support/movement.rs"]
+mod scale_fixture;
 impl NativeQa {
     pub(super) fn check_movement_lab(&mut self, label: &str) -> Result<(), String> {
         let count = self.editor.state.project.scenes[0]
@@ -41,6 +43,18 @@ impl NativeQa {
         if !rt.logs.is_empty() {
             return Err(format!("{:?}", rt.logs));
         }
+        if label == "lab3d_scale_running" {
+            return if count == 50
+                && rt.scene().entities.len() == 400
+                && rt
+                    .physics_world()
+                    .is_some_and(|w| w.counters().colliders == 251)
+            {
+                Ok(())
+            } else {
+                Err("Carga nativa não manteve 50 personagens / 400 objetos / 251 formas".into())
+            };
+        }
         let body = rt
             .scene()
             .entities
@@ -78,10 +92,82 @@ impl NativeQa {
     }
 }
 #[test]
+#[ignore = "Native WGPU 400-entity/50-character regression; not a GPU benchmark"]
+fn native_movement_scale_v030() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m7-scale");
+    let path = output.join("project/project.oxy.json");
+    let mut project = scale_fixture::fixture(50, "dense");
+    project.scenes[0].name = "50 personagens · 400 objetos".into();
+    // Inspection camera only: keep every body in the native QA image. The CPU
+    // benchmark retains its original following camera and original workload.
+    for e in &mut project.scenes[0].entities {
+        e.material.color = if e.character3d.is_some() {
+            [0.9, 0.6, 0.15, 1.]
+        } else {
+            [0.22, 0.29, 0.36, 1.]
+        };
+        if e.camera.is_some() {
+            e.camera.as_mut().unwrap().fov = 75.;
+            e.camera_rig.as_mut().unwrap().mode = CameraMode::Fixed;
+            e.transform.position = [0., 25., 55.];
+            e.transform.rotation = [-(25_f32 / 55.).atan(), 0., 0.];
+        }
+    }
+    oxy_core::persistence::save_project(&path, &project).unwrap();
+    let report = Arc::new(Mutex::new(Report::default()));
+    let shared = report.clone();
+    let artifacts = output.clone();
+    eframe::run_native(
+        "OXY Engine 0.3.0 — 50 personagens / 400 objetos",
+        eframe::NativeOptions {
+            persist_window: false,
+            renderer: eframe::Renderer::Wgpu,
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1280., 800.])
+                .with_active(false),
+            event_loop_builder: Some(Box::new(|b| {
+                b.with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            let mut qa = NativeQa::new(cc, path, artifacts, shared);
+            qa.actions = VecDeque::from([
+                Action::Click("▶ Jogar"),
+                Action::Wait(30),
+                Action::Check("lab3d_scale_running"),
+                Action::HoldSeconds(Key::W, 1.5),
+                Action::Check("lab3d_scale_running"),
+                Action::Screenshot("50-characters.png"),
+                Action::Key(Key::Escape, false),
+                Action::Click("Cena"),
+                Action::Click("■ Parar"),
+                Action::Idle,
+                Action::Key(Key::S, true),
+                Action::ReopenProject,
+            ]);
+            Ok(Box::new(qa))
+        }),
+    )
+    .unwrap();
+    let r = report.lock().unwrap();
+    let text = format!(
+        "Concluído: {}\nErro: {:?}\n{}",
+        r.done,
+        r.error,
+        r.steps.join("\n")
+    );
+    std::fs::write(output.join("native-scale.txt"), &text).unwrap();
+    assert!(r.done && r.error.is_none(), "{text}");
+}
+#[test]
 #[ignore = "Real native WGPU editor, isolated RawInput; not a physical mouse capture test"]
 fn native_movement_lab_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m6");
+    let output = std::env::var_os("OXY_MOVEMENT_QA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m6"));
     let path = output.join("project/project.oxy.json");
     oxy_core::persistence::save_project(
         &path,
@@ -151,6 +237,7 @@ fn native_movement_lab_v030() {
                 Action::Check("lab3d_stopped"),
                 Action::Key(Key::S, true),
                 Action::ReopenProject,
+                Action::Idle,
             ]);
             Ok(Box::new(qa))
         }),

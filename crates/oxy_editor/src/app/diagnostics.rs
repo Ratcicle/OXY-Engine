@@ -58,6 +58,13 @@ impl Editor {
                 ui.separator();
                 ui.small("Instrumentação ativa: totais desde a última atualização deste painel. Tempos CPU, sem GPU/VSync.");
                 ui.label(format!("Passos: {} · movimento: {:.3} ms · áreas: {:.3} ms · ações: {:.3} ms", counters.steps, counters.movement_ns as f64/1e6, counters.areas_ns as f64/1e6, counters.tasks_ns as f64/1e6));
+                ui.label(format!("Passos completos: {:.3} ms · apresentação/câmera: {:.3} ms", counters.fixed_step_ns as f64/1e6,counters.presentation_ns as f64/1e6));
+                ui.label(format!("Preparação 3D: {:.3} ms · motor: {:.3} ms · sensores: {:.3} ms",counters.character_prepare_ns as f64/1e6,counters.character_motor_ns as f64/1e6,counters.character_sensors_ns as f64/1e6));
+                ui.small(format!("Resolução incluída no motor: {:.3} ms. Não somar novamente.",counters.character_resolve_ns as f64/1e6));
+                if let Some(world)=self.runtime.as_ref().and_then(|r|r.physics_world()) {
+                    let p=world.counters();
+                    ui.label(format!("Física 3D: {} formas vivas · {} preparações · {} consultas · {} candidatos (acumulados)",p.colliders,p.shapes_prepared,p.queries,p.candidate_tests));
+                }
                 ui.label(format!("Consultas: {} · visitas de hierarquia: {} · matrizes: {} · reutilizadas: {}", counters.entity_queries,counters.hierarchy_visits,counters.matrices,counters.matrix_hits));
                 ui.label(format!("Índices construídos: {} · candidatos: {} · sobreposições: {} · ações: {}",counters.index_builds,counters.candidates,counters.overlaps,counters.actions));
             }

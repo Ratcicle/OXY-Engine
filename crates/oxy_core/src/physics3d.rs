@@ -149,7 +149,7 @@ pub struct MotionResult {
     pub segments: Vec<(Vec3, Vec3)>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub struct PhysicsCounters {
     pub shapes_prepared: u64,
     pub shapes_shared: u64,
@@ -508,6 +508,19 @@ impl PhysicsWorld {
         Ok(result)
     }
     pub fn move_capsule(
+        &self,
+        feet: Vec3,
+        desired: Vec3,
+        dt: f32,
+        config: CapsuleMotion,
+        options: &QueryOptions,
+    ) -> Result<MotionResult, String> {
+        crate::metrics::timed(
+            || self.move_capsule_inner(feet, desired, dt, config, options),
+            |c, ns| c.character_resolve_ns += ns,
+        )
+    }
+    fn move_capsule_inner(
         &self,
         feet: Vec3,
         desired: Vec3,

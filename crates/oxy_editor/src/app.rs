@@ -85,6 +85,7 @@ enum Transition {
     Create(String, SceneKind),
     Open(PathBuf),
     Recipe(PathBuf),
+    Laboratory(PathBuf),
     Close,
 }
 
@@ -487,6 +488,13 @@ impl Editor {
                     self.home.example_copy = true;
                     self.tab = Tab::Logic;
                     self.select(self.scene().entities.first().map(|e| e.id.clone()));
+                }
+            }
+            Transition::Laboratory(path) => {
+                self.open_with_recent(path, false);
+                if !self.home.visible {
+                    self.home.example_copy = true;
+                    self.tab = Tab::Scene;
                 }
             }
             Transition::Close => self.allow_close = true,

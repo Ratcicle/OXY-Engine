@@ -18,6 +18,7 @@ jobs:
           ./scripts/benchmark.ps1 -Label "manual-$env:GITHUB_RUN_ID"
           ./scripts/benchmark.ps1 -Label "manual-extra-$env:GITHUB_RUN_ID" -Example performance_extra
           ./scripts/benchmark.ps1 -Label "manual-mesh-$env:GITHUB_RUN_ID" -Example performance_mesh -Sizes '22,70,158'
+          ./scripts/benchmark.ps1 -Label "manual-movement-$env:GITHUB_RUN_ID" -Example performance_movement -Sizes '1,10,50'
       - uses: actions/upload-artifact@v4
         with:
           name: oxy-cpu-measurements

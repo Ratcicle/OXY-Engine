@@ -572,6 +572,18 @@ impl Runtime {
         }
     }
     pub(super) fn update_presentation(&mut self, dt: f32) {
+        crate::metrics::timed(
+            || self.update_presentation_inner(dt),
+            |c, ns| c.presentation_ns += ns,
+        );
+    }
+    pub fn camera_physics_counters(&self) -> crate::physics3d::PhysicsCounters {
+        self.cameras
+            .query_world
+            .as_ref()
+            .map_or_else(Default::default, PhysicsWorld::counters)
+    }
+    fn update_presentation_inner(&mut self, dt: f32) {
         if self.stopped || self.scene().kind != SceneKind::ThreeD {
             return;
         }

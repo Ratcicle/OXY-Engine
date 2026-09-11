@@ -1,0 +1,13 @@
+OXY Engine — dependências de consultas físicas adicionadas na 0.3.0
+
+Rapier 3D 0.35.3 e Parry 3D 0.30.2, Dimforge / Sébastien Crozet.
+Licença Apache-2.0. Os textos originais, sem alterações, estão nesta pasta.
+Rapier fornece consultas e resolução cinemática; OXY mantém o motor próprio.
+
+Fontes das licenças, fixadas nas mesmas versões do Cargo.lock:
+https://github.com/dimforge/rapier/blob/v0.35.3/LICENSE
+https://github.com/dimforge/parry/blob/v0.30.2/LICENSE
+
+Demais dependências e versões: Cargo.lock no código-fonte da OXY Engine.
+Esta relação documenta a adição da 0.3.0; não é uma auditoria jurídica de
+todas as bibliotecas do workspace.

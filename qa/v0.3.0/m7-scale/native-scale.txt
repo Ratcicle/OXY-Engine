@@ -1,0 +1,17 @@
+Concluído: true
+Erro: None
+Clique: ▶ Jogar em [326.6 46.5]
+Reproduzir 30 quadros sem entrada
+Verificado: lab3d_scale_running
+Entrada real W durante 1.5s de simulação
+Verificado: lab3d_scale_running
+Captura GPU da janela: 50-characters.png
+Captura 50-characters.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla Escape, Ctrl=false
+Clique: Cena em [32.5 82.5]
+Clique: ■ Parar em [477.2 45.5]
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: []
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos

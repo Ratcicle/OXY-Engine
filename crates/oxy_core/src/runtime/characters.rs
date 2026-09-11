@@ -1,6 +1,6 @@
 use super::*;
 use crate::character::*;
-use crate::physics3d::{PhysicsWorld, QueryOptions};
+use crate::physics3d::{ColliderOverride, PhysicsWorld, QueryOptions};
 use glam::{Mat4, Quat, Vec2};
 mod commands;
 mod motor;
@@ -21,7 +21,7 @@ pub(super) struct Characters {
     pub(super) looped: HashSet<Id>,
     pub(super) ignored_tracks: HashSet<(Id, Id, Id)>,
     platforms: HashMap<Id, platforms::PlatformFrame>,
-    overrides: HashMap<Id, (crate::physics3d::Collider3d, Mat4)>,
+    overrides: HashMap<Id, ColliderOverride>,
     events: Vec<(Id, MovementEvent)>,
     records: Vec<MovementRecord>,
     pending_records: Vec<MovementRecord>,
@@ -101,6 +101,8 @@ impl Characters {
             *self = Default::default();
             return Ok(());
         }
+        #[cfg(feature = "profiling")]
+        let prepare_started = std::time::Instant::now();
         let mut evaluation = SceneEvaluation::new(scene)?;
         self.platforms =
             platforms::advance(scene, &mut evaluation, &self.platforms, &self.looped, dt)?;
@@ -164,18 +166,22 @@ impl Characters {
             }
             state.previous_position = state.position;
             state.previous_yaw = state.yaw;
-            let world = Mat4::from_scale_rotation_translation(
-                scale,
-                Quat::from_rotation_y(state.yaw),
-                state.position,
-            );
             self.overrides.insert(
                 entity.id.clone(),
-                (actual_collider(entity, state, scale.x), world),
+                ColliderOverride {
+                    config: actual_collider(entity, state, scale.x),
+                    position: state.position,
+                    rotation: Quat::from_rotation_y(state.yaw),
+                    scale,
+                },
             );
         }
         let world = self.world.get_or_insert_with(PhysicsWorld::new);
         world.sync_evaluated(scene, &evaluation, &self.overrides)?;
+        #[cfg(feature = "profiling")]
+        crate::metrics::count(|c| {
+            c.character_prepare_ns += prepare_started.elapsed().as_nanos() as u64
+        });
         let active_rig = control.and_then(|c| c.rig.as_ref());
         let mut lateral = HashSet::new();
         for i in indices {
@@ -281,18 +287,23 @@ impl Characters {
             let events_before = self.events.len();
             let records_before = self.records.len();
             let result = if config.enabled {
-                context.advance(
-                    state,
-                    motor::MotorInput {
-                        axis,
-                        jump,
-                        sprint,
-                        crouch,
-                        crouch_pressed,
-                        crouch_override,
-                        jump_held,
-                        slide,
+                crate::metrics::timed(
+                    || {
+                        context.advance(
+                            state,
+                            motor::MotorInput {
+                                axis,
+                                jump,
+                                sprint,
+                                crouch,
+                                crouch_pressed,
+                                crouch_override,
+                                jump_held,
+                                slide,
+                            },
+                        )
                     },
+                    |c, ns| c.character_motor_ns += ns,
                 )
             } else {
                 Ok(motor::MotorStep::default())
@@ -391,25 +402,26 @@ impl Characters {
             scene.entities[i].transform = transform;
             self.overrides.insert(
                 id.clone(),
-                (
-                    actual_collider(&scene.entities[i], state, scale.x),
-                    next_world,
-                ),
+                ColliderOverride {
+                    config: actual_collider(&scene.entities[i], state, scale.x),
+                    position: state.position,
+                    rotation: Quat::from_rotation_y(state.yaw),
+                    scale,
+                },
             );
             evaluation.refresh_subtree(scene, &id);
             for child in evaluation.index.descendants(scene, &id) {
                 let index = evaluation.index.position(&child).unwrap();
-                if let Some(matrix) = self
-                    .overrides
-                    .get(&child)
-                    .map(|(_, matrix)| *matrix)
-                    .or(evaluation.worlds[index])
-                {
-                    world.sync_entity(
-                        &scene.entities[index],
-                        matrix,
-                        self.overrides.get(&child).map(|(c, _)| c),
+                if let Some(pose) = self.overrides.get(&child) {
+                    world.upsert(
+                        &child,
+                        &pose.config,
+                        pose.position,
+                        pose.rotation,
+                        pose.scale,
                     )?;
+                } else if let Some(matrix) = evaluation.worlds[index] {
+                    world.sync_entity(&scene.entities[index], matrix, None)?;
                 }
             }
             world.flush();

@@ -89,6 +89,12 @@ struct Task {
     node: Id,
     context: Context,
 }
+#[derive(Default)]
+struct EventCatalog {
+    operations: HashSet<String>,
+    /// Scene order; invalidated with the existing event/structural revision.
+    owners: Vec<usize>,
+}
 #[derive(Clone, Copy, Debug, Default)]
 struct BodyState {
     velocity: Vec3,
@@ -116,7 +122,7 @@ pub struct Runtime {
     physics_dirty: bool,
     input_timeline: crate::input_timeline::InputTimeline,
     input_modes: OnceLock<BTreeMap<String, u8>>,
-    event_operations: OnceLock<HashSet<String>>,
+    event_operations: OnceLock<EventCatalog>,
     step_input: InputFrame,
     query_work: usize,
     ready: VecDeque<Task>,
@@ -312,7 +318,10 @@ impl Runtime {
             };
             self.input_timeline
                 .sample(self.time + f64::from(FIXED_DT), &mut frame);
-            self.fixed_step(&frame, &mut budget);
+            crate::metrics::timed(
+                || self.fixed_step(&frame, &mut budget),
+                |c, ns| c.fixed_step_ns += ns,
+            );
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
         }
@@ -321,7 +330,7 @@ impl Runtime {
     fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
         self.step_input = input.clone();
         self.query_work = 0;
-        self.begin_camera_input(input);
+        crate::metrics::timed(|| self.begin_camera_input(input), |c, ns| c.input_ns += ns);
         self.collect_activations();
         crate::metrics::count(|c| c.steps += 1);
         self.time += f64::from(FIXED_DT);
@@ -358,7 +367,13 @@ impl Runtime {
             }
         }
         crate::metrics::timed(|| self.detect_areas(), |c, ns| c.areas_ns += ns);
-        crate::metrics::timed(|| self.detect_character_sensors(), |c, ns| c.areas_ns += ns);
+        crate::metrics::timed(
+            || self.detect_character_sensors(),
+            |c, ns| {
+                c.areas_ns += ns;
+                c.character_sensors_ns += ns;
+            },
+        );
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
         self.collect_activations();
     }
@@ -441,7 +456,9 @@ impl Runtime {
         }
         let generated_activation = self.next_serial();
         let mut found = Vec::new();
-        for entity in &self.scene().entities {
+        for &index in &self.event_catalog().owners {
+            let entity = &self.scene().entities[index];
+            crate::metrics::count(|c| c.event_entity_visits += 1);
             if self.disabled_behaviors.contains(&entity.id) {
                 continue;
             }
@@ -1337,27 +1354,31 @@ impl Runtime {
                 pairs.insert(pair);
             }
         }
-        let mut exited: Vec<_> = self
-            .overlap_pairs
-            .difference(&pairs)
-            .filter(|(area, other)| {
-                index.position(area).is_some_and(|i| {
-                    self.scene().entities[i]
-                        .collider
-                        .as_ref()
-                        .is_some_and(|c| c.enabled && c.is_trigger)
-                }) && index.position(other).is_some()
-            })
-            .cloned()
-            .collect();
-        exited.sort_by_key(|(a, b)| (index.position(a), index.position(b)));
-        for (area, other) in exited {
-            if let Some(&activation) = self.area_activations.get(&area) {
-                events.push(RuntimeEvent::AreaExit {
-                    area,
-                    other,
-                    activation,
-                });
+        // Preserve pair state for future listeners, but do not compute a full
+        // difference of dense sets when no graph consumes exit events.
+        if self.event_used("event.area_exit") {
+            let mut exited: Vec<_> = self
+                .overlap_pairs
+                .difference(&pairs)
+                .filter(|(area, other)| {
+                    index.position(area).is_some_and(|i| {
+                        self.scene().entities[i]
+                            .collider
+                            .as_ref()
+                            .is_some_and(|c| c.enabled && c.is_trigger)
+                    }) && index.position(other).is_some()
+                })
+                .cloned()
+                .collect();
+            exited.sort_by_key(|(a, b)| (index.position(a), index.position(b)));
+            for (area, other) in exited {
+                if let Some(&activation) = self.area_activations.get(&area) {
+                    events.push(RuntimeEvent::AreaExit {
+                        area,
+                        other,
+                        activation,
+                    });
+                }
             }
         }
         self.overlap_pairs = pairs;

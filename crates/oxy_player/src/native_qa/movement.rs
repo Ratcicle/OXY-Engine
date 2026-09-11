@@ -221,7 +221,9 @@ impl eframe::App for MovementPlayerQa {
 #[ignore = "Real native WGPU standalone player; isolated RawInput"]
 fn native_player_movement_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m6");
+    let output = std::env::var_os("OXY_MOVEMENT_QA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m6"));
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir()
         .join(format!("oxy-movement-player-{}", new_id()))

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Label, [string]$Sizes = '100,200,400,800,1600', [string]$Executable = '', [ValidateSet('performance','performance_extra','performance_mesh')][string]$Example = 'performance', [string]$ReferenceCommit = '')
+param([Parameter(Mandatory)][string]$Label, [string]$Sizes = '100,200,400,800,1600', [string]$Executable = '', [ValidateSet('performance','performance_extra','performance_mesh','performance_movement')][string]$Example = 'performance', [string]$ReferenceCommit = '')
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $results = Join-Path $workspace 'benchmarks/results'

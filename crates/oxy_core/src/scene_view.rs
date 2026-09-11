@@ -165,6 +165,22 @@ impl<'a> SceneView<'a> {
             .position(id)
             .ok_or_else(|| format!("Objeto ausente: {id}"))?;
         let mut matrices = self.matrices.borrow_mut();
+        if let Some(world) = matrices[root] {
+            metrics::count(|c| c.matrix_hits += 1);
+            return Ok(world);
+        }
+        if let Some(world) = self.overrides.as_ref().and_then(|o| o.get(id)) {
+            matrices[root] = Some(*world);
+            return Ok(*world);
+        }
+        // Most scenes have many independent roots. They need no chain, visited
+        // set or allocation; descendants still take the cycle-checked path.
+        if self.scene.entities[root].parent.is_none() {
+            metrics::count(|c| c.matrices += 1);
+            let world = self.scene.entities[root].transform.matrix();
+            matrices[root] = Some(world);
+            return Ok(world);
+        }
         let mut current = root;
         let mut chain = Vec::new();
         let mut visited = HashSet::new();

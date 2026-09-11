@@ -12,6 +12,7 @@ pub struct Counters {
     pub candidates: u64,
     pub overlaps: u64,
     pub actions: u64,
+    pub event_entity_visits: u64,
     pub graph_nodes_copied: u64,
     pub steps: u64,
     pub physics_prepare_ns: u64,
@@ -21,6 +22,15 @@ pub struct Counters {
     pub areas_ns: u64,
     pub tasks_ns: u64,
     pub animation_ns: u64,
+    pub fixed_step_ns: u64,
+    pub input_ns: u64,
+    pub character_prepare_ns: u64,
+    pub character_motor_ns: u64,
+    /// Inclusive subset of character_motor_ns (do not add both).
+    pub character_resolve_ns: u64,
+    pub character_sensors_ns: u64,
+    /// Outside fixed steps: interpolation, presentation queries and camera.
+    pub presentation_ns: u64,
 }
 #[cfg(feature = "profiling")]
 thread_local! { static COUNTERS: std::cell::RefCell<Counters> = Default::default(); }

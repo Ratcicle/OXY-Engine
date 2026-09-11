@@ -205,7 +205,7 @@ impl Editor {
                             persistence::save_project(&path,&project)?;
                             Ok::<_,String>(path)
                         })();
-                        match result {Ok(path)=>self.transition(Transition::Recipe(path)),Err(e)=>self.home.error=Some(e)}
+                        match result {Ok(path)=>self.transition(Transition::Laboratory(path)),Err(e)=>self.home.error=Some(e)}
                     }
                     });
                     ui.label("Cenas 2D e 3D · Modelagem · Pintura · Animação · Lógica visual");

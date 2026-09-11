@@ -174,17 +174,25 @@ impl Runtime {
         Ok(std::borrow::Cow::Owned(state))
     }
     pub(super) fn event_used(&self, id: &str) -> bool {
-        self.event_operations
-            .get_or_init(|| {
-                self.scene()
-                    .entities
-                    .iter()
-                    .flat_map(|e| &e.graph.nodes)
-                    .filter(|n| n.operation.starts_with("event."))
-                    .map(|n| n.operation.clone())
-                    .collect()
-            })
-            .contains(id)
+        self.event_catalog().operations.contains(id)
+    }
+    pub(super) fn event_catalog(&self) -> &EventCatalog {
+        self.event_operations.get_or_init(|| {
+            let mut catalog = EventCatalog::default();
+            for (i, e) in self.scene().entities.iter().enumerate() {
+                let mut used = false;
+                for node in &e.graph.nodes {
+                    if node.operation.starts_with("event.") {
+                        used = true;
+                        catalog.operations.insert(node.operation.clone());
+                    }
+                }
+                if used {
+                    catalog.owners.push(i);
+                }
+            }
+            catalog
+        })
     }
     pub fn step_input(&self) -> &InputFrame {
         &self.step_input

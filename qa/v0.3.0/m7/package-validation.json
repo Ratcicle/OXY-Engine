@@ -1,0 +1,14 @@
+{
+  "Version": "0.3.0",
+  "EditorSHA256": "7FBEA8E07422F25DFB7B7EF5BA3249EDB16C4F8630E41F3D5CEF90A060EE7400",
+  "PlayerSHA256": "A4E3DFF380796BB743610A9E46EAFD21189CC1A0D47A5554F1F171D06058F317",
+  "ZipSHA256": "31220D6248D43CEA117F36D0FF9B6291454E9DD5C6243D53E2114068F426AEA8",
+  "ZipBytes": 26102016,
+  "Validation": "test-portable.ps1: PE x64, icon/version, DLL imports, assets, licenses, direct launch with no Rust/Cargo PATH; not a separate clean computer",
+  "GPU": {
+    "Name": "AMD Radeon RX 6600",
+    "DriverVersion": "32.0.21045.1000"
+  },
+  "SourceCommit": "0cdcf84da2ffa1131ba79bde4b194c10b0e0a875",
+  "SourceState": "M6 plus M7 delta; immutable executable hashes above"
+}

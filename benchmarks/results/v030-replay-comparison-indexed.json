@@ -1,0 +1,8 @@
+{
+  "runs": 8,
+  "seconds_per_run": 12,
+  "fixed_steps_per_run": 720,
+  "max_numeric_error": 0.0,
+  "tolerance": 0.0002,
+  "ordered_events_equal": true
+}

@@ -2,8 +2,8 @@ Concluído: true
 Erro: None
 Selecionar hierarquia: Tubo com abertura
 Clique: Componentes em [1217.0 357.6]
-Clique: Colisor 3D · formas reais em [1263.5 390.1]
-Clique: Usar malha estática de colisão em [1290.5 492.1]
+Clique: Colisor 3D · formas reais em [1263.5 492.1]
+Clique: Usar malha estática de colisão em [1290.5 594.1]
 Verificado: phys_triangles
 Captura GPU da janela: triangles-opening.png
 Captura triangles-opening.png: 1440 × 900 pixels físicos; 1 pixels por ponto
@@ -11,7 +11,7 @@ Tecla Z, Ctrl=true
 Verificado: phys_none
 Tecla Y, Ctrl=true
 Verificado: phys_triangles
-Clique: Gerar colisor convexo em [1266.0 424.1]
+Clique: Gerar colisor convexo em [1266.0 526.1]
 Verificado: phys_convex
 Captura GPU da janela: convex-closes-opening.png
 Captura convex-closes-opening.png: 1440 × 900 pixels físicos; 1 pixels por ponto

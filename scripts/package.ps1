@@ -56,6 +56,11 @@ foreach ($file in $files) {
 }
 Copy-Item -LiteralPath $executable -Destination (Join-Path $stagingPath 'oxy_player.exe') -Force
 Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $packageData 'project.oxy.json') -Force
+$licenseTarget = Join-Path $stagingPath 'licenses'
+New-Item -ItemType Directory -Path $licenseTarget -Force | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $workspace 'licenses') -File | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $licenseTarget
+}
 if ($IncludeEditor) {
     Copy-Item -LiteralPath $editorExecutable -Destination (Join-Path $stagingPath 'OXY Engine.exe') -Force
 }

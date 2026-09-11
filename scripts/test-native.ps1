@@ -8,6 +8,13 @@ $checks = @()
 if (!$GraphicsOnly) {
     $checks += @(
         @('oxy_editor','native_ux_m1_workflow'),
+        @('oxy_editor','native_physics_v030_authoring'),
+        @('oxy_editor','native_first_person_v030'),
+        @('oxy_editor','native_ground_posture_v030'),
+        @('oxy_editor','native_cameras_v030'),
+        @('oxy_editor','native_movement_lab_v030'),
+        @('oxy_editor','native_movement_scale_v030'),
+        @('oxy_player','native_player_movement_v030'),
         @('oxy_editor','native_input_guide_workflow'),
         @('oxy_editor','native_mesh_foundation_workflow'),
         @('oxy_editor','native_direct_modeling_v021_workflow'),

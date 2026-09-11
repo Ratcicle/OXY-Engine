@@ -188,6 +188,9 @@ impl Characters {
 }
 impl Runtime {
     pub(in crate::runtime) fn detect_character_sensors(&mut self) {
+        if self.scene().kind != SceneKind::ThreeD {
+            return;
+        }
         let mut characters = std::mem::take(&mut self.characters);
         if let Err(error) = characters.detect_sensors(self.scene()) {
             self.log(format!("Áreas 3D: {error}"));
