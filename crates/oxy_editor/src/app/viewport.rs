@@ -94,27 +94,31 @@ impl Editor {
         );
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
         self.editor_size = size;
+        self.navigate_viewport(ui, rect);
+        if self.scene().kind == SceneKind::ThreeD {
+            response.clone().on_hover_text(navigation::HELP);
+        }
         let blocked = self.modeling.creation.is_some() || self.modeling.help;
-        if response.hovered() && !self.spatial_active_drag() && !self.camera_dragging() && !blocked
+        let view_input = self.scene().kind == SceneKind::TwoD
+            || (!self.navigation_blocked(ui.ctx()) && ui.input(|i| i.focused));
+        if response.hovered()
+            && view_input
+            && (self.scene().kind == SceneKind::TwoD || !ui.input(|i| i.pointer.secondary_down()))
+            && !self.navigation.active
+            && !self.spatial_active_drag()
+            && !self.camera_dragging()
+            && !blocked
         {
             self.camera.zoom(ui.input(|i| i.smooth_scroll_delta.y));
         }
         if response.dragged_by(egui::PointerButton::Middle)
+            && view_input
             && !self.spatial_active_drag()
             && !self.camera_dragging()
             && !blocked
         {
             let d = ui.input(|i| i.pointer.delta());
             self.camera.pan([d.x, d.y], size);
-        }
-        if self.scene().kind == SceneKind::ThreeD
-            && response.dragged_by(egui::PointerButton::Secondary)
-            && !self.spatial_active_drag()
-            && !self.camera_dragging()
-            && !blocked
-        {
-            let d = ui.input(|i| i.pointer.delta());
-            self.camera.orbit([d.x, d.y]);
         }
         let physical = [
             (rect.width() * ui.ctx().pixels_per_point()).max(1.) as u32,
@@ -137,12 +141,13 @@ impl Editor {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
             Color32::WHITE,
         );
+        self.navigation_notice(ui, rect);
         if blocked {
             return;
         }
         let point = ui
             .input(|i| i.pointer.interact_pos())
-            .filter(|p| rect.contains(*p));
+            .filter(|p| rect.contains(*p) && !self.navigation.active);
         let object_point = point.filter(|_| !self.components_active());
         let pick = object_point.and_then(|p| {
             oxy_render::pick(
@@ -205,18 +210,20 @@ impl Editor {
                 self.select_click(id.clone(), ui.input(|i| i.modifiers), false);
                 self.focus_object_click(id, response.double_clicked(), ui.input(|i| i.modifiers));
             }
-            if response.secondary_clicked() {
+            if self.scene().kind == SceneKind::TwoD && response.secondary_clicked() {
                 self.context_target = contour_pick
                     .or(ui_pick)
                     .or_else(|| pick.as_ref().map(|h| h.entity.clone()));
             }
-            response.context_menu(|ui| {
-                if let Some(id) = self.context_target.clone() {
-                    self.object_context(ui, &id);
-                } else {
-                    self.creation_menu(ui);
-                }
-            });
+            if self.scene().kind == SceneKind::TwoD {
+                response.context_menu(|ui| {
+                    if let Some(id) = self.context_target.clone() {
+                        self.object_context(ui, &id);
+                    } else {
+                        self.creation_menu(ui);
+                    }
+                });
+            }
             self.selection_outlines(ui, &scene, rect, size);
             if self.spatial.mode == Tool::Object
                 && !handle_owned

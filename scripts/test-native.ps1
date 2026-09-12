@@ -7,6 +7,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $workspace 'artifacts') | O
 $checks = @()
 if (!$GraphicsOnly) {
     $checks += @(
+        @('oxy_editor','native_navigation_v033'),
         @('oxy_editor','native_ux_m1_workflow'),
         @('oxy_editor','native_inspector_v031'),
         @('oxy_editor','native_camera_body_v032'),

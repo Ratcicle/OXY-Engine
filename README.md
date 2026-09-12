@@ -1,6 +1,8 @@
-# OXY Engine 0.3.2
+# OXY Engine 0.3.3
 
 Editor e runtime desktop próprios em Rust: cenas 2D/3D, modelagem por peças e polígonos, pintura PNG, animação rígida, atributos e lógica visual. Editor e player compartilham egui/eframe 0.33.3 e wgpu 27.0.1, sem outra engine como núcleo. Dependências fixadas e `Cargo.lock` mantido.
+
+A **0.3.3** adiciona navegação livre no viewport 3D: segure **RMB + mouse + WASD**, com Shift rápido, Ctrl preciso e roda para ajustar a velocidade. Soltar RMB devolve W/E/R às ferramentas. A vista não altera o projeto, o histórico nem a câmera de jogo. Consulte [testes e limites da 0.3.3](docs/v0.3.3.md).
 
 A 0.3.2 adiciona Corpo de movimento configurável (cápsula, caixa, esfera e convexo), guias editáveis de câmera e uma prévia nativa sem iniciar o jogo. Jogador e Câmera continuam separados. O [relatório da 0.3.2](docs/v0.3.2.md) reúne migração, testes, capturas e medições comparáveis à 0.3.1.
 
@@ -63,7 +65,7 @@ O Estúdio usa duas linhas de cabeçalho, incluindo suas abas. **Visualização*
 | Objeto | **C/P** Editar colisor/pivô; **F2** Renomear; **Ctrl+D/Delete** Duplicar/excluir |
 | Operação em curso | Soltar aplica; **Esc** cancela; Bisturi termina com duplo clique ou Enter. Criar, excluir, inverter e triangular aplicam imediatamente |
 
-Campos de texto, modais, guia, grafo e jogo têm foco próprio; combinações Shift não acionam também W/E/R. Botão central move a câmera, roda amplia/reduz, arraste direito orbita no 3D. Alças X/Y/Z restringem escala por eixo; centro escala uniformemente. Alt suspende encaixe em movimento/colisor/pivô; ao escalar, força o eixo já escolhido e não desliga encaixe. Unidades em metros, +Y para cima, sistema 3D destro; graus na interface, radianos nos documentos.
+Campos de texto, modais, guia, grafo e jogo têm foco próprio; combinações Shift não acionam também W/E/R. Botão central faz pan e roda sem RMB amplia/reduz. No 3D, RMB + mouse olha a partir da posição atual e RMB + WASD move na direção completa da vista, inclusive para cima/baixo; diagonais são normalizadas. Shift ×4, Ctrl ×0,25; juntos usam a base. RMB + roda ajusta a base em ×1,2 por passo (0,1–100 m/s; inicial 8 m/s), com aviso breve. **Interface** guarda velocidade e sensibilidade locais. O RMB é reservado à navegação no viewport 3D; use o menu da Hierarquia para ações de objetos. Sair do viewport, perder foco ou trocar de contexto encerra o gesto; o próximo RMB inicia outro. A navegação 2D permanece igual. Alças X/Y/Z restringem escala por eixo; centro escala uniformemente. Alt suspende encaixe em movimento/colisor/pivô; ao escalar, força o eixo já escolhido e não desliga encaixe. Unidades em metros, +Y para cima, sistema 3D destro; graus na interface, radianos nos documentos.
 
 Selecionar uma peça **ou grupo vazio** com colisor mostra a caixa real da física. **Visualização → Colisores** mostra as demais; sólidos verdes, áreas amarelas, desativados tracejados. **Editar colisor** oferece bordas/cantos 2D e faces 3D; mover o centro altera só a caixa. **Ajustar ao objeto/grupo/filhos** calcula uma caixa inicial com prévia, margem e seleção das peças. Geometria editada não redimensiona o colisor automaticamente. No Jogo, Visualização junto dos controles de reprodução é somente leitura; mudanças da cena exigem Parar/Jogar novamente.
 
@@ -82,8 +84,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ./scripts/benchmark-v021.ps1 -Label minha-medicao
 # Engine portátil: editor + player + exemplos. -SkipBuild reutiliza release já compilado.
 ./scripts/package-engine.ps1
-& './dist/OXY-Engine-0.3.2-windows-x64/OXY Engine.exe'
-./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.3.2-windows-x64.zip'
+& './dist/OXY-Engine-0.3.3-windows-x64/OXY Engine.exe'
+./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.3.3-windows-x64.zip'
 # Exportar seu jogo: só runtime e dados; não depende do editor ou do diretório-fonte.
 ./scripts/package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
 ./dist/Meu-Jogo/oxy_player.exe

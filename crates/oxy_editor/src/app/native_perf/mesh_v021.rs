@@ -403,8 +403,8 @@ fn core_inset(source: &EditableMesh) -> Value {
     json!({"comparison":"final-only; inset absent from reference","selected_faces":1,"cases":rows})
 }
 
-impl eframe::App for Bench {
-    fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
+impl Bench {
+    fn scripted_input(&mut self, input: &mut egui::RawInput) {
         input
             .events
             .retain(|e| matches!(e, Event::Screenshot { .. }));
@@ -523,6 +523,13 @@ impl eframe::App for Bench {
             }
             self.button = desired;
         }
+    }
+}
+
+impl eframe::App for Bench {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.scripted_input(input);
+        self.editor.raw_input_hook(ctx, input);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if self.complete {

@@ -35,6 +35,9 @@ Jogador e Câmera principal são objetos separados, ligados pelo Alvo da câmera
 Personagem 3D > Corpo de movimento: escolha cápsula, caixa, esfera ou convexo.
 Selecione uma câmera e arraste olhos/distância/ombro. Exibir > Câmeras oferece
 guias e prévia nativa, com Fixar, tamanho, enquadramento e postura agachada.
+Na vista de edição 3D, segure RMB: mouse olha, WASD move, Shift acelera,
+Ctrl reduz a velocidade e a roda ajusta a base. Solte RMB para voltar a W/E/R.
+Interface guarda velocidade e sensibilidade locais; a câmera de jogo não muda.
 Propriedades mostra os componentes presentes; + Adicionar componente oferece
 as opções compatíveis. Na Hierarquia, arraste para definir parentesco e use
 o botão direito para duplicar, agrupar, excluir ou salvar hierarquia como modelo.

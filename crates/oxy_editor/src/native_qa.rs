@@ -2091,6 +2091,7 @@ impl eframe::App for NativeQa {
         if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
             viewport.focused = Some(true);
         }
+        self.editor.raw_input_hook(_ctx, input);
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {

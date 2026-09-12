@@ -5,6 +5,7 @@ mod home;
 mod library;
 mod logic;
 mod modeling;
+mod navigation;
 mod notices;
 mod physics;
 mod preferences;
@@ -95,6 +96,7 @@ pub struct Editor {
     notices: notices::Notices,
     preferences: preferences::Preferences,
     pending_preferences: Option<preferences::Preferences>,
+    navigation: navigation::Navigation,
     new_project: Option<scenes::NewProject>,
     scene_dialog: Option<scenes::SceneDialog>,
     logic_ui: logic::LogicUi,
@@ -212,6 +214,7 @@ impl Editor {
             notices: Default::default(),
             preferences,
             pending_preferences: None,
+            navigation: Default::default(),
             new_project: None,
             scene_dialog: None,
             logic_ui: Default::default(),
@@ -1010,6 +1013,10 @@ impl Editor {
 }
 
 impl eframe::App for Editor {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.navigation_input(ctx, input);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_started = Instant::now();
         if !self.capture || self.tab != Tab::Game {
@@ -1022,6 +1029,7 @@ impl eframe::App for Editor {
             ctx.set_zoom_factor(self.scale);
         }
         if self.home.visible {
+            self.stop_navigation(ctx);
             self.console(ctx);
             self.home_ui(ctx);
             self.project_dialogs(ctx);
@@ -1031,16 +1039,17 @@ impl eframe::App for Editor {
             return;
         }
         let edit_event = ctx.input(|i| {
-            i.events.iter().any(|e| {
-                matches!(
-                    e,
-                    egui::Event::PointerButton { pressed: true, .. }
-                        | egui::Event::Key { pressed: true, .. }
-                        | egui::Event::Text(_)
-                )
+            i.events.iter().any(|e| match e {
+                egui::Event::PointerButton {
+                    button,
+                    pressed: true,
+                    ..
+                } => !self.navigation.owns_rmb || *button != egui::PointerButton::Secondary,
+                egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) => true,
+                _ => false,
             })
         });
-        if !self.capture && edit_event && !self.history.is_pending() {
+        if !self.capture && !self.navigation.active && edit_event && !self.history.is_pending() {
             self.history
                 .begin("Editar projeto", &self.state.project, &self.state.images);
         }
@@ -1053,6 +1062,7 @@ impl eframe::App for Editor {
             }
         }
         if self.allow_close {
+            self.stop_navigation(ctx);
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
@@ -1084,6 +1094,7 @@ impl eframe::App for Editor {
             oxy_render::input::release_cursor(ctx);
         }
         if !dialog_open
+            && !self.navigation.active
             && !self.mesh_operation_active()
             && !self.capture
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
@@ -1091,6 +1102,7 @@ impl eframe::App for Editor {
             self.save_requested = true;
         }
         if !dialog_open
+            && !self.navigation.active
             && !self.capture
             && ctx.input(|i| i.focused)
             && !crate::graph_ui::text_input_active(ctx)
@@ -1160,7 +1172,11 @@ impl eframe::App for Editor {
                 }
             }
         }
-        if ctx.input(|i| i.pointer.any_down()) && !self.history.is_pending() {
+        if !self.navigation.active
+            && (!self.navigation.owns_rmb || ctx.input(|i| i.pointer.primary_down()))
+            && ctx.input(|i| i.pointer.any_down())
+            && !self.history.is_pending()
+        {
             self.history
                 .begin("Gesto de edição", &self.state.project, &self.state.images);
         }
@@ -1260,6 +1276,7 @@ impl eframe::App for Editor {
         self.mesh_help(ctx);
         self.mesh_creation_dialog(ctx);
         self.notices_ui(ctx);
+        self.finish_navigation(ctx);
         if self.pending.is_some() {
             self.pause();
             egui::Window::new("Alterações não salvas").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,Vec2::ZERO).show(ctx,|ui|{

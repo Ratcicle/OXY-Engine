@@ -346,8 +346,8 @@ pub(super) fn viewport(ctx: &egui::Context) -> Option<Rect> {
     largest
 }
 
-impl eframe::App for MeasuredEditor {
-    fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
+impl MeasuredEditor {
+    fn scripted_input(&mut self, input: &mut egui::RawInput) {
         input
             .events
             .retain(|e| matches!(e, Event::Screenshot { .. }));
@@ -437,6 +437,13 @@ impl eframe::App for MeasuredEditor {
             input.events.push(key(key_code, true, modifiers));
             self.previous_key = Some(key_code);
         }
+    }
+}
+
+impl eframe::App for MeasuredEditor {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.scripted_input(input);
+        self.editor.raw_input_hook(ctx, input);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if self.complete {

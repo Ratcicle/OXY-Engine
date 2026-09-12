@@ -1,0 +1,106 @@
+{
+  "version": "0.3.3",
+  "base_commit": "f013bfd2764145894ba708ef84af0ecc7e39f316",
+  "final_commit": null,
+  "source_fingerprint": {
+    "algorithm": "SHA-256",
+    "value": "405f31fd2da6f679b8b7b7ad31efc9abaedb6aac939478e296c2f123647ea181",
+    "files": 227,
+    "method": "Sorted relative UTF-8 POSIX path + NUL + exact file bytes + NUL; Cargo.toml/Cargo.lock and .rs/.toml/.json/.wgsl/.ps1/.png/.ico files under crates, examples, scripts, .cargo. Excludes reports, captures and build outputs."
+  },
+  "environment": {
+    "os": "Windows 11 Pro 10.0.26100",
+    "cpu": "AMD Ryzen 5 5600",
+    "physical_ram_bytes": 17076060160,
+    "rust": "1.92.0",
+    "target": "x86_64-pc-windows-gnu",
+    "native_profile": "release --locked",
+    "gpu": "AMD Radeon RX 6600",
+    "driver": "26.7.1",
+    "backend": "Vulkan"
+  },
+  "automatic_tests": {
+    "passed": 312,
+    "failed": 0,
+    "ignored": 33
+  },
+  "checks": {
+    "fmt_all_check": "passed",
+    "workspace_build_locked": "passed",
+    "workspace_release_build_locked": "passed",
+    "workspace_all_targets_all_features_clippy_deny_warnings": "passed"
+  },
+  "native": {
+    "passed_count": 28,
+    "passed_tests": [
+      "app::navigation::native::native_navigation_v033",
+      "gpu_test::components::native_gpu_component_overlay_depth_and_cache",
+      "gpu_test::native_gpu_depth_texture_and_resize",
+      "gpu_test::native_gpu_editable_mesh_equivalence",
+      "native_qa::camera_authoring::native_camera_body_v032",
+      "native_qa::cameras::native_cameras_v030",
+      "native_qa::cuts::native_cut_bevel_workflow",
+      "native_qa::direct::native_direct_modeling_v021_workflow",
+      "native_qa::final_flow::native_final_creation_workflow",
+      "native_qa::input_guide::native_input_guide_workflow",
+      "native_qa::inspector::native_inspector_v031",
+      "native_qa::layout::native_layout_matrix_workflow",
+      "native_qa::mesh::native_mesh_foundation_workflow",
+      "native_qa::mesh::native_player_final_authored_mesh",
+      "native_qa::modeling::native_basic_modeling_workflow",
+      "native_qa::movement::native_first_person_v030",
+      "native_qa::movement::native_ground_posture_v030",
+      "native_qa::movement::native_player_movement_v030",
+      "native_qa::movement_lab::native_movement_lab_v030",
+      "native_qa::movement_lab::native_movement_scale_v030",
+      "native_qa::native_editor_workflow",
+      "native_qa::native_player_portable_workflow",
+      "native_qa::painting::native_mesh_painting_workflow",
+      "native_qa::physics::native_physics_v030_authoring",
+      "native_qa::portable::native_portable_home_workflow",
+      "native_qa::recipes::native_guide_recipes_workflow",
+      "native_qa::spatial::native_spatial_workflow",
+      "native_qa::ux::native_ux_m1_workflow"
+    ],
+    "initial_failure": "native_layout_matrix_workflow captured a 1440x900 window before the requested 920x600 resize was applied. Isolated rerun passed; remaining suite resumed and passed.",
+    "input": "Real native WGPU window with isolated application RawInput, not OS physical input automation.",
+    "navigation_raw_report": "navigation/native-navigation.json",
+    "captures_visually_inspected": true,
+    "logical_source_unchanged_during_navigation": true,
+    "local_log_files": [
+      "artifacts/v033-native-suite.log",
+      "artifacts/v033-native-layout-recheck.log",
+      "artifacts/v033-native-tail.log",
+      "artifacts/v033-native-navigation-final.log"
+    ]
+  },
+  "portable": {
+    "zip": "dist/OXY-Engine-0.3.3-windows-x64.zip",
+    "size_bytes": 26248133,
+    "sha256": "14be1dce77873055f339bad64e92ddea2a87fa0790e48df2b20eed14bd271bbd",
+    "extracted_outside_repo": true,
+    "direct_exe_open_without_rust_cargo_path": true,
+    "metadata_version": "0.3.3",
+    "pe_x64_and_imports_checked": true,
+    "second_clean_machine": false
+  },
+  "compatibility": {
+    "schema_version": 4,
+    "runtime_player_source_changed": false,
+    "examples_changed": false,
+    "game_packaging_preserved": true
+  },
+  "limitations": [
+    "No physical OS mouse/keyboard automation; driver event delivery across devices remains outside this test.",
+    "No second clean Windows machine, local MSVC build or GitHub CI run.",
+    "No new GPU timing or FPS result; App::update CPU time is labelled separately.",
+    "Long historical performance suites not rerun; their old orbit phase now exercises free look and is not the same workload."
+  ],
+  "published": {
+    "commit": false,
+    "push": false,
+    "tag": false,
+    "release": false,
+    "record_scope": "Snapshot of local validation before the subsequently authorized commit/push/tag/release; see GitHub tag v0.3.3 for publication status."
+  }
+}

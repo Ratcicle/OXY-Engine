@@ -4,12 +4,16 @@ use super::*;
 pub(super) struct Preferences {
     pub scale_percent: u16,
     pub tool_names: bool,
+    pub navigation_speed: f32,
+    pub navigation_sensitivity: f32,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self {
             scale_percent: 100,
             tool_names: false,
+            navigation_speed: 8.,
+            navigation_sensitivity: 0.003,
         }
     }
 }
@@ -34,6 +38,20 @@ impl Preferences {
                 .map(|v| v.as_bool().ok_or("Preferência de nomes inválida"))
                 .transpose()?
                 .unwrap_or(false),
+            navigation_speed: local_number(
+                &json,
+                "navigation_speed",
+                8.,
+                navigation::MIN_SPEED,
+                navigation::MAX_SPEED,
+            )?,
+            navigation_sensitivity: local_number(
+                &json,
+                "navigation_sensitivity",
+                0.003,
+                navigation::MIN_SENSITIVITY,
+                navigation::MAX_SENSITIVITY,
+            )?,
         };
         if !(80..=160).contains(&value.scale_percent) {
             return Err("A escala deve ficar entre 80% e 160%.".into());
@@ -57,15 +75,39 @@ impl Preferences {
             None => (Self::default(), None),
         }
     }
-    fn save(&self) -> Result<(), String> {
+    pub(super) fn save(&self) -> Result<(), String> {
         if let Some(path) = Self::path() {
-            persistence::safe_write(
-                &path,
-                &serde_json::to_vec_pretty(&serde_json::json!({"scale_percent":self.scale_percent,"tool_names":self.tool_names})).map_err(|e| e.to_string())?,
-            )?;
+            self.save_to(&path)?;
         }
         Ok(())
     }
+    fn save_to(&self, path: &Path) -> Result<(), String> {
+        persistence::safe_write(
+            path,
+            &serde_json::to_vec_pretty(&serde_json::json!({"scale_percent":self.scale_percent,
+                "tool_names":self.tool_names,"navigation_speed":self.navigation_speed,
+                "navigation_sensitivity":self.navigation_sensitivity}))
+            .map_err(|e| e.to_string())?,
+        )
+    }
+}
+fn local_number(
+    json: &serde_json::Value,
+    name: &str,
+    default: f32,
+    min: f32,
+    max: f32,
+) -> Result<f32, String> {
+    let Some(value) = json.get(name) else {
+        return Ok(default);
+    };
+    let value = value
+        .as_f64()
+        .ok_or_else(|| format!("Preferência inválida: {name}"))? as f32;
+    if !value.is_finite() {
+        return Err("Preferência numérica inválida".into());
+    }
+    Ok(value.clamp(min, max))
 }
 impl Editor {
     pub(super) fn interface_button(&mut self, ui: &mut egui::Ui) {
@@ -99,6 +141,16 @@ impl Editor {
                 }
             });
             ui.checkbox(&mut pending.tool_names, "Mostrar nomes das ferramentas");
+            ui.separator();
+            ui.label("Navegação 3D do editor");
+            ui.add(egui::DragValue::new(&mut pending.navigation_speed)
+                .range(navigation::MIN_SPEED..=navigation::MAX_SPEED).speed(0.1)
+                .prefix("Velocidade de navegação 3D: ").suffix(" m/s"))
+                .on_hover_text("Velocidade local da vista. RMB + roda ajusta em passos de ×1,2; Shift ×4, Ctrl ×0,25; juntos usam a base.");
+            ui.add(egui::DragValue::new(&mut pending.navigation_sensitivity)
+                .range(navigation::MIN_SENSITIVITY..=navigation::MAX_SENSITIVITY).speed(0.0001)
+                .max_decimals(4).prefix("Sensibilidade do olhar: "))
+                .on_hover_text("Sensibilidade local do mouse na vista de edição. Não altera a câmera de jogo nem depende da escala da interface.");
             ui.horizontal_wrapped(|ui| {
                 apply = ui.button("Aplicar").clicked();
                 cancel = ui.button("Cancelar").clicked();
@@ -132,6 +184,32 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_preferences_load_older_settings_and_roundtrip_locally() {
+        let old = Preferences::decode(br#"{"scale_percent":120,"tool_names":true}"#).unwrap();
+        assert_eq!(old.navigation_speed, 8.);
+        assert_eq!(old.navigation_sensitivity, 0.003);
+        let mut changed = old;
+        changed.navigation_speed = 9.6;
+        changed.navigation_sensitivity = 0.006;
+        let folder = std::env::temp_dir().join(format!("oxy-preferences-{}", new_id()));
+        let path = folder.join("interface.json");
+        changed.save_to(&path).unwrap();
+        let loaded = Preferences::decode(&std::fs::read(&path).unwrap()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&folder).unwrap();
+        assert_eq!(loaded.navigation_speed, 9.6);
+        assert_eq!(loaded.navigation_sensitivity, 0.006);
+        assert_eq!(loaded.scale_percent, 120);
+        assert!(loaded.tool_names);
+        let bounded = Preferences::decode(
+            br#"{"scale_percent":100,"navigation_speed":100000,"navigation_sensitivity":-9}"#,
+        )
+        .unwrap();
+        assert_eq!(bounded.navigation_speed, navigation::MAX_SPEED);
+        assert_eq!(bounded.navigation_sensitivity, navigation::MIN_SENSITIVITY);
+        assert!(Preferences::decode(br#"{"scale_percent":100,"navigation_speed":"bad"}"#).is_err());
+    }
     #[test]
     fn preferences_validate_and_draft_is_independent() {
         assert!(Preferences::decode(br#"{"scale_percent":200}"#).is_err());

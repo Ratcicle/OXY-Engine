@@ -156,6 +156,47 @@ impl CameraState {
         self.pitch = (self.pitch + delta[1] * 0.008).clamp(-1.5, 1.5);
     }
 
+    /// Optical forward/right, including pitch; no projection onto the ground plane.
+    pub fn forward(&self) -> Vec3 {
+        self.view()
+            .inverse()
+            .transform_vector3(-Vec3::Z)
+            .normalize_or_zero()
+    }
+
+    pub fn right(&self) -> Vec3 {
+        self.view()
+            .inverse()
+            .transform_vector3(Vec3::X)
+            .normalize_or_zero()
+    }
+
+    /// Editor look: retain the eye while rotating the direction, rather than orbiting a focus.
+    /// Delta is unscaled mouse motion (physical pixels for the absolute-pointer fallback).
+    pub fn look_from_eye(&mut self, delta: [f32; 2], sensitivity: f32) {
+        if self.kind != SceneKind::ThreeD || self.game_view.is_some() || delta == [0., 0.] {
+            return;
+        }
+        let eye = self.eye();
+        self.yaw = (self.yaw - delta[0] * sensitivity).rem_euclid(std::f32::consts::TAU);
+        self.pitch = (self.pitch + delta[1] * sensitivity).clamp(-1.55, 1.55);
+        let offset = self.eye() - self.target;
+        self.target = eye - offset;
+    }
+
+    /// Translate an editor view in metres, independent of orbit distance and game time.
+    pub fn move_in_view(&mut self, lateral: f32, forward: f32, speed: f32, dt: f32) {
+        if self.kind != SceneKind::ThreeD
+            || self.game_view.is_some()
+            || !dt.is_finite()
+            || (lateral == 0. && forward == 0.)
+        {
+            return;
+        }
+        let direction = self.right() * lateral + self.forward() * forward;
+        self.target += direction.normalize_or_zero() * speed * dt.clamp(0., 0.05);
+    }
+
     pub fn pan(&mut self, delta: [f32; 2], size: [u32; 2]) {
         self.game_view = None;
         let half = if self.kind == SceneKind::TwoD {
@@ -185,6 +226,64 @@ impl CameraState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn editor_movement_follows_full_view_and_normalizes_diagonals() {
+        let base = CameraState::for_scene(&Scene::new("Vista", SceneKind::ThreeD));
+        for (x, z) in [(0., 1.), (0., -1.), (1., 0.), (-1., 0.), (1., 1.)] {
+            let mut camera = base.clone();
+            let expected = (base.forward() * z + base.right() * x).normalize() * 0.4;
+            camera.move_in_view(x, z, 8., 0.05);
+            assert!((camera.eye() - base.eye()).abs_diff_eq(expected, 1e-5));
+        }
+        for (pitch, sign) in [(-0.8, 1.), (0.8, -1.)] {
+            let mut camera = base.clone();
+            camera.pitch = pitch;
+            let eye = camera.eye();
+            camera.move_in_view(0., 1., 8., 0.05);
+            assert!((camera.eye().y - eye.y) * sign > 0.1);
+        }
+    }
+    #[test]
+    fn editor_time_and_look_preserve_speed_eye_and_focus_distance() {
+        let base = CameraState::for_scene(&Scene::new("Vista", SceneKind::ThreeD));
+        for fps in [30, 144] {
+            let mut camera = base.clone();
+            for _ in 0..fps {
+                camera.move_in_view(1., 1., 8., 1. / fps as f32);
+            }
+            assert!(((camera.eye() - base.eye()).length() - 8.).abs() < 0.001);
+        }
+        let mut camera = base.clone();
+        camera.move_in_view(0., 1., 8., 8.);
+        assert!(((camera.eye() - base.eye()).length() - 0.4).abs() < 0.0001);
+        let eye = camera.eye();
+        camera.look_from_eye([80., -70.], 0.003);
+        assert!(camera.eye().abs_diff_eq(eye, 1e-5));
+        assert_eq!(camera.distance, base.distance);
+        assert_eq!(camera.fov, base.fov);
+        assert!(!camera.forward().abs_diff_eq(base.forward(), 0.01));
+        for distance in [1., 200.] {
+            let mut camera = base.clone();
+            camera.distance = distance;
+            let start = camera.eye();
+            camera.move_in_view(0., 1., 8., 0.05);
+            assert!(((camera.eye() - start).length() - 0.4).abs() < 0.0001);
+        }
+    }
+    #[test]
+    fn free_navigation_refuses_2d_and_authored_game_views() {
+        for kind in [SceneKind::TwoD, SceneKind::ThreeD] {
+            let mut scene = Scene::new("Vista", kind);
+            let mut entity = oxy_core::document::Entity::new("Câmera", None);
+            entity.camera = Some(Default::default());
+            scene.entities.push(entity);
+            let mut camera = CameraState::for_game(&scene);
+            let before = camera.matrix([1000, 700]);
+            camera.look_from_eye([100., 100.], 0.003);
+            camera.move_in_view(1., 1., 10., 1.);
+            assert_eq!(before, camera.matrix([1000, 700]));
+        }
+    }
     #[test]
     fn resized_projection_and_ray_stay_aligned() {
         let scene = Scene::new("Teste", SceneKind::ThreeD);
