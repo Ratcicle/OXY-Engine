@@ -1,0 +1,159 @@
+Concluído: true
+Erro: None
+Clique: Novo projeto em [113.7 192.5]
+Clique: Cena 3D
+Comece com modelos, profundidade e uma câmera 3D. em [737.5 486.1]
+Clique: Criar projeto em [578.5 550.6]
+Verificado: f7_new
+Fluxo integrado: save_location
+Clique: Estúdio em [153.2 79.0]
+Clique: + Objeto em [131.5 117.8]
+Clique: Tubo em [119.5 296.5]
+Tecla Enter, Ctrl=false
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Tubo criado
+Tecla Enter, Ctrl=false
+Verificado: f7_tube
+Tecla Num2, Ctrl=false
+Clique: Malha em [738.0 164.8]
+Clique: Converter em malha editável em [814.5 195.5]
+Verificado: f7_converted
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho R com Modifiers { shift: true }
+Escolher ponto do mundo pelo mouse no viewport
+Tecla Enter, Ctrl=false
+Verificado: f7_loop
+Captura GPU da janela: tube-loop.png
+Captura tube-loop.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Num2, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho E com Modifiers { shift: true }
+Editar campo visível: Distância = 0.25
+Tecla Enter, Ctrl=false
+Verificado: f7_extruded
+Fluxo integrado: cap_edge
+Tecla Num3, Ctrl=false
+Selecionar componente pelo ponto projetado na janela
+Atalho B com Modifiers { shift: true }
+Editar campo visível: Segmentos = 2
+Editar campo visível: Largura = 0.02
+Verificado: f7_beveled
+Tecla Z, Ctrl=true
+Verificado: f7_undo
+Tecla Y, Ctrl=true
+Verificado: f7_redo
+Captura GPU da janela: tube-edited.png
+Captura tube-edited.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Fluxo integrado: paint_faces
+Clique: Pintura em [356.7 124.8]
+Clique: Textura em [542.5 161.8]
+Clique: Criar textura em [601.0 199.0]
+Clique: Criar 512×512 em [922.5 218.0]
+Clique: Visualização em [582.5 161.8]
+Clique: Enquadrar seleção em [658.5 373.5]
+Verificado: f7_paint_base
+Clique real na face antiga pela imagem
+Verificado: f7_old_painted
+Clique real na face nova pela peça
+Verificado: f7_painted
+Tecla Z, Ctrl=true
+Verificado: f7_paint_undo
+Tecla Y, Ctrl=true
+Verificado: f7_redo
+Captura GPU da janela: tube-painted.png
+Captura tube-painted.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Modelagem em [272.5 125.2]
+Tecla Num1, Ctrl=false
+Rolar painel PROPRIEDADES
+Abrir menu de contexto: Tubo criado
+Clique: Salvar hierarquia como modelo em [159.0 370.5]
+Verificado: f7_model
+Clique: Colocar na cena em [292.0 894.0]
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Instância articulada
+Tecla Enter, Ctrl=false
+Verificado: f7_instance
+Tecla W, Ctrl=false
+Arrastar eixo X pelo controle visual
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Rolar painel PROPRIEDADES
+Clique: + Adicionar componente em [1238.5 317.1]
+Clique: Colisor 3D em [1196.5 370.5]
+Clique: Colisor 3D em [1205.5 316.1]
+Clique: Gerar colisor convexo em [1248.0 350.1]
+Verificado: f7_spatial_base
+Tecla P, Ctrl=false
+Arrastar alça espacial por projeção da câmera
+Verificado: f7_pivot
+Tecla Z, Ctrl=true
+Verificado: f7_undo
+Tecla Y, Ctrl=true
+Verificado: f7_redo
+Captura GPU da janela: tube-pivot.png
+Captura tube-pivot.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla W, Ctrl=false
+Clique: Visualização em [458.0 164.8]
+Clique: Colisores em [495.0 307.0]
+Captura GPU da janela: tube-collider.png
+Captura tube-collider.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla W, Ctrl=false
+Clique: Animação em [433.3 125.8]
+Clique: + Nova animação em [295.0 186.2]
+Tecla A, Ctrl=true
+Digitar: Giro rígido
+Tecla Enter, Ctrl=false
+Clique: + Quadro-chave em [946.9 657.0]
+Editar campo visível: Cursor = 0.5
+Tecla E, Ctrl=false
+Girar braço pelo eixo Z
+Clique: + Quadro-chave em [946.9 657.0]
+Verificado: f7_animation
+Captura GPU da janela: tube-rigid-animation.png
+Captura tube-rigid-animation.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Modelo em [532.4 124.2]
+Clique: Pose-base em [517.5 197.5]
+Tecla Escape, Ctrl=false
+Clique: Lógica em [220.8 80.0]
+Clique: Ao iniciar cena em [287.5 317.5]
+Clique: Pesquisar ação… em [293.0 254.8]
+Digitar: animação
+Clique: Reproduzir animação em [307.5 385.0]
+Arrastar nó pelo título
+Clique: Escolha… em [1243.5 429.0]
+Clique: Instância articulada · Giro rígido em [1313.0 464.0]
+Conectar saída e entrada pelas portas visuais
+Captura GPU da janela: tube-animation-graph.png
+Captura tube-animation-graph.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Cena em [32.5 79.5]
+Clique: + Objeto em [131.5 117.8]
+Clique: Câmera em [127.0 347.0]
+Clique: Transformação em [1219.5 232.1]
+Fluxo integrado: camera_x
+Fluxo integrado: camera_y
+Fluxo integrado: camera_z
+Fluxo integrado: camera_pitch
+Verificado: f7_camera
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Instância articulada
+Clique: ▶ Jogar em [326.6 46.5]
+Reproduzir 20 quadros sem entrada
+Verificado: f7_runtime
+Captura GPU da janela: tube-runtime.png
+Captura tube-runtime.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [492.2 45.5]
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Instância articulada
+Clique: Estúdio em [153.2 79.0]
+Clique: Visualização em [458.0 164.8]
+Clique: Enquadrar seleção em [533.5 376.5]
+Captura GPU da janela: tube-final-reopened.png
+Captura tube-final-reopened.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Capturas: ["tube-loop.png", "tube-edited.png", "tube-painted.png", "tube-pivot.png", "tube-collider.png", "tube-rigid-animation.png", "tube-animation-graph.png", "tube-runtime.png", "tube-final-reopened.png"]

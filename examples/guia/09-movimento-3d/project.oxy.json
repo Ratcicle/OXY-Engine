@@ -11,7 +11,7 @@
       "entities": [
         {
           "id": "03000000-0000-4000-8000-000000015f92",
-          "name": "Personagem 3D",
+          "name": "Jogador",
           "parent": null,
           "transform": {
             "position": [
@@ -570,13 +570,13 @@
         },
         {
           "id": "03000000-0000-4000-8000-000000015fa4",
-          "name": "Câmera do personagem",
-          "parent": "03000000-0000-4000-8000-000000015f92",
+          "name": "Câmera principal",
+          "parent": null,
           "transform": {
             "position": [
               0.0,
-              1.6,
-              0.0
+              1.62,
+              4.0
             ],
             "rotation": [
               0.0,

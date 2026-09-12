@@ -13,6 +13,7 @@ impl NativeQa {
         let shape = e.physics3d.as_ref().map(|c| &c.shape);
         match label {
             "phys_none" if shape.is_none() => Ok(()),
+            "phys_box" if matches!(shape, Some(CollisionShape::Box { .. })) => Ok(()),
             "phys_triangles" | "phys_convex" => {
                 let convex = label == "phys_convex";
                 if !matches!(
@@ -40,7 +41,7 @@ impl NativeQa {
 fn native_physics_v030_authoring() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.3.0/m1");
+    let output = workspace.join("qa/v0.3.1/physics");
     std::fs::create_dir_all(&output).unwrap();
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
@@ -83,13 +84,19 @@ fn native_physics_v030_authoring() {
             let mut qa = NativeQa::new(cc, path, artifacts, shared);
             qa.actions = VecDeque::from([
                 Action::SelectEntity("Tubo com abertura"),
-                Action::Click("Componentes"),
-                Action::Click("Colisor 3D · formas reais"),
+                Action::Click("+ Adicionar componente"),
+                Action::Click("Colisor 3D"),
+                Action::Check("phys_box"),
+                Action::Click("Colisor 3D"),
                 Action::Click("Usar malha estática de colisão"),
                 Action::Check("phys_triangles"),
                 Action::Screenshot("triangles-opening.png"),
                 Action::Key(Key::Z, true),
+                Action::Check("phys_box"),
+                Action::Key(Key::Z, true),
                 Action::Check("phys_none"),
+                Action::Key(Key::Y, true),
+                Action::Check("phys_box"),
                 Action::Key(Key::Y, true),
                 Action::Check("phys_triangles"),
                 Action::Click("Gerar colisor convexo"),

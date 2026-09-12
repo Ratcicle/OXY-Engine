@@ -1,0 +1,31 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Tubo com abertura
+Clique: + Adicionar componente em [1238.5 300.1]
+Clique: Colisor 3D em [1196.5 353.5]
+Verificado: phys_box
+Clique: Colisor 3D em [1205.5 299.1]
+Clique: Usar malha estática de colisão em [1272.5 367.1]
+Verificado: phys_triangles
+Captura GPU da janela: triangles-opening.png
+Captura triangles-opening.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Verificado: phys_box
+Tecla Z, Ctrl=true
+Verificado: phys_none
+Tecla Y, Ctrl=true
+Verificado: phys_box
+Tecla Y, Ctrl=true
+Verificado: phys_triangles
+Clique: Gerar colisor convexo em [1248.0 333.1]
+Verificado: phys_convex
+Captura GPU da janela: convex-closes-opening.png
+Captura convex-closes-opening.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Selecionar hierarquia: Tubo com abertura
+Verificado: phys_convex
+Selecionar hierarquia: Cápsula física
+Captura GPU da janela: capsule-empty-group.png
+Captura capsule-empty-group.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Capturas: ["triangles-opening.png", "convex-closes-opening.png", "capsule-empty-group.png"]

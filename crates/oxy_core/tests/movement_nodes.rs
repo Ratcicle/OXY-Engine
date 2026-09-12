@@ -342,14 +342,155 @@ fn optional_presets_undo_redo_and_model_copy_keep_bindings_and_internal_links() 
     h.redo(&mut p, &mut images).unwrap();
     assert_eq!(p, after);
     assert_eq!(h.undo_len(), 1);
+    let camera = p.scenes[0]
+        .entities
+        .iter()
+        .find(|e| e.camera_rig.is_some())
+        .unwrap();
+    assert!(camera.parent.is_none());
+    assert_eq!(
+        camera.camera_rig.as_ref().unwrap().target.as_ref(),
+        Some(&id)
+    );
+    let camera_id = camera.id.clone();
     let asset = p.save_model(&scene, &id, "Personagem").unwrap();
+    let copy = p.instantiate_model(&asset, &scene).unwrap();
+    let descendants = p.scenes[0].descendants(&copy);
+    // Saving a character hierarchy no longer silently saves a camera with it.
+    assert!(
+        descendants
+            .iter()
+            .all(|id| p.scenes[0].entity(id).unwrap().camera.is_none())
+    );
+    assert_eq!(
+        p.scenes[0]
+            .entity(&camera_id)
+            .unwrap()
+            .camera_rig
+            .as_ref()
+            .unwrap()
+            .target
+            .as_ref(),
+        Some(&id)
+    );
+    // An explicit group containing both objects still serializes/remaps their link.
+    let assembly =
+        oxy_core::editing::group_selection(&mut p.scenes[0], &[id.clone(), camera_id.clone()])
+            .unwrap();
+    let asset = p
+        .save_model(&scene, &assembly, "Montagem completa")
+        .unwrap();
     let copy = p.instantiate_model(&asset, &scene).unwrap();
     let descendants = p.scenes[0].descendants(&copy);
     let rig = descendants
         .iter()
         .find_map(|id| p.scenes[0].entity(id).unwrap().camera_rig.as_ref())
         .unwrap();
-    assert_eq!(rig.target.as_ref(), Some(&copy));
+    assert!(descendants.contains(rig.target.as_ref().unwrap()));
+    assert_ne!(rig.target.as_ref(), Some(&id));
     assert!(rig.hidden.iter().all(|id| descendants.contains(id)));
     validate_project(&p).unwrap();
+}
+
+#[test]
+fn independent_camera_presets_roundtrip_and_target_motion_is_applied_once() {
+    for preset in [MovementPreset::FirstPerson, MovementPreset::ThirdPerson] {
+        let mut p = Project::new("Alvo explícito");
+        p.scenes[0].kind = SceneKind::ThreeD;
+        let scene = p.start_scene.clone();
+        let player = create(&mut p, &scene, preset, Vec3::new(4., 0.02, -3.)).unwrap();
+        p.scenes[0].entity_mut(&player).unwrap().transform.position[0] += 7.;
+        let camera = p.scenes[0]
+            .entities
+            .iter()
+            .find(|e| e.camera.is_some())
+            .unwrap();
+        let id = camera.id.clone();
+        let rig = camera.camera_rig.clone().unwrap();
+        assert!(camera.parent.is_none());
+        assert!(p.scenes[0].entity(&player).unwrap().camera.is_none());
+        let bytes = serde_json::to_vec(&p).unwrap();
+        let reopened = oxy_core::migration::read(&bytes).unwrap();
+        assert_eq!(p, reopened);
+        let mut r = Runtime::new(&reopened, &scene).unwrap();
+        ticks(&mut r, 3);
+        assert_eq!(r.active_camera(), Some(id.as_str()));
+        r.set_camera_mode(&id, CameraMode::FirstPerson, 0.).unwrap();
+        ticks(&mut r, 2);
+        let pose = r.game_camera_pose().unwrap();
+        assert!(
+            (pose.position.x - 11.).abs() < 0.0001,
+            "camera/parent counted twice: {pose:?}"
+        );
+        r.advance(
+            oxy_core::runtime::FIXED_DT,
+            &InputFrame {
+                pressed: [rig.mode_action.clone()].into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.camera_mode(&id), Some(CameraMode::ThirdPerson));
+        ticks(&mut r, 45);
+        let before = r.game_camera_pose().unwrap().position;
+        r.advance(
+            oxy_core::runtime::FIXED_DT,
+            &InputFrame {
+                pressed: [rig.shoulder_action.clone()].into(),
+                ..Default::default()
+            },
+        );
+        ticks(&mut r, 45);
+        assert!(
+            (r.game_camera_pose().unwrap().position.x - before.x).abs() > 0.1,
+            "shoulder did not change"
+        );
+        let yaw = r.character_state(&player).unwrap().look_yaw;
+        r.advance(
+            oxy_core::runtime::FIXED_DT,
+            &InputFrame {
+                look: [120., -20.],
+                ..Default::default()
+            },
+        );
+        assert_ne!(r.character_state(&player).unwrap().look_yaw, yaw);
+        r.advance(
+            oxy_core::runtime::FIXED_DT,
+            &InputFrame {
+                pressed: [rig.mode_action].into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.camera_mode(&id), Some(CameraMode::FirstPerson));
+        r.stop();
+        assert_eq!(serde_json::to_vec(&p).unwrap(), bytes);
+        clean(&r);
+    }
+}
+
+#[test]
+fn published_movement_projects_have_camera_roots_and_explicit_targets() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let paths = (6..=12)
+        .map(|i| root.join(format!("guia/{i:02}-movimento-3d")))
+        .chain([root.join("laboratorio-3d")]);
+    for path in paths {
+        let p = oxy_core::persistence::load_project(&path).unwrap();
+        for scene in &p.scenes {
+            for e in &scene.entities {
+                if let Some(rig) = &e.camera_rig {
+                    assert!(
+                        e.camera.is_some() && e.character3d.is_none() && e.parent.is_none(),
+                        "{}",
+                        path.display()
+                    );
+                    assert!(
+                        rig.target
+                            .as_deref()
+                            .and_then(|id| scene.entity(id))
+                            .is_some_and(|e| e.character3d.is_some())
+                    );
+                }
+            }
+        }
+    }
 }

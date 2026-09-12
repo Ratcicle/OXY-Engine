@@ -11,11 +11,11 @@ impl NativeQa {
             .find(|e| e.name == "Personagem")
             .ok_or("Personagem ausente")?;
         match label {
-            "m3_standing" | "m3_crouched" => {
+            "posture3d_standing" | "posture3d_crouched" => {
                 use oxy_core::character::Posture;
                 let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
                 let state = rt.character_state(&body.id).ok_or("Estado ausente")?;
-                let expected = if label == "m3_crouched" {
+                let expected = if label == "posture3d_crouched" {
                     Posture::Crouched
                 } else {
                     Posture::Standing
@@ -92,7 +92,7 @@ impl NativeQa {
 fn native_ground_posture_v030() {
     use oxy_core::{character::CharacterConfig, surface::*};
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m3");
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.1/posture");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");
@@ -170,15 +170,15 @@ fn native_ground_posture_v030() {
                 Action::ReopenProject,
                 Action::Click("▶ Jogar"),
                 Action::Wait(18),
-                Action::Check("m3_standing"),
+                Action::Check("posture3d_standing"),
                 Action::Screenshot("standing-runtime.png"),
                 Action::Key(Key::C, false),
                 Action::Wait(18),
-                Action::Check("m3_crouched"),
+                Action::Check("posture3d_crouched"),
                 Action::Screenshot("crouched-runtime.png"),
                 Action::Key(Key::C, false),
                 Action::Wait(18),
-                Action::Check("m3_standing"),
+                Action::Check("posture3d_standing"),
                 Action::Click("■ Parar"),
                 Action::Check("fp_stopped"),
             ]);
@@ -253,9 +253,8 @@ fn native_first_person_v030() {
             let mut qa = NativeQa::new(cc, path, artifacts, shared);
             qa.actions = VecDeque::from([
                 Action::SelectEntity("Personagem"),
-                Action::Click("Componentes"),
+                Action::Click("+ Adicionar componente"),
                 Action::Click("Personagem 3D"),
-                Action::Click("Adicionar personagem 3D"),
                 Action::Check("fp_author"),
                 Action::Key(Key::Z, true),
                 Action::Check("fp_none"),

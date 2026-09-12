@@ -539,6 +539,59 @@ fn platform_carry_is_once_and_jump_inheritance_is_configurable() {
 }
 
 #[test]
+fn landing_on_a_matching_horizontal_platform_preserves_world_velocity() {
+    use oxy_core::surface::*;
+    for (platform_speed, air_speed) in [(2., 2.), (-3., -3.), (2., 0.), (2., 5.)] {
+        let mut project = fixture();
+        project.scenes[0].entities[0].platform = Some(TranslationPlatform {
+            mode: PlatformMode::Velocity,
+            velocity: [platform_speed, 0., 0.],
+            ..Default::default()
+        });
+        let body = project.scenes[0].entity_mut(BODY).unwrap();
+        body.transform.position[1] = 2.;
+        let config = body.character3d.as_mut().unwrap();
+        config.automatic_input = false;
+        config.ground_friction = 0.;
+        config.ground_braking = 0.;
+        config.air_resistance = 0.;
+        config.landing_retention = 1.;
+        let mut rt = runtime(&project);
+        rt.advance(FIXED_DT, &InputFrame::default());
+        rt.set_character_velocity(BODY, Vec3::new(air_speed, -1., 0.))
+            .unwrap();
+        let mut landed = false;
+        for _ in 0..120 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+            let state = rt.character_state(BODY).unwrap();
+            if state.grounded {
+                assert!(
+                    (state.total_velocity().x - air_speed).abs() < 0.002,
+                    "acquiring support duplicated velocity: {state:?}"
+                );
+                assert!(
+                    (state.velocity.x - (air_speed - platform_speed)).abs() < 0.002,
+                    "velocity must now be relative to support: {state:?}"
+                );
+                let position = state.position;
+                for _ in 0..30 {
+                    rt.advance(FIXED_DT, &InputFrame::default());
+                }
+                let state = rt.character_state(BODY).unwrap();
+                assert!(
+                    (state.position.x - position.x - air_speed * 0.5).abs() < 0.005,
+                    "{state:?}"
+                );
+                landed = true;
+                break;
+            }
+        }
+        assert!(landed);
+        assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    }
+}
+
+#[test]
 fn conveyor_is_tangential_and_pause_clears_requested_posture() {
     use oxy_core::surface::*;
     let mut project = fixture();

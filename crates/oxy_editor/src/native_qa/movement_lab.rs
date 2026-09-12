@@ -206,7 +206,7 @@ fn native_movement_lab_v030() {
                 Action::Key(Key::S, true),
                 Action::ReopenProject,
                 Action::Scroll("HIERARQUIA", 10000.),
-                Action::SelectEntity("Personagem 3D"),
+                Action::SelectEntity("Jogador"),
                 Action::Click("Lógica"),
                 Action::Screenshot("movement-graph.png"),
                 Action::Click("Cena"),

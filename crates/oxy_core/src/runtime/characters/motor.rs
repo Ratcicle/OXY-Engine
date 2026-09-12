@@ -535,6 +535,12 @@ impl MotorContext<'_> {
             }
         }
         if state.grounded {
+            if !was_grounded {
+                // Air velocity is in world space. On acquiring support, store
+                // it relative to that support before projection/retention or
+                // a buffered jump. total_velocity adds transport exactly once.
+                state.velocity -= state.support.as_ref().map_or(Vec3::ZERO, |s| s.velocity);
+            }
             let normal = state.support.as_ref().map_or(Vec3::Y, |s| s.normal);
             let speed = Vec3::new(state.velocity.x, 0., state.velocity.z).length();
             let horizontal = Vec3::new(state.velocity.x, 0., state.velocity.z);

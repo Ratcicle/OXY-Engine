@@ -61,7 +61,9 @@ impl Editor {
             if ui.button("Câmera").clicked() {
                 self.add_entity(None, "Câmera");
                 let id = self.selected.clone().unwrap();
-                self.scene_mut().entity_mut(&id).unwrap().camera = Some(Camera::default());
+                let camera=self.scene_mut().entity_mut(&id).unwrap();
+                camera.parent=None;
+                camera.camera = Some(Camera::default());
                 ui.close();
             }
             if self.scene().kind==SceneKind::ThreeD && self.tab==Tab::Scene {
@@ -293,6 +295,19 @@ impl Editor {
         }
         if ui.button("Duplicar hierarquia").clicked() {
             self.duplicate();
+            ui.close();
+        }
+        if ui.button("Salvar hierarquia como modelo").clicked() {
+            let scene_id = self.scene_id.clone();
+            let name = self
+                .scene()
+                .entity(id)
+                .map(|e| e.name.clone())
+                .unwrap_or_default();
+            match self.state.project.save_model(&scene_id,id,&name) {
+                Ok(_)=>self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco."),
+                Err(e)=>self.warn(e),
+            }
             ui.close();
         }
         if ui.button("Editar pivô (P)").clicked() {

@@ -1,4 +1,5 @@
 use super::*;
+mod components;
 
 impl Editor {
     fn multiple_properties(&mut self, ui: &mut egui::Ui) {
@@ -73,18 +74,6 @@ impl Editor {
             );
             self.selection_scale = 1.;
         }
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Duplicar").clicked() {
-                self.duplicate();
-            }
-            if ui.button("Agrupar").clicked() {
-                self.group();
-            }
-            if ui.button("Excluir").clicked() {
-                self.delete();
-            }
-        });
     }
     fn transform_multiple(&mut self, ids: &[Id], delta: glam::Mat4) {
         if let Err(error) = editing::transform_selection(self.scene_mut(), ids, delta) {
@@ -118,9 +107,6 @@ impl Editor {
                 ui.label(egui::RichText::new("INSTÂNCIA NA CENA").small().color(Color32::from_rgb(128,203,192)));
                 if entity.model_source.is_some(){ui.small("Cópia editável de um modelo").on_hover_text("Salvar como modelo cria um recurso independente na biblioteca.");}
                 ui.horizontal(|ui|{ui.checkbox(&mut entity.visible,"Visível").on_hover_text("Mostra ou oculta a aparência deste objeto e de seus filhos.");ui.label("Camada").on_hover_text("No 2D, valores maiores aparecem na frente de valores menores.");ui.add(egui::DragValue::new(&mut entity.layer));});
-                let old_parent=entity.parent.clone();
-                ui.label("Pai (opção avançada)").on_hover_text("Objeto cuja transformação será herdada. Também é possível arrastar na Hierarquia; a posição global será preservada.");object_picker(ui,&mut entity.parent,&objects,"entity_parent");
-                let new_parent=entity.parent.clone();entity.parent=old_parent.clone();
                 ui.collapsing("Transformação",|ui| {
                     ui.horizontal(|ui|{ui.selectable_value(&mut self.view_global,false,"Local");ui.selectable_value(&mut self.view_global,true,"Global");});
                     let mut transform=if self.view_global {Transform::from_matrix(self.scene().world_matrix(&id).unwrap_or_default(),entity.transform.pivot)}else{entity.transform.clone()};
@@ -173,26 +159,8 @@ impl Editor {
                     ui.checkbox(&mut entity.material.nearest,"Pixels nítidos").on_hover_text("Preserva os pixels de imagens pequenas. Desative para suavizar a textura.");
                     self.texture_controls(ui,&mut entity,false);
                 });}
-                ui.collapsing("Componentes",|ui| {
-                    if self.scene().kind==SceneKind::ThreeD {self.physics_properties(ui,&mut entity);}
-                    component_switch(ui,"Colisão / área",&mut entity.collider,Collider{size:entity.dimensions,..Default::default()});
-                    if let Some(c)=&mut entity.collider{ui.checkbox(&mut c.enabled,"Colisor ativo");ui.checkbox(&mut c.is_trigger,"Área de detecção").on_hover_text("Área detecta entradas sem bloquear movimento. Desativada, esta caixa é um colisor sólido.");vector3(ui,"Tamanho da caixa",&mut c.size,0.05,true);c.size=c.size.map(|v|v.max(0.0001));vector3(ui,"Deslocamento",&mut c.offset,0.05,false);ui.small("Caixa alinhada aos eixos").on_hover_text("Girar a aparência não gira a caixa física. Não é uma colisão precisa da malha.");}
-                    if entity.collider.is_some(){
-                        if ui.button("Editar colisor (C)").clicked(){requested_tool=Some(Tool::Collider);}
-                        ui.horizontal_wrapped(|ui|{
-                            if ui.button("Ajustar ao objeto").clicked(){requested_fit=Some(false);}
-                            if ui.button("Ajustar ao grupo/filhos").clicked(){requested_fit=Some(true);}
-                        });
-                        if entity.controller.is_some()&&entity.collider.as_ref().is_some_and(|c|c.is_trigger){ui.colored_label(Color32::YELLOW,"Personagem com área de detecção: esta caixa detecta entradas; um colisor sólido representa bloqueios. A configuração não foi alterada.");}
-                    }
-                    ui.separator();component_switch(ui,"Controlador de movimento",&mut entity.controller,Controller::default());                    if self.scene().entity(&id).is_some_and(|e|e.controller.is_none()) && let Some(c)=&entity.controller {
-                        let kind=self.scene().kind;
-                        oxy_core::input_actions::ensure_controller(&mut self.state.project,&c.actions,kind);
-                    }
-                    if entity.controller.is_some() && ui.button("Configurar ações na Lógica").clicked() {self.pause();self.tab=Tab::Logic;self.logic_ui.inputs=true;}
-                    if let Some(c)=&mut entity.controller{ui.checkbox(&mut c.enabled,"Controlador ativo");ui.add(egui::DragValue::new(&mut c.speed).range(0.0..=100.0).prefix("Velocidade "));ui.add(egui::DragValue::new(&mut c.jump).range(0.0..=100.0).prefix("Pulo "));ui.add(egui::DragValue::new(&mut c.gravity).range(0.0..=200.0).prefix("Gravidade "));}
-                    ui.separator();component_switch(ui,"Câmera de jogo",&mut entity.camera,Camera::default());
-                    if let Some(c)=&mut entity.camera{ui.checkbox(&mut c.active,"Câmera ativa");ui.add(egui::DragValue::new(&mut c.orthographic_size).range(0.1..=500.).prefix("Meia altura 2D ")).on_hover_text("Metade da altura visível em unidades da cena.");ui.add(egui::Slider::new(&mut c.fov,10.0..=150.).text("Campo de visão vertical 3D (°)"));ui.small("A câmera olha para -Z local. Ative apenas a câmera desejada.");}
+                ui.push_id(("object_components", &id), |ui| {
+                    self.object_components(ui, &mut entity, &mut requested_tool, &mut requested_fit);
                 });
                 ui.collapsing("Atributos personalizados",|ui| {
                     ui.small("Nenhum nome de atributo impõe regras. Os nós configuram o comportamento.");
@@ -221,14 +189,6 @@ impl Editor {
                 if let Some(pivot)=requested_pivot && self.structural_ready() && let Err(e)=oxy_core::spatial::move_pivot(self.scene_mut(),&id,Vec3::from(pivot)){self.log(e);self.notice_last(false);}
                 if let Some(tool)=requested_tool{self.set_spatial_tool(tool);}
                 if let Some(children)=requested_fit{self.start_fit(children);}
-                if new_parent!=old_parent&&self.structural_ready()&& let Err(e)=self.scene_mut().reparent(&id,new_parent,true){self.log(e);self.notice_last(false);}
-                ui.separator();
-                ui.horizontal(|ui|{if ui.button("Lógica").clicked(){self.tab=Tab::Logic;}
-if ui.button("Animação").clicked(){self.open_animation_for(&id);}});
-                if ui.button("Salvar hierarquia como modelo").clicked(){let scene_id=self.scene_id.clone();let name=self.scene().entity(&id).map(|e|e.name.clone()).unwrap_or_default();match self.state.project.save_model(&scene_id,&id,&name){Ok(_)=>self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco."),Err(e)=>{self.log(e);self.notice_last(false);}}}
-                ui.horizontal(|ui|{if ui.button("Duplicar").clicked(){self.duplicate();}
-if ui.button("Agrupar").clicked(){self.group();}
-if ui.button("Excluir").clicked(){self.delete();}});
             });
         });
     }

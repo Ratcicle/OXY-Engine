@@ -61,8 +61,8 @@ pub fn recipes() -> &'static [Recipe] {
         },
         Recipe {
             title: "Primeira pessoa por nós",
-            setup: "Crie uma cena 3D, chão sólido e grupo com Personagem 3D e cápsula nos pés. Crie a câmera com alvo nesse grupo e peças visuais filhas; desative Entrada automática no personagem.",
-            flow: "A cada passo → Definir intenção; Ler eixos: Movimento → Intenção. Ação Pular → Solicitar pulo. Ler ação Correr/Agachar: Mantida → Comando de postura. O mouse pertence ao rig da câmera.",
+            setup: "Crie o grupo Jogador e use + Adicionar componente → Personagem 3D. Coloque as peças visuais como filhos. + Objeto → Câmera cria outra entidade: nela, adicione Controle da câmera e escolha Alvo = Jogador. Mantenha a câmera na raiz. No Básico do personagem, desative Ler ações de movimento automaticamente.",
+            flow: "A cada passo → Definir intenção; Ler eixos: Movimento → Intenção. Ação Pular → Solicitar pulo. Ler ação Correr/Agachar: Mantida → Comando de postura. O mouse pertence ao Controle da câmera.",
             expected: "WASD move e Espaço pula. Remova a conexão de intenção: ela expira no próximo passo, sem velocidade desejada presa.",
             bytes: include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -71,7 +71,7 @@ pub fn recipes() -> &'static [Recipe] {
         },
         Recipe {
             title: "Trocar câmera por nós",
-            setup: "Personagem e câmera usam os mesmos componentes da primeira receita. Crie ações 1 e 2; o alvo dos nós é a câmera.",
+            setup: "Jogador e Câmera principal são objetos separados na Hierarquia. A câmera tem Controle da câmera, com Alvo = Jogador. Crie ações 1 e 2; os nós de câmera apontam para Câmera principal, não para o Jogador.",
             flow: "Ação 1 → Trocar modo: Primeira pessoa. Ação 2 → Trocar modo: Terceira pessoa. Transição 0,25 s; o controle de colisão continua no personagem.",
             expected: "Troque enquanto pula: velocidade e apoio continuam. Q muda o ombro; o volume da câmera evita paredes.",
             bytes: include_bytes!(concat!(

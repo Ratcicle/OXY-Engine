@@ -117,6 +117,7 @@ fn native_input_guide_workflow() {
                 Action::Click("Guia de lógica visual"),
                 Action::Screenshot("guide-first.png"),
                 Action::Idle,
+                Action::Scroll("Guia de lógica visual", -650.),
                 Action::Click("Abrir cópia da receita: primeira mensagem"),
                 Action::Check("m2_recipe"),
                 Action::Click("Ações de entrada"),

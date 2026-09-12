@@ -1,6 +1,6 @@
 //! Full authoring workflow: every document mutation comes from editor RawInput.
 use super::*;
-use oxy_core::{document::*, spatial};
+use oxy_core::document::*;
 
 impl NativeQa {
     pub(super) fn final_action(
@@ -266,20 +266,25 @@ impl NativeQa {
                 {
                     return Err("Pivô não mudou com preservação da peça".into());
                 }
-                let a = spatial::collider_bounds(before, id)?;
-                let b = spatial::collider_bounds(self.editor.scene(), id)?;
-                if !a.min.abs_diff_eq(b.min, 1e-4) || !a.max.abs_diff_eq(b.max, 1e-4) {
-                    return Err("Pivô deslocou colisor".into());
+                let mut a = oxy_core::physics3d::PhysicsWorld::new();
+                let mut b = oxy_core::physics3d::PhysicsWorld::new();
+                a.sync_scene(before, false)?;
+                b.sync_scene(self.editor.scene(), false)?;
+                let a = a
+                    .debug_shapes()
+                    .find(|s| s.id == id)
+                    .ok_or("Colisor anterior ausente")?;
+                let b = b
+                    .debug_shapes()
+                    .find(|s| s.id == id)
+                    .ok_or("Colisor atual ausente")?;
+                if !a.position.abs_diff_eq(b.position, 1e-4)
+                    || !a.rotation.abs_diff_eq(b.rotation, 1e-4)
+                    || a.geometry.vertices != b.geometry.vertices
+                {
+                    return Err("Pivô deslocou a forma física 3D".into());
                 }
                 self.after_paint = Some(self.editor.state.clone());
-            }
-            "f7_fit" => {
-                let id = self.created.as_deref().unwrap();
-                let a = spatial::visual_bounds(self.editor.scene(), &[id.to_owned()])?;
-                let b = spatial::collider_bounds(self.editor.scene(), id)?;
-                if !a.min.abs_diff_eq(b.min, 1e-4) || !a.max.abs_diff_eq(b.max, 1e-4) {
-                    return Err("Caixa ajustada não usa limites reais da malha".into());
-                }
             }
             "f7_animation" => {
                 let e = selected.ok_or("Instância ausente")?;
@@ -439,6 +444,7 @@ fn native_final_creation_workflow() {
                 Action::Click("Modelagem"),
                 Action::Key(Key::Num1, false),
                 Action::Scroll("PROPRIEDADES", -550.),
+                Action::ContextEntity("Tubo criado"),
                 Action::Click("Salvar hierarquia como modelo"),
                 Action::Check("f7_model"),
                 Action::Click("Colocar na cena"),
@@ -454,8 +460,10 @@ fn native_final_creation_workflow() {
                 Action::Click("Visualização"),
                 Action::Click("Enquadrar seleção"),
                 Action::Scroll("PROPRIEDADES", 900.),
-                Action::Click("Componentes"),
-                Action::Click("Colisão / área"),
+                Action::Click("+ Adicionar componente"),
+                Action::Click("Colisor 3D"),
+                Action::Click("Colisor 3D"),
+                Action::Click("Gerar colisor convexo"),
                 Action::Check("f7_spatial_base"),
                 Action::Key(Key::P, false),
                 Action::SpatialDrag {
@@ -470,10 +478,8 @@ fn native_final_creation_workflow() {
                 Action::Check("f7_redo"),
                 Action::Screenshot("tube-pivot.png"),
                 Action::Key(Key::W, false),
-                Action::Click("Ajustar ao objeto"),
-                Action::Click("Confirmar ajuste"),
-                Action::Check("f7_fit"),
-                Action::Key(Key::C, false),
+                Action::Click("Visualização"),
+                Action::Click("Colisores"),
                 Action::Screenshot("tube-collider.png"),
                 Action::Key(Key::W, false),
                 Action::Click("Animação"),

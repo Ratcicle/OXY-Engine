@@ -1,0 +1,254 @@
+{
+  "version": "0.3.1",
+  "base_commit": "2c828b99b0b2a7860d998a8e1836aa357934a830",
+  "environment": {
+    "os": "Windows 11 Pro 10.0.26100",
+    "cpu": "AMD Ryzen 5 5600",
+    "gpu": "AMD Radeon RX 6600",
+    "driver_windows": "32.0.21045.1000",
+    "driver_vulkan": "26.7.1",
+    "rust": "1.92.0",
+    "target": "x86_64-pc-windows-gnu"
+  },
+  "method": "Release locked; native WGPU windows, application RawInput; durations are complete tests, not frame/GPU timings. Each test in a separate process.",
+  "native_tests": [
+    {
+      "crate": "oxy_editor",
+      "test": "native_ux_m1_workflow",
+      "passed": true,
+      "test_duration_s": 7.76,
+      "log": "artifacts/v021-final-native_ux_m1_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_inspector_v031",
+      "passed": true,
+      "test_duration_s": 7.4,
+      "log": "artifacts/v031-final-native_inspector_v031.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_physics_v030_authoring",
+      "passed": true,
+      "test_duration_s": 2.77,
+      "log": "artifacts/v021-final-native_physics_v030_authoring.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_first_person_v030",
+      "passed": true,
+      "test_duration_s": 3.29,
+      "log": "artifacts/v021-final-native_first_person_v030.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_ground_posture_v030",
+      "passed": true,
+      "test_duration_s": 2.41,
+      "log": "artifacts/v031-final-native_ground_posture_v030.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_cameras_v030",
+      "passed": true,
+      "test_duration_s": 5.37,
+      "log": "artifacts/v021-final-native_cameras_v030.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_movement_lab_v030",
+      "passed": true,
+      "test_duration_s": 10.34,
+      "log": "artifacts/v021-final-native_movement_lab_v030.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_movement_scale_v030",
+      "passed": true,
+      "test_duration_s": 3.97,
+      "log": "artifacts/v021-final-native_movement_scale_v030.log"
+    },
+    {
+      "crate": "oxy_player",
+      "test": "native_player_movement_v030",
+      "passed": true,
+      "test_duration_s": 2.39,
+      "log": "artifacts/v021-final-native_player_movement_v030.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_input_guide_workflow",
+      "passed": true,
+      "test_duration_s": 7.69,
+      "log": "artifacts/v021-final-native_input_guide_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_mesh_foundation_workflow",
+      "passed": true,
+      "test_duration_s": 8.36,
+      "log": "artifacts/v021-final-native_mesh_foundation_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_direct_modeling_v021_workflow",
+      "passed": true,
+      "test_duration_s": 10.92,
+      "log": "artifacts/v021-final-native_direct_modeling_v021_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_basic_modeling_workflow",
+      "passed": true,
+      "test_duration_s": 6.01,
+      "log": "artifacts/v021-final-native_basic_modeling_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_cut_bevel_workflow",
+      "passed": true,
+      "test_duration_s": 5.45,
+      "log": "artifacts/v021-final-native_cut_bevel_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_mesh_painting_workflow",
+      "passed": true,
+      "test_duration_s": 5.13,
+      "log": "artifacts/v021-final-native_mesh_painting_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_guide_recipes_workflow",
+      "passed": true,
+      "test_duration_s": 12.16,
+      "log": "artifacts/v021-final-native_guide_recipes_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_layout_matrix_workflow",
+      "passed": true,
+      "test_duration_s": 67.04,
+      "log": "artifacts/v021-final-native_layout_matrix_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_final_creation_workflow",
+      "passed": true,
+      "test_duration_s": 15.95,
+      "log": "artifacts/v021-final-native_final_creation_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_spatial_workflow",
+      "passed": true,
+      "test_duration_s": 12.93,
+      "log": "artifacts/v021-final-native_spatial_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_editor_workflow",
+      "passed": true,
+      "test_duration_s": 25.29,
+      "log": "artifacts/v021-final-native_editor_workflow.log"
+    },
+    {
+      "crate": "oxy_editor",
+      "test": "native_portable_home_workflow",
+      "passed": true,
+      "test_duration_s": 3.92,
+      "log": "artifacts/v021-final-native_portable_home_workflow.log"
+    },
+    {
+      "crate": "oxy_player",
+      "test": "native_player_portable_workflow",
+      "passed": true,
+      "test_duration_s": 0.96,
+      "log": "artifacts/v021-final-native_player_portable_workflow.log"
+    },
+    {
+      "crate": "oxy_player",
+      "test": "native_player_final_authored_mesh",
+      "passed": true,
+      "test_duration_s": 0.95,
+      "log": "artifacts/v021-final-native_player_final_authored_mesh.log"
+    },
+    {
+      "crate": "oxy_render",
+      "test": "native_gpu_depth_texture_and_resize",
+      "passed": true,
+      "test_duration_s": 0.41,
+      "log": "artifacts/v021-final-native_gpu_depth_texture_and_resize.log"
+    },
+    {
+      "crate": "oxy_render",
+      "test": "native_gpu_editable_mesh_equivalence",
+      "passed": true,
+      "test_duration_s": 0.27,
+      "log": "artifacts/v021-final-native_gpu_editable_mesh_equivalence.log"
+    },
+    {
+      "crate": "oxy_render",
+      "test": "native_gpu_component_overlay_depth_and_cache",
+      "passed": true,
+      "test_duration_s": 0.28,
+      "log": "artifacts/v021-final-native_gpu_component_overlay_depth_and_cache.log"
+    }
+  ],
+  "source_state": "Validation of the v0.3.1 working tree over base_commit, before commit and publication.",
+  "checks": [
+    {
+      "command": "cargo fmt --all --check",
+      "passed": true,
+      "log": "artifacts/v031-final-check-0.log"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "passed": true,
+      "log": "artifacts/v031-final-check-1.log"
+    },
+    {
+      "command": "cargo test --workspace --locked",
+      "passed": true,
+      "log": "artifacts/v031-final-check-2.log",
+      "tests_passed": 286,
+      "tests_ignored": 31
+    },
+    {
+      "command": "cargo test -p oxy_core --features profiling --locked",
+      "passed": true,
+      "log": "artifacts/v031-final-check-3.log",
+      "tests_passed": 219,
+      "tests_ignored": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "passed": true,
+      "log": "artifacts/v031-final-check-4.log"
+    }
+  ],
+  "portable": {
+    "passed": true,
+    "file": "dist/OXY-Engine-0.3.1-windows-x64.zip",
+    "bytes": 26134342,
+    "sha256": "7241170aa9bb3bcba18f3c0158080694cfe487e519bbc60139c862b5ce39b309",
+    "checks": [
+      "PE x64",
+      "version/icon",
+      "DLL imports",
+      "assets",
+      "checksum",
+      "direct native window outside repository with no Rust/Cargo in PATH"
+    ],
+    "independent_clean_machine_tested": false,
+    "log": "artifacts/v031-portable.log"
+  },
+  "game_package": "dist/OXY-Laboratorio-0.3.1/oxy_player.exe",
+  "visual_review": [
+    "inspector/object-clean.png",
+    "inspector/player-inspector.png",
+    "inspector/camera-small.png",
+    "regression/lab-third-person.png",
+    "regression/standalone-player.png"
+  ]
+}

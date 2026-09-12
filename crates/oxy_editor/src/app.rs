@@ -1318,24 +1318,6 @@ if ui.button("Cancelar").clicked(){self.pending=None;}});
     }
 }
 
-fn component_switch<T>(ui: &mut egui::Ui, label: &str, value: &mut Option<T>, default: T) {
-    let mut enabled = value.is_some();
-    if ui
-        .checkbox(&mut enabled, label)
-        .on_hover_text(match label {
-            "Colisão / área" => {
-                "Um colisor sólido bloqueia movimento. Uma área apenas detecta entrada de objetos."
-            }
-            "Controlador de movimento" => {
-                "Move o objeto usando as ações de entrada do projeto, com gravidade e pulo."
-            }
-            _ => "Ative para adicionar este componente ao objeto.",
-        })
-        .changed()
-    {
-        *value = if enabled { Some(default) } else { None };
-    }
-}
 // The HSV conversion inside egui can round untouched RGB values. Only author a color on input.
 pub fn color_editor(ui: &mut egui::Ui, value: &mut [f32; 4]) {
     let mut candidate = *value;

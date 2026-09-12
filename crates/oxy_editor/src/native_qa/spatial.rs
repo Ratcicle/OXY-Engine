@@ -8,7 +8,7 @@ mod checks;
 fn native_spatial_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.1/m7/spatial");
+    let output = workspace.join("qa/v0.3.1/spatial");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-spatial-{}", new_id()));
     std::fs::create_dir_all(&fixture).unwrap();
@@ -79,7 +79,7 @@ fn native_spatial_workflow() {
                 Action::Wait(3),
                 Action::Check("selected_group_collider"),
                 Action::Screenshot("selected-empty-group-2d.png"),
-                Action::Click("Componentes"),
+                Action::Click("Colisor 2D"),
                 Action::Click("Ajustar ao grupo/filhos"),
                 Action::Wait(2),
                 Action::Screenshot("fit-preview-2d.png"),
@@ -161,9 +161,9 @@ fn native_spatial_workflow() {
                 Action::Resize(Vec2::new(1440., 900.)),
                 Action::Spatial3D,
                 Action::Wait(3),
-                Action::Click("Ajustar ao grupo/filhos"),
-                Action::Click("Confirmar ajuste"),
-                Action::Check("spatial_fit"),
+                // Loaded legacy 3D boxes retain their overlay/editing behavior,
+                // but no longer expose legacy authoring in the Inspector.
+                // Fit is exercised above in 2D and by the core 3D spatial tests.
                 Action::Key(Key::C, false),
                 Action::Screenshot("handles-3d.png"),
                 Action::SpatialDrag {

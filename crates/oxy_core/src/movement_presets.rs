@@ -32,7 +32,7 @@ pub fn create(
         if matches!(preset, MovementPreset::Platform) {
             "Plataforma móvel"
         } else {
-            "Personagem 3D"
+            "Jogador"
         },
         None,
     );
@@ -98,9 +98,8 @@ pub fn create(
     let mut visual = Entity::new("Aparência editável", None);
     visual.parent = Some(id.clone());
     let visual_id = visual.id.clone();
-    let mut camera = Entity::new("Câmera do personagem", None);
-    camera.parent = Some(id.clone());
-    camera.transform.position = [0., 1.6, 0.];
+    let mut camera = Entity::new("Câmera principal", None);
+    camera.transform.position = (position + Vec3::Y * 1.6).to_array();
     camera.camera = Some(Camera {
         active: !has_camera,
         ..Default::default()

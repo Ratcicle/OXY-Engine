@@ -6,6 +6,7 @@ mod cuts;
 mod direct;
 mod final_flow;
 mod input_guide;
+mod inspector;
 mod layout;
 mod mesh;
 mod modeling;
@@ -39,6 +40,7 @@ enum Action {
     ControlSelect(&'static str),
     DoubleEntity(&'static str),
     Context(&'static str),
+    ContextEntity(&'static str),
     Reparent(&'static str, &'static str),
     EditValue(&'static str, &'static str),
     Scroll(&'static str, f32),
@@ -572,13 +574,16 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("i031_") {
+            return self.check_inspector(label);
+        }
         if label.starts_with("lab3d_") {
             return self.check_movement_lab(label);
         }
         if label.starts_with("camera3d_") {
             return self.check_cameras(label);
         }
-        if label.starts_with("fp_") || label.starts_with("m3_") {
+        if label.starts_with("fp_") || label.starts_with("posture3d_") {
             return self.check_first_person(label);
         }
         if label.starts_with("phys_") {
@@ -1566,10 +1571,13 @@ impl NativeQa {
                 }
                 description = format!("Selecionar hierarquia: {label}");
             }
-            Action::Context(label) => {
-                let point = self
-                    .find(label, false)
-                    .ok_or_else(|| format!("Alvo de menu de contexto ausente: {label}"))?;
+            Action::Context(label) | Action::ContextEntity(label) => {
+                let point = if matches!(action, Action::ContextEntity(_)) {
+                    self.entity_position(label)
+                } else {
+                    self.find(label, false)
+                }
+                .ok_or_else(|| format!("Alvo de menu de contexto ausente: {label}"))?;
                 self.click_with(point, PointerButton::Secondary, Modifiers::NONE);
                 description = format!("Abrir menu de contexto: {label}");
             }

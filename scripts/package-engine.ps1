@@ -29,8 +29,12 @@ Novo projeto: escolha a primeira cena 2D/3D e use Salvar para escolher sua pasta
 Abrir projeto: escolha project.oxy.json de um projeto existente.
 Projetos recentes: lista local em %LOCALAPPDATA%\OXY Engine.
 Projeto de exemplo: sala 2D, oficina 3D e cartas; Salvar cria sua cópia.
-Laboratório 3D · movimento: pista editável da 0.3.0; WASD, mouse, Espaço, Shift e C.
+Laboratório 3D · movimento: pista editável; WASD, mouse, Espaço, Shift e C.
 V alterna primeira/terceira pessoa; Q muda ombro; R retorna ao checkpoint.
+Jogador e Câmera principal são objetos separados, ligados pelo Alvo da câmera.
+Propriedades mostra os componentes presentes; + Adicionar componente oferece
+as opções compatíveis. Na Hierarquia, arraste para definir parentesco e use
+o botão direito para duplicar, agrupar, excluir ou salvar hierarquia como modelo.
 Ajuda > Guia de lógica visual: consulte os nós e abra cópias de doze receitas
 editáveis, disponíveis offline dentro do executável.
 Estúdio > Modelagem: crie formas, edite faces/arestas/vértices, pinte e anime
