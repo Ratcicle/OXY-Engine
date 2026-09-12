@@ -1,6 +1,6 @@
 //! CPU-only M7 harness; no FPS/GPU time is inferred from these measurements.
 #[path = "../../oxy_core/examples/support/movement.rs"]
-mod movement;
+pub mod movement;
 #[allow(dead_code)]
 #[path = "performance.rs"]
 mod standard;
@@ -37,7 +37,7 @@ fn input(tick: usize) -> InputFrame {
         ..Default::default()
     }
 }
-fn measure(p: &Project, steps: usize) -> serde_json::Value {
+pub fn measure(p: &Project, steps: usize) -> serde_json::Value {
     let mut rt = Runtime::new(p, &p.start_scene).unwrap();
     for tick in 0..120 {
         rt.advance(FIXED_DT, &input(tick));
@@ -133,7 +133,7 @@ fn main() {
                 || black_box(oxy_render::prepare_scene(rt.scene(), &camera)).len(),
                 limit,
             );
-            rows.push(serde_json::json!({"scenario":mode,"controllers":count,"entities":s.entities.len(),"sensors":s.entities.iter().filter(|e|e.physics3d.as_ref().is_some_and(|p|p.sensor)).count(),"physical_shapes":s.entities.iter().filter(|e|e.physics3d.is_some()).count(),"static_physics_triangles":if mode=="triangles"{3200}else{0},"json_bytes":bytes.len(),"load_validate":load,"runtime_create":create,"render_cpu":render,"single":measure(&p,1),"four_steps":measure(&p,4)}));
+            rows.push(serde_json::json!({"scenario":mode,"controllers":count,"entities":s.entities.len(),"sensors":s.entities.iter().filter(|e|e.physics3d.as_ref().is_some_and(|p|p.sensor)).count(),"physical_shapes":s.entities.iter().filter(|e|e.physics3d.is_some() || e.character3d.is_some()).count(),"static_physics_triangles":if mode=="triangles"{3200}else{0},"json_bytes":bytes.len(),"load_validate":load,"runtime_create":create,"render_cpu":render,"single":measure(&p,1),"four_steps":measure(&p,4)}));
         }
     }
     println!("{}",serde_json::to_string_pretty(&serde_json::json!({"method":"CPU only, seed 0, fixed UUIDs, release locked profiling; 120 warmup ticks then 301 samples (8s soft limit each); exactly 1 or 4 fixed steps; presentation outside step; resolve is included in motor; 101 samples/3s for create/load/render; counters cumulative between before/after; no GPU/RAM estimate","rows":rows})).unwrap());

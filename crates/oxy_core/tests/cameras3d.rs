@@ -28,14 +28,6 @@ fn fixture(mode: CameraMode) -> Project {
     body.id = BODY.into();
     body.transform.position = [0., 0.02, 0.];
     body.character3d = Some(CharacterConfig::default());
-    body.physics3d = Some(Collider3d {
-        shape: CollisionShape::Capsule {
-            height: 1.8,
-            radius: 0.3,
-        },
-        center: [0., 0.9, 0.],
-        ..Default::default()
-    });
     let mut camera = Entity::new("Câmera", None);
     camera.id = CAMERA.into();
     camera.camera = Some(Camera::default());

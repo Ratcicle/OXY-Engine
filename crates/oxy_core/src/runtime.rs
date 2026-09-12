@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
 mod cameras;
+pub use cameras::{CameraDebug, CameraPreview};
 mod characters;
 mod movement_nodes;
 pub use characters::SensorCrossing;

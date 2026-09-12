@@ -32,6 +32,9 @@ Projeto de exemplo: sala 2D, oficina 3D e cartas; Salvar cria sua cópia.
 Laboratório 3D · movimento: pista editável; WASD, mouse, Espaço, Shift e C.
 V alterna primeira/terceira pessoa; Q muda ombro; R retorna ao checkpoint.
 Jogador e Câmera principal são objetos separados, ligados pelo Alvo da câmera.
+Personagem 3D > Corpo de movimento: escolha cápsula, caixa, esfera ou convexo.
+Selecione uma câmera e arraste olhos/distância/ombro. Exibir > Câmeras oferece
+guias e prévia nativa, com Fixar, tamanho, enquadramento e postura agachada.
 Propriedades mostra os componentes presentes; + Adicionar componente oferece
 as opções compatíveis. Na Hierarquia, arraste para definir parentesco e use
 o botão direito para duplicar, agrupar, excluir ou salvar hierarquia como modelo.
@@ -46,10 +49,10 @@ Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
-Projetos antigos (schema 1 e 2) são convertidos em memória, sem alterar o original
+Projetos antigos (schema 1, 2 e 3) são convertidos em memória, sem alterar o original
 ao abrir. Ao salvar convertido, a OXY preserva um backup do documento original.
-O schema 3 requer OXY Engine 0.3.0 ou leitor compatível; não abra esses
-documentos em versões antigas que desconheçam os componentes de movimento 3D.
+O schema 4 requer OXY Engine 0.3.2 ou leitor compatível; não abra esses
+documentos em versões antigas que desconheçam os corpos de movimento configuráveis.
 Sem instalador, atualização automática ou assinatura digital.
 "@
 [IO.File]::WriteAllText((Join-Path $destinationPath 'LEIA-ME.txt'), $instructions, [Text.Encoding]::UTF8)

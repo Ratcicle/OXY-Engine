@@ -1,0 +1,55 @@
+Concluído: true
+Erro: None
+Verificado: lab3d_base
+Clique: + Objeto em [131.5 117.8]
+Clique: Personagem em terceira pessoa em [197.5 411.0]
+Verificado: lab3d_preset
+Tecla Z, Ctrl=true
+Verificado: lab3d_base
+Tecla Y, Ctrl=true
+Verificado: lab3d_preset
+Tecla Z, Ctrl=true
+Verificado: lab3d_base
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Rolar painel HIERARQUIA
+Selecionar hierarquia: Jogador
+Clique: Lógica em [220.8 80.0]
+Captura GPU da janela: movement-graph.png
+Captura movement-graph.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Clique: Cena em [32.5 79.5]
+Clique: ▶ Jogar em [326.6 46.5]
+Reproduzir 20 quadros sem entrada
+Verificado: lab3d_running
+Captura GPU da janela: first-person-start.png
+Captura first-person-start.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla V, Ctrl=false
+Reproduzir 20 quadros sem entrada
+Verificado: lab3d_tp
+Captura GPU da janela: third-person-start.png
+Captura third-person-start.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Entrada real W durante 4.9s de simulação
+Reproduzir 15 quadros sem entrada
+Verificado: lab3d_terrace
+Captura GPU da janela: terrace-checkpoint.png
+Captura terrace-checkpoint.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Tecla I, Ctrl=false
+Reproduzir 10 quadros sem entrada
+Tecla R, Ctrl=false
+Reproduzir 8 quadros sem entrada
+Verificado: lab3d_reset
+Redimensionar: [920.0 600.0]
+Escala de interface 1.2
+Captura GPU da janela: small-runtime.png
+Captura small-runtime.png: 920 × 600 pixels físicos; 1.2 pixels por ponto
+Tecla Escape, Ctrl=false
+Clique: Cena em [32.2 119.9]
+Verificado: lab3d_paused
+Clique: ■ Parar em [476.8 45.9]
+Verificado: lab3d_stopped
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: []
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Capturas: ["movement-graph.png", "first-person-start.png", "third-person-start.png", "terrace-checkpoint.png", "small-runtime.png"]

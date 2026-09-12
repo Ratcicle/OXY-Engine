@@ -87,14 +87,7 @@ pub fn create(
     let config = CharacterConfig::default();
     crate::input_actions::ensure_character(project, &config);
     root.character3d = Some(config);
-    root.physics3d = Some(Collider3d {
-        shape: CollisionShape::Capsule {
-            height: 1.8,
-            radius: 0.3,
-        },
-        center: [0., 0.9, 0.],
-        ..Default::default()
-    });
+
     let mut visual = Entity::new("Aparência editável", None);
     visual.parent = Some(id.clone());
     let visual_id = visual.id.clone();

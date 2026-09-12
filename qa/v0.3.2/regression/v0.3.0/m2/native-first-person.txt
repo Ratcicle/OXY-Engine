@@ -1,0 +1,32 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Personagem
+Clique: + Adicionar componente em [1078.5 266.1]
+Clique: Personagem 3D em [1053.5 296.0]
+Verificado: fp_author
+Tecla Z, Ctrl=true
+Verificado: fp_none
+Tecla Y, Ctrl=true
+Verificado: fp_author
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Clique: ▶ Jogar em [326.6 46.5]
+Reproduzir 8 quadros sem entrada
+Deslocamento relativo no RawInput: [750.0 0.0]
+Entrada real W durante 0.4s de simulação
+Verificado: fp_running
+Captura GPU da janela: first-person.png
+Captura first-person.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Clique: Cena em [32.5 82.5]
+Verificado: fp_paused
+Clique: Jogo em [89.1 83.5]
+Verificado: fp_paused
+Clique: ▶ Retomar · Pausado em [364.6 45.0]
+Tecla Escape, Ctrl=false
+Verificado: fp_paused
+Clique: ■ Parar em [477.2 45.5]
+Verificado: fp_stopped
+Selecionar hierarquia: Personagem
+Captura GPU da janela: authored-capsule.png
+Captura authored-capsule.png: 1280 × 800 pixels físicos; 1 pixels por ponto
+Capturas: ["first-person.png", "authored-capsule.png"]

@@ -13,7 +13,7 @@ $projectResolved = (Resolve-Path -LiteralPath $projectCandidate).Path
 $manifestPath = if (Test-Path -LiteralPath $projectResolved -PathType Container) { Join-Path $projectResolved 'project.oxy.json' } else { $projectResolved }
 $dataRoot = Split-Path $manifestPath -Parent
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.schema_version -notin @(1,2,3)) { throw 'Versão incompatível: o pacote aceita schema_version 1, 2 e 3.' }
+if ($manifest.schema_version -notin @(1,2,3,4)) { throw 'Versão incompatível: o pacote aceita schema_version 1, 2, 3 e 4.' }
 $destinationPath = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($Destination)) { $Destination } else { Join-Path $workspace $Destination }))
 if ($destinationPath.TrimEnd('\','/') -eq $workspace.TrimEnd('\','/') -or $destinationPath.TrimEnd('\','/') -eq $dataRoot.TrimEnd('\','/')) { throw 'Escolha uma pasta de pacote separada do projeto e do repositório.' }
 if ($destinationPath.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($destinationPath).TrimEnd('\','/')) { throw 'A raiz de um disco não pode ser pasta de pacote.' }

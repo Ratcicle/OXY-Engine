@@ -88,20 +88,22 @@ impl Characters {
             let Some(state) = self.states.get(&entity.id) else {
                 continue;
             };
-            let collider = entity.physics3d.as_ref().ok_or("Personagem sem forma")?;
-            if !collider.enabled {
+            let config = entity
+                .character3d
+                .as_ref()
+                .ok_or("Personagem sem corpo de movimento")?;
+            if !config.body.enabled {
                 continue;
             }
-            let crate::physics3d::CollisionShape::Capsule { radius, .. } = collider.shape else {
-                continue;
-            };
-            let shape = crate::physics3d::CollisionShape::Capsule {
-                height: state.height,
-                radius: radius * state.uniform_scale,
-            };
+            let motion = config.body.prepare(
+                state.posture != Posture::Standing,
+                config.crouch_height,
+                state.uniform_scale,
+                state.yaw,
+            )?;
             let mut options = QueryOptions {
-                category: collider.filter.category,
-                mask: collider.filter.mask,
+                category: config.body.filter.category,
+                mask: config.body.filter.mask,
                 include_sensors: true,
                 only_sensors: true,
                 ..QueryOptions::excluding(&entity.id)
@@ -113,10 +115,16 @@ impl Characters {
                 .get(&entity.id)
                 .filter(|p| !p.is_empty())
                 .map_or(empty_path.as_slice(), Vec::as_slice);
-            let center = Vec3::Y * (state.height * 0.5);
+            let center = motion.rotation * motion.center;
             let mut spans: BTreeMap<Id, (f32, f32)> = BTreeMap::new();
             for (i, (from, to)) in path.iter().enumerate() {
-                for span in world.sweep_all(&shape, *from + center, *to - *from, &options)? {
+                for span in world.sweep_all_prepared(
+                    &motion.geometry,
+                    motion.rotation,
+                    *from + center,
+                    *to - *from,
+                    &options,
+                )? {
                     if index.related(scene, &span.object, &entity.id) {
                         continue;
                     }
@@ -132,7 +140,12 @@ impl Characters {
                 }
             }
             let final_inside: HashSet<_> = world
-                .overlaps(&shape, state.position + center, &options)?
+                .overlaps_prepared(
+                    &motion.geometry,
+                    motion.rotation,
+                    state.position + center,
+                    &options,
+                )?
                 .into_iter()
                 .filter(|id| !index.related(scene, id, &entity.id))
                 .collect();

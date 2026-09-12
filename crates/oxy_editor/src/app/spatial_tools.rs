@@ -69,7 +69,7 @@ pub(crate) struct SpatialTools {
     previous_preview: bool,
 }
 
-fn ray_plane(
+pub(super) fn ray_plane(
     camera: &CameraState,
     rect: Rect,
     pointer: Pos2,

@@ -1,0 +1,93 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Jogador
+Clique: Personagem 3D em [1222.5 300.6]
+Clique: Corpo de movimento em [1255.0 334.1]
+Clique: Cápsula em [1226.5 410.1]
+Clique: Caixa em [1226.0 477.5]
+Verificado: v032_body
+Captura GPU da janela: movement-box.png
+Captura movement-box.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Personagem 3D em [1222.5 300.6]
+Clique: Exibir em [395.0 45.0]
+Clique: Mostrar ícones de câmera em [473.0 186.0]
+Tecla Escape, Ctrl=false
+Medir CPU do host: guides-off
+Selecionar hierarquia: Câmera principal
+Medir CPU do host: selected-frustum
+Captura GPU da janela: third-person-guides.png
+Captura third-person-guides.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Arrastar alça de câmera Eye por 0.25 m
+Verificado: v032_drag
+Tecla Z, Ctrl=true
+Verificado: v032_restored
+Arrastar alça de câmera CrouchedEye por 0.15 m
+Verificado: v032_restored
+Arrastar alça de câmera Distance por 0.4 m
+Verificado: v032_drag
+Tecla Z, Ctrl=true
+Verificado: v032_restored
+Arrastar alça de câmera Shoulder por -0.9 m
+Verificado: v032_drag
+Captura GPU da janela: shoulder-gizmo.png
+Captura shoulder-gizmo.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Verificado: v032_restored
+Arrastar alça de câmera FollowHeight por 0.2 m
+Verificado: v032_drag
+Tecla Z, Ctrl=true
+Verificado: v032_restored
+Clique: Exibir em [395.0 45.0]
+Clique: Mostrar proteção contra obstáculos em [504.5 287.0]
+Tecla Escape, Ctrl=false
+Captura GPU da janela: obstruction.png
+Captura obstruction.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Controle da câmera em [1232.5 299.1]
+Clique: Prévia da câmera em [1235.5 372.1]
+Verificado: v032_preview
+Medir CPU do host: preview-open-idle
+Captura GPU da janela: preview-third-person.png
+Captura preview-third-person.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Fixar em [532.1 179.7]
+Selecionar hierarquia: Jogador
+Verificado: v032_preview
+Clique: Média em [591.3 179.7]
+Captura GPU da janela: preview-pinned-medium.png
+Captura preview-pinned-medium.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Média em [591.3 179.7]
+Selecionar hierarquia: Câmera principal
+Clique: Fixar em [532.1 179.7]
+Clique: Prévia agachada em [455.5 205.7]
+Captura GPU da janela: crouched-eyes.png
+Captura crouched-eyes.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Prévia agachada em [455.5 205.7]
+Clique: Exibir em [395.0 45.0]
+Clique: Mostrar prévia da câmera em [472.5 312.0]
+Tecla Escape, Ctrl=false
+Medir CPU do host: preview-closed
+Selecionar hierarquia: Câmera fixa
+Captura GPU da janela: fixed-frustum.png
+Captura fixed-frustum.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Selecionar hierarquia: Câmera principal
+Clique: Básico em [1213.0 406.1]
+Clique: Terceira pessoa em [1248.5 441.6]
+Clique: Primeira pessoa em [1257.0 475.5]
+Captura GPU da janela: first-person-guides.png
+Captura first-person-guides.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Redimensionar: [920.0 600.0]
+Escala de interface 1.2
+Arrastar alça de câmera Eye por 0.1 m
+Verificado: v032_drag
+Tecla Z, Ctrl=true
+Verificado: v032_restored
+Captura GPU da janela: small-120-percent.png
+Captura small-120-percent.png: 920 × 600 pixels físicos; 1.2 pixels por ponto
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Clique: ▶ Jogar em [327.1 46.8]
+Entrada real W durante 0.4s de simulação
+Clique: ■ Parar em [491.8 45.9]
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: []
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Capturas: ["movement-box.png", "third-person-guides.png", "shoulder-gizmo.png", "obstruction.png", "preview-third-person.png", "preview-pinned-medium.png", "crouched-eyes.png", "fixed-frustum.png", "first-person-guides.png", "small-120-percent.png"]

@@ -25,6 +25,7 @@ impl Editor {
             ui.checkbox(&mut self.console, "Console");
             ui.checkbox(&mut self.diagnostics, "Desempenho");
             self.notices_button(ui);
+            self.camera_display_menu(ui);
         });
         if self.notices.has_unread() {
             ui.painter().circle_filled(
@@ -127,9 +128,7 @@ impl Editor {
                     }
                     self.visualization_button(ui, true);
                 }
-                if ctx.content_rect().width() < 900. {
-                    self.display_menu(ui);
-                }
+                self.display_menu(ui);
                 self.interface_button(ui);
                 ui.menu_button("Ajuda", |ui| {
                     if ui.button("Guia de lógica visual").clicked() {
@@ -180,6 +179,7 @@ impl Editor {
                     self.pause();
                 }
                 if old != self.tab {
+                    self.cancel_camera_drag();
                     self.set_spatial_tool(Tool::Object);
                     self.spatial.fit = None;
                 }

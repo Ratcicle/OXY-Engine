@@ -18,12 +18,27 @@ impl PhysicsWorld {
         delta: Vec3,
         options: &QueryOptions,
     ) -> Result<Vec<SweepSpan>, String> {
+        self.sweep_all_prepared(
+            &shape.prepare(Vec3::ONE)?,
+            Quat::IDENTITY,
+            position,
+            delta,
+            options,
+        )
+    }
+    pub fn sweep_all_prepared(
+        &self,
+        shape: &SharedShape,
+        rotation: Quat,
+        position: Vec3,
+        delta: Vec3,
+        options: &QueryOptions,
+    ) -> Result<Vec<SweepSpan>, String> {
         if !position.is_finite() || !delta.is_finite() || !(position + delta).is_finite() {
             return Err("Varredura com posição inválida.".into());
         }
-        let shape = shape.prepare(Vec3::ONE)?;
-        let start = pose(position, Quat::IDENTITY);
-        let end = pose(position + delta, Quat::IDENTITY);
+        let start = pose(position, rotation);
+        let end = pose(position + delta, rotation);
         let bounds = shape.compute_aabb(&start).merged(&shape.compute_aabb(&end));
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let pipeline = self.broad.as_query_pipeline(
@@ -42,15 +57,15 @@ impl PhysicsWorld {
         };
         for (handle, collider) in pipeline.intersect_aabb_conservative(bounds) {
             let starts_inside =
-                query::intersection_test(&start, &*shape, collider.position(), collider.shape())
+                query::intersection_test(&start, &**shape, collider.position(), collider.shape())
                     .map_err(|_| "Interseção de formas não suportada")?;
             let ends_inside =
-                query::intersection_test(&end, &*shape, collider.position(), collider.shape())
+                query::intersection_test(&end, &**shape, collider.position(), collider.shape())
                     .map_err(|_| "Interseção de formas não suportada")?;
             let forward = query::cast_shapes(
                 &start,
                 vector(delta),
-                &*shape,
+                &**shape,
                 collider.position(),
                 Vector::ZERO,
                 collider.shape(),
@@ -64,7 +79,7 @@ impl PhysicsWorld {
                 query::cast_shapes(
                     &end,
                     vector(-delta),
-                    &*shape,
+                    &**shape,
                     collider.position(),
                     Vector::ZERO,
                     collider.shape(),

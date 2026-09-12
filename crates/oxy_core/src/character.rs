@@ -2,7 +2,7 @@
 use crate::{
     document::{Entity, Id, Scene, SceneKind},
     input_actions::MovementActions,
-    physics3d::{CapsuleMotion, CollisionShape},
+    physics3d::ShapeMotion,
 };
 use glam::{Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,7 @@ pub enum BodyFacing {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CharacterConfig {
+    pub body: crate::movement_body::MovementBody,
     pub enabled: bool,
     pub automatic_input: bool,
     pub actions: MovementActions,
@@ -98,6 +99,7 @@ pub struct CharacterConfig {
 impl Default for CharacterConfig {
     fn default() -> Self {
         Self {
+            body: Default::default(),
             enabled: true,
             automatic_input: true,
             actions: Default::default(),
@@ -143,34 +145,22 @@ impl Default for CharacterConfig {
     }
 }
 impl CharacterConfig {
-    pub fn motion(&self, entity: &Entity, scale: f32) -> Result<CapsuleMotion, String> {
-        let collider = entity
-            .physics3d
-            .as_ref()
-            .ok_or("Personagem 3D requer um colisor de cápsula.")?;
-        let CollisionShape::Capsule { height, radius } = collider.shape else {
-            return Err("Personagem 3D requer uma cápsula vertical.".into());
-        };
-        if self.enabled && (collider.sensor || !collider.enabled) {
-            return Err(
-                "Personagem 3D requer uma cápsula sólida ativa, não uma área de detecção.".into(),
-            );
+    pub fn motion(&self, _entity: &Entity, scale: f32) -> Result<ShapeMotion, String> {
+        self.body.validate(self.crouch_height)?;
+        if self.enabled && !self.body.enabled {
+            return Err("Personagem ativo exige Corpo de movimento ativo.".into());
         }
-        // Feet, not the visual mesh origin, are the physical reference point.
-        if !Vec3::from(collider.center).abs_diff_eq(Vec3::Y * (height * 0.5), 1e-5) {
-            return Err("O centro da cápsula do personagem deve ficar em (0, metade da altura, 0); a origem representa os pés.".into());
-        }
-        let motion = CapsuleMotion {
-            height: height * scale,
-            radius: radius * scale,
-            margin: self.margin,
-            climb_degrees: self.slope_degrees,
-            slide_degrees: (self.slope_degrees + 0.1).min(89.8),
-            step_height: self.step_height,
-            step_width: self.step_width,
-            snap: self.snap,
-        };
+        let mut motion = self.body.prepare(false, self.crouch_height, scale, 0.)?;
+        motion.margin = self.margin;
+        motion.climb_degrees = self.slope_degrees;
+        motion.slide_degrees = (self.slope_degrees + 0.1).min(89.8);
+        motion.step_height = self.step_height;
+        motion.step_width = self.step_width;
+        motion.snap = self.snap;
         motion.validate()?;
+        let mut crouched = self.body.prepare(true, self.crouch_height, scale, 0.)?;
+        crouched.margin = self.margin;
+        crouched.validate()?;
         if [
             self.speed,
             self.gravity,
@@ -202,8 +192,7 @@ impl CharacterConfig {
         if !self.absolute_speed_limit.is_finite()
             || !(1. ..=10000.).contains(&self.absolute_speed_limit)
             || !self.crouch_height.is_finite()
-            || self.crouch_height < 2. * radius
-            || self.crouch_height > height
+            || self.crouch_height <= 0.
             || self.coyote_ms > 1000.
             || self.jump_buffer_ms > 1000.
             || self.recovery_distance > 10.
@@ -214,7 +203,7 @@ impl CharacterConfig {
             || self.slide_duration <= 0.
             || self.slide_exit_speed > self.slide_min_speed
         {
-            return Err("Altura agachada deve caber na cápsula; limite absoluto deve estar entre 1 e 10000 m/s; tolerâncias de pulo entre 0 e 1000 ms.".into());
+            return Err("Altura agachada deve ser positiva; limite absoluto deve estar entre 1 e 10000 m/s; tolerâncias de pulo entre 0 e 1000 ms.".into());
         }
         Ok(motion)
     }
@@ -488,6 +477,9 @@ pub fn validate(
         }
         let (_, rotation, scale) = crate::physics3d::world_pose(view.world_matrix(&entity.id)?)?;
         character_scale(rotation, scale)?;
+        if entity.physics3d.is_some() {
+            return Err("O personagem usa seu Corpo de movimento. Colisores auxiliares devem ficar em objetos filhos.".into());
+        }
         config.motion(entity, scale.x)?;
     }
     if let Some(rig) = &entity.camera_rig {

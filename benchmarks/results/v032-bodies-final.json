@@ -1,0 +1,1732 @@
+{
+  "method": "CPU release profiling. 120 warmup steps, 301 samples, 8 second limit per case. Exactly one fixed step per sample. No GPU or FPS inference.",
+  "rows": [
+    {
+      "characters": 1,
+      "seed": 0,
+      "shape": "capsule",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 457300,
+          "p95_ns": 499200,
+          "p99_ns": 518700,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 100,
+          "p99_ns": 200,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 182,
+          "poses_updated": 420,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 182,
+          "poses_updated": 119,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 120
+        },
+        "checksum": 970751105355,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 225700,
+          "p95_ns": 247300,
+          "p99_ns": 288500,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 600,
+          "p95_ns": 700,
+          "p99_ns": 800,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 0,
+          "areas_ns": 36600,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 14200,
+          "character_prepare_ns": 120000,
+          "character_resolve_ns": 6500,
+          "character_sensors_ns": 36200,
+          "entity_queries": 774,
+          "entity_scans": 3,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 185200,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 600,
+          "matrices": 764,
+          "matrix_hits": 0,
+          "movement_ns": 147500,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 189200,
+          "steps": 1,
+          "tasks_ns": 0
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 15000,
+          "p95_ns": 18100,
+          "p99_ns": 25400,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 9019,
+          "colliders": 202,
+          "poses_updated": 421,
+          "queries": 3436,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 422
+        },
+        "physics_before": {
+          "candidate_tests": 2604,
+          "colliders": 202,
+          "poses_updated": 120,
+          "queries": 996,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 121
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 159400,
+          "p95_ns": 175700,
+          "p99_ns": 187600,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 230300,
+          "p95_ns": 252600,
+          "p99_ns": 289100,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 7300,
+          "p95_ns": 9600,
+          "p99_ns": 12700,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 36500,
+          "p95_ns": 41400,
+          "p99_ns": 59000,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 200,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 1,
+      "seed": 0,
+      "shape": "box",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 365100,
+          "p95_ns": 386800,
+          "p99_ns": 485100,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 100,
+          "p99_ns": 100,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 182,
+          "poses_updated": 393,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 394
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 182,
+          "poses_updated": 119,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 120
+        },
+        "checksum": 972617976072,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 178300,
+          "p95_ns": 190600,
+          "p99_ns": 265500,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 600,
+          "p95_ns": 700,
+          "p99_ns": 800,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 58900,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 13200,
+          "character_prepare_ns": 118400,
+          "character_resolve_ns": 8500,
+          "character_sensors_ns": 56200,
+          "entity_queries": 774,
+          "entity_scans": 3,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 224400,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 700,
+          "matrices": 764,
+          "matrix_hits": 0,
+          "movement_ns": 162900,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 314900,
+          "steps": 1,
+          "tasks_ns": 500
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 11600,
+          "p95_ns": 15700,
+          "p99_ns": 22800,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 10115,
+          "colliders": 202,
+          "poses_updated": 393,
+          "queries": 3932,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 394
+        },
+        "physics_before": {
+          "candidate_tests": 2792,
+          "colliders": 202,
+          "poses_updated": 120,
+          "queries": 1087,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 121
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 117500,
+          "p95_ns": 122800,
+          "p99_ns": 171100,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 186200,
+          "p95_ns": 200500,
+          "p99_ns": 220600,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 7200,
+          "p95_ns": 10800,
+          "p99_ns": 14400,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 35300,
+          "p95_ns": 36700,
+          "p99_ns": 51900,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 200,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 1,
+      "seed": 0,
+      "shape": "sphere",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 364600,
+          "p95_ns": 423200,
+          "p99_ns": 527500,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 100,
+          "p99_ns": 200,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 0,
+          "colliders": 182,
+          "poses_updated": 420,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 0,
+          "colliders": 182,
+          "poses_updated": 119,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 120
+        },
+        "checksum": 970020150695,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 177400,
+          "p95_ns": 199300,
+          "p99_ns": 265200,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 600,
+          "p95_ns": 700,
+          "p99_ns": 1100,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 35800,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 10600,
+          "character_prepare_ns": 117000,
+          "character_resolve_ns": 5800,
+          "character_sensors_ns": 35500,
+          "entity_queries": 774,
+          "entity_scans": 3,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 177700,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 600,
+          "matrices": 764,
+          "matrix_hits": 0,
+          "movement_ns": 140800,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 188000,
+          "steps": 1,
+          "tasks_ns": 0
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 9900,
+          "p95_ns": 13700,
+          "p99_ns": 17500,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 9778,
+          "colliders": 202,
+          "poses_updated": 421,
+          "queries": 3829,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 422
+        },
+        "physics_before": {
+          "candidate_tests": 2775,
+          "colliders": 202,
+          "poses_updated": 120,
+          "queries": 1080,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 121
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 117600,
+          "p95_ns": 132600,
+          "p99_ns": 169500,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 186600,
+          "p95_ns": 218200,
+          "p99_ns": 271800,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 5000,
+          "p95_ns": 7500,
+          "p99_ns": 9100,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 35600,
+          "p95_ns": 37100,
+          "p99_ns": 57700,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 200,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 1,
+      "seed": 0,
+      "shape": "convex",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 373200,
+          "p95_ns": 419300,
+          "p99_ns": 544600,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 100,
+          "p99_ns": 200,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 182,
+          "poses_updated": 396,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 397
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 182,
+          "poses_updated": 119,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 182,
+          "tree_updates": 120
+        },
+        "checksum": 900702532416,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 184900,
+          "p95_ns": 214600,
+          "p99_ns": 272700,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 600,
+          "p95_ns": 700,
+          "p99_ns": 900,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 36700,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 16900,
+          "character_prepare_ns": 123900,
+          "character_resolve_ns": 11300,
+          "character_sensors_ns": 36400,
+          "entity_queries": 774,
+          "entity_scans": 3,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 192600,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 600,
+          "matrices": 764,
+          "matrix_hits": 0,
+          "movement_ns": 154700,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 188700,
+          "steps": 1,
+          "tasks_ns": 100
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 16900,
+          "p95_ns": 22600,
+          "p99_ns": 27900,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 9968,
+          "colliders": 202,
+          "poses_updated": 395,
+          "queries": 3939,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 396
+        },
+        "physics_before": {
+          "candidate_tests": 2801,
+          "colliders": 202,
+          "poses_updated": 120,
+          "queries": 1105,
+          "shapes_prepared": 202,
+          "shapes_shared": 0,
+          "tree_updates": 121
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 117500,
+          "p95_ns": 139600,
+          "p99_ns": 163200,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 187700,
+          "p95_ns": 219500,
+          "p99_ns": 265100,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 10800,
+          "p95_ns": 14200,
+          "p99_ns": 17800,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 36100,
+          "p95_ns": 42700,
+          "p99_ns": 59400,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 200,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 10,
+      "seed": 0,
+      "shape": "capsule",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 563400,
+          "p95_ns": 619000,
+          "p99_ns": 727600,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 100,
+          "p99_ns": 200,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 191,
+          "poses_updated": 4200,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 191,
+          "poses_updated": 1190,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 120
+        },
+        "checksum": 970724144093,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 366000,
+          "p95_ns": 395400,
+          "p99_ns": 515500,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 600,
+          "p95_ns": 700,
+          "p99_ns": 1200,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 0,
+          "areas_ns": 46600,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 131700,
+          "character_prepare_ns": 127700,
+          "character_resolve_ns": 66700,
+          "character_sensors_ns": 46300,
+          "entity_queries": 864,
+          "entity_scans": 12,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 364800,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 600,
+          "matrices": 782,
+          "matrix_hits": 0,
+          "movement_ns": 317100,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 217300,
+          "steps": 1,
+          "tasks_ns": 200
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 133800,
+          "p95_ns": 146000,
+          "p99_ns": 183400,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 90721,
+          "colliders": 211,
+          "poses_updated": 4210,
+          "queries": 34437,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 4211
+        },
+        "physics_before": {
+          "candidate_tests": 25856,
+          "colliders": 211,
+          "poses_updated": 1200,
+          "queries": 9815,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 1201
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 126600,
+          "p95_ns": 138600,
+          "p99_ns": 183000,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 195900,
+          "p95_ns": 219700,
+          "p99_ns": 280500,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 67400,
+          "p95_ns": 76500,
+          "p99_ns": 90200,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 46100,
+          "p95_ns": 51300,
+          "p99_ns": 71100,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 300,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 10,
+      "seed": 0,
+      "shape": "box",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 550200,
+          "p95_ns": 604800,
+          "p99_ns": 678100,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 100,
+          "p99_ns": 200,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 191,
+          "poses_updated": 3752,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 191,
+          "poses_updated": 1170,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 120
+        },
+        "checksum": 970811433356,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 349700,
+          "p95_ns": 386500,
+          "p99_ns": 452800,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 600,
+          "p95_ns": 800,
+          "p99_ns": 1300,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 49600,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 119100,
+          "character_prepare_ns": 127000,
+          "character_resolve_ns": 74700,
+          "character_sensors_ns": 49300,
+          "entity_queries": 864,
+          "entity_scans": 12,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 359000,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 600,
+          "matrices": 782,
+          "matrix_hits": 0,
+          "movement_ns": 308200,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 198600,
+          "steps": 1,
+          "tasks_ns": 200
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 112900,
+          "p95_ns": 128900,
+          "p99_ns": 146900,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 101176,
+          "colliders": 211,
+          "poses_updated": 3744,
+          "queries": 39633,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 3745
+        },
+        "physics_before": {
+          "candidate_tests": 28594,
+          "colliders": 211,
+          "poses_updated": 1179,
+          "queries": 11054,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 1180
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 127800,
+          "p95_ns": 137800,
+          "p99_ns": 188600,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 198600,
+          "p95_ns": 220600,
+          "p99_ns": 249200,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 69300,
+          "p95_ns": 79500,
+          "p99_ns": 90300,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 48700,
+          "p95_ns": 54700,
+          "p99_ns": 67600,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 200,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 10,
+      "seed": 0,
+      "shape": "sphere",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 525300,
+          "p95_ns": 645400,
+          "p99_ns": 707300,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 100,
+          "p99_ns": 200,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 0,
+          "colliders": 191,
+          "poses_updated": 4200,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 0,
+          "colliders": 191,
+          "poses_updated": 1190,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 120
+        },
+        "checksum": 969590313714,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 328800,
+          "p95_ns": 404100,
+          "p99_ns": 471200,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 600,
+          "p95_ns": 800,
+          "p99_ns": 1100,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 46200,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 97500,
+          "character_prepare_ns": 125400,
+          "character_resolve_ns": 48500,
+          "character_sensors_ns": 45900,
+          "entity_queries": 864,
+          "entity_scans": 12,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 325100,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 600,
+          "matrices": 782,
+          "matrix_hits": 0,
+          "movement_ns": 277800,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 195800,
+          "steps": 1,
+          "tasks_ns": 200
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 98700,
+          "p95_ns": 121700,
+          "p99_ns": 150800,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 97763,
+          "colliders": 211,
+          "poses_updated": 4210,
+          "queries": 38352,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 4211
+        },
+        "physics_before": {
+          "candidate_tests": 27873,
+          "colliders": 211,
+          "poses_updated": 1200,
+          "queries": 10958,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 1201
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 126100,
+          "p95_ns": 156900,
+          "p99_ns": 201800,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 195200,
+          "p95_ns": 242600,
+          "p99_ns": 270400,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 49700,
+          "p95_ns": 61400,
+          "p99_ns": 71500,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 46000,
+          "p95_ns": 57000,
+          "p99_ns": 74900,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 300,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 10,
+      "seed": 0,
+      "shape": "convex",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 606000,
+          "p95_ns": 959100,
+          "p99_ns": 1127000,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 400,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 191,
+          "poses_updated": 3675,
+          "queries": 2520,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 191,
+          "poses_updated": 1127,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 191,
+          "tree_updates": 120
+        },
+        "checksum": 803435712523,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 403600,
+          "p95_ns": 642800,
+          "p99_ns": 787900,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 700,
+          "p95_ns": 1300,
+          "p99_ns": 1400,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 47600,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 162500,
+          "character_prepare_ns": 128100,
+          "character_resolve_ns": 103700,
+          "character_sensors_ns": 47200,
+          "entity_queries": 864,
+          "entity_scans": 12,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 398500,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 600,
+          "matrices": 782,
+          "matrix_hits": 0,
+          "movement_ns": 349700,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 197200,
+          "steps": 1,
+          "tasks_ns": 200
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 166800,
+          "p95_ns": 259800,
+          "p99_ns": 307700,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 99520,
+          "colliders": 211,
+          "poses_updated": 3667,
+          "queries": 39780,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 3668
+        },
+        "physics_before": {
+          "candidate_tests": 28466,
+          "colliders": 211,
+          "poses_updated": 1134,
+          "queries": 11230,
+          "shapes_prepared": 211,
+          "shapes_shared": 0,
+          "tree_updates": 1135
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 129400,
+          "p95_ns": 206600,
+          "p99_ns": 237400,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 201100,
+          "p95_ns": 324700,
+          "p99_ns": 386800,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 105600,
+          "p95_ns": 165100,
+          "p99_ns": 200900,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 48000,
+          "p95_ns": 80500,
+          "p99_ns": 89300,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 300,
+          "p99_ns": 300,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 50,
+      "seed": 0,
+      "shape": "capsule",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 1440000,
+          "p95_ns": 1799800,
+          "p99_ns": 2655500,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 400,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 231,
+          "poses_updated": 21000,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 231,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 231,
+          "poses_updated": 5950,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 231,
+          "tree_updates": 120
+        },
+        "checksum": 970382904105,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 1189900,
+          "p95_ns": 1495200,
+          "p99_ns": 2204500,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 700,
+          "p95_ns": 1200,
+          "p99_ns": 1600,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 91000,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 646000,
+          "character_prepare_ns": 171000,
+          "character_resolve_ns": 333200,
+          "character_sensors_ns": 90600,
+          "entity_queries": 1264,
+          "entity_scans": 52,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 1182000,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 800,
+          "matrices": 862,
+          "matrix_hits": 0,
+          "movement_ns": 1089400,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 285400,
+          "steps": 1,
+          "tasks_ns": 100
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 653800,
+          "p95_ns": 805600,
+          "p99_ns": 1215800,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 453417,
+          "colliders": 251,
+          "poses_updated": 21050,
+          "queries": 172954,
+          "shapes_prepared": 251,
+          "shapes_shared": 0,
+          "tree_updates": 21051
+        },
+        "physics_before": {
+          "candidate_tests": 128874,
+          "colliders": 251,
+          "poses_updated": 6000,
+          "queries": 49188,
+          "shapes_prepared": 251,
+          "shapes_shared": 0,
+          "tree_updates": 6001
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 167600,
+          "p95_ns": 238100,
+          "p99_ns": 297900,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 247200,
+          "p95_ns": 370800,
+          "p99_ns": 444000,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 339700,
+          "p95_ns": 410000,
+          "p99_ns": 608900,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 91700,
+          "p95_ns": 144500,
+          "p99_ns": 166200,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 300,
+          "p99_ns": 400,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 50,
+      "seed": 0,
+      "shape": "box",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 1341000,
+          "p95_ns": 1564400,
+          "p99_ns": 1683200,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 300,
+          "p99_ns": 400,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 1262,
+          "colliders": 231,
+          "poses_updated": 19319,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 231,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 359,
+          "colliders": 231,
+          "poses_updated": 5766,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 231,
+          "tree_updates": 120
+        },
+        "checksum": 971765630505,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 1089700,
+          "p95_ns": 1282700,
+          "p99_ns": 1356000,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 800,
+          "p95_ns": 1400,
+          "p99_ns": 1600,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 95600,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 717600,
+          "character_prepare_ns": 167200,
+          "character_resolve_ns": 428600,
+          "character_sensors_ns": 94100,
+          "entity_queries": 1264,
+          "entity_scans": 52,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 1343500,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 800,
+          "matrices": 862,
+          "matrix_hits": 0,
+          "movement_ns": 1245600,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 371900,
+          "steps": 1,
+          "tasks_ns": 200
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 563200,
+          "p95_ns": 665800,
+          "p99_ns": 721800,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 507771,
+          "colliders": 251,
+          "poses_updated": 19299,
+          "queries": 197371,
+          "shapes_prepared": 251,
+          "shapes_shared": 0,
+          "tree_updates": 19300
+        },
+        "physics_before": {
+          "candidate_tests": 144483,
+          "colliders": 251,
+          "poses_updated": 5808,
+          "queries": 55704,
+          "shapes_prepared": 251,
+          "shapes_shared": 0,
+          "tree_updates": 5809
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 166800,
+          "p95_ns": 216300,
+          "p99_ns": 239200,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 246900,
+          "p95_ns": 326300,
+          "p99_ns": 363300,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 338600,
+          "p95_ns": 394200,
+          "p99_ns": 428600,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 92100,
+          "p95_ns": 124400,
+          "p99_ns": 149100,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 200,
+          "p95_ns": 300,
+          "p99_ns": 300,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    },
+    {
+      "characters": 50,
+      "seed": 0,
+      "shape": "sphere",
+      "single": {
+        "advance": {
+          "limit_exceeded": false,
+          "median_ns": 1420900,
+          "p95_ns": 1618300,
+          "p99_ns": 1709500,
+          "samples": 301
+        },
+        "animation": {
+          "limit_exceeded": false,
+          "median_ns": 100,
+          "p95_ns": 200,
+          "p99_ns": 1200,
+          "samples": 301
+        },
+        "camera_after": {
+          "candidate_tests": 0,
+          "colliders": 231,
+          "poses_updated": 21000,
+          "queries": 2523,
+          "shapes_prepared": 0,
+          "shapes_shared": 231,
+          "tree_updates": 421
+        },
+        "camera_before": {
+          "candidate_tests": 0,
+          "colliders": 231,
+          "poses_updated": 5950,
+          "queries": 717,
+          "shapes_prepared": 0,
+          "shapes_shared": 231,
+          "tree_updates": 120
+        },
+        "checksum": 970906717173,
+        "fixed_steps": {
+          "limit_exceeded": false,
+          "median_ns": 1111600,
+          "p95_ns": 1316700,
+          "p99_ns": 1414300,
+          "samples": 301
+        },
+        "input": {
+          "limit_exceeded": false,
+          "median_ns": 800,
+          "p95_ns": 1200,
+          "p99_ns": 2000,
+          "samples": 301
+        },
+        "last_sample_work": {
+          "actions": 0,
+          "animation_ns": 100,
+          "areas_ns": 94900,
+          "boxes": 0,
+          "candidates": 0,
+          "character_motor_ns": 559300,
+          "character_prepare_ns": 176400,
+          "character_resolve_ns": 278600,
+          "character_sensors_ns": 94500,
+          "entity_queries": 1264,
+          "entity_scans": 52,
+          "event_entity_visits": 0,
+          "fixed_step_ns": 1142400,
+          "graph_nodes_copied": 0,
+          "hierarchy_visits": 400,
+          "index_builds": 5,
+          "input_ns": 700,
+          "matrices": 862,
+          "matrix_hits": 0,
+          "movement_ns": 1045800,
+          "overlaps": 0,
+          "physics_filter_ns": 0,
+          "physics_prepare_ns": 0,
+          "physics_resolve_ns": 0,
+          "presentation_ns": 293400,
+          "steps": 1,
+          "tasks_ns": 200
+        },
+        "motor_inclusive": {
+          "limit_exceeded": false,
+          "median_ns": 537400,
+          "p95_ns": 645100,
+          "p99_ns": 707400,
+          "samples": 301
+        },
+        "physics_after": {
+          "candidate_tests": 490215,
+          "colliders": 251,
+          "poses_updated": 21050,
+          "queries": 193671,
+          "shapes_prepared": 251,
+          "shapes_shared": 0,
+          "tree_updates": 21051
+        },
+        "physics_before": {
+          "candidate_tests": 139535,
+          "colliders": 251,
+          "poses_updated": 6000,
+          "queries": 55218,
+          "shapes_prepared": 251,
+          "shapes_shared": 0,
+          "tree_updates": 6001
+        },
+        "prepare_queries_platforms": {
+          "limit_exceeded": false,
+          "median_ns": 173800,
+          "p95_ns": 237200,
+          "p99_ns": 310700,
+          "samples": 301
+        },
+        "presentation_camera": {
+          "limit_exceeded": false,
+          "median_ns": 260900,
+          "p95_ns": 390700,
+          "p99_ns": 444300,
+          "samples": 301
+        },
+        "resolve_subset_of_motor": {
+          "limit_exceeded": false,
+          "median_ns": 273900,
+          "p95_ns": 320500,
+          "p99_ns": 345000,
+          "samples": 301
+        },
+        "retained": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "retained_after_stop": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "sensors": {
+          "limit_exceeded": false,
+          "median_ns": 94500,
+          "p95_ns": 149400,
+          "p99_ns": 172700,
+          "samples": 301
+        },
+        "steps_per_advance": 1,
+        "tasks": {
+          "limit_exceeded": false,
+          "median_ns": 200,
+          "p95_ns": 300,
+          "p99_ns": 600,
+          "samples": 301
+        }
+      },
+      "total_entities": 400
+    }
+  ]
+}

@@ -24,14 +24,6 @@ fn project() -> Project {
     body.id = BODY.into();
     body.transform.position = [0., 0.02, 0.];
     body.character3d = Some(CharacterConfig::default());
-    body.physics3d = Some(Collider3d {
-        shape: CollisionShape::Capsule {
-            height: 1.8,
-            radius: 0.3,
-        },
-        center: [0., 0.9, 0.],
-        ..Default::default()
-    });
     let mut camera = Entity::new("Olhar", None);
     camera.camera = Some(Camera::default());
     camera.camera_rig = Some(CameraRig {
@@ -490,9 +482,10 @@ fn disabling_movement_does_not_hide_an_active_collider_from_sensors() {
     rt.scene_mut()
         .entity_mut(BODY)
         .unwrap()
-        .physics3d
+        .character3d
         .as_mut()
         .unwrap()
+        .body
         .enabled = false;
     rt.advance(FIXED_DT, &InputFrame::default());
     assert!(rt.sensor_events().is_empty());

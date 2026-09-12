@@ -1,8 +1,8 @@
-# OXY Engine 0.3.1
+# OXY Engine 0.3.2
 
 Editor e runtime desktop próprios em Rust: cenas 2D/3D, modelagem por peças e polígonos, pintura PNG, animação rígida, atributos e lógica visual. Editor e player compartilham egui/eframe 0.33.3 e wgpu 27.0.1, sem outra engine como núcleo. Dependências fixadas e `Cargo.lock` mantido.
 
-Esta atualização limpa o Inspetor: só componentes presentes, adição contextual e ações estruturais na Hierarquia. Os presets e o laboratório usam Jogador e Câmera principal separados, ligados pelo campo Alvo. Também corrige a velocidade ao aterrissar em plataformas móveis. O [relatório da 0.3.1](docs/v0.3.1.md) registra testes e limites; os sistemas da [0.3.0](docs/v0.3.0.md), o histórico e o fluxo portátil permanecem.
+A 0.3.2 adiciona Corpo de movimento configurável (cápsula, caixa, esfera e convexo), guias editáveis de câmera e uma prévia nativa sem iniciar o jogo. Jogador e Câmera continuam separados. O [relatório da 0.3.2](docs/v0.3.2.md) reúne migração, testes, capturas e medições comparáveis à 0.3.1.
 
 ## Abrir e desenvolver
 
@@ -40,7 +40,11 @@ Nesta máquina, `scripts/cargo.ps1` configura o compilador GNU preparado. Passe 
 
 **Propriedades** mostra nome, visibilidade, camada, transformação, aparência, atributos e componentes presentes. **+ Adicionar componente** oferece apenas opções compatíveis e ausentes. Componentes extensos começam recolhidos e lembram a expansão por objeto durante a sessão. Remova componentes dentro das suas seções; o colisor necessário ao controlador não pode ser removido antes dele. Parentesco é editado por arrasto na Hierarquia; renomear, duplicar, agrupar, excluir e salvar modelo ficam no seu menu de contexto. Lógica e Animação continuam nas suas áreas.
 
-**+ Objeto → Câmera** cria uma câmera independente. Nela, use **+ Adicionar componente → Controle da câmera → Básico → Alvo** para escolher o personagem. Os presets FP/TP já criam e vinculam ambos. Selecionar Jogador mostra seu personagem/colisor; selecionar Câmera principal mostra câmera/controle. Componentes 3D legados são preservados na leitura e execução, mas ficam fora do fluxo de autoria. O controlador e as caixas 2D continuam disponíveis em cenas 2D.
+**+ Objeto → Câmera** cria uma câmera independente. Nela, use **+ Adicionar componente → Controle da câmera → Básico → Alvo** para escolher o personagem. Os presets FP/TP já criam e vinculam ambos. Selecionar Jogador mostra seu Personagem 3D e seu Corpo de movimento; selecionar Câmera principal mostra câmera/controle. Componentes 3D legados são preservados na leitura e execução, mas ficam fora do fluxo de autoria. O controlador e as caixas 2D continuam disponíveis em cenas 2D.
+
+**Personagem 3D → Corpo de movimento** define a colisão de locomoção, sem Colisor 3D separado. Escolha Cápsula/Caixa/Esfera ou gere explicitamente um convexo de uma peça. Cápsula e caixa reduzem a altura ao agachar; esfera e convexo preservam sua geometria até configurar uma alternativa. A origem fica nos pés. Superfície e filtros pertencem ao próprio corpo; obstáculos/sensores usam Colisor 3D, e colisores auxiliares ficam em objetos filhos.
+
+**Selecione uma câmera na Cena** para ver direção, enquadramento, olhos e órbita. Arraste as alças de olhos, distância, ombro e altura; soltar grava um Undo, Esc cancela. FP/TP mostram a pose prevista pelo alvo; a câmera fixa usa Transformação. **Exibir → Câmeras** controla as guias e a prévia. Na janela **Prévia da câmera**, Fixar mantém a câmera ao selecionar outra peça, Média amplia a imagem, 16:9/4:3 ajusta o enquadramento e Prévia agachada mostra a outra postura. A prévia compartilha o renderer, sem simular o jogo, e reutiliza a imagem quando nada mudou.
 
 O botão **Interface: 100%** separa escala pendente/aplicada: ajuste 80–160%, use Aplicar, Cancelar ou Restaurar 100%. **Mostrar nomes das ferramentas** acompanha os ícones para iniciantes. Avisos não abrem o console nem mudam o viewport; **Console/Ver detalhes** abre o registro manualmente. Falhas de salvamento permanecem visíveis.
 
@@ -78,15 +82,16 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ./scripts/benchmark-v021.ps1 -Label minha-medicao
 # Engine portátil: editor + player + exemplos. -SkipBuild reutiliza release já compilado.
 ./scripts/package-engine.ps1
-& './dist/OXY-Engine-0.3.1-windows-x64/OXY Engine.exe'
-./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.3.1-windows-x64.zip'
+& './dist/OXY-Engine-0.3.2-windows-x64/OXY Engine.exe'
+./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.3.2-windows-x64.zip'
 # Exportar seu jogo: só runtime e dados; não depende do editor ou do diretório-fonte.
 ./scripts/package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
 ./dist/Meu-Jogo/oxy_player.exe
 # Medições release/locked; rótulos novos preservam resultados anteriores.
 ./scripts/benchmark.ps1 -Label meu-teste-v020
 ./scripts/benchmark.ps1 -Label minhas-malhas-v020 -Example performance_mesh -Sizes '22,70,158'
-./scripts/benchmark.ps1 -Label meu-movimento-v030 -Example performance_movement -Sizes '1,10,50'
+./scripts/benchmark.ps1 -Label meu-movimento-v032 -Example performance_movement -Sizes '1,10,50'
+./scripts/benchmark.ps1 -Label meus-corpos-v032 -Example performance_bodies -Sizes '1,10,50'
 ./scripts/cargo.ps1 @('run','-p','oxy_core','--example','movement_replay','--release','--locked')
 ```
 
@@ -94,13 +99,15 @@ Execute cada teste nativo em um processo separado: o Winit permite uma janela de
 
 O player aceita arquivo/pasta; sem argumento procura `data/project.oxy.json` junto do executável. Empacotadores incluem assets referenciados e modelos/malhas no JSON, usam uma pasta temporária e preservam o pacote anterior. O guia e suas receitas são embarcados no executável. `-DebugBuild` no empacotador de jogos escolhe desenvolvimento; `-SkipBuild` usa os binários do perfil selecionado.
 
-`portable-windows.yml` gera ZIP x64 e SHA-256: artifact por 14 dias em pushes para `main`, e anexos de Release **somente em tags `v*`** correspondentes à versão do workspace, como `v0.3.1`. MSVC usa runtime C estático. `ci.yml` verifica fmt/build/test/Clippy e invariantes; `performance.yml` permite benchmarks manuais sem reprovar por variação de milissegundos. `target/`, `dist/` e ferramentas temporárias permanecem ignorados. Não há instalador, updater ou assinatura digital.
+`portable-windows.yml` gera ZIP x64 e SHA-256: artifact por 14 dias em pushes para `main`, e anexos de Release **somente em tags `v*`** correspondentes à versão do workspace, como `v0.3.2`. MSVC usa runtime C estático. `ci.yml` verifica fmt/build/test/Clippy e invariantes; `performance.yml` permite benchmarks manuais sem reprovar por variação de milissegundos. `target/`, `dist/` e ferramentas temporárias permanecem ignorados. Não há instalador, updater ou assinatura digital.
 
-O teste portátil confere o checksum adjacente quando disponível, versão/ícone, PE x64, DLLs e assets; extrai em caminho com espaços e abre o editor de outro diretório, sem Rust/Cargo no PATH. `-ContentOnly` omite a janela em runners sem GPU. Isso **não substitui outra máquina limpa**: Windows Sandbox não está disponível neste ambiente. Execução do CI remoto e reprodução audível de WAV também não estão verificadas. O [relatório de entrega](docs/v0.3.1.md) distingue testes automáticos, janelas/capturas reais, medições CPU e limitações do ambiente; [benchmarks da base](benchmarks/README.md) preservam a referência da 0.1.3. Não há promessa de FPS, medição inventada de GPU/VRAM ou validação universal de hardware.
+O teste portátil confere o checksum adjacente quando disponível, versão/ícone, PE x64, DLLs e assets; extrai em caminho com espaços e abre o editor de outro diretório, sem Rust/Cargo no PATH. `-ContentOnly` omite a janela em runners sem GPU. Isso **não substitui outra máquina limpa**: Windows Sandbox não está disponível neste ambiente. Execução do CI remoto e reprodução audível de WAV também não estão verificadas. O [relatório de entrega](docs/v0.3.2.md) distingue testes automáticos, janelas/capturas reais, medições CPU e limitações do ambiente; [benchmarks da base](benchmarks/README.md) preservam a referência da 0.1.3. Não há promessa de FPS, medição inventada de GPU/VRAM ou validação universal de hardware.
 
 ## Compatibilidade e domínio suportado
 
-O formato atual é **schema_version 3**. Documentos schema 1 e 2 são migrados em memória sem mudar IDs nem sobrescrever ao abrir. Ao salvar convertido, há backup identificado dos bytes originais e escrita segura. Versões futuras/inválidas são recusadas; leitores antigos não devem abrir o novo formato. As três demonstrações continuam em `examples/validacao`; doze receitas em `examples/guia` e a pista em `examples/laboratorio-3d` são projetos comuns.
+O formato atual é **schema_version 4**. Documentos schema 1, 2 e 3 são migrados em memória sem mudar IDs nem sobrescrever ao abrir. Ao salvar convertido, há backup identificado dos bytes originais e escrita segura. Versões futuras/inválidas são recusadas; leitores antigos não devem abrir o novo formato. As três demonstrações continuam em `examples/validacao`; doze receitas em `examples/guia` e a pista em `examples/laboratorio-3d` são projetos comuns.
+
+A cápsula de locomoção da 0.3.1 é convertida para o corpo interno, preservando dimensões, filtros, superfície, pés e IDs. Configurações antigas ambíguas são recusadas antes de alterar o documento; o erro identifica o personagem. O Colisor 3D de obstáculos e sensores permanece separado.
 
 - Malhas: triângulos, quads e polígonos simples planos, inclusive côncavos; bordas abertas e elementos soltos. Faces com buracos, cruzamentos, degenerações ou mais de duas faces por aresta são recusadas. Faces não planas exigem triangulação explícita ou edição válida.
 - Extrusão: região conectada, por face, faixa de bordas/arestas soltas e cadeias de vértices. Criar face exige contorno/ordem inequívoca. Encaixe move a seleção efetiva ou escala no eixo com solução; operações que exigiriam cisalhamento são recusadas.
@@ -108,7 +115,7 @@ O formato atual é **schema_version 3**. Documentos schema 1 e 2 são migrados e
 - Loop: faixa de quads, até 64 cortes; para em polos/triângulos/polígonos. Bisturi: percurso contínuo visível entre bordas de faces adjacentes, uma visita por face; não atravessa volume, vazio ou outras malhas.
 - Arredondamento: arestas convexas expostas com duas faces, cadeias e junções de cubos/prismas; cantos convexos de três arestas, inclusive múltiplos não conflitantes. Largura abaixo de 45% da menor aresta incidente, 1–16 segmentos. Regiões abertas/côncavas/encobertas, valências complexas e sobreposições são recusadas.
 - Pintura: um atlas RGBA por peça, UV por canto e espaço conservador para faces novas; sem camadas/editor UV avançado. A cópia ampliada preserva pixels antigos 1:1. Instâncias são independentes, sem variantes/herança.
-- Colisões legadas continuam caixas alinhadas aos eixos. O novo personagem 3D é opcional: cápsula em pé com escala global uniforme positiva, consultas Rapier/Parry, caixas orientadas/esferas/convexos e triângulos estáticos preparados explicitamente. Não há corpos rígidos dinâmicos ou transporte por rotação. Personagens novos e controladores legados não ganham colisão mútua implícita; o novo solver consulta obstáculos legados, mas o antigo continua consultando caixas. Ajustar um colisor nunca segue a animação automaticamente. O overlay atravessa geometria sem distinguir todos os trechos ocultos.
+- Colisões legadas continuam caixas alinhadas aos eixos. O novo personagem 3D é opcional: corpo convexo configurável com escala global uniforme positiva, consultas Rapier/Parry, caixas orientadas/esferas/convexos e triângulos estáticos preparados explicitamente. Não há corpos rígidos dinâmicos ou transporte por rotação. Personagens novos e controladores legados não ganham colisão mútua implícita; o novo solver consulta obstáculos legados, mas o antigo continua consultando caixas. Ajustar um colisor nunca segue a animação automaticamente. O overlay atravessa geometria sem distinguir todos os trechos ocultos.
 - Animação é por peças rígidas; sem deformação, pesos, IK, canais independentes ou mistura avançada. Lua/plugins, física avançada, PBR, gêneros completos e exportação web/mobile ficam fora desta versão.
 
 As otimizações da 0.1.3 permanecem: índices por fase, matrizes reutilizadas, grafos preparados e vida útil de ativações. Histórico guarda deltas/pixels e apenas malhas afetadas em armazenamento imutável; não copia todas as imagens. Texturas CPU sob demanda têm orçamento de 128 MiB, preservando buffers alterados/em uso. Caches de malhas CPU/GPU usam 64 entradas/64 MiB cada. Repouso redesenha sob demanda. Esses orçamentos não equivalem à RAM/VRAM total; custos e limites medidos de malhas 968/9.800/49.928 triângulos estão no relatório.

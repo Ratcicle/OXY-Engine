@@ -79,9 +79,13 @@ impl Runtime {
                 let id = self.target(graph, node, context, budget, depth + 1)?;
                 Value::Surface(
                     self.entity(&id)
-                        .and_then(|e| e.physics3d.as_ref())
-                        .ok_or("Objeto não possui colisor 3D")?
-                        .surface
+                        .and_then(|e| {
+                            e.character3d
+                                .as_ref()
+                                .map(|c| &c.body.surface)
+                                .or_else(|| e.physics3d.as_ref().map(|c| &c.surface))
+                        })
+                        .ok_or("Objeto não possui forma física 3D")?
                         .clone(),
                 )
             }

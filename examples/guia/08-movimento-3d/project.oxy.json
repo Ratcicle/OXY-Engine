@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "id": "03000000-0000-4000-8000-000000013880",
   "name": "Gelo e piso comum",
   "start_scene": "03000000-0000-4000-8000-000000013881",
@@ -82,29 +82,24 @@
             }
           },
           "collider": null,
-          "physics3d": {
-            "shape": {
-              "Capsule": {
-                "height": 1.8,
-                "radius": 0.3
-              }
-            },
-            "center": [
-              0.0,
-              0.9,
-              0.0
-            ],
-            "enabled": true,
-            "sensor": false,
-            "filter": {
-              "category": 1,
-              "mask": 4294967295,
-              "blocks_character": true,
-              "blocks_camera": true
-            },
-            "surface": null
-          },
           "character3d": {
+            "body": {
+              "standing": {
+                "Capsule": {
+                  "height": 1.8,
+                  "radius": 0.3
+                }
+              },
+              "crouched": null,
+              "filter": {
+                "category": 1,
+                "mask": 4294967295,
+                "blocks_character": true,
+                "blocks_camera": true
+              },
+              "surface": null,
+              "enabled": true
+            },
             "enabled": true,
             "automatic_input": true,
             "actions": {

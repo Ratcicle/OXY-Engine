@@ -124,7 +124,8 @@ impl NativeQa {
             ),
             "i031_player" => require(
                 has("Personagem 3D")
-                    && has("Colisor 3D")
+                    && !has("Colisor 3D")
+                    && selected.is_some_and(|e| e.physics3d.is_none())
                     && !has("Controle da câmera")
                     && !has("Câmera")
                     && !has("Plataforma móvel"),
@@ -133,6 +134,7 @@ impl NativeQa {
             "i031_groups" => require(
                 [
                     "Básico",
+                    "Corpo de movimento",
                     "Movimento no chão",
                     "Movimento no ar",
                     "Pulo",
@@ -314,10 +316,6 @@ fn native_inspector_v031() {
                 Action::Check("i031_preset"),
                 Action::SelectEntity("Jogador"),
                 Action::Check("i031_player"),
-                Action::Click("Colisor 3D"),
-                Action::Click("Remover componente"),
-                Action::Check("i031_player"),
-                Action::Click("Colisor 3D"),
                 Action::Click("Personagem 3D"),
                 Action::Check("i031_groups"),
                 Action::Screenshot("player-inspector.png"),

@@ -262,7 +262,7 @@ impl Characters {
                     );
                 }
             }
-            let filter = &entity.physics3d.as_ref().unwrap().filter;
+            let filter = &config.body.filter;
             let mut options = QueryOptions {
                 category: filter.category,
                 mask: filter.mask,
@@ -465,12 +465,12 @@ fn actual_collider(
     state: &CharacterState,
     scale: f32,
 ) -> crate::physics3d::Collider3d {
-    let mut result = entity.physics3d.as_ref().unwrap().clone();
-    if let crate::physics3d::CollisionShape::Capsule { height, .. } = &mut result.shape {
-        *height = state.height / scale;
-        result.center = [0., *height * 0.5, 0.];
-    }
-    result
+    let config = entity.character3d.as_ref().unwrap();
+    let _ = scale;
+    config
+        .body
+        .collider(state.posture != Posture::Standing, config.crouch_height)
+        .expect("validated movement body")
 }
 impl Runtime {
     pub(super) fn move_characters(&mut self, input: &InputFrame) {

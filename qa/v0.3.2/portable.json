@@ -1,0 +1,11 @@
+{
+  "version": "0.3.2",
+  "zip_sha256": "9A61E7316F77B3E52B5472FA9C01D2B194BE8CBF9929B048F3F04B9ED7B60E37",
+  "editor_portable_log": "artifacts/v032-portable.log",
+  "player_title": "OXY Engine — Jogo",
+  "player_workdir": "C:\\Users\\Gabriel\\AppData\\Local\\Temp\\",
+  "rust_in_path": false,
+  "manifest_before": "69728FF4F46255D51E24775D629E3120802D0E6B24626C60A979453FA72D81C2",
+  "manifest_after": "69728FF4F46255D51E24775D629E3120802D0E6B24626C60A979453FA72D81C2",
+  "clean_second_machine_tested": false
+}

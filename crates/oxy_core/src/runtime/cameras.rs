@@ -34,6 +34,7 @@ struct Transition {
 }
 #[derive(Default)]
 pub(super) struct Cameras {
+    debug: Option<CameraDebug>,
     active_override: Option<Id>,
     states: HashMap<Id, RigState>,
     pub(super) worlds: Option<Arc<HashMap<Id, Mat4>>>,
@@ -322,7 +323,15 @@ impl Cameras {
                 .map_or(settings.eye_height * scale.y, |s| {
                     s.previous_eye_height + (s.eye_height - s.previous_eye_height) * alpha
                 });
-            let height = character.map_or(1.8 * scale.y, |s| s.height);
+            let height = character.map_or_else(
+                || {
+                    view.entity(target)
+                        .and_then(|e| e.character3d.as_ref())
+                        .and_then(|c| c.body.prepare(false, c.crouch_height, scale.y, 0.).ok())
+                        .map_or(1.8 * scale.y, |b| b.height)
+                },
+                |s| s.height,
+            );
             // Sweep from inside the body to the smoothed eye: posture animation
             // cannot leave the camera inside yesterday's ceiling.
             anchor = feet + Vec3::Y * (height * 0.5);
@@ -408,9 +417,12 @@ impl Cameras {
                 * (1. + (desired.fov.to_radians() * 0.5).tan().powi(2) * (1. + aspect * aspect))
                     .sqrt(),
         ) + settings.collision_margin;
+        let proposed = desired.position;
+        let mut contact = None;
         if let Some(world) = &self.query_world {
             anchor = world.recover_sphere(anchor, radius, radius * 2., &options)?;
-            desired.position = sweep_camera(world, anchor, desired.position, radius, &options)?;
+            (desired.position, contact) =
+                sweep_camera_hit(world, anchor, desired.position, radius, &options)?;
             if mode == CameraMode::ThirdPerson
                 && self.transition.is_none()
                 && let Some(state) = self.states.get_mut(&entity.id)
@@ -460,6 +472,13 @@ impl Cameras {
         {
             desired.rotation = rotation;
         }
+        self.debug = Some(CameraDebug {
+            pose: desired.clone(),
+            desired: proposed,
+            anchor,
+            radius,
+            contact,
+        });
         self.pose = Some(desired);
         Ok(())
     }
@@ -471,16 +490,94 @@ fn sweep_camera(
     radius: f32,
     options: &QueryOptions,
 ) -> Result<Vec3, String> {
+    sweep_camera_hit(world, from, to, radius, options).map(|(position, _)| position)
+}
+fn sweep_camera_hit(
+    world: &PhysicsWorld,
+    from: Vec3,
+    to: Vec3,
+    radius: f32,
+    options: &QueryOptions,
+) -> Result<(Vec3, Option<crate::physics3d::QueryHit>), String> {
     let delta = to - from;
     if delta.length_squared() < 1e-12 {
-        return Ok(from);
+        return Ok((from, None));
     }
-    let fraction = world
-        .cast(&CollisionShape::Sphere { radius }, from, delta, options)?
+    let hit = world.cast(&CollisionShape::Sphere { radius }, from, delta, options)?;
+    let fraction = hit
+        .as_ref()
         .map_or(1., |hit| (hit.fraction - 0.001 / delta.length()).max(0.));
-    Ok(from + delta * fraction)
+    Ok((from + delta * fraction, hit))
+}
+
+#[derive(Clone, Debug)]
+pub struct CameraDebug {
+    pub pose: GameCameraPose,
+    pub desired: Vec3,
+    pub anchor: Vec3,
+    pub radius: f32,
+    pub contact: Option<crate::physics3d::QueryHit>,
+}
+/// Authored scene queries only: no Runtime, input timeline, tasks or simulation.
+/// A bounded world cache reuses the same prepared physics shapes between edits.
+#[derive(Default)]
+pub struct CameraPreview {
+    world: Option<PhysicsWorld>,
+}
+impl CameraPreview {
+    pub fn evaluate(
+        &mut self,
+        scene: &Scene,
+        id: &str,
+        aspect: f32,
+        crouched: bool,
+    ) -> Result<CameraDebug, String> {
+        let entity = scene
+            .entity(id)
+            .filter(|e| e.camera.is_some())
+            .ok_or("Escolha uma câmera")?;
+        let world = self.world.get_or_insert_with(PhysicsWorld::new);
+        world.sync_scene(scene, false)?;
+        let mut characters = characters::Characters::default();
+        if let Some(rig) = &entity.camera_rig
+            && let Some(target) = &rig.target
+        {
+            let (feet, rotation, scale) =
+                crate::physics3d::world_pose(scene.world_matrix(target)?)?;
+            let mut state = CharacterState::new(feet, angles(rotation).0);
+            state.pitch = angles(rotation).1;
+            state.height = scene
+                .entity(target)
+                .and_then(|e| e.character3d.as_ref())
+                .map(|c| c.body.prepare(crouched, c.crouch_height, scale.y, 0.))
+                .transpose()?
+                .map_or(1.8 * scale.y, |b| b.height);
+            state.eye_height = if crouched {
+                rig.crouched_eye_height
+            } else {
+                rig.eye_height
+            } * scale.y;
+            state.previous_eye_height = state.eye_height;
+            characters.states.insert(target.clone(), state);
+        }
+        let mut cameras = Cameras {
+            active_override: Some(id.into()),
+            aspect,
+            query_world: self.world.take(),
+            ..Default::default()
+        };
+        let result = cameras
+            .control(scene, &characters, &InputFrame::default())
+            .and_then(|_| cameras.present(scene, &characters, 1., Vec2::ZERO, 0.));
+        self.world = cameras.query_world.take();
+        result?;
+        cameras.debug.ok_or("Prévia de câmera indisponível".into())
+    }
 }
 impl Runtime {
+    pub fn camera_debug(&self) -> Option<&CameraDebug> {
+        self.cameras.debug.as_ref()
+    }
     pub(in crate::runtime) fn begin_camera_input(&mut self, input: &InputFrame) {
         if self.scene().kind != SceneKind::ThreeD
             || !self.scene().entities.iter().any(|e| e.camera_rig.is_some())

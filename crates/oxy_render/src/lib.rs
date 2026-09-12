@@ -126,6 +126,7 @@ pub struct Renderer {
     overrides: HashMap<Id, TextureOverride>,
     white: TextureEntry,
     target: Target,
+    preview_target: Option<Target>,
     project_root: PathBuf,
     errors: Vec<String>,
     /// Grid is normally visible for editing and disabled for gameplay.
@@ -227,6 +228,7 @@ impl Renderer {
             overrides: HashMap::new(),
             white,
             target,
+            preview_target: None,
             project_root: PathBuf::new(),
             errors: Vec::new(),
             show_grid: true,
@@ -396,6 +398,37 @@ impl Renderer {
         self.textures[&key].bind_group.clone()
     }
 
+    /// One extra output, sharing all geometry, textures, pipelines and buffers.
+    /// Commands are submitted before the next view; no GPU readback is involved.
+    pub fn render_preview(
+        &mut self,
+        rs: &RenderState,
+        project: &Project,
+        scene: &Scene,
+        root: &Path,
+        camera: &CameraState,
+        size: [u32; 2],
+    ) -> egui::TextureId {
+        let mut target = self
+            .preview_target
+            .take()
+            .unwrap_or_else(|| make_target(rs, [1, 1], None));
+        std::mem::swap(&mut self.target, &mut target);
+        let grid = self.show_grid;
+        let debug = self.debug_colliders;
+        self.show_grid = false;
+        let result = self.render(rs, project, scene, root, camera, size, None, false);
+        self.show_grid = grid;
+        self.debug_colliders = debug;
+        std::mem::swap(&mut self.target, &mut target);
+        self.preview_target = Some(target);
+        result
+    }
+    pub fn close_preview(&mut self, rs: &RenderState) {
+        if let Some(target) = self.preview_target.take() {
+            rs.renderer.write().free_texture(&target.id);
+        }
+    }
     /// Draw into a color/depth target, then expose it as a native egui texture.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
@@ -632,11 +665,16 @@ impl Renderer {
         if !self.debug_colliders && selected.is_empty() {
             return overlay;
         }
-        if scene.entities.iter().any(|e| e.physics3d.is_some()) {
+        if scene
+            .entities
+            .iter()
+            .any(|e| e.physics3d.is_some() || e.character3d.is_some())
+        {
             let mut cache = self.physics_debug.borrow_mut();
             let include_disabled = runtime_world.is_some()
                 && scene.entities.iter().any(|e| {
-                    e.physics3d.as_ref().is_some_and(|c| !c.enabled)
+                    (e.physics3d.as_ref().is_some_and(|c| !c.enabled)
+                        || e.character3d.as_ref().is_some_and(|c| !c.body.enabled))
                         && (show_disabled || selected.contains(&e.id))
                 });
             if runtime_world.is_none() || include_disabled {
@@ -656,15 +694,20 @@ impl Renderer {
                     .into_iter()
                     .flat_map(|w| w.debug_shapes())
                     .filter(|b| {
-                        view.entity(b.id)
-                            .and_then(|e| e.physics3d.as_ref())
-                            .is_some_and(|c| !c.enabled)
+                        view.entity(b.id).is_some_and(|e| {
+                            e.physics3d.as_ref().is_some_and(|c| !c.enabled)
+                                || e.character3d.as_ref().is_some_and(|c| !c.body.enabled)
+                        })
                     }),
             ) {
                 let Some(entity) = view.entity(body.id) else {
                     continue;
                 };
-                let Some(config) = &entity.physics3d else {
+                let movement = entity
+                    .character3d
+                    .as_ref()
+                    .and_then(|c| c.body.collider(false, c.crouch_height).ok());
+                let Some(config) = movement.as_ref().or(entity.physics3d.as_ref()) else {
                     continue;
                 };
                 let active = selected.iter().any(|id| id == body.id);
@@ -721,7 +764,9 @@ impl Renderer {
                         format!(
                             "{} · {}{}",
                             entity.name,
-                            if config.sensor {
+                            if entity.character3d.is_some() {
+                                "Corpo de movimento"
+                            } else if config.sensor {
                                 "Área 3D"
                             } else {
                                 "Colisor 3D"

@@ -55,13 +55,10 @@ fn available(kind: SceneKind, e: &Entity) -> Vec<Component> {
     }
     let mut entries = Vec::new();
     if e.controller.is_none() && e.collider.is_none() {
-        let compatible_capsule=e.physics3d.as_ref().is_none_or(|c| {
-            matches!(c.shape,CollisionShape::Capsule{height,..} if c.enabled && !c.sensor && c.validate().is_ok() && Vec3::from(c.center).abs_diff_eq(Vec3::Y*height*0.5,0.00001))
-        });
-        if e.character3d.is_none() && e.platform.is_none() && compatible_capsule {
+        if e.character3d.is_none() && e.platform.is_none() && e.physics3d.is_none() {
             entries.push(Component::Character);
         }
-        if e.physics3d.is_none() {
+        if e.physics3d.is_none() && e.character3d.is_none() {
             entries.extend([Component::Collider3d, Component::Sensor3d]);
         }
         if e.platform.is_none()
@@ -84,22 +81,9 @@ fn add(
     }
     match component {
         Component::Character => {
-            let mut config = CharacterConfig::default();
-            if let Some(c) = &e.physics3d
-                && let CollisionShape::Capsule { height, radius } = c.shape
-            {
-                config.crouch_height = config.crouch_height.clamp(radius * 2., height);
-            }
+            let config = CharacterConfig::default();
             oxy_core::input_actions::ensure_character(project, &config);
             e.character3d = Some(config);
-            e.physics3d.get_or_insert(Collider3d {
-                shape: CollisionShape::Capsule {
-                    height: 1.8,
-                    radius: 0.3,
-                },
-                center: [0., 0.9, 0.],
-                ..Default::default()
-            });
         }
         Component::CameraControl => {
             let rig = CameraRig::default();

@@ -63,14 +63,6 @@ fn native_cameras_v030() {
     let mut body = Entity::new("Personagem", None);
     body.character3d = Some(config);
     body.transform.position = [0., 0.02, 0.];
-    body.physics3d = Some(Collider3d {
-        shape: CollisionShape::Capsule {
-            height: 1.8,
-            radius: 0.3,
-        },
-        center: [0., 0.9, 0.],
-        ..Default::default()
-    });
     let mut torso = Entity::new("Tronco", Some(Primitive::Cube));
     torso.parent = Some(body.id.clone());
     torso.dimensions = [0.45, 0.9, 0.3];

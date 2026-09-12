@@ -68,6 +68,15 @@ impl CameraState {
         }
         result
     }
+    pub fn from_pose(scene: &Scene, pose: &oxy_core::character::GameCameraPose) -> Self {
+        let mut result = Self::for_scene(scene);
+        result.game_view =
+            Some(Mat4::from_rotation_translation(pose.rotation, pose.position).inverse());
+        result.target = pose.position;
+        result.fov = pose.fov;
+        result.hidden = pose.hidden.clone();
+        result
+    }
     pub fn scene_view<'a>(&self, scene: &'a Scene) -> oxy_core::scene_view::SceneView<'a> {
         if let Some(worlds) = &self.worlds {
             oxy_core::scene_view::SceneView::with_worlds(scene, worlds.clone())

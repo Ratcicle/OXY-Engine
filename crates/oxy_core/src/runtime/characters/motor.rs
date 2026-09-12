@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    physics3d::{CapsuleMotion, CollisionShape, QueryHit},
+    physics3d::{QueryHit, ShapeMotion},
     surface::{SurfaceMaterial, VelocitySpace},
 };
 
@@ -17,7 +17,7 @@ pub(super) struct MotorInput {
 pub(super) struct MotorContext<'a> {
     pub world: &'a PhysicsWorld,
     pub config: &'a CharacterConfig,
-    pub standing: CapsuleMotion,
+    pub standing: ShapeMotion,
     pub options: QueryOptions,
     pub surfaces: &'a [SurfaceMaterial],
     pub platforms: &'a HashMap<Id, platforms::PlatformFrame>,
@@ -33,15 +33,6 @@ pub(super) struct MotorStep {
     pub path: Vec<(Vec3, Vec3)>,
     pub lateral: Vec<QueryHit>,
     pub warning: Option<String>,
-}
-fn shape(motion: CapsuleMotion) -> CollisionShape {
-    CollisionShape::Capsule {
-        height: motion.height,
-        radius: motion.radius,
-    }
-}
-fn center(feet: Vec3, height: f32) -> Vec3 {
-    feet + Vec3::Y * (height * 0.5)
 }
 fn append_path(
     path: &mut Vec<(Vec3, Vec3)>,
@@ -121,19 +112,23 @@ impl MotorContext<'_> {
     fn probe(
         &self,
         feet: Vec3,
-        motion: CapsuleMotion,
+        motion: &ShapeMotion,
         previous: Option<&str>,
     ) -> Result<Option<QueryHit>, String> {
         let lift = motion.margin + 0.025;
         let distance = lift + motion.snap + motion.margin + 0.03;
-        let at = center(feet + Vec3::Y * lift, motion.height);
+        let at = motion.at(feet + Vec3::Y * lift);
         let mut options = self.options.clone();
         let mut best = None;
         // Reject walls in the support probe; collision resolution still sees them.
         for _ in 0..8 {
-            let Some(hit) = self
-                .world
-                .cast(&shape(motion), at, -Vec3::Y * distance, &options)?
+            let Some(hit) = self.world.cast_prepared(
+                &motion.geometry,
+                motion.rotation,
+                at,
+                -Vec3::Y * distance,
+                &options,
+            )?
             else {
                 break;
             };
@@ -148,10 +143,13 @@ impl MotorContext<'_> {
         {
             let mut same = self.options.clone();
             same.only = Some(id.into());
-            if let Some(old) = self
-                .world
-                .cast(&shape(motion), at, -Vec3::Y * distance, &same)?
-                && old.distance <= hit.distance + 0.02
+            if let Some(old) = self.world.cast_prepared(
+                &motion.geometry,
+                motion.rotation,
+                at,
+                -Vec3::Y * distance,
+                &same,
+            )? && old.distance <= hit.distance + 0.02
                 && old.normal.y >= motion.climb_degrees.to_radians().cos()
             {
                 best = Some(old);
@@ -217,7 +215,12 @@ impl MotorContext<'_> {
         if state.height <= 0. {
             state.height = self.standing.height;
         }
-        let crouch_height = config.crouch_height * self.scale;
+        let mut crouched =
+            config
+                .body
+                .prepare(true, config.crouch_height, self.scale, state.yaw)?;
+        crouched.settings = self.standing.settings;
+        let crouch_height = crouched.height;
         if let Some(wanted) = input.crouch_override {
             state.want_crouch = wanted;
         } else if config.crouch_toggle {
@@ -232,8 +235,8 @@ impl MotorContext<'_> {
             state.slide_latched = false;
         }
         let old_posture = state.posture;
-        let mut motion = self.standing;
-        motion.height = state.height;
+        let mut standing = self.standing.clone();
+        standing.set_yaw(state.yaw);
         if !state.want_crouch {
             state.slide_latched = false;
         }
@@ -266,9 +269,10 @@ impl MotorContext<'_> {
         } else if state.posture == Posture::Crouched
             && self
                 .world
-                .penetrating(
-                    &shape(self.standing),
-                    center(state.position, self.standing.height),
+                .penetrating_prepared(
+                    &standing.geometry,
+                    standing.rotation,
+                    standing.at(state.position),
                     &self.options,
                 )?
                 .is_empty()
@@ -276,7 +280,11 @@ impl MotorContext<'_> {
             state.posture = Posture::Standing;
             state.height = self.standing.height;
         }
-        motion.height = state.height;
+        let mut motion = if state.posture == Posture::Standing {
+            standing
+        } else {
+            crouched
+        };
         if old_posture != state.posture {
             record(
                 &mut out.events,
@@ -302,6 +310,10 @@ impl MotorContext<'_> {
                             .collider
                             .as_ref()
                             .is_some_and(|c| c.enabled && !c.is_trigger)
+                        || self.scene.entities[i]
+                            .character3d
+                            .as_ref()
+                            .is_some_and(|c| c.body.enabled)
                 });
             if !exists
                 || self
@@ -333,16 +345,12 @@ impl MotorContext<'_> {
                 if carry.length_squared() > 1e-12 {
                     let mut options = self.options.clone();
                     options.exclude.insert(support.object.clone());
-                    let mut carry_motion = motion;
+                    let mut carry_motion = motion.clone();
                     carry_motion.snap = 0.;
                     carry_motion.step_height = 0.;
-                    let resolved = self.world.move_capsule(
-                        state.position,
-                        carry,
-                        dt,
-                        carry_motion,
-                        &options,
-                    )?;
+                    let resolved =
+                        self.world
+                            .move_body(state.position, carry, dt, &carry_motion, &options)?;
                     append_path(&mut out.path, state.position, &resolved);
                     state.position += resolved.delta;
                     state.velocity += (resolved.delta - carry) / dt;
@@ -351,23 +359,25 @@ impl MotorContext<'_> {
             }
         }
         // Recover only genuine penetration (touching the floor is allowed).
-        let penetrating = self.world.penetrating(
-            &shape(motion),
-            center(state.position, motion.height),
+        let penetrating = self.world.penetrating_prepared(
+            &motion.geometry,
+            motion.rotation,
+            motion.at(state.position),
             &self.options,
         )?;
         if !penetrating.is_empty() {
             let recovered =
                 self.world
-                    .move_capsule(state.position, Vec3::ZERO, dt, motion, &self.options)?;
+                    .move_body(state.position, Vec3::ZERO, dt, &motion, &self.options)?;
             let recovery = recovered
                 .delta
                 .clamp_length_max(config.recovery_distance * self.scale);
             let mut path_options = self.options.clone();
             path_options.exclude.extend(penetrating);
-            let obstacle = self.world.cast(
-                &shape(motion),
-                center(state.position, motion.height),
+            let obstacle = self.world.cast_prepared(
+                &motion.geometry,
+                motion.rotation,
+                motion.at(state.position),
                 recovery,
                 &path_options,
             )?;
@@ -379,9 +389,10 @@ impl MotorContext<'_> {
             }
             if !self
                 .world
-                .penetrating(
-                    &shape(motion),
-                    center(state.position, motion.height),
+                .penetrating_prepared(
+                    &motion.geometry,
+                    motion.rotation,
+                    motion.at(state.position),
                     &self.options,
                 )?
                 .is_empty()
@@ -396,7 +407,7 @@ impl MotorContext<'_> {
 
         let transport_velocity = state.support.as_ref().map_or(Vec3::ZERO, |s| s.velocity);
         if state.grounded {
-            let contact = self.probe(state.position, motion, previous_support.as_deref())?;
+            let contact = self.probe(state.position, &motion, previous_support.as_deref())?;
             state.grounded = contact.is_some();
             state.support = contact.and_then(|hit| self.support(hit));
         }
@@ -502,11 +513,11 @@ impl MotorContext<'_> {
         }
         let before_velocity = state.velocity;
         let ascending = !state.grounded && state.velocity.y > 0.;
-        let resolved = self.world.move_capsule(
+        let resolved = self.world.move_body(
             state.position,
             desired_velocity * dt,
             dt,
-            motion,
+            &motion,
             &self.options,
         )?;
         append_path(&mut out.path, state.position, &resolved);
@@ -514,7 +525,7 @@ impl MotorContext<'_> {
         // Rapier's `is_sliding_down_slope` also describes unconstrained tangents
         // on almost-flat contacts. Walkability comes from our support normal.
         state.support = if !ascending {
-            self.probe(state.position, motion, previous_support.as_deref())?
+            self.probe(state.position, &motion, previous_support.as_deref())?
                 .and_then(|hit| self.support(hit))
         } else {
             None

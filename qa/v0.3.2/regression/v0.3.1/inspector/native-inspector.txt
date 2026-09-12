@@ -1,0 +1,86 @@
+Concluído: true
+Erro: None
+Clique: + Objeto em [131.5 117.8]
+Clique: Câmera em [127.0 347.0]
+Verificado: i031_camera_empty
+Clique: + Adicionar componente em [1078.5 300.1]
+Verificado: i031_camera_menu
+Clique: Controle da câmera em [1063.5 328.5]
+Verificado: i031_camera
+Tecla Z, Ctrl=true
+Verificado: i031_camera_empty
+Tecla Y, Ctrl=true
+Verificado: i031_camera
+Tecla Delete, Ctrl=false
+Verificado: i031_no_preset
+Selecionar hierarquia: Peça de teste
+Verificado: i031_empty
+Captura GPU da janela: object-clean.png
+Captura object-clean.png: 1280 × 900 pixels físicos; 1 pixels por ponto
+Clique: + Adicionar componente em [1078.5 300.1]
+Verificado: i031_menu
+Clique: Plataforma móvel em [1059.0 403.5]
+Verificado: i031_platform
+Clique: Plataforma móvel em [1068.0 299.1]
+Clique: Remover componente em [1091.0 454.6]
+Verificado: i031_platform_removed
+Tecla Z, Ctrl=true
+Verificado: i031_platform
+Tecla Z, Ctrl=true
+Verificado: i031_empty
+Tecla Y, Ctrl=true
+Verificado: i031_platform
+Tecla Z, Ctrl=true
+Clique: + Objeto em [131.5 117.8]
+Clique: Personagem em primeira pessoa em [199.5 386.0]
+Verificado: i031_preset
+Tecla Z, Ctrl=true
+Verificado: i031_no_preset
+Tecla Y, Ctrl=true
+Verificado: i031_preset
+Selecionar hierarquia: Jogador
+Verificado: i031_player
+Clique: Personagem 3D em [1062.5 266.6]
+Verificado: i031_groups
+Captura GPU da janela: player-inspector.png
+Captura player-inspector.png: 1280 × 900 pixels físicos; 1 pixels por ponto
+Selecionar hierarquia: Câmera principal
+Verificado: i031_camera
+Clique: Controle da câmera em [1072.5 299.1]
+Clique: Básico em [1053.0 406.1]
+Verificado: i031_target
+Captura GPU da janela: camera-inspector.png
+Captura camera-inspector.png: 1280 × 900 pixels físicos; 1 pixels por ponto
+Redimensionar: [920.0 600.0]
+Verificado: i031_camera
+Captura GPU da janela: camera-small.png
+Captura camera-small.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Redimensionar: [1280.0 900.0]
+Selecionar hierarquia: Jogador
+Verificado: i031_groups
+Verificado: i031_before_parent
+Arrastar hierarquia: Peça de teste → Grupo de teste
+Verificado: i031_parent
+Selecionar hierarquia: Grupo de teste
+Abrir menu de contexto: Grupo de teste
+Verificado: i031_context
+Clique: Salvar hierarquia como modelo em [210.0 371.5]
+Verificado: i031_model
+Tecla Z, Ctrl=true
+Verificado: i031_no_model
+Tecla Y, Ctrl=true
+Verificado: i031_model
+Tecla F2, Ctrl=false
+Tecla A, Ctrl=true
+Digitar: Articulação renomeada
+Tecla Enter, Ctrl=false
+Verificado: i031_renamed
+Tecla D, Ctrl=true
+Tecla Delete, Ctrl=false
+Verificado: i031_original
+Tecla Z, Ctrl=true
+Tecla Y, Ctrl=true
+Verificado: i031_original
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Capturas: ["object-clean.png", "player-inspector.png", "camera-inspector.png", "camera-small.png"]

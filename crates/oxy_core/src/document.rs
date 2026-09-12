@@ -5,7 +5,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 pub type Id = String;
 pub fn new_id() -> Id {
     uuid::Uuid::new_v4().to_string()
@@ -791,7 +791,11 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
             .filter_map(|a| a.model.as_deref())
             .flatten(),
     ) {
-        if let Some(id) = entity.physics3d.as_ref().and_then(|c| c.surface.as_deref())
+        if let Some(id) = entity
+            .character3d
+            .as_ref()
+            .and_then(|c| c.body.surface.as_deref())
+            .or_else(|| entity.physics3d.as_ref().and_then(|c| c.surface.as_deref()))
             && !surfaces.contains(id)
         {
             return Err(format!("{}: superfície física ausente ({id})", entity.name));

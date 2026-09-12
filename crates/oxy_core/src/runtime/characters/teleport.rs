@@ -105,21 +105,22 @@ impl Runtime {
         let old = &self.characters.states[id];
         let entity = self.entity(id).unwrap();
         let config = entity.character3d.as_ref().unwrap();
-        let motion = config.motion(entity, old.uniform_scale)?;
-        let shape = crate::physics3d::CollisionShape::Capsule {
-            height: old.height,
-            radius: motion.radius,
-        };
+        let motion = config.body.prepare(
+            old.posture != Posture::Standing,
+            config.crouch_height,
+            old.uniform_scale,
+            options.yaw.unwrap_or(old.yaw),
+        )?;
         let mut filter = QueryOptions {
-            category: entity.physics3d.as_ref().unwrap().filter.category,
-            mask: entity.physics3d.as_ref().unwrap().filter.mask,
+            category: config.body.filter.category,
+            mask: config.body.filter.mask,
             ..QueryOptions::excluding(id)
         };
         filter.exclude.extend(self.scene().descendants(id));
         let world = self.characters.world.as_ref().unwrap();
         let free = |feet: Vec3| {
             world
-                .penetrating(&shape, feet + Vec3::Y * (old.height * 0.5), &filter)
+                .penetrating_prepared(&motion.geometry, motion.rotation, motion.at(feet), &filter)
                 .map(|ids| ids.is_empty())
         };
         let mut selected = free(destination)?.then_some(destination);
@@ -233,7 +234,39 @@ impl Runtime {
             return Err("Orientação inválida.".into());
         }
         self.ensure_character_state(id)?;
+        self.refresh_character_queries()?;
         let state = &self.characters.states[id];
+        let config = self.entity(id).unwrap().character3d.as_ref().unwrap();
+        let body = config.body.prepare(
+            state.posture != Posture::Standing,
+            config.crouch_height,
+            state.uniform_scale,
+            yaw,
+        )?;
+        let mut filter = QueryOptions {
+            category: config.body.filter.category,
+            mask: config.body.filter.mask,
+            ..QueryOptions::excluding(id)
+        };
+        filter.exclude.extend(self.scene().descendants(id));
+        if !self
+            .characters
+            .world
+            .as_ref()
+            .unwrap()
+            .penetrating_prepared(
+                &body.geometry,
+                body.rotation,
+                body.at(state.position),
+                &filter,
+            )?
+            .is_empty()
+        {
+            return Err(
+                "A nova orientação do corpo ocuparia um obstáculo; orientação anterior preservada."
+                    .into(),
+            );
+        }
         let transform = self.character_transform(id, state.position, yaw, state.uniform_scale)?;
         self.entity_mut(id).unwrap().transform = transform;
         let state = self.characters.states.get_mut(id).unwrap();
@@ -269,6 +302,38 @@ impl Runtime {
             return Err(
                 "O novo limite reduziria o embalo atual. Autorize a redução explicitamente.".into(),
             );
+        }
+        let body_changed = e.character3d.as_ref().is_some_and(|old| {
+            old.body != config.body || old.crouch_height != config.crouch_height
+        });
+        if body_changed {
+            let body = config.body.prepare(
+                state.posture != Posture::Standing,
+                config.crouch_height,
+                state.uniform_scale,
+                state.yaw,
+            )?;
+            let position = state.position;
+            let mut filter = QueryOptions {
+                category: config.body.filter.category,
+                mask: config.body.filter.mask,
+                ..QueryOptions::excluding(id)
+            };
+            filter.exclude.extend(self.scene().descendants(id));
+            self.refresh_character_queries()?;
+            if !self
+                .characters
+                .world
+                .as_ref()
+                .unwrap()
+                .penetrating_prepared(&body.geometry, body.rotation, body.at(position), &filter)?
+                .is_empty()
+            {
+                return Err(
+                    "O novo corpo ocuparia um obstáculo; configuração anterior preservada.".into(),
+                );
+            }
+            self.characters.states.get_mut(id).unwrap().height = body.height;
         }
         self.entity_mut(id).unwrap().character3d = Some(config);
         Ok(())

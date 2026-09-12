@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod audio;
 pub mod broadphase;
+pub mod camera_authoring;
 pub mod character;
 pub mod collision;
 pub mod document;
@@ -15,6 +16,7 @@ pub mod input_actions;
 pub mod input_timeline;
 pub mod metrics;
 pub mod migration;
+pub mod movement_body;
 pub mod movement_presets;
 pub mod painting;
 pub mod persistence;

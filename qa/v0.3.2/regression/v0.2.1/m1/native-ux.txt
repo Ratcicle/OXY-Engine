@@ -1,0 +1,57 @@
+Concluído: true
+Erro: None
+Verificado: ux_base
+Clique: Novo projeto em [113.7 192.5]
+Captura GPU da janela: new-project.png
+Captura new-project.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Cancelar em [667.6 549.1]
+Verificado: ux_unchanged
+Clique: Novo projeto em [113.7 192.5]
+Clique: Cena 3D
+Comece com modelos, profundidade e uma câmera 3D. em [737.5 486.1]
+Clique: Criar projeto em [578.5 550.6]
+Verificado: ux_new_3d
+Clique: Interface: 100% em [483.8 45.0]
+Clique: 160% em [838.2 451.5]
+Verificado: ux_scale_100
+Captura GPU da janela: pending-scale.png
+Captura pending-scale.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: Cancelar em [678.9 510.0]
+Verificado: ux_scale_100
+Clique: Interface: 100% em [483.8 45.0]
+Clique: 160% em [838.2 451.5]
+Clique: Aplicar em [606.0 511.0]
+Verificado: ux_scale_160
+Captura GPU da janela: 1440-scale160.png
+Captura 1440-scale160.png: 1440 × 900 pixels físicos; 1.6 pixels por ponto
+Janela: 920 × 600 pixels físicos
+Clique: Interface: 160% em [399.8 33.0]
+Captura GPU da janela: 920-scale160.png
+Captura 920-scale160.png: 920 × 600 pixels físicos; 1.6 pixels por ponto
+Clique: 80% em [166.1 189.0]
+Clique: Aplicar em [173.2 248.3]
+Verificado: ux_scale_80
+Clique: Interface: 80% em [479.7 45.5]
+Clique: Restaurar 100% em [633.4 436.1]
+Clique: Aplicar em [462.0 436.1]
+Verificado: ux_scale_100
+Verificado: ux_viewport
+Tecla C, Ctrl=false
+Verificado: ux_refusal
+Captura GPU da janela: refusal-920.png
+Captura refusal-920.png: 920 × 600 pixels físicos; 1 pixels por ponto
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: [crates\oxy_editor\src\app\notices.rs:81 ]
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Clique: ... em [520.3 85.8]
+Clique: Duplicar cena em [554.5 136.5]
+Verificado: ux_duplicate
+Clique: Desfazer em [162.3 45.0]
+Verificado: ux_undo_scene
+Clique: Refazer em [238.2 45.0]
+Verificado: ux_duplicate
+Clique: Projeto em [87.8 46.5]
+Clique: Novo projeto em [103.5 101.0]
+Clique: Cancelar em [407.6 399.1]
+Verificado: ux_duplicate
+Capturas: ["new-project.png", "pending-scale.png", "1440-scale160.png", "920-scale160.png", "refusal-920.png"]

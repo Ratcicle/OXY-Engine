@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
+mod camera_authoring;
 mod cameras;
 mod cuts;
 mod direct;
@@ -29,6 +30,8 @@ use std::{
 
 #[derive(Clone)]
 enum Action {
+    CameraDrag(oxy_core::camera_authoring::CameraField, f32, bool),
+    MeasureCamera(&'static str),
     Direct(&'static str),
     DirectDrag {
         pixels: f32,
@@ -130,6 +133,8 @@ fn wake_after(ctx: &egui::Context, duration: Duration) {
 }
 
 struct NativeQa {
+    camera_measurement: Option<camera_authoring::Measurement>,
+    camera_expected: Option<(oxy_core::camera_authoring::CameraField, f32)>,
     editor: Editor,
     actions: VecDeque<Action>,
     events: VecDeque<Vec<Event>>,
@@ -429,6 +434,8 @@ impl NativeQa {
             Action::Idle,
         ]);
         Self {
+            camera_measurement: None,
+            camera_expected: None,
             editor,
             actions,
             events: VecDeque::new(),
@@ -574,6 +581,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("v032_") {
+            return self.check_camera_authoring(label);
+        }
         if label.starts_with("i031_") {
             return self.check_inspector(label);
         }
@@ -1496,6 +1506,20 @@ impl NativeQa {
                 self.click(button);
                 description = format!("Recolher/expandir {label}");
             }
+            Action::CameraDrag(field, delta, cancel) => {
+                self.camera_drag(field, delta, cancel)?;
+                description = format!("Arrastar alça de câmera {field:?} por {delta} m");
+            }
+            Action::MeasureCamera(label) => {
+                self.camera_measurement = Some(camera_authoring::Measurement {
+                    label,
+                    samples: vec![],
+                    warm: 20,
+                    draws_after_warmup: None,
+                });
+                self.wait = 125;
+                description = format!("Medir CPU do host: {label}");
+            }
             Action::SpatialDrag {
                 face,
                 delta,
@@ -2161,7 +2185,9 @@ impl eframe::App for NativeQa {
             self.report.lock().unwrap().screenshots.push(name);
             self.pending_shot = None;
         }
+        let camera_start = Instant::now();
         self.editor.update(ctx, frame);
+        self.camera_measurement_frame(camera_start.elapsed().as_secs_f64() * 1000.);
         self.surface = capture_surface(ctx);
         if let Some((key, deadline)) = self.held_until {
             if Instant::now() < deadline {

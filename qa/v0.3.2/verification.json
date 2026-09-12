@@ -1,0 +1,24 @@
+{
+  "version": "0.3.2",
+  "base_commit": "bc245c95b6a90854ff90589e99a244f5ad0ac953",
+  "source_sha256": "68a0a8e0914443b8b9f74b5e4949fae1b4cd562a0c3d43cf529aee8f9bfe2dfb",
+  "source_scope": "Paths and bytes sorted; crates/examples/scripts/.cargo .rs/.wgsl/.toml/.json/.ps1 plus Cargo.toml/Cargo.lock; no QA/results/dist/target",
+  "source_files": 222,
+  "workspace_tests_passed": 302,
+  "workspace_ignored": 32,
+  "native_tests_passed": 27,
+  "native_camera_retested_after_nearest_handle_fix": true,
+  "fmt": "pass",
+  "build_workspace_locked": "pass",
+  "clippy_all_targets_all_features_deny_warnings": "pass",
+  "schemas_read": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "schema_written": 4,
+  "native_api": "eframe/WGPU Vulkan, app-isolated egui RawInput; not physical mouse/keyboard OS automation",
+  "migration_nondefault_filters_surface_and_disabled_retested": true,
+  "publication_state_at_local_validation": "No commit/push/tag/release had been created when these local checks were recorded."
+}

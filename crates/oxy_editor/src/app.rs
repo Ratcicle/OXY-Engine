@@ -1,3 +1,4 @@
+mod camera_tools;
 mod diagnostics;
 mod hierarchy;
 mod home;
@@ -99,6 +100,7 @@ pub struct Editor {
     logic_ui: logic::LogicUi,
     modeling: modeling::ModelState,
     physics_ui: physics::PhysicsUi,
+    pub(crate) camera_tools: camera_tools::CameraTools,
     compact_panel: CompactPanel,
     pub state: Snapshot,
     history: CommandHistory,
@@ -215,6 +217,7 @@ impl Editor {
             logic_ui: Default::default(),
             modeling: Default::default(),
             physics_ui: Default::default(),
+            camera_tools: Default::default(),
             compact_panel: Default::default(),
             history: CommandHistory::new(),
             state,
@@ -501,6 +504,7 @@ impl Editor {
         }
     }
     fn sync_textures(&mut self) {
+        self.camera_tools.invalidate_image();
         self.renderer.clear_textures();
         self.game_ui = oxy_render::GameUi::new();
         for (id, pixels) in self.state.images.dirty_images() {
@@ -527,6 +531,7 @@ impl Editor {
         }
     }
     pub fn refresh_texture(&mut self, id: &str) {
+        self.camera_tools.invalidate_image();
         if self
             .studio
             .texture_key
@@ -1058,11 +1063,14 @@ impl eframe::App for Editor {
             }
         }
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let camera_cancelled = (escape || !ctx.input(|i| i.focused)) && self.cancel_camera_drag();
         let cancel_undo = self.mesh_operation_active()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
         let mesh_cancelled = (escape || cancel_undo)
             && (self.cancel_box_selection() || self.cancel_mesh_operation());
-        let dialog_open = self.modeling.creation.is_some()
+        let dialog_open = camera_cancelled
+            || self.camera_dragging()
+            || self.modeling.creation.is_some()
             || mesh_cancelled
             || self.modeling.help
             || self.pending_preferences.is_some()
@@ -1242,6 +1250,7 @@ impl eframe::App for Editor {
                 });
             }
         }
+        self.camera_preview_window(ctx);
         self.asset_delete_dialog(ctx);
         self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);

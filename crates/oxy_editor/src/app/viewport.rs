@@ -95,11 +95,13 @@ impl Editor {
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
         self.editor_size = size;
         let blocked = self.modeling.creation.is_some() || self.modeling.help;
-        if response.hovered() && !self.spatial_active_drag() && !blocked {
+        if response.hovered() && !self.spatial_active_drag() && !self.camera_dragging() && !blocked
+        {
             self.camera.zoom(ui.input(|i| i.smooth_scroll_delta.y));
         }
         if response.dragged_by(egui::PointerButton::Middle)
             && !self.spatial_active_drag()
+            && !self.camera_dragging()
             && !blocked
         {
             let d = ui.input(|i| i.pointer.delta());
@@ -108,6 +110,7 @@ impl Editor {
         if self.scene().kind == SceneKind::ThreeD
             && response.dragged_by(egui::PointerButton::Secondary)
             && !self.spatial_active_drag()
+            && !self.camera_dragging()
             && !blocked
         {
             let d = ui.input(|i| i.pointer.delta());
@@ -159,8 +162,9 @@ impl Editor {
             self.show_disabled_colliders,
         );
         let contour_pick = point.and_then(|p| overlays.pick(p, &self.selection.ids));
-        let handle_owned = !painting && self.spatial_handles(ui, &scene, rect);
-        if !painting && self.mesh_viewport(ui, &scene, rect, &response) {
+        let camera_owned = !painting && self.camera_guides(ui, &scene, rect);
+        let handle_owned = camera_owned || (!painting && self.spatial_handles(ui, &scene, rect));
+        if !painting && !camera_owned && self.mesh_viewport(ui, &scene, rect, &response) {
             return;
         }
         if painting {
@@ -214,7 +218,15 @@ impl Editor {
                 }
             });
             self.selection_outlines(ui, &scene, rect, size);
-            if self.spatial.mode == Tool::Object {
+            if self.spatial.mode == Tool::Object
+                && !handle_owned
+                && !self
+                    .selected
+                    .as_deref()
+                    .and_then(|id| scene.entity(id))
+                    .and_then(|e| e.camera_rig.as_ref())
+                    .is_some_and(|r| r.mode != oxy_core::character::CameraMode::Fixed)
+            {
                 self.gizmo_ui(ui, rect, size);
             }
             let clicks = self

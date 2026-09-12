@@ -38,6 +38,16 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), String> {
         }
     }
     if version < u64::from(SCHEMA_VERSION) {
+        if let Some(scenes) = value["scenes"].as_array_mut() {
+            for scene in scenes {
+                migrate_movement(&mut scene["entities"])?;
+            }
+        }
+        if let Some(assets) = value["assets"].as_array_mut() {
+            for asset in assets {
+                migrate_movement(&mut asset["model"])?;
+            }
+        }
         value["schema_version"] = SCHEMA_VERSION.into();
     }
     let project =
@@ -46,6 +56,61 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), String> {
         project,
         (version < u64::from(SCHEMA_VERSION)).then_some(version as u32),
     ))
+}
+fn migrate_movement(value: &mut serde_json::Value) -> Result<(), String> {
+    let Some(entities) = value.as_array_mut() else {
+        return Ok(());
+    };
+    for entity in entities {
+        if entity["character3d"].is_null() {
+            continue;
+        }
+        let error = |message: &str| {
+            format!(
+                "Não foi possível converter Personagem 3D ‘{}’ ({}): {message}. Documento original preservado.",
+                entity["name"].as_str().unwrap_or("?"),
+                entity["id"].as_str().unwrap_or("?")
+            )
+        };
+        if !entity["character3d"]["body"].is_null() {
+            return Err(error(
+                "o documento antigo já contém um corpo de movimento; conversão ambígua",
+            ));
+        }
+        let collider: crate::physics3d::Collider3d =
+            serde_json::from_value(entity["physics3d"].clone())
+                .map_err(|_| error("cápsula de origem ausente ou inválida"))?;
+        let crate::physics3d::CollisionShape::Capsule { height, .. } = collider.shape else {
+            return Err(error(
+                "a forma de origem não é a cápsula vertical suportada na versão anterior",
+            ));
+        };
+        if collider.sensor
+            || !glam::Vec3::from(collider.center).abs_diff_eq(glam::Vec3::Y * height * 0.5, 1e-5)
+        {
+            return Err(error(
+                "a cápsula é uma área ou seu centro não corresponde à origem nos pés",
+            ));
+        }
+        let body = crate::movement_body::MovementBody {
+            standing: collider.shape,
+            crouched: None,
+            filter: collider.filter,
+            surface: collider.surface,
+            enabled: collider.enabled,
+        };
+        let mut config: crate::character::CharacterConfig =
+            serde_json::from_value(entity["character3d"].clone())
+                .map_err(|_| error("configuração de movimento inválida"))?;
+        config.body = body;
+        config
+            .body
+            .validate(config.crouch_height)
+            .map_err(|e| error(&e))?;
+        entity["character3d"] = serde_json::to_value(config).map_err(|e| e.to_string())?;
+        entity["physics3d"] = serde_json::Value::Null;
+    }
+    Ok(())
 }
 fn migrate_entities(value: &mut serde_json::Value) {
     if let Some(entities) = value.as_array_mut() {

@@ -1,8 +1,10 @@
 //! Query-only Rapier adapter. OXY owns velocities, gravity and platform transport.
 //! Library handles and prepared shapes are transient; external identity is always OXY ID.
+mod movement;
 mod scene;
 mod shapes;
 mod sweep;
+pub use movement::{MotionSettings, ShapeMotion};
 pub use scene::*;
 pub use shapes::*;
 pub use sweep::SweepSpan;
@@ -133,9 +135,6 @@ impl CapsuleMotion {
             return Err("Cápsula: margem, degrau, aderência ou inclinação inválidos.".into());
         }
         Ok(())
-    }
-    fn shape(self) -> SharedShape {
-        SharedShape::capsule_y(self.height * 0.5 - self.radius, self.radius)
     }
 }
 
@@ -409,10 +408,25 @@ impl PhysicsWorld {
         direction: Vec3,
         options: &QueryOptions,
     ) -> Result<Option<QueryHit>, String> {
+        self.cast_prepared(
+            &shape.prepare(Vec3::ONE)?,
+            Quat::IDENTITY,
+            position,
+            direction,
+            options,
+        )
+    }
+    pub fn cast_prepared(
+        &self,
+        shape: &SharedShape,
+        rotation: Quat,
+        position: Vec3,
+        direction: Vec3,
+        options: &QueryOptions,
+    ) -> Result<Option<QueryHit>, String> {
         if !position.is_finite() || !direction.is_finite() {
             return Err("Consulta: posição/deslocamento inválidos.".into());
         }
-        let shape = shape.prepare(Vec3::ONE)?;
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
             self.narrow.query_dispatcher(),
@@ -423,9 +437,9 @@ impl PhysicsWorld {
         self.queries.set(self.queries.get() + 1);
         Ok(queries
             .cast_shape(
-                &pose(position, Quat::IDENTITY),
+                &pose(position, rotation),
                 vector(direction),
-                &*shape,
+                &**shape,
                 ShapeCastOptions {
                     max_time_of_impact: 1.,
                     stop_at_penetration: true,
@@ -487,10 +501,23 @@ impl PhysicsWorld {
         position: Vec3,
         options: &QueryOptions,
     ) -> Result<Vec<Id>, String> {
+        self.overlaps_prepared(
+            &shape.prepare(Vec3::ONE)?,
+            Quat::IDENTITY,
+            position,
+            options,
+        )
+    }
+    pub fn overlaps_prepared(
+        &self,
+        shape: &SharedShape,
+        rotation: Quat,
+        position: Vec3,
+        options: &QueryOptions,
+    ) -> Result<Vec<Id>, String> {
         if !position.is_finite() {
             return Err("Consulta: posição inválida.".into());
         }
-        let shape = shape.prepare(Vec3::ONE)?;
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
             self.narrow.query_dispatcher(),
@@ -500,7 +527,7 @@ impl PhysicsWorld {
         );
         self.queries.set(self.queries.get() + 1);
         let mut result: Vec<_> = queries
-            .intersect_shape(pose(position, Quat::IDENTITY), &*shape)
+            .intersect_shape(pose(position, rotation), &**shape)
             .filter_map(|(h, _)| self.ids.get(&h).cloned())
             .collect();
         result.sort();
@@ -515,25 +542,45 @@ impl PhysicsWorld {
         config: CapsuleMotion,
         options: &QueryOptions,
     ) -> Result<MotionResult, String> {
-        crate::metrics::timed(
-            || self.move_capsule_inner(feet, desired, dt, config, options),
-            |c, ns| c.character_resolve_ns += ns,
-        )
+        config.validate()?;
+        let mut body = ShapeMotion::new(
+            &CollisionShape::Capsule {
+                height: config.height,
+                radius: config.radius,
+            },
+            1.,
+            Quat::IDENTITY,
+        )?;
+        body.settings = config.into();
+        self.move_body(feet, desired, dt, &body, options)
     }
-    fn move_capsule_inner(
+    pub fn move_body(
         &self,
         feet: Vec3,
         desired: Vec3,
         dt: f32,
-        config: CapsuleMotion,
+        config: &ShapeMotion,
+        options: &QueryOptions,
+    ) -> Result<MotionResult, String> {
+        crate::metrics::timed(
+            || self.move_body_inner(feet, desired, dt, config, options),
+            |c, ns| c.character_resolve_ns += ns,
+        )
+    }
+    fn move_body_inner(
+        &self,
+        feet: Vec3,
+        desired: Vec3,
+        dt: f32,
+        config: &ShapeMotion,
         options: &QueryOptions,
     ) -> Result<MotionResult, String> {
         config.validate()?;
         if !feet.is_finite() || !desired.is_finite() || !dt.is_finite() || dt <= 0. {
             return Err("Movimento físico inválido.".into());
         }
-        let shape = config.shape();
-        let center = feet + Vec3::Y * (config.height * 0.5);
+        let shape = &config.geometry;
+        let center = config.at(feet);
         let solver = KinematicCharacterController {
             offset: CharacterLength::Absolute(config.margin),
             max_slope_climb_angle: config.climb_degrees.to_radians(),
@@ -562,8 +609,8 @@ impl PhysicsWorld {
         let movement = solver.move_shape(
             dt,
             &queries,
-            &*shape,
-            &pose(center, Quat::IDENTITY),
+            &**shape,
+            &pose(center, config.rotation),
             vector(desired),
             |collision| {
                 let current = oxy(collision.translation_applied);
@@ -598,10 +645,6 @@ impl PhysicsWorld {
         // combine lift and forward nudge in one waypoint. Define an explicit
         // clearance-checked route before exposing that movement to sensors.
         if config.step_height > 0. {
-            let capsule = CollisionShape::Capsule {
-                height: config.height,
-                radius: config.radius,
-            };
             let original = std::mem::take(&mut result.segments);
             for (index, (from, to)) in original.into_iter().enumerate() {
                 let delta = to - from;
@@ -609,7 +652,7 @@ impl PhysicsWorld {
                     && delta.y > 1e-5
                     && Vec3::new(delta.x, 0., delta.z).length_squared() > 1e-10
                     && self
-                        .cast(&capsule, center + from, delta, options)?
+                        .cast_prepared(shape, config.rotation, center + from, delta, options)?
                         .is_some_and(|h| h.fraction < 0.9999);
                 if blocked {
                     let raised = from + Vec3::Y * (config.step_height + config.margin);
@@ -617,7 +660,7 @@ impl PhysicsWorld {
                     let route = [(from, raised), (raised, over), (over, to)];
                     for (a, b) in route {
                         if self
-                            .cast(&capsule, center + a, b - a, options)?
+                            .cast_prepared(shape, config.rotation, center + a, b - a, options)?
                             .is_some_and(|h| h.fraction < 0.9999)
                         {
                             return Err("Não foi possível validar o trajeto do degrau; movimento preservado.".into());
@@ -628,6 +671,37 @@ impl PhysicsWorld {
                     result.segments.push((from, to));
                 }
             }
+        }
+        // Rapier's generic support-map snap can cross a flat face while starting
+        // within its target margin (notably boxes/convexes). Validate the resolved
+        // route against actual volumes before accepting it. Capsule behavior is
+        // retained; it has its own analytic path in Parry.
+        if !matches!(shape.as_typed_shape(), TypedShape::Capsule(_))
+            && !self
+                .penetrating_prepared(shape, config.rotation, center + result.delta, options)?
+                .is_empty()
+            && self
+                .penetrating_prepared(shape, config.rotation, center, options)?
+                .is_empty()
+        {
+            let mut safe = Vec::new();
+            for &(from, to) in &result.segments {
+                let delta = to - from;
+                if let Some(hit) =
+                    self.cast_prepared(shape, config.rotation, center + from, delta, options)?
+                {
+                    let approach = -delta.dot(hit.normal);
+                    if approach > 1e-6 {
+                        let fraction = (hit.fraction - config.margin / approach).clamp(0., 1.);
+                        result.delta = from + delta * fraction;
+                        safe.push((from, result.delta));
+                        result.contacts.push(hit);
+                        break;
+                    }
+                }
+                safe.push((from, to));
+            }
+            result.segments = safe;
         }
         if !result.delta.is_finite() {
             return Err("Resolvedor retornou movimento inválido; posição preservada.".into());
@@ -642,8 +716,24 @@ impl PhysicsWorld {
         position: Vec3,
         options: &QueryOptions,
     ) -> Result<Vec<Id>, String> {
+        self.penetrating_prepared(
+            &shape.prepare(Vec3::ONE)?,
+            Quat::IDENTITY,
+            position,
+            options,
+        )
+    }
+    pub fn penetrating_prepared(
+        &self,
+        shape: &SharedShape,
+        rotation: Quat,
+        position: Vec3,
+        options: &QueryOptions,
+    ) -> Result<Vec<Id>, String> {
         let mut ids = Vec::new();
-        self.visit_penetrations(shape, position, options, |id, _, _, _| ids.push(id.clone()))?;
+        self.visit_penetrations(shape, rotation, position, options, |id, _, _, _| {
+            ids.push(id.clone())
+        })?;
         ids.sort();
         ids.dedup();
         Ok(ids)
@@ -656,24 +746,45 @@ impl PhysicsWorld {
         position: Vec3,
         options: &QueryOptions,
     ) -> Result<Vec<QueryHit>, String> {
+        self.penetration_contacts_prepared(
+            &shape.prepare(Vec3::ONE)?,
+            Quat::IDENTITY,
+            position,
+            options,
+        )
+    }
+    pub fn penetration_contacts_prepared(
+        &self,
+        shape: &SharedShape,
+        rotation: Quat,
+        position: Vec3,
+        options: &QueryOptions,
+    ) -> Result<Vec<QueryHit>, String> {
         let mut result = Vec::new();
-        self.visit_penetrations(shape, position, options, |id, point, normal, distance| {
-            result.push(QueryHit {
-                object: id.clone(),
-                point,
-                normal,
-                distance,
-                surface: self.entries[id].surface.clone(),
-                ..Default::default()
-            });
-        })?;
+        self.visit_penetrations(
+            shape,
+            rotation,
+            position,
+            options,
+            |id, point, normal, distance| {
+                result.push(QueryHit {
+                    object: id.clone(),
+                    point,
+                    normal,
+                    distance,
+                    surface: self.entries[id].surface.clone(),
+                    ..Default::default()
+                });
+            },
+        )?;
         result.sort_by(|a, b| a.object.cmp(&b.object));
         result.dedup_by(|a, b| a.object == b.object);
         Ok(result)
     }
     fn visit_penetrations(
         &self,
-        shape: &CollisionShape,
+        shape: &SharedShape,
+        rotation: Quat,
         position: Vec3,
         options: &QueryOptions,
         mut visit: impl FnMut(&Id, Vec3, Vec3, f32),
@@ -681,8 +792,7 @@ impl PhysicsWorld {
         if !position.is_finite() {
             return Err("Consulta: posição inválida.".into());
         }
-        let shape = shape.prepare(Vec3::ONE)?;
-        let at = pose(position, Quat::IDENTITY);
+        let at = pose(position, rotation);
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
             self.narrow.query_dispatcher(),
@@ -691,13 +801,13 @@ impl PhysicsWorld {
             QueryFilter::default().predicate(&predicate),
         );
         self.queries.set(self.queries.get() + 1);
-        for (handle, collider) in queries.intersect_shape(at, &*shape) {
+        for (handle, collider) in queries.intersect_shape(at, &**shape) {
             let contact = self
                 .narrow
                 .query_dispatcher()
                 .contact(
                     &at.inv_mul(collider.position()),
-                    &*shape,
+                    &**shape,
                     collider.shape(),
                     0.,
                 )
@@ -708,7 +818,7 @@ impl PhysicsWorld {
                 visit(
                     id,
                     oxy(collider.position() * contact.point2),
-                    -oxy(contact.normal1),
+                    -(rotation * oxy(contact.normal1)),
                     contact.dist,
                 );
             }

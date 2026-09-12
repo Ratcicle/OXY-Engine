@@ -1,3 +1,4 @@
+mod body;
 use super::*;
 use oxy_core::physics3d::{CollisionGeometry, CollisionShape, generate_collider};
 
@@ -165,6 +166,7 @@ impl Editor {
             return;
         }
         ui.collapsing("Personagem 3D",|ui| {
+            self.movement_body_properties(ui, entity);
             if let Some(config)=&mut entity.character3d {
                 ui.collapsing("Básico", |ui| {
                 ui.menu_button("Aplicar perfil de movimento",|ui|{
@@ -202,8 +204,7 @@ impl Editor {
                 });
                 ui.collapsing("Agachamento/deslize",|ui|{
                     ui.add(egui::DragValue::new(&mut config.crouch_speed).speed(0.1).range(0. ..=100.).prefix("Velocidade agachado (m/s) "));
-                    let (minimum,maximum)=entity.physics3d.as_ref().and_then(|c|if let CollisionShape::Capsule{height,radius}=c.shape{Some((radius*2.,height))}else{None}).unwrap_or((0.6,1.8));
-                    ui.add(egui::DragValue::new(&mut config.crouch_height).speed(0.01).range(minimum..=maximum).prefix("Altura agachado (m) ")).on_hover_text("Os pés ficam no lugar. Só volta a ficar em pé se a cápsula inteira couber.");
+
                     ui.checkbox(&mut config.crouch_toggle,"Alternar agachamento a cada toque");
                     let action=&mut config.crouch_action;
                     egui::ComboBox::from_id_salt(("character_extra_action","Agachar")).selected_text(format!("Agachar: {}",oxy_core::input_actions::label(&self.state.project,action))).show_ui(ui,|ui|{for id in self.state.project.input_bindings.keys(){ui.selectable_value(action,id.clone(),oxy_core::input_actions::label(&self.state.project,id));}});
@@ -240,6 +241,8 @@ impl Editor {
             return;
         }
         ui.collapsing("Controle da câmera",|ui|{
+            if entity.camera_rig.as_ref().is_some_and(|r|r.mode != oxy_core::character::CameraMode::Fixed) { ui.label("Pose controlada pelo alvo durante o jogo."); }
+            if ui.button("Prévia da câmera").clicked() { self.camera_tools.preview = true; }
             let Some(rig)=&mut entity.camera_rig else {return;};
             let targets:Vec<_>=self.scene().entities.iter().filter(|e|e.id!=entity.id).map(|e|(e.id.clone(),e.name.clone())).collect();
             use oxy_core::character::CameraMode;

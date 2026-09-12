@@ -9,6 +9,7 @@ if (!$GraphicsOnly) {
     $checks += @(
         @('oxy_editor','native_ux_m1_workflow'),
         @('oxy_editor','native_inspector_v031'),
+        @('oxy_editor','native_camera_body_v032'),
         @('oxy_editor','native_physics_v030_authoring'),
         @('oxy_editor','native_first_person_v030'),
         @('oxy_editor','native_ground_posture_v030'),

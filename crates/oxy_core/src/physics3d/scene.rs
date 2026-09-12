@@ -155,7 +155,7 @@ impl PhysicsWorld {
         Ok(())
     }
     /// A simulation phase already evaluated the hierarchy. Character overrides
-    /// hold runtime capsule height/pose; authored standing capsules are untouched.
+    /// hold the runtime body's posture/pose; authored standing geometry is untouched.
     pub fn sync_evaluated(
         &mut self,
         scene: &Scene,
@@ -164,7 +164,10 @@ impl PhysicsWorld {
     ) -> Result<(), String> {
         let mut seen = std::collections::HashSet::new();
         for (i, entity) in scene.entities.iter().enumerate() {
-            if entity.physics3d.is_none() && entity.collider.is_none() {
+            if entity.physics3d.is_none()
+                && entity.collider.is_none()
+                && entity.character3d.is_none()
+            {
                 continue;
             }
             seen.insert(entity.id.clone());
@@ -202,7 +205,15 @@ impl PhysicsWorld {
         matrix: Mat4,
         override_config: Option<&Collider3d>,
     ) -> Result<(), String> {
-        if let Some(config) = override_config.or(entity.physics3d.as_ref()) {
+        let movement = entity
+            .character3d
+            .as_ref()
+            .map(|c| c.body.collider(false, c.crouch_height))
+            .transpose()?;
+        if let Some(config) = override_config
+            .or(movement.as_ref())
+            .or(entity.physics3d.as_ref())
+        {
             let (position, rotation, scale) = world_pose(matrix)?;
             self.upsert(&entity.id, config, position, rotation, scale)?;
         } else if let Some(collider) = &entity.collider {
@@ -234,7 +245,12 @@ impl PhysicsWorld {
         let view = SceneView::new(scene);
         let mut seen = HashSet::new();
         for entity in &scene.entities {
-            if let Some(config) = &entity.physics3d {
+            let movement = entity
+                .character3d
+                .as_ref()
+                .map(|c| c.body.collider(false, c.crouch_height))
+                .transpose()?;
+            if let Some(config) = movement.as_ref().or(entity.physics3d.as_ref()) {
                 seen.insert(entity.id.clone());
                 let (position, rotation, scale) = world_pose(view.world_matrix(&entity.id)?)?;
                 if show_disabled && !config.enabled {

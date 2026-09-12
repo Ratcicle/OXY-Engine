@@ -67,7 +67,7 @@ fn schema_two_migration_keeps_legacy_controller_exactly_and_does_not_add_new_bod
     let bytes = serde_json::to_vec(&p).unwrap();
     let (converted, from) = migration::read_report(&bytes).unwrap();
     assert_eq!(from, Some(2));
-    assert_eq!(converted.schema_version, 3);
+    assert_eq!(converted.schema_version, SCHEMA_VERSION);
     assert_eq!(converted.scenes, p.scenes);
     assert!(converted.scenes[0].entities[0].physics3d.is_none());
 }

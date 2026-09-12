@@ -87,10 +87,16 @@ impl Runtime {
         {
             return Err("Superfície física ausente.".into());
         }
-        self.entity_mut(target)
-            .and_then(|e| e.physics3d.as_mut())
-            .ok_or("Objeto não possui colisor 3D")?
-            .surface = surface;
+        let entity = self.entity_mut(target).ok_or("Objeto ausente")?;
+        if let Some(config) = &mut entity.character3d {
+            config.body.surface = surface;
+        } else {
+            entity
+                .physics3d
+                .as_mut()
+                .ok_or("Objeto não possui forma física 3D")?
+                .surface = surface;
+        }
         self.physics_dirty = true;
         Ok(())
     }

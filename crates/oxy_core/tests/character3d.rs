@@ -28,14 +28,6 @@ fn fixture() -> Project {
         ground_acceleration: 600.,
         ..Default::default()
     });
-    body.physics3d = Some(Collider3d {
-        shape: CollisionShape::Capsule {
-            height: 1.8,
-            radius: 0.3,
-        },
-        center: [0., 0.9, 0.],
-        ..Default::default()
-    });
     body.transform.position[1] = 0.02;
     let mut camera = Entity::new("Olhos", None);
     camera.id = "00000000-0000-4000-8000-000000000003".into();
@@ -176,18 +168,20 @@ fn new_controller_never_runs_legacy_solver_and_invalid_setup_is_rejected() {
     project.scenes[0]
         .entity_mut(BODY)
         .unwrap()
-        .physics3d
+        .character3d
         .as_mut()
         .unwrap()
-        .sensor = true;
+        .body
+        .enabled = false;
     assert!(Runtime::new(&project, &project.start_scene).is_err());
     project.scenes[0]
         .entity_mut(BODY)
         .unwrap()
-        .physics3d
+        .character3d
         .as_mut()
         .unwrap()
-        .sensor = false;
+        .body
+        .enabled = true;
     project.scenes[0]
         .entity_mut(BODY)
         .unwrap()

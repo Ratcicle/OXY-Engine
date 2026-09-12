@@ -52,14 +52,6 @@ pub fn fixture(count: usize, mode: &str) -> Project {
             reference: MovementReference::World,
             ..Default::default()
         });
-        body.physics3d = Some(Collider3d {
-            shape: CollisionShape::Capsule {
-                height: 1.8,
-                radius: 0.3,
-            },
-            center: [0., 0.9, 0.],
-            ..Default::default()
-        });
         s.entities.push(body);
         if mode == "platforms" {
             let mut platform = solid(2000 + i, [x, 0.25, 0.], [1.4, 0.5, 8.]);

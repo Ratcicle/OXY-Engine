@@ -40,11 +40,11 @@ impl NativeQa {
             "fp_author" => {
                 if body.character3d.is_none()
                     || !matches!(
-                        body.physics3d.as_ref().map(|c| &c.shape),
+                        body.character3d.as_ref().map(|c| &c.body.standing),
                         Some(CollisionShape::Capsule { .. })
                     )
                 {
-                    return Err("O botão não criou controlador/cápsula".into());
+                    return Err("O botão não criou personagem/corpo interno".into());
                 }
             }
             "fp_none" => {
@@ -111,14 +111,6 @@ fn native_ground_posture_v030() {
     let mut body = Entity::new("Personagem", None);
     body.transform.position = [0., 0.02, 0.];
     body.character3d = Some(config);
-    body.physics3d = Some(Collider3d {
-        shape: CollisionShape::Capsule {
-            height: 1.8,
-            radius: 0.3,
-        },
-        center: [0., 0.9, 0.],
-        ..Default::default()
-    });
     let mut floor = Entity::new("Plataforma de gelo", Some(Primitive::Cube));
     floor.dimensions = [10., 1., 8.];
     floor.transform.position = [0., -0.5, 0.];
