@@ -11,8 +11,7 @@ pub(super) const MIN_SPEED: f32 = 0.1;
 pub(super) const MAX_SPEED: f32 = 100.;
 pub(super) const MIN_SENSITIVITY: f32 = 0.0005;
 pub(super) const MAX_SENSITIVITY: f32 = 0.02;
-pub(super) const HELP: &str =
-    "RMB + mouse olhar · RMB + WASD mover · E subir / C descer · Shift rápido · Ctrl preciso · RMB + roda velocidade";
+pub(super) const HELP: &str = "RMB + mouse olhar · RMB + WASD mover · E subir / C descer · Shift rápido · Ctrl preciso · RMB + roda velocidade";
 
 #[derive(Default)]
 pub(super) struct Navigation {

@@ -6,7 +6,7 @@
   "verified_utc": "2026-09-13T14:36:28.092944+00:00",
   "source_fingerprint": {
     "algorithm": "SHA-256",
-    "value": "a2a8e005246bb576ee5d1f97e9c21ca8e1dd6d58ea7139067347f09e550dc5c5",
+    "value": "e960a1b6de880c89fc2cba183962a9a8e2f0d78217e1c675c23efba7265fb816",
     "files": 233,
     "method": "Sorted relative UTF-8 POSIX path + NUL + exact file bytes + NUL; Cargo.toml/Cargo.lock and .rs/.toml/.json/.wgsl/.ps1/.png/.ico/.yml files under crates, examples, scripts, .cargo, .github. Excludes reports, captures and build outputs."
   },
@@ -110,8 +110,8 @@
   },
   "portable": {
     "zip": "dist/OXY-Engine-0.3.3.1-windows-x64.zip",
-    "size_bytes": 26251357,
-    "sha256": "f9aa913c4db65c16a0c398e6e99e15e6fa075d0778307c7550499edfb9d50e49",
+    "size_bytes": 26251540,
+    "sha256": "3528eae4b6eaf88fd7bc609472ed4c0e9655cb960f84df757b151173ce176b53",
     "extracted_outside_repo": true,
     "direct_exe_open_without_rust_cargo_path": true,
     "metadata_version": "0.3.3.1",
@@ -145,5 +145,17 @@
     "tag": false,
     "release": false,
     "record_scope": "Local validation snapshot before the subsequently authorized commit/push/tag/release. See GitHub tag v0.3.3.1 for publication status."
+  },
+  "publication_followup": {
+    "initial_commit": "b041070d0b2be421f83f6e5bc499195caa80b826",
+    "initial_ci_failure": "rustfmt required the updated navigation tooltip declaration on one line. Formatting-only correction; no behavior changed.",
+    "previous_source_sha256": "a2a8e005246bb576ee5d1f97e9c21ca8e1dd6d58ea7139067347f09e550dc5c5",
+    "previous_portable_sha256": "f9aa913c4db65c16a0c398e6e99e15e6fa075d0778307c7550499edfb9d50e49",
+    "local_rechecks": [
+      "cargo fmt --all --check",
+      "cargo build --workspace --release --locked",
+      "scripts/test-portable.ps1"
+    ],
+    "remote_results": "See GitHub Actions for the final tagged commit."
   }
 }
