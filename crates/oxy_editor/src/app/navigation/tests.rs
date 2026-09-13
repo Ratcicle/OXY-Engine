@@ -30,7 +30,7 @@ fn route(nav: &mut Navigation, events: Vec<Event>, allowed: bool) -> egui::RawIn
         focused: true,
         ..Default::default()
     };
-    nav.route(&mut input, 1., allowed, [None; 4], |p| {
+    nav.route(&mut input, 1., allowed, [None; 6], |p| {
         Rect::from_min_max(Pos2::ZERO, Pos2::new(100., 100.)).contains(p)
     });
     input
@@ -118,7 +118,7 @@ fn key_already_held_starts_without_waiting_for_repeat_and_idle_rmb_does_not_drif
         &mut input,
         1.,
         true,
-        [Some(Key::W), None, None, None],
+        [Some(Key::W), None, None, None, None, None],
         |_| true,
     );
     assert!(nav.held.contains(&Key::W));
@@ -175,12 +175,12 @@ fn invalid_context_exit_and_focus_loss_clear_navigation_until_new_press() {
         events: vec![button(true), key(Key::W, true)],
         ..Default::default()
     };
-    nav.route(&mut input, 1., true, [None; 4], |_| true);
+    nav.route(&mut input, 1., true, [None; 6], |_| true);
     assert!(!nav.active);
 }
 
 #[test]
-fn existing_primary_gesture_has_priority_and_navigation_does_not_add_qe_axes() {
+fn existing_primary_gesture_has_priority_and_navigation_does_not_add_q_axis() {
     let mut nav = Navigation::default();
     let primary = Event::PointerButton {
         pos: Pos2::new(40., 40.),
@@ -196,12 +196,7 @@ fn existing_primary_gesture_has_priority_and_navigation_does_not_add_qe_axes() {
     assert!(!nav.active);
     route(
         &mut nav,
-        vec![
-            button(false),
-            button(true),
-            key(Key::Q, true),
-            key(Key::E, true),
-        ],
+        vec![button(false), button(true), key(Key::Q, true)],
         true,
     );
     assert!(nav.active && nav.held.is_empty());
@@ -217,7 +212,7 @@ fn mouse_look_is_independent_of_ui_scale_and_event_splitting() {
             events: vec![Event::PointerMoved(Pos2::new(40. + 16. / scale, 40.))],
             ..Default::default()
         };
-        nav.route(&mut input, scale, true, [None; 4], |_| true);
+        nav.route(&mut input, scale, true, [None; 6], |_| true);
         let mut camera = CameraState::for_scene(&Scene::new("Vista", SceneKind::ThreeD));
         nav.apply(&mut camera, &mut preferences::Preferences::default(), 0.02);
         views.push(camera);
@@ -242,6 +237,45 @@ fn mouse_look_is_independent_of_ui_scale_and_event_splitting() {
         ],
         ..Default::default()
     };
-    nav.route(&mut input, 1.6, true, [None; 4], |_| true);
+    nav.route(&mut input, 1.6, true, [None; 6], |_| true);
     assert_eq!(nav.look, Vec2::new(20., -5.)); // Do not apply both relative and absolute motion.
+}
+
+#[test]
+fn ec_are_global_vertical_only_with_rmb_and_all_combinations_are_bounded() {
+    for pitch in [-1.2, 0., 1.2] {
+        for (keys, direction) in [
+            (vec![Key::E], Vec3::Y),
+            (vec![Key::C], -Vec3::Y),
+            (vec![Key::W, Key::E], Vec3::ZERO),
+            (vec![Key::A, Key::C], Vec3::ZERO),
+        ] {
+            let mut nav = Navigation::default();
+            let mut camera = CameraState::for_scene(&Scene::new("Teste", SceneKind::ThreeD));
+            camera.pitch = pitch;
+            let mut prefs = preferences::Preferences::default();
+            let mut events = vec![button(true)];
+            events.extend(keys.iter().map(|k| key(*k, true)));
+            assert_eq!(route(&mut nav, events, true).events.len(), 1);
+            route(&mut nav, vec![], true);
+            let at = camera.eye();
+            nav.apply(&mut camera, &mut prefs, 0.05);
+            let delta = camera.eye() - at;
+            if direction != Vec3::ZERO {
+                assert!(delta.abs_diff_eq(direction * 0.4, 1e-5));
+            } else {
+                assert!(delta.length() <= 0.40001 && delta.length() > 0.01);
+            }
+            for event in [Event::WindowFocused(false), button(false)] {
+                route(&mut nav, vec![event], true);
+                assert!(nav.held.is_empty());
+                let at = camera.eye();
+                nav.apply(&mut camera, &mut prefs, 0.05);
+                assert_eq!(camera.eye(), at);
+            }
+            for code in [Key::E, Key::C] {
+                assert_eq!(route(&mut nav, vec![key(code, true)], true).events.len(), 1);
+            }
+        }
+    }
 }

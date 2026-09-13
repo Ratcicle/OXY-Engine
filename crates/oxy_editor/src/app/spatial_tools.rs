@@ -98,6 +98,8 @@ impl Editor {
         }
     }
     pub(crate) fn set_spatial_tool(&mut self, mode: Tool) {
+        self.cancel_body_drag();
+        self.body_tools.active = None;
         if self.mesh_operation_active() {
             self.warn(
                 "Termine o gesto de modelagem ou pressione Esc antes de trocar de ferramenta.",

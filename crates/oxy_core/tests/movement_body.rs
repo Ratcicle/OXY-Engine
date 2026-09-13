@@ -1,5 +1,7 @@
 use glam::{Quat, Vec3};
 use oxy_core::{character::*, document::*, movement_body::MovementBody, physics3d::*, runtime::*};
+#[path = "movement_body/offset.rs"]
+mod offset;
 
 fn convex(size: [f32; 3]) -> CollisionShape {
     let mut piece = Entity::new("Geometria", Some(Primitive::Cube));

@@ -95,6 +95,7 @@ fn migrate_movement(value: &mut serde_json::Value) -> Result<(), String> {
         let body = crate::movement_body::MovementBody {
             standing: collider.shape,
             crouched: None,
+            offset: [0.; 3],
             filter: collider.filter,
             surface: collider.surface,
             enabled: collider.enabled,

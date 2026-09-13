@@ -186,15 +186,25 @@ impl CameraState {
 
     /// Translate an editor view in metres, independent of orbit distance and game time.
     pub fn move_in_view(&mut self, lateral: f32, forward: f32, speed: f32, dt: f32) {
+        self.move_in_view_vertical(lateral, forward, 0., speed, dt);
+    }
+    pub fn move_in_view_vertical(
+        &mut self,
+        lateral: f32,
+        forward: f32,
+        vertical: f32,
+        speed: f32,
+        dt: f32,
+    ) {
         if self.kind != SceneKind::ThreeD
             || self.game_view.is_some()
             || !dt.is_finite()
-            || (lateral == 0. && forward == 0.)
+            || (lateral == 0. && forward == 0. && vertical == 0.)
         {
             return;
         }
-        let direction = self.right() * lateral + self.forward() * forward;
-        self.target += direction.normalize_or_zero() * speed * dt.clamp(0., 0.05);
+        let direction = self.right() * lateral + self.forward() * forward + Vec3::Y * vertical;
+        self.target += direction.clamp_length_max(1.) * speed * dt.clamp(0., 0.05);
     }
 
     pub fn pan(&mut self, delta: [f32; 2], size: [u32; 2]) {

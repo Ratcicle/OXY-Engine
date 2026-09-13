@@ -107,6 +107,7 @@ impl Editor {
             && !self.navigation.active
             && !self.spatial_active_drag()
             && !self.camera_dragging()
+            && !self.body_dragging()
             && !blocked
         {
             self.camera.zoom(ui.input(|i| i.smooth_scroll_delta.y));
@@ -115,6 +116,7 @@ impl Editor {
             && view_input
             && !self.spatial_active_drag()
             && !self.camera_dragging()
+            && !self.body_dragging()
             && !blocked
         {
             let d = ui.input(|i| i.pointer.delta());
@@ -167,9 +169,11 @@ impl Editor {
             self.show_disabled_colliders,
         );
         let contour_pick = point.and_then(|p| overlays.pick(p, &self.selection.ids));
-        let camera_owned = !painting && self.camera_guides(ui, &scene, rect);
-        let handle_owned = camera_owned || (!painting && self.spatial_handles(ui, &scene, rect));
-        if !painting && !camera_owned && self.mesh_viewport(ui, &scene, rect, &response) {
+        let body_owned = !painting && self.body_handles(ui, &scene, rect);
+        let camera_owned = !painting && !body_owned && self.camera_guides(ui, &scene, rect);
+        let handle_owned =
+            body_owned || camera_owned || (!painting && self.spatial_handles(ui, &scene, rect));
+        if !painting && !handle_owned && self.mesh_viewport(ui, &scene, rect, &response) {
             return;
         }
         if painting {

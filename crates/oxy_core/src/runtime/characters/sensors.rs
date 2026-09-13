@@ -115,13 +115,12 @@ impl Characters {
                 .get(&entity.id)
                 .filter(|p| !p.is_empty())
                 .map_or(empty_path.as_slice(), Vec::as_slice);
-            let center = motion.rotation * motion.center;
             let mut spans: BTreeMap<Id, (f32, f32)> = BTreeMap::new();
             for (i, (from, to)) in path.iter().enumerate() {
                 for span in world.sweep_all_prepared(
                     &motion.geometry,
                     motion.rotation,
-                    *from + center,
+                    motion.at(*from),
                     *to - *from,
                     &options,
                 )? {
@@ -143,7 +142,7 @@ impl Characters {
                 .overlaps_prepared(
                     &motion.geometry,
                     motion.rotation,
-                    state.position + center,
+                    motion.at(state.position),
                     &options,
                 )?
                 .into_iter()

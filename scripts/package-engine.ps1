@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
-$version = [regex]::Match((Get-Content -LiteralPath (Join-Path $workspace 'Cargo.toml') -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+$version = [regex]::Match((Get-Content -LiteralPath (Join-Path $workspace 'Cargo.toml') -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value.Replace("+patch.", ".")
 if (!$Destination) { $Destination = "dist/OXY-Engine-$version-windows-x64" }
 $destinationPath = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($Destination)) { $Destination } else { Join-Path $workspace $Destination }))
 & (Join-Path $PSScriptRoot 'package.ps1') -Project 'examples/validacao' -Destination $destinationPath -IncludeEditor -SkipBuild:$SkipBuild -BinaryDirectory $BinaryDirectory
@@ -33,9 +33,11 @@ Laboratório 3D · movimento: pista editável; WASD, mouse, Espaço, Shift e C.
 V alterna primeira/terceira pessoa; Q muda ombro; R retorna ao checkpoint.
 Jogador e Câmera principal são objetos separados, ligados pelo Alvo da câmera.
 Personagem 3D > Corpo de movimento: escolha cápsula, caixa, esfera ou convexo.
+Deslocamento local alinha a colisão sem mover a raiz ou a aparência.
+Editar posição do corpo oferece alças X/Y/Z; Esc cancela, Ctrl+Z desfaz.
 Selecione uma câmera e arraste olhos/distância/ombro. Exibir > Câmeras oferece
 guias e prévia nativa, com Fixar, tamanho, enquadramento e postura agachada.
-Na vista de edição 3D, segure RMB: mouse olha, WASD move, Shift acelera,
+Na vista de edição 3D, segure RMB: mouse olha, WASD move, E sobe, C desce, Shift acelera,
 Ctrl reduz a velocidade e a roda ajusta a base. Solte RMB para voltar a W/E/R.
 Interface guarda velocidade e sensibilidade locais; a câmera de jogo não muda.
 Propriedades mostra os componentes presentes; + Adicionar componente oferece

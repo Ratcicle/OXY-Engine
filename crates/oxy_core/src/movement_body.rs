@@ -1,6 +1,6 @@
 //! Authored locomotion geometry. Origin is always at the feet, independently of appearance.
 use crate::physics3d::{Collider3d, CollisionFilter, CollisionShape, ShapeMotion};
-use glam::Quat;
+use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -9,6 +9,8 @@ pub struct MovementBody {
     pub standing: CollisionShape,
     /// None generates a shorter capsule/box; sphere/convex keep their shape.
     pub crouched: Option<CollisionShape>,
+    /// Local displacement relative to the logical feet origin, shared by both postures.
+    pub offset: [f32; 3],
     pub filter: CollisionFilter,
     pub surface: Option<crate::document::Id>,
     pub enabled: bool,
@@ -21,6 +23,7 @@ impl Default for MovementBody {
                 radius: 0.3,
             },
             crouched: None,
+            offset: [0.; 3],
             filter: Default::default(),
             surface: None,
             enabled: true,
@@ -57,18 +60,23 @@ impl MovementBody {
         scale: f32,
         yaw: f32,
     ) -> Result<ShapeMotion, String> {
-        ShapeMotion::new(
+        if !Vec3::from(self.offset).is_finite() {
+            return Err("Deslocamento local do corpo deve conter valores finitos.".into());
+        }
+        let mut motion = ShapeMotion::new(
             &self.shape(crouched, crouch_height),
             scale,
             Quat::from_rotation_y(yaw),
-        )
+        )?;
+        motion.set_local_offset(Vec3::from(self.offset) * scale, yaw);
+        Ok(motion)
     }
     pub fn collider(&self, crouched: bool, crouch_height: f32) -> Result<Collider3d, String> {
         let shape = self.shape(crouched, crouch_height);
-        let prepared = ShapeMotion::new(&shape, 1., Quat::IDENTITY)?;
+        let prepared = self.prepare(crouched, crouch_height, 1., 0.)?;
         Ok(Collider3d {
             shape,
-            center: prepared.center.to_array(),
+            center: prepared.at(Vec3::ZERO).to_array(),
             enabled: self.enabled,
             sensor: false,
             filter: self.filter.clone(),

@@ -235,6 +235,9 @@ impl MotorContext<'_> {
             state.slide_latched = false;
         }
         let old_posture = state.posture;
+        let old_height = state.height;
+        let old_slide_elapsed = state.slide_elapsed;
+        let old_slide_latched = state.slide_latched;
         let mut standing = self.standing.clone();
         standing.set_yaw(state.yaw);
         if !state.want_crouch {
@@ -279,6 +282,26 @@ impl MotorContext<'_> {
         {
             state.posture = Posture::Standing;
             state.height = self.standing.height;
+        }
+        // An explicit crouched convex/box can be wider than standing. Never
+        // accept a posture that occupies an obstacle, or depenetrate the feet
+        // merely to accommodate that change.
+        if old_posture == Posture::Standing
+            && state.posture != Posture::Standing
+            && !self
+                .world
+                .penetrating_prepared(
+                    &crouched.geometry,
+                    crouched.rotation,
+                    crouched.at(state.position),
+                    &self.options,
+                )?
+                .is_empty()
+        {
+            state.posture = old_posture;
+            state.height = old_height;
+            state.slide_elapsed = old_slide_elapsed;
+            state.slide_latched = old_slide_latched;
         }
         let mut motion = if state.posture == Posture::Standing {
             standing

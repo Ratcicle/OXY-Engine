@@ -43,7 +43,7 @@ impl Editor {
             ui.horizontal_wrapped(|ui| {
                 if ctx.content_rect().width() < 700. {
                     ui.label(
-                        egui::RichText::new(concat!("OXY\n", env!("CARGO_PKG_VERSION")))
+                        egui::RichText::new(concat!("OXY\n", env!("OXY_APP_VERSION")))
                             .strong()
                             .color(Color32::from_rgb(131, 224, 207)),
                     );
@@ -55,7 +55,7 @@ impl Editor {
                             .color(Color32::from_rgb(131, 224, 207)),
                     );
                     ui.label(
-                        egui::RichText::new(concat!("ENGINE\n", env!("CARGO_PKG_VERSION")))
+                        egui::RichText::new(concat!("ENGINE\n", env!("OXY_APP_VERSION")))
                             .size(12.)
                             .strong(),
                     );

@@ -730,7 +730,7 @@ fn native_component_v021_measurements() {
     .args(["--version", "--verbose"])
     .output()
     .unwrap();
-    let json = json!({"commit":String::from_utf8_lossy(&commit.stdout).trim(),"label":label,"version":env!("CARGO_PKG_VERSION"),
+    let json = json!({"commit":String::from_utf8_lossy(&commit.stdout).trim(),"label":label,"version":env!("OXY_APP_VERSION"),
         "system":system_environment(&root),"gpu":report.gpu,"compiler":String::from_utf8_lossy(&compiler.stdout).trim(),
         "window_logical_points":[1440,900],"interface_scale":1.,"warmup_cycles":WARMUP,"sample_cycles":SAMPLES,"phase_limit_seconds":PHASE_LIMIT,
         "method":"Release --locked opt-level=2. Deterministic Plane22/70/158 and Sphere64x32. CPU around real Editor::update includes driver submission, excludes eframe tessellation/GPU completion/VSync. Creation/reset outside measurements. RawInput orbit/pan/hover; rectangular selection begins at viewport(+35,+45) and ends center(+60+cycle%5,+40); four frames press/drag/release/settle. Ctrl starts with one original component. Six frames flip/Enter/Undo/Redo/Undo/settle; Enter compatibility step remains in final workload. Modes/selection initialization outside measured update. Actual source/revision/history/upload checks. Forced repaint only in harness; no GPU duration, FPS, process RAM or VRAM inferred. Duration limits preserve partial samples and continue subsequent phases.",

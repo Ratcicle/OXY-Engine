@@ -29,6 +29,9 @@ impl From<CapsuleMotion> for MotionSettings {
 pub struct ShapeMotion {
     pub geometry: SharedShape,
     pub center: Vec3,
+    // Offset rotates with the root even when an axisymmetric shape uses identity rotation.
+    local_offset: Vec3,
+    world_offset: Vec3,
     pub height: f32,
     pub rotation: Quat,
     pub settings: MotionSettings,
@@ -97,15 +100,26 @@ impl ShapeMotion {
         Ok(Self {
             geometry,
             center,
+            local_offset: Vec3::ZERO,
+            world_offset: Vec3::ZERO,
             height,
             rotation,
             settings: CapsuleMotion::default().into(),
         })
     }
     pub fn at(&self, feet: Vec3) -> Vec3 {
-        feet + self.rotation * self.center
+        feet + self.rotation * self.center + self.world_offset
+    }
+    pub(crate) fn set_local_offset(&mut self, offset: Vec3, yaw: f32) {
+        self.local_offset = offset;
+        self.set_yaw(yaw);
     }
     pub fn set_yaw(&mut self, yaw: f32) {
+        self.world_offset = if self.local_offset == Vec3::ZERO {
+            Vec3::ZERO
+        } else {
+            Quat::from_rotation_y(yaw) * self.local_offset
+        };
         // Yaw cannot change these axisymmetric bodies. Preserve the original
         // unrotated analytic query path, while boxes/convexes rotate physically.
         self.rotation = if matches!(
@@ -118,6 +132,9 @@ impl ShapeMotion {
         };
     }
     pub fn validate(&self) -> Result<(), String> {
+        if !self.local_offset.is_finite() || !self.world_offset.is_finite() {
+            return Err("Deslocamento do corpo fora dos limites numéricos.".into());
+        }
         let bounds = self.geometry.compute_local_aabb();
         let half_extent = (bounds.maxs - bounds.mins).min_element() * 0.5;
         if [

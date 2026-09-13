@@ -153,7 +153,7 @@ impl Editor {
                             ui.heading(egui::RichText::new("OXY Engine").size(32.));
                             ui.label(concat!(
                                 "Versão ",
-                                env!("CARGO_PKG_VERSION"),
+                                env!("OXY_APP_VERSION"),
                                 " · Crie do seu jeito."
                             ));
                         });

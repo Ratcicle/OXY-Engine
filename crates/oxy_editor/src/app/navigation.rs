@@ -12,7 +12,7 @@ pub(super) const MAX_SPEED: f32 = 100.;
 pub(super) const MIN_SENSITIVITY: f32 = 0.0005;
 pub(super) const MAX_SENSITIVITY: f32 = 0.02;
 pub(super) const HELP: &str =
-    "RMB + mouse olhar · RMB + WASD mover · Shift rápido · Ctrl preciso · RMB + roda velocidade";
+    "RMB + mouse olhar · RMB + WASD mover · E subir / C descer · Shift rápido · Ctrl preciso · RMB + roda velocidade";
 
 #[derive(Default)]
 pub(super) struct Navigation {
@@ -61,7 +61,7 @@ impl Navigation {
         input: &mut egui::RawInput,
         pixels_per_point: f32,
         can_start: bool,
-        initially_held: [Option<Key>; 4],
+        initially_held: [Option<Key>; 6],
         over_viewport: impl Fn(Pos2) -> bool,
     ) {
         self.look = Vec2::ZERO;
@@ -150,7 +150,7 @@ impl Navigation {
                         self.consumed.remove(key);
                     } else if self.active {
                         if (!repeat || !was_consumed)
-                            && matches!(key, Key::W | Key::A | Key::S | Key::D)
+                            && matches!(key, Key::W | Key::A | Key::S | Key::D | Key::E | Key::C)
                         {
                             self.held.insert(*key);
                         }
@@ -195,9 +195,10 @@ impl Navigation {
             self.notice_until = Some(Instant::now() + std::time::Duration::from_millis(1400));
         }
         let down = |key| if self.held.contains(&key) { 1. } else { 0. };
-        camera.move_in_view(
+        camera.move_in_view_vertical(
             down(Key::D) - down(Key::A),
             down(Key::W) - down(Key::S),
+            down(Key::E) - down(Key::C),
             speed * multiplier(self.modifiers),
             if self.started { 0. } else { dt },
         );
@@ -223,6 +224,7 @@ impl Editor {
             || self.gizmo_drag.is_some()
             || self.spatial_active_drag()
             || self.camera_dragging()
+            || self.body_dragging()
             || self.pending_preferences.is_some()
             || self.new_project.is_some()
             || self.scene_dialog.is_some()
@@ -254,8 +256,9 @@ impl Editor {
             i.keys_down
                 .retain(|key| !self.navigation.consumed.contains(key))
         });
-        let initially_held =
-            ctx.input(|i| [Key::W, Key::A, Key::S, Key::D].map(|k| i.key_down(k).then_some(k)));
+        let initially_held = ctx.input(|i| {
+            [Key::W, Key::A, Key::S, Key::D, Key::E, Key::C].map(|k| i.key_down(k).then_some(k))
+        });
         self.navigation.route(
             input,
             ctx.pixels_per_point(),

@@ -53,6 +53,7 @@ impl Editor {
         };
         let mut config = original.clone();
         let mut error = None;
+        let mut edit_position = false;
         ui.collapsing("Corpo de movimento", |ui| {
             ui.small("Colisão independente da aparência. Origem: pés.");
             ui.add_enabled(!config.enabled, egui::Checkbox::new(&mut config.body.enabled, "Corpo ativo")).on_hover_text("Para desativar o corpo, desative primeiro o Personagem 3D. Um personagem ativo precisa de colisão.");
@@ -74,6 +75,17 @@ impl Editor {
                     }
                 }
             });
+            ui.label("Deslocamento local").on_hover_text("Reposiciona somente o corpo físico em relação à origem do personagem. Não move o personagem nem a aparência.");
+            ui.horizontal(|ui| {
+                for (value, axis) in config.body.offset.iter_mut().zip(["X ", "Y ", "Z "]) {
+                    let response = ui.add(egui::DragValue::new(value).speed(0.01).prefix(axis));
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("body_offset_field", axis)), response.rect));
+                    response.on_hover_text("Reposiciona somente o corpo físico em relação à origem do personagem. Não move o personagem nem a aparência.");
+                }
+            });
+            if ui.add_enabled(self.tab == Tab::Scene && self.selection.ids.len() == 1,
+                egui::Button::new(if self.body_tools.active.as_deref() == Some(&entity.id) { "Concluir posição do corpo" } else { "Editar posição do corpo" })).clicked() { edit_position = true; }
             ui.label("Em pé");
             ui.push_id("standing_body", |ui| dimensions(ui, &mut config.body.standing));
             match &config.body.standing {
@@ -105,6 +117,13 @@ impl Editor {
             });
             self.surface_properties(ui, &mut config.body.surface);
         });
+        if edit_position {
+            if self.body_tools.active.as_deref() == Some(&entity.id) {
+                self.set_spatial_tool(Tool::Object);
+            } else {
+                self.edit_body_position(&entity.id);
+            }
+        }
         if let Some(error) = error {
             self.warn(error);
         }

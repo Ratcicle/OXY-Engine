@@ -22,7 +22,7 @@ fn main() -> eframe::Result {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_icon(window_icon())
-            .with_title(concat!("OXY Engine ", env!("CARGO_PKG_VERSION")))
+            .with_title(concat!("OXY Engine ", env!("OXY_APP_VERSION")))
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([920.0, 600.0]),
         ..Default::default()

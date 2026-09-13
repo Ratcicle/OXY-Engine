@@ -29,6 +29,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json).packages | Where-Object name -eq 'oxy_editor' | Select-Object -ExpandProperty version
+          $version = $version.Replace("+patch.", ".")
           if ($env:RELEASE_TAG -ne "v$version") { throw "Tag $env:RELEASE_TAG não corresponde à versão $version do editor." }
       - name: Compilar com runtime C estático
         run: cargo build --workspace --release --locked --target x86_64-pc-windows-msvc

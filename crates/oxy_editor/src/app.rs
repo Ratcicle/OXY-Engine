@@ -1,3 +1,4 @@
+mod body_tools;
 mod camera_tools;
 mod diagnostics;
 mod hierarchy;
@@ -97,6 +98,7 @@ pub struct Editor {
     preferences: preferences::Preferences,
     pending_preferences: Option<preferences::Preferences>,
     navigation: navigation::Navigation,
+    body_tools: body_tools::BodyTools,
     new_project: Option<scenes::NewProject>,
     scene_dialog: Option<scenes::SceneDialog>,
     logic_ui: logic::LogicUi,
@@ -215,6 +217,7 @@ impl Editor {
             preferences,
             pending_preferences: None,
             navigation: Default::default(),
+            body_tools: Default::default(),
             new_project: None,
             scene_dialog: None,
             logic_ui: Default::default(),
@@ -595,6 +598,7 @@ impl Editor {
             return;
         }
         self.forget_last_mesh_operation();
+        self.cancel_body_drag();
         self.cancel_spatial_drag();
         self.finish_history(true);
         let result = if redo {
@@ -1073,12 +1077,21 @@ impl eframe::App for Editor {
             }
         }
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let body_cancelled = (escape
+            || !ctx.input(|i| i.focused)
+            || self.tab != Tab::Scene
+            || self.body_tools.active != self.selected
+            || self.pending.is_some()
+            || self.pending_preferences.is_some())
+            && self.cancel_body_drag();
         let camera_cancelled = (escape || !ctx.input(|i| i.focused)) && self.cancel_camera_drag();
         let cancel_undo = self.mesh_operation_active()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
         let mesh_cancelled = (escape || cancel_undo)
             && (self.cancel_box_selection() || self.cancel_mesh_operation());
-        let dialog_open = camera_cancelled
+        let dialog_open = body_cancelled
+            || self.body_dragging()
+            || camera_cancelled
             || self.camera_dragging()
             || self.modeling.creation.is_some()
             || mesh_cancelled

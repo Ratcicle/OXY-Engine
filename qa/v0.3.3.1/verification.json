@@ -1,0 +1,149 @@
+{
+  "version": "0.3.3.1",
+  "cargo_version": "0.3.3+patch.1",
+  "base_commit": "22e90abf9fa6498bac2ecdbf07556e492216e1d9",
+  "final_commit": null,
+  "verified_utc": "2026-09-13T14:36:28.092944+00:00",
+  "source_fingerprint": {
+    "algorithm": "SHA-256",
+    "value": "a2a8e005246bb576ee5d1f97e9c21ca8e1dd6d58ea7139067347f09e550dc5c5",
+    "files": 233,
+    "method": "Sorted relative UTF-8 POSIX path + NUL + exact file bytes + NUL; Cargo.toml/Cargo.lock and .rs/.toml/.json/.wgsl/.ps1/.png/.ico/.yml files under crates, examples, scripts, .cargo, .github. Excludes reports, captures and build outputs."
+  },
+  "environment": {
+    "os": "Windows 11 Pro 10.0.26100",
+    "cpu": "AMD Ryzen 5 5600",
+    "physical_ram_bytes": 17076060160,
+    "rust": "1.92.0",
+    "target": "x86_64-pc-windows-gnu",
+    "native_profile": "release opt-level=2 --locked",
+    "gpu": "AMD Radeon RX 6600",
+    "driver": "26.7.1",
+    "backend": "Vulkan"
+  },
+  "automatic_tests": {
+    "passed": 320,
+    "failed": 0,
+    "ignored": 34
+  },
+  "baseline_automatic_tests": {
+    "passed": 312,
+    "failed": 0,
+    "ignored": 33
+  },
+  "checks": {
+    "fmt_all_check": "passed",
+    "workspace_build_locked": "passed",
+    "workspace_release_build_locked": "passed",
+    "workspace_all_targets_all_features_clippy_deny_warnings": "passed",
+    "git_diff_check": "passed"
+  },
+  "native": {
+    "passed_count": 8,
+    "passed_tests": [
+      "native_qa::body_offset::native_body_offset_v0331",
+      "app::navigation::native::native_navigation_v033",
+      "native_qa::camera_authoring::native_camera_body_v032",
+      "native_qa::movement::native_ground_posture_v030",
+      "native_qa::movement::native_player_movement_v030",
+      "gpu_test::native_gpu_depth_texture_and_resize",
+      "gpu_test::native_gpu_editable_mesh_equivalence",
+      "gpu_test::components::native_gpu_component_overlay_depth_and_cache"
+    ],
+    "input": "Real native WGPU window with isolated application RawInput, not OS physical input automation.",
+    "captures_visually_inspected": true,
+    "patch_report": "patch/native-patch.txt",
+    "navigation_report": "navigation/native-navigation.json",
+    "local_log_files": [
+      "artifacts/v0331-native-patch-final.log",
+      "artifacts/v0331-native_navigation_v033.log",
+      "artifacts/v0331-native_camera_body_v032.log",
+      "artifacts/v0331-native_ground_posture_v030.log",
+      "artifacts/v0331-native_player_movement_v030.log",
+      "artifacts/v0331-gpu.log"
+    ],
+    "full_historical_suite_rerun": false
+  },
+  "zero_offset_replay": {
+    "base": "replay-base.json",
+    "patch": "replay-patch.json",
+    "base_sha256": "6a86f236784c42db92212fd4262765cab06e10dddb13094127cf34ec4b0ab529",
+    "patch_sha256": "6a86f236784c42db92212fd4262765cab06e10dddb13094127cf34ec4b0ab529",
+    "json_exactly_equal": true,
+    "paired_runs": 8,
+    "seed": 0,
+    "seconds_per_run": 12,
+    "fixed_steps_per_run": 720,
+    "presentation_hz": [
+      30,
+      60,
+      144,
+      240
+    ],
+    "note": "Exact cross-version equality for each frequency, including traces and samples. Harness tolerance of 0.2 mm applies to comparisons between presentation frequencies.",
+    "base_capture_sha256": "7e1ca4b27e443b557931a17053d280ecc9bc0a8966dc86480c60dd6844d938c4",
+    "patch_capture_sha256": "7e1ca4b27e443b557931a17053d280ecc9bc0a8966dc86480c60dd6844d938c4",
+    "text_normalization": "CRLF capture line endings normalized to LF for Git; JSON values unchanged. Original capture hashes retained."
+  },
+  "measurements": {
+    "navigation_objects": 602,
+    "observed_speed_mps": {
+      "base": 8.0,
+      "shift": 32.00000762939453,
+      "ctrl": 2.0000014305114746
+    },
+    "cpu_app_update_median_ms": {
+      "base": 2.7971,
+      "shift": 2.81,
+      "ctrl": 2.5537
+    },
+    "samples": {
+      "base": 52,
+      "shift": 53,
+      "ctrl": 52
+    },
+    "idle_spontaneous_updates_in_500ms": {
+      "patch": 1,
+      "navigation": 1
+    },
+    "method": "Native QA measurements of editor update CPU and clamped navigation dt; not GPU time, VSync, FPS, or controlled before/after performance benchmark."
+  },
+  "portable": {
+    "zip": "dist/OXY-Engine-0.3.3.1-windows-x64.zip",
+    "size_bytes": 26251357,
+    "sha256": "f9aa913c4db65c16a0c398e6e99e15e6fa075d0778307c7550499edfb9d50e49",
+    "extracted_outside_repo": true,
+    "direct_exe_open_without_rust_cargo_path": true,
+    "metadata_version": "0.3.3.1",
+    "pe_x64_and_imports_checked": true,
+    "second_clean_machine": false,
+    "version_marker_mismatch_found_and_fixed": true
+  },
+  "compatibility": {
+    "schema_version": 4,
+    "missing_offset_default": [
+      0,
+      0,
+      0
+    ],
+    "player_source_changed": false,
+    "shared_runtime_uses_offset": true,
+    "examples_changed": false,
+    "benchmarks_changed": false,
+    "game_packaging_preserved": true
+  },
+  "limitations": [
+    "No physical OS mouse/keyboard automation or second clean Windows machine.",
+    "No local MSVC build or remote GitHub CI run.",
+    "No new GPU timing or controlled performance comparison; long benchmark suites not rerun.",
+    "Character transform domain remains yaw-only with positive uniform global scale.",
+    "Nonzero-offset independent trajectories may accumulate f32 rounding differences; query-level equivalence tests compare equal physical inputs with 0.1 mm tolerance."
+  ],
+  "published": {
+    "commit": false,
+    "push": false,
+    "tag": false,
+    "release": false,
+    "record_scope": "Local validation snapshot before the subsequently authorized commit/push/tag/release. See GitHub tag v0.3.3.1 for publication status."
+  }
+}

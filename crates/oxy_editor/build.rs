@@ -1,4 +1,9 @@
 fn main() {
+    // Cargo uses SemVer (three numeric fields); Windows/UI retain the patch label.
+    let version = std::env::var("CARGO_PKG_VERSION")
+        .unwrap()
+        .replace("+patch.", ".");
+    println!("cargo:rustc-env=OXY_APP_VERSION={version}");
     println!("cargo:rerun-if-changed=../../assets/branding/oxy.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut resource = winresource::WindowsResource::new();
@@ -8,7 +13,17 @@ fn main() {
             .set("FileDescription", "OXY Engine — Editor de jogos")
             .set("InternalName", "oxy_editor")
             .set("OriginalFilename", "OXY Engine.exe")
-            .set("CompanyName", "Ratcicle");
+            .set("CompanyName", "Ratcicle")
+            .set("ProductVersion", &version)
+            .set("FileVersion", &version);
+        let mut parts = version.split('.').map(|s| s.parse::<u64>().unwrap());
+        let number = (parts.next().unwrap_or(0) << 48)
+            | (parts.next().unwrap_or(0) << 32)
+            | (parts.next().unwrap_or(0) << 16)
+            | parts.next().unwrap_or(0);
+        resource
+            .set_version_info(winresource::VersionInfo::FILEVERSION, number)
+            .set_version_info(winresource::VersionInfo::PRODUCTVERSION, number);
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
             // windres reparses absolute -I paths containing spaces when invoking cpp.
             // Compile relative filenames in OUT_DIR instead (the repository has a space).

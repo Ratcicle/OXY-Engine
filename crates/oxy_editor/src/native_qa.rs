@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot, Tab};
+mod body_offset;
 mod camera_authoring;
 mod cameras;
 mod cuts;
@@ -30,6 +31,9 @@ use std::{
 
 #[derive(Clone)]
 enum Action {
+    BodyPatch(&'static str),
+    BodyField(&'static str),
+    BodyDrag(usize, f32, bool),
     CameraDrag(oxy_core::camera_authoring::CameraField, f32, bool),
     MeasureCamera(&'static str),
     Direct(&'static str),
@@ -581,6 +585,9 @@ impl NativeQa {
     }
 
     fn check(&mut self, label: &str) -> Result<(), String> {
+        if label.starts_with("patch_") {
+            return self.check_body_patch(label);
+        }
         if label.starts_with("v032_") {
             return self.check_camera_authoring(label);
         }
@@ -1450,6 +1457,25 @@ impl NativeQa {
         };
         let description;
         match action {
+            Action::BodyPatch(label) => {
+                self.body_patch_input(label)?;
+                description = format!("Entrada do patch: {label}");
+            }
+            Action::BodyDrag(axis, delta, cancel) => {
+                self.body_patch_drag(axis, delta, cancel)?;
+                description = "Arrastar posição física do corpo".into();
+            }
+            Action::BodyField(value) => {
+                let rect = ctx
+                    .data(|d| d.get_temp::<Rect>(egui::Id::new(("body_offset_field", "Y "))))
+                    .ok_or("Campo Y do corpo ausente")?;
+                self.click(rect.center());
+                self.click(rect.center());
+                self.key(Key::A, true);
+                self.events.push_back(vec![Event::Text(value.into())]);
+                self.key(Key::Enter, false);
+                description = format!("Editar campo Y do corpo: {value}");
+            }
             Action::ReopenProject => {
                 let before = self.editor.state.project.clone();
                 self.editor

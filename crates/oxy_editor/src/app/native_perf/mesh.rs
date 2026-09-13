@@ -686,7 +686,7 @@ fn native_mesh_editor_measurements() {
     .map(|r| String::from_utf8_lossy(&r.stdout).trim().to_owned());
     let json = json!({
         "commit":String::from_utf8_lossy(&commit.stdout).trim(),"working_tree":"M7 implementation; benchmark source stored in repository",
-        "version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+        "version":env!("OXY_APP_VERSION"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
         "cpu_identifier":std::env::var("PROCESSOR_IDENTIFIER").ok(),"gpu":report.gpu,
         "system":system_environment(&root),
         "compiler":compiler,

@@ -1,0 +1,59 @@
+Concluído: true
+Erro: None
+Selecionar hierarquia: Jogador
+Clique: Personagem 3D em [1222.5 266.6]
+Clique: Corpo de movimento em [1255.0 300.1]
+Verificado: patch_base
+Captura GPU da janela: before.png
+Captura before.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Editar campo Y do corpo: 0.5
+Verificado: patch_field
+Captura GPU da janela: field-y.png
+Captura field-y.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Tecla Z, Ctrl=true
+Verificado: patch_zero
+Tecla Y, Ctrl=true
+Verificado: patch_field
+Clique: Editar posição do corpo em [1272.5 501.1]
+Arrastar posição física do corpo
+Tecla Z, Ctrl=true
+Verificado: patch_restored
+Tecla Y, Ctrl=true
+Arrastar posição física do corpo
+Verificado: patch_gizmo
+Verificado: patch_visual
+Captura GPU da janela: gizmo-xz.png
+Captura gizmo-xz.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Arrastar posição física do corpo
+Verificado: patch_restored
+Tecla Escape, Ctrl=false
+Tecla S, Ctrl=true
+Reabrir projeto no editor e comparar todos os documentos
+Clique: Visualização em [458.0 124.8]
+Clique: Colisores em [495.0 267.0]
+Tecla Escape, Ctrl=false
+Clique: ▶ Jogar em [336.6 46.5]
+Reproduzir 100 quadros sem entrada
+Verificado: patch_play
+Captura GPU da janela: runtime-offset.png
+Captura runtime-offset.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Clique: ■ Parar em [502.2 45.5]
+Verificado: patch_stopped
+Selecionar hierarquia: Caixa de teste
+Tecla W, Ctrl=false
+Entrada do patch: up
+Verificado: patch_up
+Captura GPU da janela: navigation-up.png
+Captura navigation-up.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Entrada do patch: down
+Verificado: patch_down
+Tecla E, Ctrl=false
+Verificado: patch_rotate
+Tecla C, Ctrl=false
+Verificado: patch_collider
+Captura GPU da janela: released-collider.png
+Captura released-collider.png: 1440 × 900 pixels físicos; 1 pixels por ponto
+Medir repouso sem request_repaint do harness (300 ms estabilização + 500 ms)
+Causas de repaint: []
+Repouso medido: 1 atualizações espontâneas em 500 ms
+Capturas: ["before.png", "field-y.png", "gizmo-xz.png", "runtime-offset.png", "navigation-up.png", "released-collider.png"]
