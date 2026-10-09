@@ -42,7 +42,10 @@ fn dimensions(ui: &mut egui::Ui, shape: &mut CollisionShape) {
             ui.label(format!("Convexo · {} vértices de origem", geometry.vertices.len())).on_hover_text("O volume é a envoltória convexa destes pontos. A base é apoiada na origem dos pés.");
         }
         CollisionShape::TriMesh { .. } => {
-            ui.colored_label(Color32::YELLOW, "Malha de triângulos móvel não suportada");
+            ui.colored_label(
+                crate::theme::WARNING,
+                "Malha de triângulos móvel não suportada",
+            );
         }
     }
 }

@@ -15,7 +15,7 @@ fn native_portable_home_workflow() {
             copy_directory(&workspace.join("examples/validacao"), &data).unwrap();
         }
     }
-    let output = workspace.join("qa/v0.2.1/portable");
+    let output = oxy_core::qa::output_dir("v0.2.1/portable");
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let shared = report.clone();

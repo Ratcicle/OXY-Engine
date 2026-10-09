@@ -1,5 +1,4 @@
 //! Human-readable choices preserve stable identifiers in graph parameters.
-use egui::Color32;
 use oxy_core::document::{AssetKind, Id, Project, Scene, Value};
 use oxy_core::graph::{Node, ParamDef};
 use std::collections::{BTreeMap, BTreeSet};
@@ -216,7 +215,7 @@ pub(super) fn parameter_editor(
                         .is_some_and(|entity| entity.clips.iter().any(|clip| clip.id == *selected))
                 {
                     ui.colored_label(
-                        Color32::LIGHT_RED,
+                        crate::theme::ERROR,
                         "A animação selecionada não pertence ao objeto atual.",
                     );
                 }

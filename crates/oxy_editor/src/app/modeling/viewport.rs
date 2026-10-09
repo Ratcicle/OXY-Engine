@@ -79,7 +79,7 @@ impl Editor {
                     None
                 }
             })
-            .unwrap_or(self.gizmo);
+            .unwrap_or(self.transform_ui.gizmo);
         let pressed = ui.input(|i| {
             i.pointer
                 .primary_pressed()
@@ -129,9 +129,9 @@ impl Editor {
                 Color32::WHITE
             } else {
                 [
-                    Color32::LIGHT_RED,
-                    Color32::LIGHT_GREEN,
-                    Color32::LIGHT_BLUE,
+                    crate::theme::AXIS_X,
+                    crate::theme::AXIS_Y,
+                    crate::theme::AXIS_Z,
                 ][axis]
             };
             ui.painter_at(rect)
@@ -207,8 +207,9 @@ impl Editor {
                     {
                         let mut distance = (hit - drag.start_world).dot(drag.world_axis)
                             / drag.world_axis.length_squared().max(1e-12);
-                        if self.snap_grid && !ui.input(|i| i.modifiers.alt) {
-                            distance = (distance / self.grid_size).round() * self.grid_size;
+                        if self.view.snap_grid && !ui.input(|i| i.modifiers.alt) {
+                            distance =
+                                (distance / self.view.grid_size).round() * self.view.grid_size;
                         }
                         preview.values[axis] = drag.base[axis] + distance;
                     }

@@ -132,7 +132,12 @@ impl NativeQa {
                 }
             }
             "patch_play" => {
-                let rt = self.editor.runtime.as_ref().ok_or("Jogo não iniciou")?;
+                let rt = self
+                    .editor
+                    .play
+                    .runtime
+                    .as_ref()
+                    .ok_or("Jogo não iniciou")?;
                 let state = rt
                     .character_state("body")
                     .ok_or("Personagem não simulado")?;
@@ -197,7 +202,7 @@ impl NativeQa {
 #[ignore = "Native WGPU movement-body offset field/gizmo/history, runtime and RMB E/C"]
 fn native_body_offset_v0331() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.3.1/patch");
+    let output = oxy_core::qa::output_dir("v0.3.3.1/patch");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");

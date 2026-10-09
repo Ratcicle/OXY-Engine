@@ -132,7 +132,7 @@ impl Bench {
         editor.home.visible = false;
         editor.tab = Tab::Studio;
         editor.studio.tab = StudioTab::Model;
-        editor.debug = true;
+        editor.view.debug = true;
         let gpu = cc.wgpu_render_state.as_ref().unwrap().adapter.get_info();
         report.lock().unwrap().gpu = json!({"name":gpu.name,"driver":gpu.driver,"driver_info":gpu.driver_info,"backend":format!("{:?}",gpu.backend)});
         let source = fixture(0).scenes[0].entities[0].mesh.clone().unwrap();
@@ -686,7 +686,7 @@ fn native_component_v021_measurements() {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     );
-    let output = root.join(format!("qa/v0.2.1/{label}"));
+    let output = oxy_core::qa::output_dir(&format!("v0.2.1/{label}"));
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let result = report.clone();

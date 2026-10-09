@@ -216,11 +216,11 @@ impl Editor {
         self.home.visible
             || !matches!(self.tab, Tab::Scene | Tab::Studio)
             || self.scene().kind != SceneKind::ThreeD
-            || self.capture
+            || self.play.capture
             || self.modeling.creation.is_some()
             || self.modeling.help
             || self.mesh_operation_active()
-            || self.gizmo_drag.is_some()
+            || self.transform_ui.gizmo_drag.is_some()
             || self.spatial_active_drag()
             || self.camera_dragging()
             || self.body_dragging()
@@ -228,7 +228,7 @@ impl Editor {
             || self.new_project.is_some()
             || self.scene_dialog.is_some()
             || self.pending.is_some()
-            || self.delete_asset.is_some()
+            || self.asset_ui.delete.is_some()
             || self.spatial.fit.is_some()
             || self.logic_ui.inputs
             || self.logic_ui.guide
@@ -293,7 +293,7 @@ impl Editor {
         self.navigation.apply(
             &mut self.camera,
             &mut self.preferences,
-            self.frame_interval_ms / 1000.,
+            self.frame.interval_ms / 1000.,
         );
         if self.navigation.active {
             ui.ctx().request_repaint();

@@ -51,7 +51,7 @@ struct Player {
 }
 impl Player {
     fn new(cc: &eframe::CreationContext<'_>, path: PathBuf) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        oxy_render::theme::apply(&cc.egui_ctx);
         let path = if path.is_dir() {
             path.join(persistence::PROJECT_FILE)
         } else {
@@ -83,6 +83,7 @@ impl Player {
     }
     fn reload(&mut self) {
         let loaded = persistence::load_project(&self.path)
+            .map_err(String::from)
             .and_then(|project| Runtime::new(&project, &project.start_scene));
         match loaded {
             Ok(runtime) => {
@@ -228,7 +229,10 @@ impl eframe::App for Player {
                         .project()
                         .asset(&request.asset)
                         .ok_or_else(|| format!("Recurso de áudio ausente: {}", request.asset))
-                        .and_then(|asset| persistence::resolve_asset_path(&self.root, &asset.path))
+                        .and_then(|asset| {
+                            persistence::resolve_asset_path(&self.root, &asset.path)
+                                .map_err(String::from)
+                        })
                         .and_then(|path| audio::play_wav(&path, request.volume));
                     if let Err(error) = result {
                         new_diagnostics.push(error)

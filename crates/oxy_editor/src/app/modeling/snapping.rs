@@ -142,7 +142,7 @@ impl Editor {
             ui.horizontal_wrapped(|ui|{changed|=ui.selectable_value(&mut state.axis,None,"Mover").changed();for(i,label)in ["Escalar X","Escalar Y","Escalar Z"].iter().enumerate(){changed|=ui.selectable_value(&mut state.axis,Some(i),*label).changed();}});
             ui.small("Escala usa o pivô da peça; seleções com várias raízes usam o centro do conjunto. Apenas o eixo escolhido muda.");
             for(index,label)in [(state.source,"Origem"),(state.target,"Destino")]{if let Some(index)=index{let p=&state.points[index];ui.label(format!("{label}: {:.3}, {:.3}, {:.3}",p.position.x,p.position.y,p.position.z));}}
-            if let Some(error)=&state.error{ui.colored_label(Color32::LIGHT_YELLOW,error);}
+            if let Some(error)=&state.error{ui.colored_label(crate::theme::WARNING,error);}
             reset=ui.button("Escolher outros pontos").clicked();
             confirm=ui.add_enabled(state.target.is_some()&&state.error.is_none(),egui::Button::new("Confirmar encaixe (Enter)")).clicked()||ui.input(|i|i.key_pressed(egui::Key::Enter))&&state.target.is_some()&&state.error.is_none();
             cancel=ui.button("Cancelar (Esc)").clicked();
@@ -199,7 +199,7 @@ impl Editor {
             {
                 continue;
             }
-            painter.circle_filled(screen, 3., Color32::from_rgb(105, 224, 208));
+            painter.circle_filled(screen, 3., crate::theme::ACCENT_BRIGHT);
             if let Some(pointer) = pointer {
                 let distance = screen.distance(pointer);
                 if distance < nearest {
@@ -210,7 +210,7 @@ impl Editor {
         }
         for index in [state.source, state.target].into_iter().flatten() {
             if let Some(screen) = project(&self.camera, rect, state.points[index].position) {
-                painter.circle_stroke(screen, 8., egui::Stroke::new(2., Color32::GOLD));
+                painter.circle_stroke(screen, 8., egui::Stroke::new(2., crate::theme::HIGHLIGHT));
             }
         }
         if let Some(index) = hovered {

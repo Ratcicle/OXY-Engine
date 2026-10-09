@@ -13,7 +13,7 @@ impl NativeQa {
         match label {
             "posture3d_standing" | "posture3d_crouched" => {
                 use oxy_core::character::Posture;
-                let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+                let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
                 let state = rt.character_state(&body.id).ok_or("Estado ausente")?;
                 let expected = if label == "posture3d_crouched" {
                     Posture::Crouched
@@ -53,7 +53,7 @@ impl NativeQa {
                 }
             }
             "fp_running" => {
-                let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+                let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
                 let state = rt
                     .character_state(&body.id)
                     .ok_or("Estado de personagem ausente")?;
@@ -71,13 +71,19 @@ impl NativeQa {
                 }
             }
             "fp_paused" => {
-                if self.editor.capture || !self.editor.runtime.as_ref().is_some_and(|rt| rt.paused)
+                if self.editor.play.capture
+                    || !self
+                        .editor
+                        .play
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|rt| rt.paused)
                 {
                     return Err("Entrada não foi liberada/pausada".into());
                 }
             }
             "fp_stopped" => {
-                if self.editor.runtime.is_some() || body.transform.position != [0., 0.02, 0.] {
+                if self.editor.play.runtime.is_some() || body.transform.position != [0., 0.02, 0.] {
                     return Err("Play alterou a pose-base".into());
                 }
             }
@@ -92,7 +98,7 @@ impl NativeQa {
 fn native_ground_posture_v030() {
     use oxy_core::{character::CharacterConfig, surface::*};
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.1/posture");
+    let output = oxy_core::qa::output_dir("v0.3.1/posture");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");
@@ -193,7 +199,7 @@ fn native_ground_posture_v030() {
 #[ignore = "Native WGPU and isolated RawInput. Does not certify physical mouse capture"]
 fn native_first_person_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m2");
+    let output = oxy_core::qa::output_dir("v0.3.0/m2");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");

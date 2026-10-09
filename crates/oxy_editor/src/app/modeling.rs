@@ -587,7 +587,7 @@ impl Editor {
         if let Some(preview) = self.modeling.preview.take() {
             if let Some(id) = &preview.expanded_texture {
                 self.renderer.clear_texture_override(id);
-                self.game_ui.clear_texture_override(id);
+                self.play.game_ui.clear_texture_override(id);
             }
             if preview.started {
                 self.history

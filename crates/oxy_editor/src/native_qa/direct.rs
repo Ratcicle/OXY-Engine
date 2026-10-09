@@ -356,7 +356,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_direct_modeling_v021_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/direct");
+    let output = oxy_core::qa::output_dir("v0.2.1/direct");
     let root = output.join("project");
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("project.oxy.json");

@@ -106,7 +106,7 @@ impl MeasuredEditor {
         editor.home.visible = false;
         editor.tab = Tab::Studio;
         editor.studio.tab = StudioTab::Model;
-        editor.debug = true;
+        editor.view.debug = true;
         let gpu = cc.wgpu_render_state.as_ref().unwrap().adapter.get_info();
         report.lock().unwrap().gpu = json!({"name":gpu.name,"driver":gpu.driver,"driver_info":gpu.driver_info,"backend":format!("{:?}",gpu.backend)});
         let project = fixture(22);
@@ -642,7 +642,7 @@ impl eframe::App for MeasuredEditor {
 fn native_mesh_editor_measurements() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = root.join("qa/v0.2.0/m7");
+    let output = oxy_core::qa::output_dir("v0.2.0/m7");
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let result = report.clone();

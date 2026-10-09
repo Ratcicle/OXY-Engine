@@ -104,7 +104,7 @@ impl Editor {
         if self.state.project != base.project
             || self.state.project.asset(&expanded).is_some()
             || self.renderer.texture_override_bytes() != pixels.pixels.len()
-            || self.game_ui.texture_override_bytes() != pixels.pixels.len()
+            || self.play.game_ui.texture_override_bytes() != pixels.pixels.len()
         {
             return Err("Prévia neutra deixou conversão, expansão ou override órfão".into());
         }
@@ -204,7 +204,7 @@ impl Editor {
         }
         let expected = original.pixels.len() + image.pixels.len();
         if self.renderer.texture_override_bytes() != expected
-            || self.game_ui.texture_override_bytes() != expected
+            || self.play.game_ui.texture_override_bytes() != expected
         {
             return Err(
                 "Cancelamento/Redo não restaurou os pixels ainda não salvos nos caches gráficos"

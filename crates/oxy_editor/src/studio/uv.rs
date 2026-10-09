@@ -1,6 +1,6 @@
 use super::PaintTool;
 use crate::app::Editor;
-use egui::{Color32, Rect, Vec2};
+use egui::{Rect, Vec2};
 use oxy_core::{
     document::Scene,
     geometry::{EditableMesh, selection::Mode},
@@ -40,9 +40,9 @@ impl Editor {
                     egui::Stroke::new(
                         if active { 2. } else { 1. },
                         if active {
-                            Color32::GOLD
+                            crate::theme::HIGHLIGHT
                         } else {
-                            Color32::from_rgba_unmultiplied(70, 235, 216, 140)
+                            crate::theme::ACCENT_BRIGHT.gamma_multiply(0.55)
                         },
                     ),
                 );
@@ -57,7 +57,7 @@ impl Editor {
             let face = mesh.face(t.face).unwrap();
             painter.add(egui::Shape::convex_polygon(
                 t.corners.map(|i| point(face.corners[i].uv)).to_vec(),
-                Color32::from_rgba_unmultiplied(245, 175, 70, 45),
+                crate::theme::HIGHLIGHT.gamma_multiply(0.18),
                 egui::Stroke::NONE,
             ));
         }
@@ -122,7 +122,7 @@ impl Editor {
             if let Some(positions) = positions {
                 painter.add(egui::Shape::convex_polygon(
                     positions,
-                    Color32::from_rgba_unmultiplied(245, 175, 70, 45),
+                    crate::theme::HIGHLIGHT.gamma_multiply(0.18),
                     egui::Stroke::NONE,
                 ));
             }

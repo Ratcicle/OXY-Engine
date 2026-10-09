@@ -17,11 +17,12 @@ pub(super) fn repaint_delay(
 }
 impl Editor {
     pub(super) fn diagnostics_ui(&mut self, ctx: &egui::Context) {
-        if !self.diagnostics {
+        if !self.frame.visible {
             return;
         }
         let stats = self.renderer.stats();
         let scene = self
+            .play
             .runtime
             .as_ref()
             .filter(|_| self.tab == Tab::Game)
@@ -35,14 +36,15 @@ impl Editor {
             .map(|e| e.graph.nodes.len())
             .sum::<usize>();
         let retained = self
+            .play
             .runtime
             .as_ref()
             .map_or([0; 4], |r| r.retained_counts());
         let counters = oxy_core::metrics::take();
         let (component_queries, component_cpu_bytes) = self.component_selection_stats();
-        egui::Window::new("Diagnóstico de desempenho").open(&mut self.diagnostics).default_width(340.).show(ctx,|ui| {
-            ui.label(format!("FPS de redesenho: {:.1}",1000./self.frame_interval_ms.max(0.001))).on_hover_text("Frequência observada entre as duas últimas atualizações. O editor em repouso redesenha apenas quando necessário.");
-            ui.label(format!("Intervalo: {:.2} ms · trabalho CPU: {:.2} ms",self.frame_interval_ms,self.frame_cpu_ms));
+        egui::Window::new("Diagnóstico de desempenho").open(&mut self.frame.visible).default_width(340.).show(ctx,|ui| {
+            ui.label(format!("FPS de redesenho: {:.1}",1000./self.frame.interval_ms.max(0.001))).on_hover_text("Frequência observada entre as duas últimas atualizações. O editor em repouso redesenha apenas quando necessário.");
+            ui.label(format!("Intervalo: {:.2} ms · trabalho CPU: {:.2} ms",self.frame.interval_ms,self.frame.cpu_ms));
             ui.separator();ui.label(format!("Objetos: {count} · visíveis: {visible}"));
             ui.label(format!("Geometrias desenhadas: {} · chamadas de desenho: {}",stats.visible_objects,stats.draw_calls));
             ui.label(format!("Vértices: {} · triângulos: {}",stats.vertices,stats.triangles));
@@ -52,7 +54,7 @@ impl Editor {
             ui.label(format!("Componentes: CPU estimada {:.2} MiB · buffers GPU alocados {:.2} MiB",component_cpu_bytes as f64/1048576.,stats.component_buffer_bytes as f64/1048576.));
             ui.label(format!("Texturas GPU: {} · pixels editáveis em memória: {}",stats.textures,self.state.images.len()));
             ui.label(format!("Imagens CPU: {:.2} MiB · histórico estimado: {:.2} MiB",self.state.images.resident_bytes() as f64/1048576.,self.history.estimated_bytes() as f64/1048576.));
-            ui.label(format!("Nós: {nodes} · tarefas pendentes: {}",self.runtime.as_ref().map_or(0,|r|r.pending_tasks())));
+            ui.label(format!("Nós: {nodes} · tarefas pendentes: {}",self.play.runtime.as_ref().map_or(0,|r|r.pending_tasks())));
             ui.label(format!("Acertos vivos: {} · áreas ativas: {} · prontas: {} · em espera: {}", retained[0], retained[1], retained[2], retained[3]));
             if oxy_core::metrics::ENABLED {
                 ui.separator();
@@ -61,7 +63,7 @@ impl Editor {
                 ui.label(format!("Passos completos: {:.3} ms · apresentação/câmera: {:.3} ms", counters.fixed_step_ns as f64/1e6,counters.presentation_ns as f64/1e6));
                 ui.label(format!("Preparação 3D: {:.3} ms · motor: {:.3} ms · sensores: {:.3} ms",counters.character_prepare_ns as f64/1e6,counters.character_motor_ns as f64/1e6,counters.character_sensors_ns as f64/1e6));
                 ui.small(format!("Resolução incluída no motor: {:.3} ms. Não somar novamente.",counters.character_resolve_ns as f64/1e6));
-                if let Some(world)=self.runtime.as_ref().and_then(|r|r.physics_world()) {
+                if let Some(world)=self.play.runtime.as_ref().and_then(|r|r.physics_world()) {
                     let p=world.counters();
                     ui.label(format!("Física 3D: {} formas vivas · {} preparações · {} consultas · {} candidatos (acumulados)",p.colliders,p.shapes_prepared,p.queries,p.candidate_tests));
                 }

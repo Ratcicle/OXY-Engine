@@ -22,8 +22,8 @@ impl Editor {
     }
     fn display_menu(&mut self, ui: &mut egui::Ui) {
         let response = ui.menu_button("Exibir", |ui| {
-            ui.checkbox(&mut self.console, "Console");
-            ui.checkbox(&mut self.diagnostics, "Desempenho");
+            ui.checkbox(&mut self.console.open, "Console");
+            ui.checkbox(&mut self.frame.visible, "Desempenho");
             self.notices_button(ui);
             self.camera_display_menu(ui);
         });
@@ -31,7 +31,7 @@ impl Editor {
             ui.painter().circle_filled(
                 response.response.rect.right_top() + Vec2::new(-3., 3.),
                 3.,
-                Color32::LIGHT_YELLOW,
+                crate::theme::WARNING,
             );
         }
     }
@@ -45,14 +45,14 @@ impl Editor {
                     ui.label(
                         egui::RichText::new(concat!("OXY\n", env!("OXY_APP_VERSION")))
                             .strong()
-                            .color(Color32::from_rgb(131, 224, 207)),
+                            .color(crate::theme::ACCENT_BRIGHT),
                     );
                 } else {
                     ui.label(
                         egui::RichText::new("OXY")
                             .size(26.)
                             .strong()
-                            .color(Color32::from_rgb(131, 224, 207)),
+                            .color(crate::theme::ACCENT_BRIGHT),
                     );
                     ui.label(
                         egui::RichText::new(concat!("ENGINE\n", env!("OXY_APP_VERSION")))
@@ -62,7 +62,7 @@ impl Editor {
                 }
                 ui.separator();
                 ui.menu_button("Projeto", |ui| {
-                    if self.capture {self.pause();oxy_render::input::release_cursor(ctx);}
+                    if self.play.capture {self.pause();oxy_render::input::release_cursor(ctx);}
                     if ui.button("Tela inicial").clicked() {
                         self.pause();
                         self.transition(Transition::Home);
@@ -101,12 +101,12 @@ impl Editor {
                     self.history_buttons(ui);
                 }
                 ui.separator();
-                if self.runtime.is_none() {
+                if self.play.runtime.is_none() {
                     if ui.button("▶ Jogar").clicked() {
                         self.start();
                     }
                 } else {
-                    let paused = self.runtime.as_ref().is_some_and(|r| r.paused);
+                    let paused = self.play.runtime.as_ref().is_some_and(|r| r.paused);
                     if ui
                         .button(if paused { "▶ Retomar · Pausado" } else { "Ⅱ Pausar · Em execução" })
                         .on_hover_text("Escape pausa e libera a entrada. Edições não alteram o teste iniciado; use Parar e Jogar novamente.")
@@ -114,11 +114,11 @@ impl Editor {
                     {
                         if paused {
                             self.tab = Tab::Game;
-                            self.capture = true;
-                            if let Some(rt) = &mut self.runtime {
+                            self.play.capture = true;
+                            if let Some(rt) = &mut self.play.runtime {
                                 rt.set_paused(false);
                             }
-                            self.last_time = Instant::now();
+                            self.frame.last_frame = Instant::now();
                         } else {
                             self.pause();
                         }
@@ -149,12 +149,12 @@ impl Editor {
                     let (rect, response) =
                         ui.allocate_exact_size(Vec2::splat(14.), egui::Sense::hover());
                     if dirty {
-                        ui.painter().circle_filled(rect.center(), 4., Color32::GOLD);
+                        ui.painter().circle_filled(rect.center(), 4., crate::theme::HIGHLIGHT);
                     } else {
                         ui.painter().circle_stroke(
                             rect.center(),
                             4.,
-                            egui::Stroke::new(1.5, Color32::from_rgb(131, 224, 207)),
+                            egui::Stroke::new(1.5, crate::theme::ACCENT_BRIGHT),
                         );
                     }
                     response.widget_info(|| {
@@ -209,9 +209,9 @@ impl Editor {
                     );
                 }
                 if ctx.content_rect().width() >= 900. {
-                    ui.checkbox(&mut self.console, "Console");
+                    ui.checkbox(&mut self.console.open, "Console");
                     self.notices_button(ui);
-                    ui.checkbox(&mut self.diagnostics, "Desempenho")
+                    ui.checkbox(&mut self.frame.visible, "Desempenho")
                         .on_hover_text(
                             "Tempos medidos, objetos, texturas, malhas e tarefas do jogo.",
                         );

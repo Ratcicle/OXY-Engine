@@ -135,7 +135,7 @@ impl Editor {
                 CollisionShape::Sphere{radius}=>{ui.add(egui::DragValue::new(radius).range(0.01..=100.).prefix("Raio (m) "));},
                 CollisionShape::Convex{geometry}|CollisionShape::TriMesh{geometry}=>{
                     ui.small(format!("{} vértices · {} triângulos de origem",geometry.vertices.len(),geometry.triangles.len()));
-                    if fingerprint.is_some() && fingerprint!=geometry.source_fingerprint {ui.colored_label(Color32::YELLOW,"A aparência mudou. A colisão preparada foi preservada.");}
+                    if fingerprint.is_some() && fingerprint!=geometry.source_fingerprint {ui.colored_label(crate::theme::WARNING,"A aparência mudou. A colisão preparada foi preservada.");}
                     if ui.button("Atualizar geometria de colisão").on_hover_text("Substitui a forma física pela geometria visual atual. Uma operação de desfazer.").clicked(){refresh=Some(original_kind==3);}
                 }
             }
@@ -154,7 +154,7 @@ impl Editor {
                     }});
                 });
             });
-            if let Err(error)=config.validate(){ui.colored_label(Color32::YELLOW,error);}
+            if let Err(error)=config.validate(){ui.colored_label(crate::theme::WARNING,error);}
             if ui.add_enabled(entity.character3d.is_none() && entity.platform.is_none(),egui::Button::new("Remover componente")).on_hover_text("Remova primeiro o Personagem 3D ou a Plataforma móvel que depende desta forma.").clicked(){entity.physics3d=None;}
             if let Some(convex)=refresh {match generate_collider(entity,convex){Ok(next)=>entity.physics3d.as_mut().unwrap().shape=next.shape,Err(e)=>self.warn(e)}}
         });

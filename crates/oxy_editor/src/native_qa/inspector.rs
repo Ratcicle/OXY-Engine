@@ -246,7 +246,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_inspector_v031() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.1/inspector");
+    let output = oxy_core::qa::output_dir("v0.3.1/inspector");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");

@@ -5,6 +5,7 @@ mod labels;
 #[cfg(test)]
 mod native_qa;
 mod studio;
+pub(crate) use oxy_render::theme;
 
 fn window_icon() -> egui::IconData {
     let image = image::load_from_memory(include_bytes!("../../../assets/branding/oxy.png"))

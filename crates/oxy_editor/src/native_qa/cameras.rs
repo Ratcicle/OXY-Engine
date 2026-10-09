@@ -2,7 +2,7 @@ use super::*;
 use oxy_core::{character::*, document::*, physics3d::*};
 impl NativeQa {
     pub(super) fn check_cameras(&mut self, label: &str) -> Result<(), String> {
-        let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+        let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
         let camera = rt.active_camera().ok_or("Câmera ausente")?;
         let pose = rt.game_camera_pose().ok_or("Pose ausente")?;
         if !rt.logs.is_empty() {
@@ -48,7 +48,7 @@ impl NativeQa {
 #[ignore = "Real native WGPU, isolated RawInput; physical OS capture is a separate check"]
 fn native_cameras_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m5");
+    let output = oxy_core::qa::output_dir("v0.3.0/m5");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");

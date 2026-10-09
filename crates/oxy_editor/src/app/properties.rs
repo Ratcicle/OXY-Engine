@@ -47,20 +47,20 @@ impl Editor {
         vector3(
             ui,
             "Giro em graus",
-            &mut self.selection_rotation,
+            &mut self.transform_ui.selection_rotation,
             0.5,
             false,
         );
         if ui.button("Aplicar giro").clicked() {
-            let [x, y, z] = self.selection_rotation.map(f32::to_radians);
+            let [x, y, z] = self.transform_ui.selection_rotation.map(f32::to_radians);
             let delta = glam::Mat4::from_translation(center)
                 * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, x, y, z))
                 * glam::Mat4::from_translation(-center);
             self.transform_multiple(&ids, delta);
-            self.selection_rotation = [0.; 3];
+            self.transform_ui.selection_rotation = [0.; 3];
         }
         ui.add(
-            egui::DragValue::new(&mut self.selection_scale)
+            egui::DragValue::new(&mut self.transform_ui.selection_scale)
                 .range(0.01..=100.)
                 .speed(0.02)
                 .prefix("Fator de escala "),
@@ -69,10 +69,10 @@ impl Editor {
             self.transform_multiple(
                 &ids,
                 glam::Mat4::from_translation(center)
-                    * glam::Mat4::from_scale(Vec3::splat(self.selection_scale))
+                    * glam::Mat4::from_scale(Vec3::splat(self.transform_ui.selection_scale))
                     * glam::Mat4::from_translation(-center),
             );
-            self.selection_scale = 1.;
+            self.transform_ui.selection_scale = 1.;
         }
     }
     fn transform_multiple(&mut self, ids: &[Id], delta: glam::Mat4) {
@@ -104,17 +104,17 @@ impl Editor {
                 let objects:Vec<_>=self.scene().entities.iter().map(|e|(e.id.clone(),e.name.clone())).collect();
                 let textures:Vec<_>=self.state.project.assets.iter().filter(|a|a.kind==AssetKind::Texture).map(|a|(a.id.clone(),a.name.clone())).collect();
                 ui.text_edit_singleline(&mut entity.name);
-                ui.label(egui::RichText::new("INSTÂNCIA NA CENA").small().color(Color32::from_rgb(128,203,192)));
+                ui.label(egui::RichText::new("INSTÂNCIA NA CENA").small().color(crate::theme::ACCENT_BRIGHT));
                 if entity.model_source.is_some(){ui.small("Cópia editável de um modelo").on_hover_text("Salvar como modelo cria um recurso independente na biblioteca.");}
                 ui.horizontal(|ui|{ui.checkbox(&mut entity.visible,"Visível").on_hover_text("Mostra ou oculta a aparência deste objeto e de seus filhos.");ui.label("Camada").on_hover_text("No 2D, valores maiores aparecem na frente de valores menores.");ui.add(egui::DragValue::new(&mut entity.layer));});
                 ui.collapsing("Transformação",|ui| {
-                    ui.horizontal(|ui|{ui.selectable_value(&mut self.view_global,false,"Local");ui.selectable_value(&mut self.view_global,true,"Global");});
-                    let mut transform=if self.view_global {Transform::from_matrix(self.scene().world_matrix(&id).unwrap_or_default(),entity.transform.pivot)}else{entity.transform.clone()};
+                    ui.horizontal(|ui|{ui.selectable_value(&mut self.view.view_global,false,"Local");ui.selectable_value(&mut self.view.view_global,true,"Global");});
+                    let mut transform=if self.view.view_global {Transform::from_matrix(self.scene().world_matrix(&id).unwrap_or_default(),entity.transform.pivot)}else{entity.transform.clone()};
                     let before=transform.clone();
                     vector3(ui,"Posição",&mut transform.position,0.05,false);
                     let mut degrees=transform.rotation.map(f32::to_degrees);let original_degrees=degrees;vector3(ui,"Rotação °",&mut degrees,0.5,false);if degrees!=original_degrees{transform.rotation=degrees.map(f32::to_radians);}
                     vector3(ui,"Escala",&mut transform.scale,0.02,true);
-                    if !self.view_global{
+                    if !self.view.view_global{
                         let mut pivot=transform.pivot;
                         ui.label("Pivô — ponto de giro").on_hover_text("Ponto em torno do qual a peça gira e escala. Mudar este ponto preserva a montagem na pose-base.");
                         vector3(ui,"Pivô local",&mut pivot,0.05,false);
@@ -122,7 +122,7 @@ impl Editor {
                         if ui.button("Editar pivô (P)").clicked(){requested_tool=Some(Tool::Pivot);}
                     }
                     if transform!=before {
-                        if self.view_global {
+                        if self.view.view_global {
                             let parent=entity.parent.as_deref().and_then(|p|self.scene().world_matrix(p).ok()).unwrap_or(glam::Mat4::IDENTITY);
                             let matrix = parent.inverse() * transform.matrix();
                             let candidate = Transform::from_matrix(matrix,entity.transform.pivot);

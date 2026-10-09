@@ -296,7 +296,7 @@ impl Editor {
                 let response = ui.checkbox(&mut controls.allow_expansion, "Criar cópia ampliada (2×)");
                 if response.changed() { edit.changed = true; edit.ended = true; }
             }
-            if let Some(error) = &candidate.error { ui.colored_label(Color32::LIGHT_YELLOW, error); }
+            if let Some(error) = &candidate.error { ui.colored_label(crate::theme::WARNING, error); }
         });
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         if edit.invalid {
@@ -381,7 +381,7 @@ impl Editor {
         // Keep the operation handle outside the transform handles' ring. Both
         // remain available after applying, without competing for egui hit testing.
         let endpoint = origin + direction * 104.;
-        let color = Color32::from_rgb(112, 239, 213);
+        let color = crate::theme::ACCENT_BRIGHT;
         let painter = ui.painter_at(rect);
         painter.line_segment([origin, endpoint], egui::Stroke::new(2., color));
         painter.circle_filled(endpoint, 6., color);
@@ -472,8 +472,8 @@ impl Editor {
                             .length()
                             .max(1e-8);
                     }
-                    if self.snap_grid && !ui.input(|i| i.modifiers.alt) {
-                        distance = (distance / self.grid_size).round() * self.grid_size;
+                    if self.view.snap_grid && !ui.input(|i| i.modifiers.alt) {
+                        distance = (distance / self.view.grid_size).round() * self.view.grid_size;
                     }
                     if p.operation == Operation::Extrude && p.direction == Direction::Vector {
                         p.values = vector_drag_values(p.world, p.global, drag.base, axis, distance);

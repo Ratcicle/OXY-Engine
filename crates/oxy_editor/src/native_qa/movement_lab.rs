@@ -24,7 +24,7 @@ impl NativeQa {
             };
         }
         if label == "lab3d_stopped" {
-            return if self.editor.runtime.is_none()
+            return if self.editor.play.runtime.is_none()
                 && self.editor.state.project.scenes[0]
                     .entities
                     .iter()
@@ -39,7 +39,7 @@ impl NativeQa {
                 Err("Teste alterou pose-base".into())
             };
         }
-        let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+        let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
         if !rt.logs.is_empty() {
             return Err(format!("{:?}", rt.logs));
         }
@@ -65,7 +65,7 @@ impl NativeQa {
             .character_state(&body.id)
             .ok_or("Estado de movimento ausente")?;
         match label {
-            "lab3d_paused" if self.editor.capture || !rt.paused => {
+            "lab3d_paused" if self.editor.play.capture || !rt.paused => {
                 Err("Saída não liberou entrada e pausou".into())
             }
             "lab3d_tp"
@@ -95,7 +95,7 @@ impl NativeQa {
 #[ignore = "Native WGPU 400-entity/50-character regression; not a GPU benchmark"]
 fn native_movement_scale_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m7-scale");
+    let output = oxy_core::qa::output_dir("v0.3.0/m7-scale");
     let path = output.join("project/project.oxy.json");
     let mut project = scale_fixture::fixture(50, "dense");
     project.scenes[0].name = "50 personagens · 400 objetos".into();
@@ -167,7 +167,7 @@ fn native_movement_lab_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let output = std::env::var_os("OXY_MOVEMENT_QA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m6"));
+        .unwrap_or_else(|| oxy_core::qa::output_dir("v0.3.0/m6"));
     let path = output.join("project/project.oxy.json");
     oxy_core::persistence::save_project(
         &path,

@@ -22,6 +22,7 @@ pub mod painting;
 pub mod persistence;
 pub mod physics3d;
 mod prepared_graph;
+pub mod qa;
 pub mod runtime;
 pub mod scene_view;
 pub mod spatial;

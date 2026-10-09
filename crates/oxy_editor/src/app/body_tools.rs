@@ -45,11 +45,11 @@ fn dragged_offset(drag: &BodyDrag, at: Vec3, snap: Option<f32>) -> [f32; 3] {
 impl Editor {
     #[cfg(test)]
     pub(crate) fn patch_tool_is_move(&self) -> bool {
-        self.gizmo == Gizmo::Move && self.spatial.mode == Tool::Object
+        self.transform_ui.gizmo == Gizmo::Move && self.spatial.mode == Tool::Object
     }
     #[cfg(test)]
     pub(crate) fn patch_tool_is_rotate(&self) -> bool {
-        self.gizmo == Gizmo::Rotate && self.spatial.mode == Tool::Object
+        self.transform_ui.gizmo == Gizmo::Rotate && self.spatial.mode == Tool::Object
     }
     #[cfg(test)]
     pub(crate) fn patch_tool_is_collider(&self) -> bool {
@@ -83,7 +83,7 @@ impl Editor {
             self.warn(error);
             return;
         }
-        if self.mesh_operation_active() || self.gizmo_drag.is_some() {
+        if self.mesh_operation_active() || self.transform_ui.gizmo_drag.is_some() {
             return;
         }
         self.set_spatial_tool(Tool::Object);
@@ -111,7 +111,7 @@ impl Editor {
             return true;
         };
         let editable = !self.navigation.active
-            && !self.capture
+            && !self.play.capture
             && !crate::graph_ui::text_input_active(ui.ctx())
             && !egui::Popup::is_any_open(ui.ctx())
             && self.pending_preferences.is_none()
@@ -136,9 +136,9 @@ impl Editor {
                 continue;
             };
             let color = [
-                Color32::LIGHT_RED,
-                Color32::LIGHT_GREEN,
-                Color32::LIGHT_BLUE,
+                crate::theme::AXIS_X,
+                crate::theme::AXIS_Y,
+                crate::theme::AXIS_Z,
             ][i];
             painter.line_segment([origin, end], egui::Stroke::new(4., Color32::BLACK));
             painter.line_segment([origin, end], egui::Stroke::new(2., color));
@@ -201,7 +201,8 @@ impl Editor {
             && let Some(at) =
                 spatial_tools::ray_plane(&self.camera, rect, pointer, drag.origin, drag.normal)
         {
-            let snap = (self.snap_grid && !ui.input(|i| i.modifiers.alt)).then_some(self.grid_size);
+            let snap = (self.view.snap_grid && !ui.input(|i| i.modifiers.alt))
+                .then_some(self.view.grid_size);
             let offset = dragged_offset(drag, at, snap);
             if Vec3::from(offset).is_finite() {
                 self.scene_mut()

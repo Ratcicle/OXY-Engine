@@ -228,16 +228,16 @@ impl Editor {
                             egui::Align2::LEFT_TOP,
                             error,
                             egui::FontId::proportional(13.),
-                            Color32::YELLOW,
+                            crate::theme::WARNING,
                         );
                     }
                     continue;
                 }
             };
             let color = if selected {
-                Color32::from_rgb(120, 200, 255)
+                crate::theme::ACCENT_BRIGHT
             } else {
-                Color32::from_gray(130)
+                crate::theme::TEXT_MUTED
             };
             let pose = &evaluated.pose;
             let mut labels = Vec::new();
@@ -370,7 +370,7 @@ impl Editor {
                     rect,
                     evaluated.anchor,
                     evaluated.desired,
-                    Color32::YELLOW,
+                    crate::theme::HIGHLIGHT,
                     2.,
                 );
                 line(
@@ -379,7 +379,7 @@ impl Editor {
                     rect,
                     evaluated.desired,
                     pose.position,
-                    Color32::LIGHT_RED,
+                    crate::theme::ERROR,
                     2.,
                 );
                 for (a, b) in [(Vec3::X, Vec3::Y), (Vec3::X, Vec3::Z), (Vec3::Y, Vec3::Z)] {
@@ -390,7 +390,7 @@ impl Editor {
                         pose.position,
                         a * evaluated.radius,
                         b * evaluated.radius,
-                        Color32::LIGHT_GREEN,
+                        crate::theme::SUCCESS,
                     );
                 }
                 if let Some(hit) = &evaluated.contact {
@@ -400,7 +400,7 @@ impl Editor {
                         rect,
                         hit.point,
                         hit.point + hit.normal * 0.5,
-                        Color32::LIGHT_RED,
+                        crate::theme::ERROR,
                         2.,
                     );
                 }
@@ -604,7 +604,7 @@ impl Editor {
                         ui.small("Prévia da cena em edição · não inicia a simulação.");
                     }
                     Err(error) => {
-                        ui.colored_label(Color32::YELLOW, error);
+                        ui.colored_label(crate::theme::WARNING, error);
                     }
                 }
             });

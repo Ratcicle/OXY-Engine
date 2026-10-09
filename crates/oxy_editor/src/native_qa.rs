@@ -1119,6 +1119,7 @@ impl NativeQa {
                     !self.editor.studio.animation.drafts.is_empty()
                         && self
                             .editor
+                            .console
                             .messages
                             .iter()
                             .any(|message| message.contains("pose provisória")),
@@ -1309,6 +1310,7 @@ impl NativeQa {
             "card_one" | "card_two" | "card_three" | "card_four" => {
                 let scene = self
                     .editor
+                    .play
                     .runtime
                     .as_ref()
                     .ok_or("Runtime de carta ausente")?
@@ -1354,16 +1356,22 @@ impl NativeQa {
             ),
             "playing" => ensure(
                 self.editor.tab == Tab::Game
-                    && self.editor.capture
+                    && self.editor.play.capture
                     && self
                         .editor
+                        .play
                         .runtime
                         .as_ref()
                         .is_some_and(|runtime| !runtime.paused),
                 "Jogo deveria estar executando e capturando entrada",
             ),
             "game_moved" => {
-                let runtime = self.editor.runtime.as_ref().ok_or("Runtime não iniciou")?;
+                let runtime = self
+                    .editor
+                    .play
+                    .runtime
+                    .as_ref()
+                    .ok_or("Runtime não iniciou")?;
                 let original = self
                     .base
                     .as_ref()
@@ -1387,16 +1395,18 @@ impl NativeQa {
                 )
             }
             "left_game_paused" | "return_still_paused" | "escape_paused" => ensure(
-                !self.editor.capture
+                !self.editor.play.capture
                     && self
                         .editor
+                        .play
                         .runtime
                         .as_ref()
                         .is_some_and(|runtime| runtime.paused),
                 "Jogo deveria pausar e liberar entrada",
             ),
             "stop_isolated" => ensure(
-                self.editor.runtime.is_none() && self.base.as_ref() == Some(&self.editor.state),
+                self.editor.play.runtime.is_none()
+                    && self.base.as_ref() == Some(&self.editor.state),
                 "Parar deve descartar runtime e preservar documento exato",
             ),
             "scene_3d" => ensure(
@@ -2308,21 +2318,21 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                     inspect(shape, clip, surface);
                 }
             }
-            egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(20, 24, 31) => {
+            egui::Shape::Rect(rect) if rect.fill == crate::theme::BG_BASE => {
                 surface.canvas = Some(rect.rect.intersect(clip))
             }
             egui::Shape::Rect(rect)
-                if rect.fill == Color32::LIGHT_RED && (rect.rect.width() - 9.).abs() < 0.1 =>
+                if rect.fill == crate::theme::AXIS_X && (rect.rect.width() - 9.).abs() < 0.1 =>
             {
                 surface.gizmo_x = Some(rect.rect.center());
             }
             egui::Shape::Rect(rect)
-                if rect.fill == Color32::LIGHT_BLUE && (rect.rect.width() - 9.).abs() < 0.1 =>
+                if rect.fill == crate::theme::AXIS_Z && (rect.rect.width() - 9.).abs() < 0.1 =>
             {
                 surface.gizmo_z = Some(rect.rect.center());
             }
             egui::Shape::Circle(circle)
-                if circle.fill == Color32::from_rgb(112, 239, 213)
+                if circle.fill == crate::theme::ACCENT_BRIGHT
                     && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.direct_handle = Some(circle.center);
@@ -2336,14 +2346,12 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                 }
             }
             egui::Shape::Circle(circle)
-                if circle.fill == Color32::from_rgb(122, 169, 240)
-                    && (circle.radius - 6.).abs() < 0.1 =>
+                if circle.fill == crate::theme::AXIS_Z && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.gizmo_z = Some(circle.center)
             }
             egui::Shape::Circle(circle)
-                if circle.fill == Color32::from_rgb(239, 113, 117)
-                    && (circle.radius - 6.).abs() < 0.1 =>
+                if circle.fill == crate::theme::AXIS_X && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.gizmo_x = Some(circle.center)
             }
@@ -2398,7 +2406,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 fn native_editor_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.1/regression");
+    let output = oxy_core::qa::output_dir("v0.2.1/regression");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-native-qa-{}", new_id()));
     copy_directory(&workspace.join("examples/validacao"), &fixture).unwrap();

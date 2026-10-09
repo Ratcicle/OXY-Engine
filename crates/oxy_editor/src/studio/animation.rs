@@ -341,7 +341,7 @@ impl Editor {
         }
     }
     fn choose_animation(&mut self, id: &str) {
-        self.hierarchy_focus = false;
+        self.hierarchy_ui.focus = false;
         if self.studio.animation.selected.as_deref() == Some(id) {
             return;
         }
@@ -426,7 +426,7 @@ impl Editor {
                             ui.small("Enter confirma · Escape cancela");
                         } else {
                             let response = ui.add_sized(
-                                [ui.available_width(), 30.0],
+                                [ui.available_width(), crate::theme::CONTROL_HEIGHT],
                                 egui::Button::selectable(
                                     self.studio.animation.selected.as_ref() == Some(&clip.id),
                                     &clip.name,
@@ -500,7 +500,7 @@ impl Editor {
         if let Some(id) = delete {
             self.delete_selected_animation(&id);
         }
-        if !self.hierarchy_focus
+        if !self.hierarchy_ui.focus
             && !text_input_active(ui.ctx())
             && ui.input(|input| input.key_pressed(egui::Key::F2))
             && let Some(clip) = self.chosen_animation()
@@ -603,7 +603,7 @@ impl Editor {
                 }
                 if !self.studio.animation.drafts.is_empty() {
                     ui.colored_label(
-                        Color32::GOLD,
+                        crate::theme::HIGHLIGHT,
                         format!(
                             "{} pose(s) provisória(s)",
                             self.studio.animation.drafts.len()
@@ -987,7 +987,9 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.add_sized(
                         [160.0, 28.0],
-                        egui::Label::new(egui::RichText::new("EVENTOS").color(Color32::GOLD)),
+                        egui::Label::new(
+                            egui::RichText::new("EVENTOS").color(crate::theme::HIGHLIGHT),
+                        ),
                     );
                     let rect = self.timeline_lane(ui, clip.duration, 30.0);
                     for (index, event) in clip.events.iter_mut().enumerate() {
@@ -1002,7 +1004,7 @@ impl Editor {
                             if selected {
                                 Color32::WHITE
                             } else {
-                                Color32::GOLD
+                                crate::theme::HIGHLIGHT
                             },
                         );
                         let response = ui
@@ -1064,7 +1066,7 @@ impl Editor {
                                     .clicked()
                                 {
                                     self.select(Some(entity.id.clone()));
-                                    self.hierarchy_focus = false;
+                                    self.hierarchy_ui.focus = false;
                                     self.studio.animation.selection = TimelineSelection::None;
                                 }
                             },
@@ -1104,19 +1106,18 @@ impl Editor {
             Vec2::new(ui.available_width().max(10.0), height),
             Sense::click(),
         );
-        ui.painter()
-            .rect_filled(rect, 2.0, Color32::from_rgb(30, 37, 45));
+        ui.painter().rect_filled(rect, 2.0, crate::theme::BG_BASE);
         for tick in 0..=10 {
             let x = rect.left() + rect.width() * tick as f32 / 10.0;
             ui.painter().line_segment(
                 [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                egui::Stroke::new(1.0, Color32::from_gray(56)),
+                egui::Stroke::new(1.0, crate::theme::GRID),
             );
         }
         let x = rect.left() + rect.width() * self.studio.animation.time / duration;
         ui.painter().line_segment(
             [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-            egui::Stroke::new(1.5, Color32::from_rgb(104, 220, 194)),
+            egui::Stroke::new(1.5, crate::theme::ACCENT_BRIGHT),
         );
         if response.clicked()
             && self.studio.animation.drafts.is_empty()
@@ -1151,9 +1152,9 @@ impl Editor {
                 center,
                 if selected { 6.0 } else { 4.5 },
                 if selected {
-                    Color32::GOLD
+                    crate::theme::HIGHLIGHT
                 } else {
-                    Color32::from_rgb(125, 195, 218)
+                    crate::theme::ACCENT_BRIGHT
                 },
             );
             let response = ui
@@ -1168,7 +1169,7 @@ impl Editor {
                 )
                 .on_hover_text(format!("Quadro completo · {:.3} s", key.time));
             if response.clicked() || response.drag_started() {
-                self.hierarchy_focus = false;
+                self.hierarchy_ui.focus = false;
                 self.studio.animation.selection = TimelineSelection::Key {
                     target: target.into(),
                     time: key.time,

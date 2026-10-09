@@ -2,7 +2,12 @@ use super::*;
 use oxy_core::document::Value;
 impl NativeQa {
     pub(super) fn check_recipes(&mut self, label: &str) -> Result<(), String> {
-        let runtime = self.editor.runtime.as_ref().ok_or("Runtime não iniciou")?;
+        let runtime = self
+            .editor
+            .play
+            .runtime
+            .as_ref()
+            .ok_or("Runtime não iniciou")?;
         let id = |n: u32| format!("02000000-0000-4000-8000-{n:012x}");
         let value = |n, attribute: &str| {
             runtime
@@ -55,7 +60,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_guide_recipes_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m6");
+    let output = oxy_core::qa::output_dir("v0.2.1/m6");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-guide-recipes-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();

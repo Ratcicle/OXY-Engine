@@ -74,10 +74,10 @@ impl Editor {
         modifiers: egui::Modifiers,
     ) {
         let plain = !modifiers.ctrl && !modifiers.command && !modifiers.shift;
-        if plain && double && id.is_some() && id == self.last_object_click {
+        if plain && double && id.is_some() && id == self.hierarchy_ui.last_object_click {
             self.frame_selection();
         }
-        self.last_object_click = if plain { id } else { None };
+        self.hierarchy_ui.last_object_click = if plain { id } else { None };
     }
     pub fn viewport(&mut self, ui: &mut egui::Ui, painting: bool) {
         if !painting {
@@ -126,7 +126,7 @@ impl Editor {
             (rect.width() * ui.ctx().pixels_per_point()).max(1.) as u32,
             (rect.height() * ui.ctx().pixels_per_point()).max(1.) as u32,
         ];
-        self.renderer.show_grid = self.grid;
+        self.renderer.show_grid = self.view.grid;
         let texture = self.renderer.render(
             &self.render_state,
             &self.state.project,
@@ -135,7 +135,7 @@ impl Editor {
             &self.camera,
             physical,
             self.selected.clone(),
-            self.debug,
+            self.view.debug,
         );
         ui.painter().image(
             texture,
@@ -166,7 +166,7 @@ impl Editor {
             &self.camera,
             rect,
             &self.selection.ids,
-            self.show_disabled_colliders,
+            self.view.show_disabled_colliders,
         );
         let contour_pick = point.and_then(|p| overlays.pick(p, &self.selection.ids));
         let body_owned = !painting && self.body_handles(ui, &scene, rect);
@@ -215,13 +215,13 @@ impl Editor {
                 self.focus_object_click(id, response.double_clicked(), ui.input(|i| i.modifiers));
             }
             if self.scene().kind == SceneKind::TwoD && response.secondary_clicked() {
-                self.context_target = contour_pick
+                self.hierarchy_ui.context_target = contour_pick
                     .or(ui_pick)
                     .or_else(|| pick.as_ref().map(|h| h.entity.clone()));
             }
             if self.scene().kind == SceneKind::TwoD {
                 response.context_menu(|ui| {
-                    if let Some(id) = self.context_target.clone() {
+                    if let Some(id) = self.hierarchy_ui.context_target.clone() {
                         self.object_context(ui, &id);
                     } else {
                         self.creation_menu(ui);
@@ -240,9 +240,10 @@ impl Editor {
             {
                 self.gizmo_ui(ui, rect, size);
             }
-            let clicks = self
-                .game_ui
-                .draw(ui, &self.state.project, &scene, &self.root(), rect);
+            let clicks =
+                self.play
+                    .game_ui
+                    .draw(ui, &self.state.project, &scene, &self.root(), rect);
             if let Some(id) = clicks.first() {
                 self.select_click(Some(id.clone()), ui.input(|i| i.modifiers), false);
             }
@@ -256,13 +257,13 @@ impl Editor {
                 ui.painter().rect_stroke(
                     outline,
                     0.,
-                    egui::Stroke::new(1.5, Color32::GOLD),
+                    egui::Stroke::new(1.5, crate::theme::HIGHLIGHT),
                     egui::StrokeKind::Inside,
                 );
             }
         }
         for error in overlays.errors {
-            if self.messages.last() != Some(&error) {
+            if self.console.messages.last() != Some(&error) {
                 self.log(error);
             }
         }
@@ -296,16 +297,19 @@ impl Editor {
         };
         let origin = rect.min + Vec2::from(origin);
         for (axis, color) in [
-            (0, Color32::from_rgb(239, 113, 117)),
-            (1, Color32::from_rgb(127, 215, 153)),
-            (2, Color32::from_rgb(122, 169, 240)),
+            (0, crate::theme::AXIS_X),
+            (1, crate::theme::AXIS_Y),
+            (2, crate::theme::AXIS_Z),
             (3, Color32::WHITE),
         ] {
             let uniform = axis == 3;
-            if uniform && self.gizmo != Gizmo::Scale {
+            if uniform && self.transform_ui.gizmo != Gizmo::Scale {
                 continue;
             }
-            if self.scene().kind == SceneKind::TwoD && axis == 2 && self.gizmo != Gizmo::Rotate {
+            if self.scene().kind == SceneKind::TwoD
+                && axis == 2
+                && self.transform_ui.gizmo != Gizmo::Rotate
+            {
                 continue;
             }
             let vector = if uniform {
@@ -373,7 +377,7 @@ impl Editor {
                     self.warn("Alt em Escalar exige escolher a alça X, Y ou Z.");
                     continue;
                 }
-                self.gizmo_drag = Some(GizmoDrag {
+                self.transform_ui.gizmo_drag = Some(GizmoDrag {
                     entity: id.clone(),
                     base: entity.transform.clone(),
                     axis,
@@ -392,7 +396,7 @@ impl Editor {
                 });
             }
             if let Some(pos) = ui.input(|i| i.pointer.latest_pos())
-                && let Some(drag) = self.gizmo_drag.clone()
+                && let Some(drag) = self.transform_ui.gizmo_drag.clone()
             {
                 if drag.entity != id || drag.axis != axis {
                     continue;
@@ -410,11 +414,12 @@ impl Editor {
                             e.transform = transform.clone();
                         }
                     }
-                    let delta = match self.gizmo {
+                    let delta = match self.transform_ui.gizmo {
                         Gizmo::Move => {
                             let mut distance = amount / drag.pixels_per_unit;
-                            if self.snap_grid && !ui.input(|i| i.modifiers.alt) {
-                                distance = (distance / self.grid_size).round() * self.grid_size;
+                            if self.view.snap_grid && !ui.input(|i| i.modifiers.alt) {
+                                distance =
+                                    (distance / self.view.grid_size).round() * self.view.grid_size;
                             }
                             glam::Mat4::from_translation(vector * distance)
                         }
@@ -439,7 +444,7 @@ impl Editor {
                         }
                     };
                     if let Err(error) = editing::transform_selection(&mut working, &roots, delta) {
-                        if self.messages.last() != Some(&error) {
+                        if self.console.messages.last() != Some(&error) {
                             self.log(error);
                         }
                     } else {
@@ -451,12 +456,13 @@ impl Editor {
                     }
                     continue;
                 }
-                match self.gizmo {
+                match self.transform_ui.gizmo {
                     Gizmo::Move => {
                         next.position[axis] += amount / drag.pixels_per_unit;
-                        if self.snap_grid && !ui.input(|i| i.modifiers.alt) {
-                            next.position[axis] =
-                                (next.position[axis] / self.grid_size).round() * self.grid_size;
+                        if self.view.snap_grid && !ui.input(|i| i.modifiers.alt) {
+                            next.position[axis] = (next.position[axis] / self.view.grid_size)
+                                .round()
+                                * self.view.grid_size;
                         }
                     }
                     Gizmo::Rotate => {
@@ -476,7 +482,7 @@ impl Editor {
             }
         }
         if ui.input(|i| !i.pointer.primary_down()) {
-            self.gizmo_drag = None;
+            self.transform_ui.gizmo_drag = None;
         }
     }
 
@@ -509,7 +515,7 @@ impl Editor {
                 painter.rect_stroke(
                     oxy_render::game_ui::element_rect(element, rect),
                     0.,
-                    egui::Stroke::new(1.5, Color32::GOLD),
+                    egui::Stroke::new(1.5, crate::theme::HIGHLIGHT),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -543,10 +549,8 @@ impl Editor {
                     if i < j
                         && let (Some(a), Some(b)) = (points[i], points[j])
                     {
-                        painter.line_segment(
-                            [a, b],
-                            egui::Stroke::new(1., Color32::from_rgb(216, 184, 96)),
-                        );
+                        painter
+                            .line_segment([a, b], egui::Stroke::new(1., crate::theme::HIGHLIGHT));
                     }
                 }
             }

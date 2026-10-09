@@ -10,7 +10,7 @@ impl Editor {
             if !visited.insert(id.clone()) {
                 break;
             }
-            self.collapsed.remove(&id);
+            self.hierarchy_ui.collapsed.remove(&id);
             parent = self.scene().entity(&id).and_then(|e| e.parent.clone());
         }
     }
@@ -20,7 +20,7 @@ impl Editor {
             .filter(|id| {
                 let mut parent = self.scene().entity(id).and_then(|e| e.parent.as_deref());
                 while let Some(id) = parent {
-                    if self.collapsed.contains(id) {
+                    if self.hierarchy_ui.collapsed.contains(id) {
                         return false;
                     }
                     parent = self.scene().entity(id).and_then(|e| e.parent.as_deref());
@@ -161,16 +161,16 @@ impl Editor {
                     .and_then(|i| i.position(id).map(|p| !i.children[p].is_empty()))
                     .unwrap_or(false)
                 {
-                    let collapsed = self.collapsed.contains(id);
+                    let collapsed = self.hierarchy_ui.collapsed.contains(id);
                     if ui
                         .small_button(if collapsed { "▸" } else { "▾" })
                         .on_hover_text("Recolher ou expandir os filhos")
                         .clicked()
                     {
                         if collapsed {
-                            self.collapsed.remove(id);
+                            self.hierarchy_ui.collapsed.remove(id);
                         } else {
-                            self.collapsed.insert(id.into());
+                            self.hierarchy_ui.collapsed.insert(id.into());
                         }
                     }
                 }
@@ -183,8 +183,13 @@ impl Editor {
                 } else {
                     "◇"
                 };
-                if self.rename.as_ref().is_some_and(|rename| rename.id == id) {
-                    let rename = self.rename.as_mut().unwrap();
+                if self
+                    .hierarchy_ui
+                    .rename
+                    .as_ref()
+                    .is_some_and(|rename| rename.id == id)
+                {
+                    let rename = self.hierarchy_ui.rename.as_mut().unwrap();
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut rename.text)
                             .id_salt(("rename_entity", id))
@@ -198,10 +203,10 @@ impl Editor {
                     let confirm =
                         ui.input(|i| i.key_pressed(egui::Key::Enter)) || response.lost_focus();
                     if cancel {
-                        self.rename = None;
+                        self.hierarchy_ui.rename = None;
                         response.surrender_focus();
                     } else if confirm {
-                        let name = self.rename.take().unwrap().text;
+                        let name = self.hierarchy_ui.rename.take().unwrap().text;
                         if let Err(error) = editing::rename_entity(self.scene_mut(), id, &name) {
                             self.log(error);
                         }
@@ -219,11 +224,11 @@ impl Editor {
                         .sense(Sense::click_and_drag()),
                     )
                     .on_hover_text(&e.name);
-                if self.reveal_scroll.as_deref() == Some(id) {
+                if self.hierarchy_ui.reveal_scroll.as_deref() == Some(id) {
                     if !ui.clip_rect().contains_rect(response.rect) {
                         response.scroll_to_me(Some(egui::Align::Center));
                     }
-                    self.reveal_scroll = None;
+                    self.hierarchy_ui.reveal_scroll = None;
                 }
                 if response.clicked() {
                     self.select_click(Some(id.into()), ui.input(|i| i.modifiers), true);
@@ -250,7 +255,7 @@ impl Editor {
                 });
             });
         });
-        if self.collapsed.contains(id) {
+        if self.hierarchy_ui.collapsed.contains(id) {
             return;
         }
         for child in scene
@@ -338,9 +343,9 @@ impl Editor {
             let mut validation = self.scene().clone();
             let result = editing::reparent_selection(&mut validation, &ids, parent.clone());
             let color = if result.is_ok() {
-                Color32::from_rgb(123, 224, 202)
+                crate::theme::SUCCESS
             } else {
-                Color32::from_rgb(238, 113, 113)
+                crate::theme::ERROR
             };
             ui.painter().rect_stroke(
                 response.rect,

@@ -1,42 +1,126 @@
 //! Validated documents and staged, recoverable file replacement.
 use crate::{
     document::{Asset, AssetKind, Id, Project, new_id, validate_project},
+    migration::MigrationError,
     painting::PaintImage,
     texture_cache::TextureCache,
 };
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::{Component, Path, PathBuf},
 };
 
+/// Why a project, asset or save operation failed. Messages are shown to the user as-is.
+#[derive(Debug, thiserror::Error)]
+pub enum PersistenceError {
+    #[error(transparent)]
+    Migration(#[from] MigrationError),
+    /// Rejected by document validation.
+    #[error("{0}")]
+    InvalidProject(String),
+    #[error("Não foi possível abrir {}: {source}", .path.display())]
+    Open { path: PathBuf, source: io::Error },
+    #[error("O documento excede o limite de leitura de 64 MB")]
+    DocumentTooLarge,
+    #[error("{context}: {source}")]
+    Io {
+        context: &'static str,
+        source: io::Error,
+    },
+    #[error(transparent)]
+    Fs(#[from] io::Error),
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    /// PNG encoding or decoding.
+    #[error("{0}")]
+    Image(String),
+    #[error("Caminho de asset inválido: {0}")]
+    InvalidAssetPath(String),
+    #[error("Caminho sem pasta existente")]
+    NoExistingFolder,
+    #[error("O caminho do asset sai da pasta do projeto: {0}")]
+    AssetOutsideProject(String),
+    #[error("Asset ausente ou inacessível '{name}': {source}")]
+    AssetMissing { name: String, source: io::Error },
+    #[error("Arquivo de asset inválido ou maior que 300 MB: {0}")]
+    AssetTooLarge(String),
+    #[error("Falha ao ler '{name}': {source}")]
+    AssetRead { name: String, source: io::Error },
+    /// The file exists but its PNG/WAV content is not usable.
+    #[error("{name}: {reason}")]
+    AssetContent { name: String, reason: String },
+    #[error("{0}")]
+    InvalidAudio(String),
+    #[error("Pixels associados a asset não-textura: {0}")]
+    PixelsOnNonTexture(String),
+    #[error("Textura alterada sem asset correspondente: {0}")]
+    DirtyTextureWithoutAsset(Id),
+    #[error("Textura alterada não está residente")]
+    DirtyTextureNotResident,
+    #[error("A pasta escolhida já contém um asset diferente: {0}. Escolha uma pasta vazia.")]
+    DestinationConflict(String),
+    #[error("Não foi possível copiar {name}: {source}")]
+    CopySource { name: String, source: io::Error },
+    #[error("Modelos são salvos pelo Estúdio; importe PNG ou WAV")]
+    ModelImport,
+    #[error("Não foi possível ler origem {}: {source}", .path.display())]
+    ReadSource { path: PathBuf, source: io::Error },
+    #[error("Textura não encontrada")]
+    TextureNotFound,
+    #[error("Asset não é textura")]
+    NotTexture,
+    #[error("Dois assets compartilham o caminho {}", .0.display())]
+    DuplicateTarget(PathBuf),
+    #[error("O destino é uma pasta: {}", .0.display())]
+    TargetIsDirectory(PathBuf),
+    /// Every file was restored; nothing on disk changed.
+    #[error("Salvamento não concluído; versão anterior preservada: {0}")]
+    SaveRolledBack(String),
+    /// Restoration failed; recovery copies were left next to the files.
+    #[error(
+        "Falha no salvamento: {error}. Cópias de recuperação foram mantidas na pasta. Falha ao restaurar: {restore}"
+    )]
+    SaveRecoveryKept { error: String, restore: String },
+}
+impl From<PersistenceError> for String {
+    fn from(error: PersistenceError) -> Self {
+        error.to_string()
+    }
+}
+fn io_context(context: &'static str) -> impl FnOnce(io::Error) -> PersistenceError {
+    move |source| PersistenceError::Io { context, source }
+}
+
 pub const PROJECT_FILE: &str = "project.oxy.json";
-pub fn load_project(path: &Path) -> Result<Project, String> {
+pub fn load_project(path: &Path) -> Result<Project, PersistenceError> {
     load_project_with(path, false).map(|(project, _)| project)
 }
 /// Validates document, relative paths and asset headers without decoding PNG pixels.
 /// A damaged pixel stream is diagnosed when the texture is first requested.
-pub fn load_project_lazy(path: &Path) -> Result<Project, String> {
+pub fn load_project_lazy(path: &Path) -> Result<Project, PersistenceError> {
     load_project_with(path, true).map(|(project, _)| project)
 }
-pub fn load_project_lazy_report(path: &Path) -> Result<(Project, Option<u32>), String> {
+pub fn load_project_lazy_report(path: &Path) -> Result<(Project, Option<u32>), PersistenceError> {
     load_project_with(path, true)
 }
-fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), String> {
+fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), PersistenceError> {
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
     } else {
         path.to_owned()
     };
-    let meta = fs::metadata(&path)
-        .map_err(|e| format!("Não foi possível abrir {}: {e}", path.display()))?;
+    let meta = fs::metadata(&path).map_err(|source| PersistenceError::Open {
+        path: path.clone(),
+        source,
+    })?;
     if meta.len() > 64 * 1024 * 1024 {
-        return Err("O documento excede o limite de leitura de 64 MB".into());
+        return Err(PersistenceError::DocumentTooLarge);
     }
-    let bytes = fs::read(&path).map_err(|e| format!("Falha ao ler projeto: {e}"))?;
+    let bytes = fs::read(&path).map_err(io_context("Falha ao ler projeto"))?;
     let (project, migrated) = crate::migration::read_report(&bytes)?;
-    validate_project(&project)?;
+    validate_project(&project).map_err(PersistenceError::InvalidProject)?;
     let root = path.parent().unwrap_or(Path::new("."));
     if lazy {
         for asset in &project.assets {
@@ -49,8 +133,8 @@ fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), 
     }
     Ok((project, migrated))
 }
-pub fn save_project(path: &Path, project: &Project) -> Result<(), String> {
-    validate_project(project)?;
+pub fn save_project(path: &Path, project: &Project) -> Result<(), PersistenceError> {
+    validate_project(project).map_err(PersistenceError::InvalidProject)?;
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
     } else {
@@ -59,10 +143,7 @@ pub fn save_project(path: &Path, project: &Project) -> Result<(), String> {
     let root = path.parent().unwrap_or(Path::new("."));
     validate_asset_files(project, root)?;
     let mut writes: Vec<_> = crate::migration::backup(&path)?.into_iter().collect();
-    writes.push((
-        path,
-        serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?,
-    ));
+    writes.push((path, serde_json::to_vec_pretty(project)?));
     transaction_write(writes)
 }
 /// Paint buffers stay in memory until the whole save has been staged successfully.
@@ -71,16 +152,15 @@ pub fn save_bundle(
     path: &Path,
     project: &Project,
     images: &HashMap<Id, PaintImage>,
-) -> Result<(), String> {
-    validate_project(project)?;
+) -> Result<(), PersistenceError> {
+    validate_project(project).map_err(PersistenceError::InvalidProject)?;
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
     } else {
         path.to_owned()
     };
     let root = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(root)
-        .map_err(|e| format!("Não foi possível criar pasta do projeto: {e}"))?;
+    fs::create_dir_all(root).map_err(io_context("Não foi possível criar pasta do projeto"))?;
     let mut writes = Vec::new();
     for asset in &project.assets {
         if asset.kind == AssetKind::Model {
@@ -89,17 +169,14 @@ pub fn save_bundle(
         let target = resolve_asset_path(root, &asset.path)?;
         if let Some(image) = images.get(&asset.id) {
             if asset.kind != AssetKind::Texture {
-                return Err(format!(
-                    "Pixels associados a asset não-textura: {}",
-                    asset.name
-                ));
+                return Err(PersistenceError::PixelsOnNonTexture(asset.name.clone()));
             }
-            writes.push((target, image.to_png()?));
+            writes.push((target, image.to_png().map_err(PersistenceError::Image)?));
         } else {
             validate_asset_file(asset, &target)?;
         }
     }
-    let bytes = serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(project)?;
     writes.extend(crate::migration::backup(&path)?);
     writes.push((path, bytes));
     transaction_write(writes)
@@ -111,7 +188,7 @@ pub fn save_cached_bundle(
     path: &Path,
     project: &Project,
     images: &mut TextureCache,
-) -> Result<(), String> {
+) -> Result<(), PersistenceError> {
     save_cached_bundle_from(path, project, images, None)
 }
 
@@ -122,7 +199,7 @@ pub fn save_cached_copy(
     project: &Project,
     images: &mut TextureCache,
     source_root: &Path,
-) -> Result<(), String> {
+) -> Result<(), PersistenceError> {
     save_cached_bundle_from(path, project, images, Some(source_root))
 }
 
@@ -131,14 +208,14 @@ fn save_cached_bundle_from(
     project: &Project,
     images: &mut TextureCache,
     source_root: Option<&Path>,
-) -> Result<(), String> {
-    validate_project(project)?;
+) -> Result<(), PersistenceError> {
+    validate_project(project).map_err(PersistenceError::InvalidProject)?;
     for (id, _) in images.dirty_images() {
         if !project
             .asset(id)
             .is_some_and(|asset| asset.kind == AssetKind::Texture)
         {
-            return Err(format!("Textura alterada sem asset correspondente: {id}"));
+            return Err(PersistenceError::DirtyTextureWithoutAsset(id.clone()));
         }
     }
     let path = if path.is_dir() {
@@ -147,8 +224,7 @@ fn save_cached_bundle_from(
         path.to_owned()
     };
     let root = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(root)
-        .map_err(|e| format!("Não foi possível criar pasta do projeto: {e}"))?;
+    fs::create_dir_all(root).map_err(io_context("Não foi possível criar pasta do projeto"))?;
     let mut writes = Vec::new();
     for asset in &project.assets {
         if asset.kind == AssetKind::Model {
@@ -157,35 +233,25 @@ fn save_cached_bundle_from(
         let target = resolve_asset_path(root, &asset.path)?;
         if images.is_dirty(&asset.id) {
             if asset.kind != AssetKind::Texture {
-                return Err(format!(
-                    "Pixels associados a asset não-textura: {}",
-                    asset.name
-                ));
+                return Err(PersistenceError::PixelsOnNonTexture(asset.name.clone()));
             }
             let image = images
                 .get(&asset.id)
-                .ok_or("Textura alterada não está residente")?;
-            let bytes = image.to_png()?;
-            if source_root.is_some()
-                && target.exists()
-                && fs::read(&target).map_err(|e| e.to_string())? != bytes
-            {
-                return Err(format!(
-                    "A pasta escolhida já contém um asset diferente: {}. Escolha uma pasta vazia.",
-                    asset.path
-                ));
+                .ok_or(PersistenceError::DirtyTextureNotResident)?;
+            let bytes = image.to_png().map_err(PersistenceError::Image)?;
+            if source_root.is_some() && target.exists() && fs::read(&target)? != bytes {
+                return Err(PersistenceError::DestinationConflict(asset.path.clone()));
             }
             writes.push((target, bytes));
         } else if let Some(source_root) = source_root {
             let source = resolve_asset_path(source_root, &asset.path)?;
             validate_asset_header(asset, &source)?;
-            let bytes = fs::read(&source)
-                .map_err(|e| format!("Não foi possível copiar {}: {e}", asset.name))?;
-            if target.exists() && fs::read(&target).map_err(|e| e.to_string())? != bytes {
-                return Err(format!(
-                    "A pasta escolhida já contém um asset diferente: {}. Escolha uma pasta vazia.",
-                    asset.path
-                ));
+            let bytes = fs::read(&source).map_err(|source| PersistenceError::CopySource {
+                name: asset.name.clone(),
+                source,
+            })?;
+            if target.exists() && fs::read(&target)? != bytes {
+                return Err(PersistenceError::DestinationConflict(asset.path.clone()));
             }
             writes.push((target, bytes));
         } else {
@@ -193,10 +259,7 @@ fn save_cached_bundle_from(
         }
     }
     writes.extend(crate::migration::backup(&path)?);
-    writes.push((
-        path.clone(),
-        serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?,
-    ));
+    writes.push((path.clone(), serde_json::to_vec_pretty(project)?));
     transaction_write(writes)?;
     images.configure(root, project);
     images.mark_saved();
@@ -205,7 +268,7 @@ fn save_cached_bundle_from(
 pub fn load_paint_images(
     project: &Project,
     root: &Path,
-) -> Result<HashMap<Id, PaintImage>, String> {
+) -> Result<HashMap<Id, PaintImage>, PersistenceError> {
     project
         .assets
         .iter()
@@ -213,7 +276,8 @@ pub fn load_paint_images(
         .map(|a| {
             Ok((
                 a.id.clone(),
-                PaintImage::load(&resolve_asset_path(root, &a.path)?)?,
+                PaintImage::load(&resolve_asset_path(root, &a.path)?)
+                    .map_err(PersistenceError::Image)?,
             ))
         })
         .collect()
@@ -223,17 +287,19 @@ pub fn import_asset(
     root: &Path,
     source: &Path,
     kind: AssetKind,
-) -> Result<Id, String> {
+) -> Result<Id, PersistenceError> {
     if kind == AssetKind::Model {
-        return Err("Modelos são salvos pelo Estúdio; importe PNG ou WAV".into());
+        return Err(PersistenceError::ModelImport);
     }
-    let bytes = fs::read(source)
-        .map_err(|e| format!("Não foi possível ler origem {}: {e}", source.display()))?;
+    let bytes = fs::read(source).map_err(|e| PersistenceError::ReadSource {
+        path: source.to_owned(),
+        source: e,
+    })?;
     match kind {
         AssetKind::Texture => {
-            PaintImage::from_png(&bytes)?;
+            PaintImage::from_png(&bytes).map_err(PersistenceError::Image)?;
         }
-        AssetKind::Audio => validate_wav(&bytes)?,
+        AssetKind::Audio => validate_wav(&bytes).map_err(PersistenceError::InvalidAudio)?,
         AssetKind::Model => {}
     }
     let id = new_id();
@@ -243,7 +309,7 @@ pub fn import_asset(
         "wav"
     };
     let relative = format!("assets/{id}.{extension}");
-    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    fs::create_dir_all(root)?;
     let target = resolve_asset_path(root, &relative)?;
     safe_write(&target, &bytes)?;
     let name = source
@@ -265,18 +331,18 @@ pub fn copy_texture(
     root: &Path,
     asset_id: &str,
     image: Option<&PaintImage>,
-) -> Result<Id, String> {
+) -> Result<Id, PersistenceError> {
     let asset = project
         .asset(asset_id)
-        .ok_or("Textura não encontrada")?
+        .ok_or(PersistenceError::TextureNotFound)?
         .clone();
     if asset.kind != AssetKind::Texture {
-        return Err("Asset não é textura".into());
+        return Err(PersistenceError::NotTexture);
     }
     let bytes = if let Some(image) = image {
-        image.to_png()?
+        image.to_png().map_err(PersistenceError::Image)?
     } else {
-        fs::read(resolve_asset_path(root, &asset.path)?).map_err(|e| e.to_string())?
+        fs::read(resolve_asset_path(root, &asset.path)?)?
     };
     let id = new_id();
     let path = format!("assets/{id}.png");
@@ -290,7 +356,7 @@ pub fn copy_texture(
     });
     Ok(id)
 }
-pub fn resolve_asset_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub fn resolve_asset_path(root: &Path, relative: &str) -> Result<PathBuf, PersistenceError> {
     let path = Path::new(relative);
     if relative.is_empty()
         || path.is_absolute()
@@ -299,24 +365,24 @@ pub fn resolve_asset_path(root: &Path, relative: &str) -> Result<PathBuf, String
             .components()
             .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
     {
-        return Err(format!("Caminho de asset inválido: {relative}"));
+        return Err(PersistenceError::InvalidAssetPath(relative.to_owned()));
     }
     let canonical_root =
-        fs::canonicalize(root).map_err(|e| format!("Pasta do projeto indisponível: {e}"))?;
+        fs::canonicalize(root).map_err(io_context("Pasta do projeto indisponível"))?;
     let result = canonical_root.join(path);
     let mut ancestor = result.as_path();
     while !ancestor.exists() {
-        ancestor = ancestor.parent().ok_or("Caminho sem pasta existente")?;
+        ancestor = ancestor
+            .parent()
+            .ok_or(PersistenceError::NoExistingFolder)?;
     }
-    let resolved = fs::canonicalize(ancestor).map_err(|e| e.to_string())?;
+    let resolved = fs::canonicalize(ancestor)?;
     if !resolved.starts_with(&canonical_root) {
-        return Err(format!(
-            "O caminho do asset sai da pasta do projeto: {relative}"
-        ));
+        return Err(PersistenceError::AssetOutsideProject(relative.to_owned()));
     }
     Ok(result)
 }
-pub fn validate_asset_files(project: &Project, root: &Path) -> Result<(), String> {
+pub fn validate_asset_files(project: &Project, root: &Path) -> Result<(), PersistenceError> {
     for asset in &project.assets {
         if asset.kind != AssetKind::Model {
             validate_asset_file(asset, &resolve_asset_path(root, &asset.path)?)?;
@@ -324,60 +390,68 @@ pub fn validate_asset_files(project: &Project, root: &Path) -> Result<(), String
     }
     Ok(())
 }
-fn validate_asset_file(asset: &Asset, path: &Path) -> Result<(), String> {
-    let meta = fs::metadata(path)
-        .map_err(|e| format!("Asset ausente ou inacessível '{}': {e}", asset.name))?;
+fn validate_asset_file(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
+    let meta = fs::metadata(path).map_err(|source| PersistenceError::AssetMissing {
+        name: asset.name.clone(),
+        source,
+    })?;
     if !meta.is_file() || meta.len() > 300_000_000 {
-        return Err(format!(
-            "Arquivo de asset inválido ou maior que 300 MB: {}",
-            asset.name
-        ));
+        return Err(PersistenceError::AssetTooLarge(asset.name.clone()));
     }
-    let bytes = fs::read(path).map_err(|e| format!("Falha ao ler '{}': {e}", asset.name))?;
+    let bytes = fs::read(path).map_err(|source| PersistenceError::AssetRead {
+        name: asset.name.clone(),
+        source,
+    })?;
+    let content = |reason| PersistenceError::AssetContent {
+        name: asset.name.clone(),
+        reason,
+    };
     match asset.kind {
         AssetKind::Texture => {
-            PaintImage::from_png(&bytes).map_err(|e| format!("{}: {e}", asset.name))?;
+            PaintImage::from_png(&bytes).map_err(content)?;
         }
-        AssetKind::Audio => validate_wav(&bytes).map_err(|e| format!("{}: {e}", asset.name))?,
+        AssetKind::Audio => validate_wav(&bytes).map_err(content)?,
         AssetKind::Model => {}
     }
     Ok(())
 }
-fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), String> {
-    let meta = fs::metadata(path)
-        .map_err(|e| format!("Asset ausente ou inacessível '{}': {e}", asset.name))?;
+fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
+    let meta = fs::metadata(path).map_err(|source| PersistenceError::AssetMissing {
+        name: asset.name.clone(),
+        source,
+    })?;
     if !meta.is_file() || meta.len() > 300_000_000 {
-        return Err(format!(
-            "Arquivo de asset inválido ou maior que 300 MB: {}",
-            asset.name
-        ));
+        return Err(PersistenceError::AssetTooLarge(asset.name.clone()));
     }
+    let content = |reason| PersistenceError::AssetContent {
+        name: asset.name.clone(),
+        reason,
+    };
     match asset.kind {
         AssetKind::Texture => {
             let reader = image::ImageReader::with_format(
-                std::io::BufReader::new(File::open(path).map_err(|e| e.to_string())?),
+                std::io::BufReader::new(File::open(path)?),
                 image::ImageFormat::Png,
             );
             let (width, height) = reader
                 .into_dimensions()
-                .map_err(|e| format!("{}: PNG inválido: {e}", asset.name))?;
+                .map_err(|e| content(format!("PNG inválido: {e}")))?;
             if width == 0
                 || height == 0
                 || width > 16384
                 || height > 16384
                 || u64::from(width) * u64::from(height) > 67_108_864
             {
-                return Err(format!("{}: dimensões de textura inválidas", asset.name));
+                return Err(content("dimensões de textura inválidas".into()));
             }
         }
         AssetKind::Audio => {
-            let reader = hound::WavReader::open(path)
-                .map_err(|e| format!("{}: WAV inválido: {e}", asset.name))?;
+            let reader =
+                hound::WavReader::open(path).map_err(|e| content(format!("WAV inválido: {e}")))?;
             let spec = reader.spec();
             if spec.channels == 0 || spec.channels > 2 || spec.sample_rate == 0 {
-                return Err(format!(
-                    "{}: WAV deve ser mono/estéreo com frequência válida",
-                    asset.name
+                return Err(content(
+                    "WAV deve ser mono/estéreo com frequência válida".into(),
                 ));
             }
         }
@@ -394,7 +468,7 @@ fn validate_wav(bytes: &[u8]) -> Result<(), String> {
     }
     Ok(())
 }
-pub fn safe_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn safe_write(path: &Path, bytes: &[u8]) -> Result<(), PersistenceError> {
     transaction_write(vec![(path.to_owned(), bytes.to_vec())])
 }
 
@@ -408,28 +482,25 @@ fn temporary_path(target: &Path, label: &str) -> PathBuf {
     let file = target.file_name().unwrap_or_default().to_string_lossy();
     target.with_file_name(format!(".{file}.{label}.{}", new_id()))
 }
-fn transaction_write(writes: Vec<(PathBuf, Vec<u8>)>) -> Result<(), String> {
+fn transaction_write(writes: Vec<(PathBuf, Vec<u8>)>) -> Result<(), PersistenceError> {
     transaction_write_with(writes, atomic_replace)
 }
 fn transaction_write_with(
     writes: Vec<(PathBuf, Vec<u8>)>,
     mut replace: impl FnMut(&Path, &Path) -> Result<(), String>,
-) -> Result<(), String> {
+) -> Result<(), PersistenceError> {
     let mut stages: Vec<Staged> = Vec::new();
     let mut targets = std::collections::HashSet::new();
-    let prepared = (|| -> Result<(), String> {
+    let prepared = (|| -> Result<(), PersistenceError> {
         for (target, bytes) in writes {
             if !targets.insert(target.clone()) {
-                return Err(format!(
-                    "Dois assets compartilham o caminho {}",
-                    target.display()
-                ));
+                return Err(PersistenceError::DuplicateTarget(target));
             }
             if target.is_dir() {
-                return Err(format!("O destino é uma pasta: {}", target.display()));
+                return Err(PersistenceError::TargetIsDirectory(target));
             }
             let parent = target.parent().unwrap_or(Path::new("."));
-            fs::create_dir_all(parent).map_err(|e| format!("Não foi possível criar pasta: {e}"))?;
+            fs::create_dir_all(parent).map_err(io_context("Não foi possível criar pasta"))?;
             let temp = temporary_path(&target, "tmp");
             let backup = if target.exists() {
                 Some(temporary_path(&target, "backup"))
@@ -446,19 +517,19 @@ fn transaction_write_with(
                 .write(true)
                 .create_new(true)
                 .open(&temp)
-                .map_err(|e| format!("Falha criando arquivo temporário: {e}"))?;
+                .map_err(io_context("Falha criando arquivo temporário"))?;
             file.write_all(&bytes)
                 .and_then(|()| file.sync_all())
-                .map_err(|e| format!("Falha gravando arquivo temporário: {e}"))?;
+                .map_err(io_context("Falha gravando arquivo temporário"))?;
             drop(file);
             if let Some(backup) = backup {
                 fs::copy(&target, &backup)
-                    .map_err(|e| format!("Falha preservando arquivo anterior: {e}"))?;
+                    .map_err(io_context("Falha preservando arquivo anterior"))?;
                 OpenOptions::new()
                     .write(true)
                     .open(&backup)
                     .and_then(|f| f.sync_all())
-                    .map_err(|e| format!("Falha confirmando cópia anterior: {e}"))?;
+                    .map_err(io_context("Falha confirmando cópia anterior"))?;
             }
         }
         Ok(())
@@ -479,14 +550,12 @@ fn transaction_write_with(
             }
             if rollback_errors.is_empty() {
                 cleanup(&stages);
-                return Err(format!(
-                    "Salvamento não concluído; versão anterior preservada: {error}"
-                ));
+                return Err(PersistenceError::SaveRolledBack(error));
             }
-            return Err(format!(
-                "Falha no salvamento: {error}. Cópias de recuperação foram mantidas na pasta. Falha ao restaurar: {}",
-                rollback_errors.join("; ")
-            ));
+            return Err(PersistenceError::SaveRecoveryKept {
+                error,
+                restore: rollback_errors.join("; "),
+            });
         }
         stages[index].committed = true;
     }
@@ -800,7 +869,10 @@ mod tests {
                 }
             },
         );
-        assert!(result.unwrap_err().contains("versão anterior preservada"));
+        assert!(matches!(
+            result.unwrap_err(),
+            PersistenceError::SaveRolledBack(_)
+        ));
         assert_eq!(fs::read(&first).unwrap(), b"first original");
         assert_eq!(fs::read(&second).unwrap(), b"second original");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
@@ -825,9 +897,10 @@ mod tests {
             );
             Err("Falha parcial simulada com bloqueio durante recuperação".into())
         });
-        let error = result.unwrap_err();
-        assert!(error.contains("Cópias de recuperação foram mantidas"));
-        assert!(error.contains("backup mantido"));
+        let PersistenceError::SaveRecoveryKept { restore, .. } = result.unwrap_err() else {
+            panic!("A recuperação falha deve manter as cópias");
+        };
+        assert!(restore.contains("backup mantido"));
         drop(lock);
         let backup = fs::read_dir(&dir)
             .unwrap()

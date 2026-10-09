@@ -49,7 +49,7 @@ impl Home {
             let result = serde_json::to_vec_pretty(
                 &serde_json::json!({"schema_version": 1, "projects": self.recent}),
             )
-            .map_err(|e| e.to_string())
+            .map_err(persistence::PersistenceError::from)
             .and_then(|bytes| persistence::safe_write(path, &bytes));
             if let Err(error) = result {
                 self.error = Some(format!(
@@ -165,22 +165,22 @@ impl Editor {
                             self.open_guide("");
                         }
                         if ui.button("Console").clicked() {
-                            self.console = !self.console;
+                            self.console.open = !self.console.open;
                         }
                     });
                     ui.horizontal_wrapped(|ui| {
                         if ui
                             .add(
                                 egui::Button::new("Novo projeto")
-                                    .min_size(Vec2::new(170., 44.))
-                                    .fill(Color32::from_rgb(43, 103, 100)),
+                                    .min_size(Vec2::new(160., 32.))
+                                    .fill(crate::theme::ACCENT),
                             )
                             .clicked()
                         {
                             self.new_project_dialog();
                         }
                         if ui
-                            .add(egui::Button::new("Abrir projeto").min_size(Vec2::new(170., 44.)))
+                            .add(egui::Button::new("Abrir projeto").min_size(Vec2::new(160., 32.)))
                             .clicked()
                             && let Some(path) = rfd::FileDialog::new()
                                 .set_title("Abrir projeto OXY")
@@ -190,7 +190,7 @@ impl Editor {
                             self.transition(Transition::Open(path));
                         }
                         if ui
-                        .add(egui::Button::new("Projeto de exemplo").min_size(Vec2::new(170., 44.)))
+                        .add(egui::Button::new("Projeto de exemplo").min_size(Vec2::new(160., 32.)))
                         .on_hover_text(
                             "Explore as três cenas. Ao salvar, escolha uma pasta para sua cópia.",
                         )
@@ -198,7 +198,7 @@ impl Editor {
                     {
                         self.open_example();
                     }
-                    if ui.add(egui::Button::new("Laboratório 3D · movimento").min_size(Vec2::new(170.,44.))).on_hover_text("Pista editável da 0.3.0: câmera, rampas, gelo, deslize, plataformas e checkpoints por nós.").clicked() {
+                    if ui.add(egui::Button::new("Laboratório 3D · movimento").min_size(Vec2::new(160., 32.))).on_hover_text("Pista editável da 0.3.0: câmera, rampas, gelo, deslize, plataformas e checkpoints por nós.").clicked() {
                         let result = (|| {
                             let project = oxy_core::guide_recipes::movement_laboratory()?;
                             let path = std::env::temp_dir().join(format!("oxy-laboratory-{}",new_id())).join(persistence::PROJECT_FILE);
@@ -234,7 +234,7 @@ impl Editor {
                                     self.home.persist();
                                 }
                                 if !path.is_file() {
-                                    ui.colored_label(Color32::YELLOW, "Arquivo não encontrado");
+                                    ui.colored_label(crate::theme::WARNING, "Arquivo não encontrado");
                                 }
                             });
                             ui.weak(path.display().to_string());
@@ -242,12 +242,12 @@ impl Editor {
                         });
                     }
                     if let Some(error) = &self.home.error {
-                        ui.colored_label(Color32::LIGHT_RED, error);
+                        ui.colored_label(crate::theme::ERROR, error);
                     }
-                    if self.console
-                        && let Some(message) = self.messages.last()
+                    if self.console.open
+                        && let Some(message) = self.console.messages.last()
                     {
-                        ui.colored_label(Color32::LIGHT_RED, message);
+                        ui.colored_label(crate::theme::ERROR, message);
                     }
                     ui.add_space(16.);
                     ui.weak(

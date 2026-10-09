@@ -62,13 +62,13 @@ enum CompactPanel {
     None,
 }
 #[derive(Clone, Copy, PartialEq)]
-enum Gizmo {
+pub(crate) enum Gizmo {
     Move,
     Rotate,
     Scale,
 }
 #[derive(Clone)]
-struct GizmoDrag {
+pub(crate) struct GizmoDrag {
     entity: Id,
     base: Transform,
     axis: usize,
@@ -78,10 +78,96 @@ struct GizmoDrag {
     originals: Vec<(Id, Transform)>,
     center: Vec3,
 }
-struct Rename {
+pub(crate) struct Rename {
     id: Id,
     text: String,
     focus: bool,
+}
+/// Viewport display options. Session state, not part of the project document.
+pub(crate) struct ViewOptions {
+    pub(crate) grid: bool,
+    pub(crate) snap_grid: bool,
+    pub(crate) grid_size: f32,
+    pub(crate) show_disabled_colliders: bool,
+    pub(crate) view_global: bool,
+    pub(crate) debug: bool,
+}
+impl Default for ViewOptions {
+    fn default() -> Self {
+        Self {
+            grid: true,
+            snap_grid: true,
+            grid_size: 0.25,
+            show_disabled_colliders: false,
+            view_global: false,
+            debug: false,
+        }
+    }
+}
+/// The isolated play test and the input capture of the Game tab.
+pub(crate) struct PlaySession {
+    pub(crate) runtime: Option<Runtime>,
+    pub(crate) game_ui: oxy_render::game_ui::GameUi,
+    pub(crate) capture: bool,
+    pub(crate) previous_tab: Tab,
+    pub(crate) last_runtime_scene: Option<Id>,
+    pub(crate) game_size: Option<[u32; 2]>,
+}
+impl Default for PlaySession {
+    fn default() -> Self {
+        Self {
+            runtime: None,
+            game_ui: Default::default(),
+            capture: false,
+            previous_tab: Tab::Scene,
+            last_runtime_scene: None,
+            game_size: None,
+        }
+    }
+}
+#[derive(Default)]
+pub(crate) struct HierarchyUi {
+    pub(crate) rename: Option<Rename>,
+    pub(crate) focus: bool,
+    pub(crate) last_object_click: Option<Id>,
+    pub(crate) collapsed: std::collections::HashSet<Id>,
+    pub(crate) reveal_scroll: Option<Id>,
+    pub(crate) context_target: Option<Id>,
+}
+#[derive(Default)]
+pub(crate) struct AssetUi {
+    pub(crate) search: String,
+    pub(crate) thumbnail: Option<(Id, egui::TextureHandle)>,
+    pub(crate) locate: Option<Id>,
+    pub(crate) delete: Option<Id>,
+}
+/// Active gizmo and the multi-selection rotation/scale fields.
+pub(crate) struct TransformUi {
+    pub(crate) gizmo: Gizmo,
+    pub(crate) gizmo_drag: Option<GizmoDrag>,
+    pub(crate) selection_rotation: [f32; 3],
+    pub(crate) selection_scale: f32,
+}
+impl Default for TransformUi {
+    fn default() -> Self {
+        Self {
+            gizmo: Gizmo::Move,
+            gizmo_drag: None,
+            selection_rotation: [0.; 3],
+            selection_scale: 1.,
+        }
+    }
+}
+pub(crate) struct ConsoleLog {
+    pub(crate) open: bool,
+    pub(crate) messages: Vec<String>,
+}
+/// Frame timing shown by the performance overlay.
+pub(crate) struct FrameStats {
+    pub(crate) visible: bool,
+    pub(crate) last_frame: Instant,
+    pub(crate) interval_ms: f32,
+    pub(crate) cpu_ms: f32,
 }
 enum Transition {
     Home,
@@ -112,11 +198,7 @@ pub struct Editor {
     pub scene_id: Id,
     pub selected: Option<Id>,
     pub selection: Selection,
-    rename: Option<Rename>,
-    pub(crate) hierarchy_focus: bool,
-    last_object_click: Option<Id>,
-    collapsed: std::collections::HashSet<Id>,
-    reveal_scroll: Option<Id>,
+    pub(crate) hierarchy_ui: HierarchyUi,
     pub tab: Tab,
     pub studio: Studio,
     graph: GraphView,
@@ -125,52 +207,32 @@ pub struct Editor {
     context: egui::Context,
     pub(crate) camera: CameraState,
     editor_size: [u32; 2],
-    pub(crate) runtime: Option<Runtime>,
-    game_ui: oxy_render::game_ui::GameUi,
-    pub(crate) capture: bool,
-    previous_tab: Tab,
-    last_time: Instant,
-    pub messages: Vec<String>,
-    console: bool,
-    debug: bool,
-    show_disabled_colliders: bool,
-    grid: bool,
-    snap_grid: bool,
-    grid_size: f32,
-    gizmo: Gizmo,
-    gizmo_drag: Option<GizmoDrag>,
+    pub(crate) play: PlaySession,
+    pub(crate) console: ConsoleLog,
+    pub(crate) frame: FrameStats,
+    pub(crate) view: ViewOptions,
+    pub(crate) transform_ui: TransformUi,
     pub(crate) spatial: SpatialTools,
     pending: Option<Transition>,
     allow_close: bool,
     pub(crate) scale: f32,
     attribute_name: String,
     attribute_type: u8,
-    asset_search: String,
-    view_global: bool,
-    last_runtime_scene: Option<Id>,
-    context_target: Option<Id>,
-    game_size: Option<[u32; 2]>,
-    thumbnail: Option<(Id, egui::TextureHandle)>,
-    locate_asset: Option<Id>,
-    delete_asset: Option<Id>,
-    selection_rotation: [f32; 3],
-    selection_scale: f32,
-    diagnostics: bool,
-    frame_interval_ms: f32,
-    frame_cpu_ms: f32,
+    pub(crate) asset_ui: AssetUi,
     save_requested: bool,
 }
 
 impl Editor {
     #[cfg(test)]
     pub(crate) fn qa_ux_refusal(&self) -> Result<(), String> {
-        if self.console {
+        if self.console.open {
             return Err("Recusa abriu o console automaticamente".into());
         }
         if self.dirty() {
             return Err("Preferência ou aviso entrou no histórico".into());
         }
         if self
+            .console
             .messages
             .last()
             .is_none_or(|m| !m.contains("Escolha somente um objeto"))
@@ -181,22 +243,10 @@ impl Editor {
     }
     #[cfg(test)]
     pub(crate) fn qa_console_open(&self) -> bool {
-        self.console
+        self.console.open
     }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut style = (*cc.egui_ctx.style()).clone();
-        style.visuals = egui::Visuals::dark();
-        style.visuals.panel_fill = Color32::from_rgb(26, 30, 37);
-        style.visuals.window_fill = Color32::from_rgb(31, 36, 43);
-        style.visuals.extreme_bg_color = Color32::from_rgb(18, 22, 28);
-        style.visuals.selection.bg_fill = Color32::from_rgb(43, 103, 100);
-        style.visuals.selection.stroke = egui::Stroke::new(1., Color32::from_rgb(140, 229, 214));
-        style.spacing.item_spacing = Vec2::new(8., 7.);
-        style.spacing.button_padding = Vec2::new(10., 6.);
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(14.));
-        cc.egui_ctx.set_style(style);
+        crate::theme::apply(&cc.egui_ctx);
         let rs = cc
             .wgpu_render_state
             .clone()
@@ -231,11 +281,7 @@ impl Editor {
             scene_id,
             selected: None,
             selection: Selection::default(),
-            rename: None,
-            hierarchy_focus: false,
-            last_object_click: None,
-            collapsed: Default::default(),
-            reveal_scroll: None,
+            hierarchy_ui: Default::default(),
             tab: Tab::Scene,
             studio: Studio::default(),
             graph: GraphView::default(),
@@ -244,39 +290,26 @@ impl Editor {
             context: cc.egui_ctx.clone(),
             camera,
             editor_size: [1280, 720],
-            runtime: None,
-            game_ui: Default::default(),
-            capture: false,
-            previous_tab: Tab::Scene,
-            last_time: Instant::now(),
-            messages: vec!["OXY Engine · editor nativo · documentos locais".into()],
-            console: false,
-            debug: false,
-            show_disabled_colliders: false,
-            grid: true,
-            snap_grid: true,
-            grid_size: 0.25,
-            gizmo: Gizmo::Move,
-            gizmo_drag: None,
+            play: Default::default(),
+            console: ConsoleLog {
+                open: false,
+                messages: vec!["OXY Engine · editor nativo · documentos locais".into()],
+            },
+            frame: FrameStats {
+                visible: false,
+                last_frame: Instant::now(),
+                interval_ms: 0.,
+                cpu_ms: 0.,
+            },
+            view: Default::default(),
+            transform_ui: Default::default(),
             spatial: SpatialTools::default(),
             pending: None,
             allow_close: false,
             scale,
             attribute_name: String::new(),
             attribute_type: 0,
-            asset_search: String::new(),
-            view_global: false,
-            last_runtime_scene: None,
-            context_target: None,
-            game_size: None,
-            thumbnail: None,
-            locate_asset: None,
-            delete_asset: None,
-            selection_rotation: [0.; 3],
-            selection_scale: 1.,
-            diagnostics: false,
-            frame_interval_ms: 0.,
-            frame_cpu_ms: 0.,
+            asset_ui: Default::default(),
             save_requested: false,
         };
         if let Some(error) = preference_error {
@@ -313,9 +346,9 @@ impl Editor {
             .to_path_buf()
     }
     pub fn log(&mut self, message: impl Into<String>) {
-        self.messages.push(message.into());
-        if self.messages.len() > 600 {
-            self.messages.drain(..100);
+        self.console.messages.push(message.into());
+        if self.console.messages.len() > 600 {
+            self.console.messages.drain(..100);
         }
     }
     fn dirty(&self) -> bool {
@@ -327,15 +360,15 @@ impl Editor {
     }
     fn reset_context(&mut self) {
         self.spatial = SpatialTools::default();
-        self.gizmo_drag = None;
-        self.collapsed.clear();
-        self.reveal_scroll = None;
-        self.runtime = None;
-        self.capture = false;
+        self.transform_ui.gizmo_drag = None;
+        self.hierarchy_ui.collapsed.clear();
+        self.hierarchy_ui.reveal_scroll = None;
+        self.play.runtime = None;
+        self.play.capture = false;
         self.selected = None;
         self.selection.single(None);
-        self.rename = None;
-        self.last_object_click = None;
+        self.hierarchy_ui.rename = None;
+        self.hierarchy_ui.last_object_click = None;
         self.tab = Tab::Scene;
         self.studio = Studio::default();
         self.graph = GraphView::default();
@@ -343,7 +376,7 @@ impl Editor {
         self.camera = CameraState::for_scene(self.scene());
         self.history.clear();
         self.history.mark_saved();
-        self.thumbnail = None;
+        self.asset_ui.thumbnail = None;
         self.sync_textures();
     }
     pub(crate) fn open(&mut self, path: PathBuf) {
@@ -390,7 +423,7 @@ impl Editor {
             self.history
                 .begin("Finalizar edição", &self.state.project, &self.state.images);
         }
-        if let Some(mut rename) = self.rename.take() {
+        if let Some(mut rename) = self.hierarchy_ui.rename.take() {
             if !self.history.is_pending() {
                 self.history
                     .begin("Renomear objeto", &self.state.project, &self.state.images);
@@ -399,7 +432,7 @@ impl Editor {
                 self.log(error);
                 self.notice_last(true);
                 rename.focus = true;
-                self.rename = Some(rename);
+                self.hierarchy_ui.rename = Some(rename);
                 return false;
             }
         }
@@ -450,7 +483,7 @@ impl Editor {
                 self.history.mark_saved();
                 self.remember_project();
                 self.renderer.release_saved_texture_pixels();
-                self.game_ui.release_saved_texture_pixels();
+                self.play.game_ui.release_saved_texture_pixels();
                 self.log(format!("Salvo: {}", path.display()));
                 true
             }
@@ -512,7 +545,7 @@ impl Editor {
     fn sync_textures(&mut self) {
         self.camera_tools.invalidate_image();
         self.renderer.clear_textures();
-        self.game_ui = oxy_render::GameUi::new();
+        self.play.game_ui = oxy_render::GameUi::new();
         for (id, pixels) in self.state.images.dirty_images() {
             if let Err(e) = self.renderer.set_texture_pixels(
                 &self.render_state,
@@ -522,9 +555,9 @@ impl Editor {
                 &pixels.pixels,
                 true,
             ) {
-                self.messages.push(e);
+                self.console.messages.push(e);
             }
-            if let Err(e) = self.game_ui.set_texture_pixels(
+            if let Err(e) = self.play.game_ui.set_texture_pixels(
                 &self.context,
                 id,
                 pixels.width,
@@ -532,7 +565,7 @@ impl Editor {
                 &pixels.pixels,
                 true,
             ) {
-                self.messages.push(e);
+                self.console.messages.push(e);
             }
         }
     }
@@ -546,8 +579,13 @@ impl Editor {
         {
             self.studio.texture_key = None;
         }
-        if self.thumbnail.as_ref().is_some_and(|(key, _)| key == id) {
-            self.thumbnail = None;
+        if self
+            .asset_ui
+            .thumbnail
+            .as_ref()
+            .is_some_and(|(key, _)| key == id)
+        {
+            self.asset_ui.thumbnail = None;
         }
         if let Some(p) = self.state.images.get(id) {
             if let Err(e) = self.renderer.set_texture_pixels(
@@ -558,9 +596,9 @@ impl Editor {
                 &p.pixels,
                 true,
             ) {
-                self.messages.push(e);
+                self.console.messages.push(e);
             }
-            if let Err(e) = self.game_ui.set_texture_pixels(
+            if let Err(e) = self.play.game_ui.set_texture_pixels(
                 &self.context,
                 id,
                 p.width,
@@ -568,7 +606,7 @@ impl Editor {
                 &p.pixels,
                 true,
             ) {
-                self.messages.push(e);
+                self.console.messages.push(e);
             }
         }
     }
@@ -630,12 +668,12 @@ impl Editor {
             let changed = self.history.last_texture_changes().to_vec();
             for id in changed {
                 self.renderer.clear_texture_override(&id);
-                self.game_ui.clear_texture_override(&id);
+                self.play.game_ui.clear_texture_override(&id);
                 if self.state.images.is_registered(&id) && self.ensure_texture(&id) {
                     self.refresh_texture(&id);
                 }
             }
-            self.thumbnail = None;
+            self.asset_ui.thumbnail = None;
         }
     }
     fn start(&mut self) {
@@ -648,16 +686,16 @@ impl Editor {
         self.finish_history(true);
         match Runtime::new(&self.state.project, &self.scene_id) {
             Ok(runtime) => {
-                self.previous_tab = if self.tab == Tab::Game {
+                self.play.previous_tab = if self.tab == Tab::Game {
                     Tab::Scene
                 } else {
                     self.tab
                 };
-                self.runtime = Some(runtime);
+                self.play.runtime = Some(runtime);
                 self.tab = Tab::Game;
-                self.capture = true;
-                self.last_runtime_scene = Some(self.scene_id.clone());
-                self.last_time = Instant::now();
+                self.play.capture = true;
+                self.play.last_runtime_scene = Some(self.scene_id.clone());
+                self.frame.last_frame = Instant::now();
                 self.studio.playing = false;
             }
             Err(e) => {
@@ -667,14 +705,14 @@ impl Editor {
         }
     }
     fn stop(&mut self) {
-        self.runtime = None;
-        self.capture = false;
-        self.tab = self.previous_tab;
-        self.last_runtime_scene = None;
+        self.play.runtime = None;
+        self.play.capture = false;
+        self.tab = self.play.previous_tab;
+        self.play.last_runtime_scene = None;
     }
     fn pause(&mut self) {
-        self.capture = false;
-        if let Some(rt) = &mut self.runtime {
+        self.play.capture = false;
+        if let Some(rt) = &mut self.play.runtime {
             rt.set_paused(true);
         }
     }
@@ -685,11 +723,11 @@ impl Editor {
             self.forget_last_mesh_operation();
         }
         if self.selected != id {
-            self.reveal_scroll = id.clone();
+            self.hierarchy_ui.reveal_scroll = id.clone();
         }
         self.reveal_selection(id.as_deref());
-        self.selection_rotation = [0.; 3];
-        self.selection_scale = 1.;
+        self.transform_ui.selection_rotation = [0.; 3];
+        self.transform_ui.selection_scale = 1.;
         self.selection.single(id.clone());
         if self.selected != id {
             self.selected = id;
@@ -707,12 +745,12 @@ impl Editor {
             self.cancel_mesh_operation();
             self.forget_last_mesh_operation();
         }
-        self.selection_rotation = [0.; 3];
-        self.selection_scale = 1.;
-        self.hierarchy_focus = hierarchy;
+        self.transform_ui.selection_rotation = [0.; 3];
+        self.transform_ui.selection_scale = 1.;
+        self.hierarchy_ui.focus = hierarchy;
         if let Some(id) = id {
             if !hierarchy {
-                self.reveal_scroll = Some(id.clone());
+                self.hierarchy_ui.reveal_scroll = Some(id.clone());
             }
             self.reveal_selection(Some(&id));
             let order = self.visible_hierarchy_order();
@@ -738,7 +776,7 @@ impl Editor {
             .as_deref()
             .and_then(|id| self.scene().entity(id))
         {
-            self.rename = Some(Rename {
+            self.hierarchy_ui.rename = Some(Rename {
                 id: entity.id.clone(),
                 text: entity.name.clone(),
                 focus: true,
@@ -863,7 +901,7 @@ impl Editor {
         }
     }
     fn game(&mut self, ui: &mut egui::Ui, dt: f32) {
-        if self.runtime.is_none() {
+        if self.play.runtime.is_none() {
             ui.vertical_centered(|ui| {
                 ui.add_space(90.);
                 ui.heading("Teste seu projeto");
@@ -880,27 +918,28 @@ impl Editor {
             self.pause();
         }
         let relative = self
+            .play
             .runtime
             .as_ref()
             .is_some_and(Runtime::wants_relative_mouse);
         let input = oxy_render::input::collect_game_input(
             ui.ctx(),
             &self.state.project.input_bindings,
-            self.capture,
+            self.play.capture,
             relative,
         );
         let available = [
             ui.available_width().max(1.) as u32,
             ui.available_height().max(1.) as u32,
         ];
-        let resized = self.game_size != Some(available);
-        self.game_size = Some(available);
-        if let Some(rt) = &mut self.runtime {
+        let resized = self.play.game_size != Some(available);
+        self.play.game_size = Some(available);
+        if let Some(rt) = &mut self.play.runtime {
             rt.set_viewport_aspect(available[0] as f32 / available[1] as f32);
             rt.advance(if resized { 0. } else { dt }, &input);
         }
-        let scene = self.runtime.as_ref().unwrap().scene().clone();
-        let camera = CameraState::for_runtime(self.runtime.as_ref().unwrap());
+        let scene = self.play.runtime.as_ref().unwrap().scene().clone();
+        let camera = CameraState::for_runtime(self.play.runtime.as_ref().unwrap());
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
@@ -917,7 +956,7 @@ impl Editor {
             &camera,
             physical,
             None,
-            self.debug,
+            self.view.debug,
         );
         ui.painter().image(
             texture,
@@ -926,6 +965,7 @@ impl Editor {
             Color32::WHITE,
         );
         let clicks = self
+            .play
             .game_ui
             .draw(ui, &self.state.project, &scene, &self.root(), rect);
         self.renderer.draw_runtime_colliders(
@@ -934,10 +974,10 @@ impl Editor {
             &camera,
             rect,
             &[],
-            self.show_disabled_colliders,
-            self.runtime.as_ref().and_then(Runtime::physics_world),
+            self.view.show_disabled_colliders,
+            self.play.runtime.as_ref().and_then(Runtime::physics_world),
         );
-        if self.capture && oxy_render::input::accepts_game_click(ui.ctx()) {
+        if self.play.capture && oxy_render::input::accepts_game_click(ui.ctx()) {
             let mut targets = clicks;
             if targets.is_empty()
                 && response.clicked()
@@ -947,13 +987,13 @@ impl Editor {
             {
                 targets.push(hit.entity);
             }
-            if let Some(rt) = &mut self.runtime {
+            if let Some(rt) = &mut self.play.runtime {
                 for id in targets {
                     rt.click(&id);
                 }
             }
         }
-        let sounds = if let Some(rt) = &mut self.runtime {
+        let sounds = if let Some(rt) = &mut self.play.runtime {
             std::mem::take(&mut rt.sounds)
         } else {
             Vec::new()
@@ -968,7 +1008,7 @@ impl Editor {
         }
     }
     fn console(&mut self, ctx: &egui::Context) {
-        if !self.console {
+        if !self.console.open {
             return;
         }
         egui::TopBottomPanel::bottom("console")
@@ -979,8 +1019,8 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.strong("CONSOLE E EXECUÇÃO");
                     if ui.button("Limpar").clicked() {
-                        self.messages.clear();
-                        if let Some(rt) = &mut self.runtime {
+                        self.console.messages.clear();
+                        if let Some(rt) = &mut self.play.runtime {
                             rt.logs.clear();
                         }
                     }
@@ -988,10 +1028,10 @@ impl Editor {
                 egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        for line in &self.messages {
+                        for line in &self.console.messages {
                             ui.monospace(line);
                         }
-                        if let Some(rt) = &self.runtime {
+                        if let Some(rt) = &self.play.runtime {
                             for line in &rt.logs {
                                 ui.monospace(line);
                             }
@@ -1023,12 +1063,12 @@ impl eframe::App for Editor {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_started = Instant::now();
-        if !self.capture || self.tab != Tab::Game {
+        if !self.play.capture || self.tab != Tab::Game {
             oxy_render::input::release_cursor(ctx);
         }
-        self.frame_interval_ms = self.last_time.elapsed().as_secs_f32() * 1000.;
-        let dt = (self.frame_interval_ms / 1000.).min(0.1);
-        self.last_time = Instant::now();
+        self.frame.interval_ms = self.frame.last_frame.elapsed().as_secs_f32() * 1000.;
+        let dt = (self.frame.interval_ms / 1000.).min(0.1);
+        self.frame.last_frame = Instant::now();
         if (ctx.zoom_factor() - self.scale).abs() > 0.0001 {
             ctx.set_zoom_factor(self.scale);
         }
@@ -1053,7 +1093,8 @@ impl eframe::App for Editor {
                 _ => false,
             })
         });
-        if !self.capture && !self.navigation.active && edit_event && !self.history.is_pending() {
+        if !self.play.capture && !self.navigation.active && edit_event && !self.history.is_pending()
+        {
             self.history
                 .begin("Editar projeto", &self.state.project, &self.state.images);
         }
@@ -1102,21 +1143,21 @@ impl eframe::App for Editor {
             || self.pending.is_some()
             || self.logic_ui.inputs
             || self.logic_ui.guide;
-        if dialog_open && self.capture {
+        if dialog_open && self.play.capture {
             self.pause();
             oxy_render::input::release_cursor(ctx);
         }
         if !dialog_open
             && !self.navigation.active
             && !self.mesh_operation_active()
-            && !self.capture
+            && !self.play.capture
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
         {
             self.save_requested = true;
         }
         if !dialog_open
             && !self.navigation.active
-            && !self.capture
+            && !self.play.capture
             && ctx.input(|i| i.focused)
             && !crate::graph_ui::text_input_active(ctx)
             && !self.mesh_shortcuts(ctx)
@@ -1140,7 +1181,7 @@ impl eframe::App for Editor {
             let animation = self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation;
             if self.tab != Tab::Logic
                 && self.tab != Tab::Game
-                && (!animation || self.hierarchy_focus)
+                && (!animation || self.hierarchy_ui.focus)
             {
                 if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
                     self.delete();
@@ -1173,15 +1214,15 @@ impl eframe::App for Editor {
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::W)) {
                     self.set_spatial_tool(Tool::Object);
-                    self.gizmo = Gizmo::Move;
+                    self.transform_ui.gizmo = Gizmo::Move;
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::E)) {
                     self.set_spatial_tool(Tool::Object);
-                    self.gizmo = Gizmo::Rotate;
+                    self.transform_ui.gizmo = Gizmo::Rotate;
                 }
                 if ctx.input(|i| i.key_pressed(egui::Key::R)) {
                     self.set_spatial_tool(Tool::Object);
-                    self.gizmo = Gizmo::Scale;
+                    self.transform_ui.gizmo = Gizmo::Scale;
                 }
             }
         }
@@ -1194,7 +1235,7 @@ impl eframe::App for Editor {
                 .begin("Gesto de edição", &self.state.project, &self.state.images);
         }
         self.toolbar(ctx);
-        if !self.capture || self.tab != Tab::Game {
+        if !self.play.capture || self.tab != Tab::Game {
             oxy_render::input::release_cursor(ctx);
         }
         self.console(ctx);
@@ -1238,6 +1279,7 @@ impl eframe::App for Editor {
                         .collect();
                     if let Some(id) = self.selected.clone() {
                         let trace: Vec<_> = self
+                            .play
                             .runtime
                             .as_ref()
                             .map(|rt| {
@@ -1315,7 +1357,7 @@ if ui.button("Cancelar").clicked(){self.pending=None;}});
             self.log(error);
             self.notice_last(false);
         }
-        for error in self.game_ui.take_errors() {
+        for error in self.play.game_ui.take_errors() {
             self.log(error);
             self.notice_last(false);
         }
@@ -1339,18 +1381,18 @@ if ui.button("Cancelar").clicked(){self.pending=None;}});
             .state
             .images
             .pin_only(active_textures.iter().map(String::as_str))
-            && self.messages.last() != Some(&error)
+            && self.console.messages.last() != Some(&error)
         {
             self.log(error);
         }
-        self.frame_cpu_ms = frame_started.elapsed().as_secs_f32() * 1000.;
+        self.frame.cpu_ms = frame_started.elapsed().as_secs_f32() * 1000.;
         if let Some(delay) = diagnostics::repaint_delay(
-            self.runtime.as_ref().is_some_and(|r| !r.paused) && self.tab == Tab::Game,
+            self.play.runtime.as_ref().is_some_and(|r| !r.paused) && self.tab == Tab::Game,
             self.studio.playing
                 && self.tab == Tab::Studio
                 && self.studio.tab == StudioTab::Animation,
             ctx.input(|i| i.pointer.any_down()),
-            self.diagnostics,
+            self.frame.visible,
         ) {
             ctx.request_repaint_after(delay);
         }

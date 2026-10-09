@@ -178,8 +178,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_mesh_foundation_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.1/m3");
+    let output = oxy_core::qa::output_dir("v0.2.1/m3");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-mesh-qa-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();

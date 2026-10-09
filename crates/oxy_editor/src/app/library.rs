@@ -17,7 +17,7 @@ impl Editor {
                 ui.horizontal_wrapped(|ui| {
                     ui.strong("BIBLIOTECA DO PROJETO");
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.asset_search)
+                        egui::TextEdit::singleline(&mut self.asset_ui.search)
                             .hint_text("Filtrar recursos…")
                             .desired_width(170.),
                     );
@@ -29,7 +29,7 @@ impl Editor {
                     }
                 });
                 let assets = self.state.project.assets.clone();
-                let asset_filter = self.asset_search.to_lowercase();
+                let asset_filter = self.asset_ui.search.to_lowercase();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for asset in assets
@@ -104,19 +104,19 @@ impl Editor {
                                         }
                                     }
                                     if ui.small_button("Excluir recurso do projeto").clicked() {
-                                        self.delete_asset = Some(asset.id.clone());
+                                        self.asset_ui.delete = Some(asset.id.clone());
                                     }
                                 });
                             });
-                            if self.locate_asset.as_ref() == Some(&asset.id) {
+                            if self.asset_ui.locate.as_ref() == Some(&asset.id) {
                                 card.response.scroll_to_me(Some(egui::Align::Center));
                                 ui.painter().rect_stroke(
                                     card.response.rect,
                                     3.,
-                                    egui::Stroke::new(2., Color32::GOLD),
+                                    egui::Stroke::new(2., crate::theme::HIGHLIGHT),
                                     egui::StrokeKind::Inside,
                                 );
-                                self.locate_asset = None;
+                                self.asset_ui.locate = None;
                             }
                         }
                     });
