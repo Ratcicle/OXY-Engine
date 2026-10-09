@@ -2,7 +2,7 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
-## Não publicado
+## 0.4.0 — 2026-10-09
 
 - **Nova estrutura da tela:** barra superior única (projeto, desfazer/refazer e salvamento; modos Cena · Estúdio · Lógica no centro; Jogar/Pausar/Parar à direita), painel inferior com abas Biblioteca, Console e Avisos, e barra de status. A aba Jogo deixa de existir: o teste aparece na área central.
 - **Hierarquia:** seletor de cena e busca no topo, ícone por tipo de objeto e chevrons desenhados.
