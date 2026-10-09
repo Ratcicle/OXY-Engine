@@ -34,7 +34,9 @@ impl Editor {
             self.warn("Pause e grave ou descarte a pose antes de alinhar a montagem.");
             return;
         }
-        let scene = self.scene();
+        // Only what is on screen can be a target: the isolated object in the Studio.
+        let shown = self.view_scene();
+        let scene = &shown;
         let view = oxy_core::scene_view::SceneView::new(scene);
         let moving = self
             .selection

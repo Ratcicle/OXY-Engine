@@ -5,6 +5,7 @@ mod labels;
 #[cfg(test)]
 mod native_qa;
 mod studio;
+mod widgets;
 pub(crate) use oxy_render::theme;
 
 fn window_icon() -> egui::IconData {

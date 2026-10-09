@@ -215,6 +215,7 @@ impl Editor {
     pub(super) fn navigation_blocked(&self, ctx: &egui::Context) -> bool {
         self.home.visible
             || !matches!(self.tab, Tab::Scene | Tab::Studio)
+            || self.showing_game()
             || self.scene().kind != SceneKind::ThreeD
             || self.play.capture
             || self.modeling.creation.is_some()

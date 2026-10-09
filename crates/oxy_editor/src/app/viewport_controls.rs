@@ -170,6 +170,9 @@ impl Editor {
                 ui.separator();
                 ui.checkbox(&mut self.modeling.selection.through,"Selecionar através (Shift+X)").on_hover_text("Inclui componentes ocultos em toda seleção retangular. Ctrl + arrasto ativa através somente naquele gesto, sem mudar esta preferência.");
             }
+            if self.scene().kind == SceneKind::ThreeD {
+                self.camera_display_menu(ui);
+            }
         }
     }
     fn spatial_value_controls(&mut self, ui: &mut egui::Ui) {

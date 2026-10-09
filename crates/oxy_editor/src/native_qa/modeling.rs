@@ -131,8 +131,11 @@ fn native_basic_modeling_workflow() {
     let path = root.join("project.oxy.json");
     let mut project =
         oxy_core::editing::blank_project("Modelagem básica", SceneKind::ThreeD).unwrap();
+    let assembly = Entity::new("Montagem", None);
     let mut source = Entity::new("Peça pintada", Some(Primitive::Cube));
+    source.parent = Some(assembly.id.clone());
     let mut target = Entity::new("Destino", Some(Primitive::Cube));
+    target.parent = Some(assembly.id.clone());
     target.transform.position = [2., 0., 0.];
     let mut joint = Entity::new("Articulação filha", None);
     joint.parent = Some(source.id.clone());
@@ -156,7 +159,7 @@ fn native_basic_modeling_workflow() {
         path: "assets/paint.png".into(),
         model: None,
     });
-    project.scenes[0].entities = vec![source, target, joint];
+    project.scenes[0].entities = vec![assembly, source, target, joint];
     oxy_core::persistence::save_project(&path, &project).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let shared = report.clone();
@@ -179,8 +182,9 @@ fn native_basic_modeling_workflow() {
         Box::new(move |cc| {
             let mut qa = NativeQa::new(cc, path, artifacts, shared);
             qa.actions = VecDeque::from([
-                Action::SelectEntity("Peça pintada"),
+                Action::SelectEntity("Montagem"),
                 Action::Click("Estúdio"),
+                Action::SelectEntity("Peça pintada"),
                 Action::OptionalClick("Ferramentas"),
                 Action::OptionalClick("Pintar"),
                 Action::Click("Visualização"),

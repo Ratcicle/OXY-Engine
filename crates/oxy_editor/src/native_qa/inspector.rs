@@ -297,7 +297,7 @@ fn native_inspector_v031() {
                 Action::Check("i031_menu"),
                 Action::Click("Plataforma móvel"),
                 Action::Check("i031_platform"),
-                Action::Click("Plataforma móvel"),
+                Action::Click("Mais ações de Plataforma móvel"),
                 Action::Click("Remover componente"),
                 Action::Check("i031_platform_removed"),
                 Action::Key(Key::Z, true),

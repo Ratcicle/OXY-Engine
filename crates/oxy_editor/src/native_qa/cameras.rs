@@ -145,7 +145,7 @@ fn native_cameras_v030() {
         Box::new(move |cc| {
             let mut qa = NativeQa::new(cc, path, artifacts, shared);
             qa.actions = VecDeque::from([
-                Action::Click("▶ Jogar"),
+                Action::Click("Jogar"),
                 Action::Wait(24),
                 Action::Check("camera3d_tp"),
                 Action::Screenshot("third-person-wall.png"),
@@ -173,14 +173,14 @@ fn native_cameras_v030() {
                 Action::Screenshot("third-person-open.png"),
                 Action::Key(Key::V, false),
                 Action::Wait(24),
-                Action::Click("Cena"),
+                Action::Click("Lógica"),
                 Action::Check("fp_paused"),
-                Action::Click("Jogo"),
+                Action::Click("Cena"),
                 Action::Check("fp_paused"),
                 Action::Resize(Vec2::new(920., 600.)),
                 Action::InterfaceScale(1.2),
                 Action::Screenshot("small-paused.png"),
-                Action::Click("■ Parar"),
+                Action::Click("Parar"),
                 Action::Check("fp_stopped"),
                 Action::Key(Key::S, true),
                 Action::ReopenProject,

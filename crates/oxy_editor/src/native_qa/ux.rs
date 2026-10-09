@@ -138,7 +138,7 @@ fn native_ux_m1_workflow() {
                 Action::Check("ux_refusal"),
                 Action::Screenshot("refusal-920.png"),
                 Action::Idle,
-                Action::Click("..."),
+                Action::Click("Ações da cena"),
                 Action::Click("Duplicar cena"),
                 Action::Check("ux_duplicate"),
                 Action::Click("Desfazer"),

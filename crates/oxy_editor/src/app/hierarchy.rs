@@ -1,4 +1,31 @@
 use super::*;
+use crate::icons::{self, Icon};
+use crate::theme;
+use egui::{Align, Layout, UiBuilder};
+
+const ROW_HEIGHT: f32 = 26.;
+
+/// Icon that tells what kind of object an entity is, in the hierarchy and inspector.
+pub(crate) fn entity_icon(e: &Entity) -> Icon {
+    if e.camera.is_some() {
+        Icon::Camera
+    } else if e.ui.is_some() {
+        Icon::Interface
+    } else if e.character3d.is_some() || e.controller.is_some() {
+        Icon::Person
+    } else if let Some(primitive) = e.primitive {
+        match primitive {
+            Primitive::Sphere | Primitive::Circle => Icon::Sphere,
+            Primitive::Plane | Primitive::Rectangle => Icon::Plane,
+            Primitive::Sprite => Icon::Sprite,
+            _ => Icon::Cube,
+        }
+    } else if e.mesh.is_some() {
+        Icon::Cube
+    } else {
+        Icon::Group
+    }
+}
 
 impl Editor {
     pub(super) fn reveal_selection(&mut self, id: Option<&str>) {
@@ -30,71 +57,82 @@ impl Editor {
             .collect()
     }
     pub(super) fn creation_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("+ Objeto", |ui| {
-            let primitives: Vec<_> = if self.scene().kind == SceneKind::TwoD {
-                vec![
-                    (Primitive::Rectangle, "Retângulo"),
-                    (Primitive::Circle, "Círculo"),
-                    (Primitive::Sprite, "Sprite"),
-                ]
-            } else {
-                vec![
-                    (Primitive::Cube, "Cubo"),
-                    (Primitive::Sphere, "Esfera"),
-                    (Primitive::Cylinder, "Cilindro"),
-                    (Primitive::Plane, "Plano"),
-                    (Primitive::Pyramid, "Pirâmide"),
-                    (Primitive::Cone, "Cone"),
-                    (Primitive::Tube, "Tubo"),
-                ]
-            };
-            for (primitive, name) in primitives {
-                if ui.button(name).clicked() {
-                    self.create_primitive(primitive, name);
+        icons::menu_button(
+            ui,
+            Icon::Plus,
+            "+ Objeto",
+            "Adicionar objeto",
+            false,
+            |ui| {
+                let primitives: Vec<_> = if self.scene().kind == SceneKind::TwoD {
+                    vec![
+                        (Primitive::Rectangle, "Retângulo"),
+                        (Primitive::Circle, "Círculo"),
+                        (Primitive::Sprite, "Sprite"),
+                    ]
+                } else {
+                    vec![
+                        (Primitive::Cube, "Cubo"),
+                        (Primitive::Sphere, "Esfera"),
+                        (Primitive::Cylinder, "Cilindro"),
+                        (Primitive::Plane, "Plano"),
+                        (Primitive::Pyramid, "Pirâmide"),
+                        (Primitive::Cone, "Cone"),
+                        (Primitive::Tube, "Tubo"),
+                    ]
+                };
+                for (primitive, name) in primitives {
+                    if ui.button(name).clicked() {
+                        self.create_primitive(primitive, name);
+                        ui.close();
+                    }
+                }
+                if ui.button("Grupo vazio").clicked() {
+                    self.add_entity(None, "Grupo");
                     ui.close();
                 }
-            }
-            if ui.button("Grupo vazio").clicked() {
-                self.add_entity(None, "Grupo");
-                ui.close();
-            }
-            if ui.button("Câmera").clicked() {
-                self.add_entity(None, "Câmera");
-                let id = self.selected.clone().unwrap();
-                let camera=self.scene_mut().entity_mut(&id).unwrap();
-                camera.parent=None;
-                camera.camera = Some(Camera::default());
-                ui.close();
-            }
-            if self.scene().kind==SceneKind::ThreeD && self.tab==Tab::Scene {
-                ui.separator();
-                use oxy_core::movement_presets::{self,MovementPreset};
-                for(preset,label)in[(MovementPreset::FirstPerson,"Personagem em primeira pessoa"),(MovementPreset::ThirdPerson,"Personagem em terceira pessoa"),(MovementPreset::Platform,"Plataforma móvel")]{
-                    if ui.button(label).on_hover_text("Cria componentes, peças e referências editáveis. A criação inteira pode ser desfeita.").clicked(){
+                if ui.button("Câmera").clicked() {
+                    self.add_entity(None, "Câmera");
+                    let id = self.selected.clone().unwrap();
+                    let camera = self.scene_mut().entity_mut(&id).unwrap();
+                    camera.parent = None;
+                    camera.camera = Some(Camera::default());
+                    ui.close();
+                }
+                if self.scene().kind == SceneKind::ThreeD && self.tab == Tab::Scene {
+                    ui.separator();
+                    use oxy_core::movement_presets::{self, MovementPreset};
+                    for (preset, label) in [
+                        (MovementPreset::FirstPerson, "Personagem em primeira pessoa"),
+                        (MovementPreset::ThirdPerson, "Personagem em terceira pessoa"),
+                        (MovementPreset::Platform, "Plataforma móvel"),
+                    ] {
+                        if ui.button(label).on_hover_text("Cria componentes, peças e referências editáveis. A criação inteira pode ser desfeita.").clicked(){
                         let scene=self.scene().id.clone();
                         match movement_presets::create(&mut self.state.project,&scene,preset,Vec3::new(0.,0.02,0.)) {Ok(id)=>self.select(Some(id)),Err(error)=>self.warn(error)}
                         ui.close();
                     }
+                    }
                 }
-            }
-            ui.separator();
-            for (kind, name) in [
-                (UiKind::Text, "Texto de interface"),
-                (UiKind::Image, "Imagem de interface"),
-                (UiKind::Button, "Botão de interface"),
-                (UiKind::Bar, "Barra de atributo"),
-            ] {
-                if ui.button(name).clicked() {
-                    self.add_entity(None, name);
-                    let id = self.selected.clone().unwrap();
-                    self.scene_mut().entity_mut(&id).unwrap().ui = Some(UiElement {
-                        kind,
-                        ..Default::default()
-                    });
-                    ui.close();
+                ui.separator();
+                for (kind, name) in [
+                    (UiKind::Text, "Texto de interface"),
+                    (UiKind::Image, "Imagem de interface"),
+                    (UiKind::Button, "Botão de interface"),
+                    (UiKind::Bar, "Barra de atributo"),
+                ] {
+                    if ui.button(name).clicked() {
+                        self.add_entity(None, name);
+                        let id = self.selected.clone().unwrap();
+                        self.scene_mut().entity_mut(&id).unwrap().ui = Some(UiElement {
+                            kind,
+                            ..Default::default()
+                        });
+                        ui.close();
+                    }
                 }
-            }
-        });
+            },
+        );
     }
     pub(super) fn hierarchy(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("hierarchy")
@@ -102,43 +140,116 @@ impl Editor {
             .width_range(115.0..=(ctx.content_rect().width() * 0.3).clamp(120., 370.))
             .resizable(true)
             .show(ctx, |ui| {
-                if self.mesh_operation_active() {
+                if self.mesh_operation_active() || self.playing() {
                     ui.disable();
                 }
-                ui.horizontal(|ui| {
-                    ui.strong("HIERARQUIA");
-                    self.creation_menu(ui);
-                });
-                ui.add_space(4.);
-                let name = &mut self.scene_mut().name;
-                ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()));
-                ui.separator();
-                let root_drop = ui
-                    .add_sized(
-                        [ui.available_width(), 27.],
-                        egui::Button::new("Raiz da cena · solte aqui"),
-                    )
-                    .on_hover_text(
-                        "Arraste objetos para cá para retirar o pai e manter a posição na cena.",
+                crate::widgets::panel_header(ui, "Hierarquia", |ui| self.creation_menu(ui));
+                ui.add_space(8.);
+                let studio = self.tab == Tab::Studio;
+                if studio {
+                    self.studio_hierarchy_header(ui);
+                } else {
+                    self.scene_bar(ui);
+                    ui.add_space(4.);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.hierarchy_ui.search)
+                            .hint_text("Buscar objeto")
+                            .desired_width(ui.available_width()),
                     );
-                if root_drop.clicked() {
-                    self.select(None);
                 }
-                self.hierarchy_drop(ui, &root_drop, None);
+                ui.add_space(6.);
                 let snapshot = self.scene().clone();
                 let scene = oxy_core::scene_view::SceneView::new(&snapshot);
+                let search = self.hierarchy_ui.search.trim().to_lowercase();
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for entity in scene.scene.entities.iter().filter(|e| e.parent.is_none()) {
-                        self.hierarchy_item(ui, &scene, &entity.id, 0);
+                    ui.spacing_mut().item_spacing.y = 1.;
+                    if studio {
+                        // The Studio lists only the isolated object.
+                        if let Some(focus) = self.studio.focus.clone() {
+                            self.hierarchy_item(ui, &scene, &focus, 0);
+                        } else {
+                            crate::widgets::hint(
+                                ui,
+                                "Nenhum objeto em edição. Escolha um na Cena ou crie uma peça em +.",
+                            );
+                        }
+                    } else if search.is_empty() {
+                        for entity in scene.scene.entities.iter().filter(|e| e.parent.is_none()) {
+                            self.hierarchy_item(ui, &scene, &entity.id, 0);
+                        }
+                    } else {
+                        // Matches are listed flat, so every result is visible without expanding.
+                        for entity in scene
+                            .scene
+                            .entities
+                            .iter()
+                            .filter(|e| e.name.to_lowercase().contains(&search))
+                        {
+                            self.hierarchy_row(ui, &scene, &entity.id, 0, false);
+                        }
                     }
-                    let blank =
-                        ui.allocate_response(Vec2::new(ui.available_width(), 60.), Sense::click());
-                    if blank.clicked() {
-                        self.select(None);
-                    }
-                    self.hierarchy_drop(ui, &blank, None);
+                    self.root_drop_zone(ui, !studio);
                 });
             });
+    }
+    /// Path to the isolated object and the way back to the full scene.
+    fn studio_hierarchy_header(&mut self, ui: &mut egui::Ui) {
+        let scene_name = self.scene().name.clone();
+        let focus = self
+            .studio
+            .focus
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+            .map(|e| e.name.clone());
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{scene_name} ›"))
+                    .size(12.)
+                    .color(theme::TEXT_MUTED),
+            );
+            if let Some(name) = focus {
+                ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
+            }
+        });
+        if ui
+            .add_sized(
+                [ui.available_width(), theme::CONTROL_HEIGHT],
+                egui::Button::new("Voltar à cena"),
+            )
+            .on_hover_text("Volta à cena completa, mantendo a seleção.")
+            .clicked()
+        {
+            self.switch_tab(Tab::Scene);
+        }
+    }
+    /// Empty space below the tree: clicking deselects, dropping moves objects to the root.
+    fn root_drop_zone(&mut self, ui: &mut egui::Ui, droppable: bool) {
+        let height = ui.available_height().max(60.);
+        let blank = ui.allocate_response(Vec2::new(ui.available_width(), height), Sense::click());
+        if blank.clicked() {
+            self.select(None);
+        }
+        if !droppable {
+            return;
+        }
+        icons::register_qa(ui, "Raiz da cena", blank.rect);
+        if egui::DragAndDrop::has_payload_of_type::<Vec<Id>>(ui.ctx()) {
+            let zone = Rect::from_min_size(blank.rect.min, Vec2::new(blank.rect.width(), 44.));
+            ui.painter().rect_stroke(
+                zone.shrink(2.),
+                5.,
+                egui::Stroke::new(1., theme::BORDER),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().text(
+                zone.center(),
+                egui::Align2::CENTER_CENTER,
+                "Solte aqui para mover para a raiz",
+                egui::FontId::proportional(12.),
+                theme::TEXT_MUTED,
+            );
+        }
+        self.hierarchy_drop(ui, &blank, None);
     }
     pub(super) fn hierarchy_item(
         &mut self,
@@ -150,39 +261,68 @@ impl Editor {
         if depth > 64 {
             return;
         }
+        let has_children = scene
+            .index
+            .as_ref()
+            .ok()
+            .and_then(|i| i.position(id).map(|p| !i.children[p].is_empty()))
+            .unwrap_or(false);
+        self.hierarchy_row(ui, scene, id, depth, has_children);
+        if self.hierarchy_ui.collapsed.contains(id) {
+            return;
+        }
+        for child in scene
+            .index
+            .as_ref()
+            .ok()
+            .and_then(|i| i.position(id).map(|p| &i.children[p]))
+            .into_iter()
+            .flatten()
+            .map(|i| &scene.scene.entities[*i])
+        {
+            self.hierarchy_item(ui, scene, &child.id, depth + 1);
+        }
+    }
+    /// One hierarchy row: expand chevron, kind icon and name. Click selects, drag reparents.
+    fn hierarchy_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        scene: &oxy_core::scene_view::SceneView<'_>,
+        id: &str,
+        depth: usize,
+        has_children: bool,
+    ) {
         let Some(e) = scene.entity(id) else { return };
         ui.push_id(id, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(depth as f32 * 12.);
-                if scene
-                    .index
-                    .as_ref()
-                    .ok()
-                    .and_then(|i| i.position(id).map(|p| !i.children[p].is_empty()))
-                    .unwrap_or(false)
-                {
-                    let collapsed = self.hierarchy_ui.collapsed.contains(id);
-                    if ui
-                        .small_button(if collapsed { "▸" } else { "▾" })
-                        .on_hover_text("Recolher ou expandir os filhos")
-                        .clicked()
-                    {
-                        if collapsed {
-                            self.hierarchy_ui.collapsed.remove(id);
-                        } else {
-                            self.hierarchy_ui.collapsed.insert(id.into());
-                        }
+            let (row_rect, _) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::hover());
+            let mut row = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(row_rect)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            let ui = &mut row;
+            ui.spacing_mut().item_spacing.x = 2.;
+            ui.add_space(2. + depth as f32 * 14.);
+            if has_children {
+                let collapsed = self.hierarchy_ui.collapsed.contains(id);
+                let (icon, label) = if collapsed {
+                    (Icon::ChevronRight, format!("Expandir {}", e.name))
+                } else {
+                    (Icon::ChevronDown, format!("Recolher {}", e.name))
+                };
+                if icons::small(ui, icon, &label, 18.).clicked() {
+                    if collapsed {
+                        self.hierarchy_ui.collapsed.remove(id);
+                    } else {
+                        self.hierarchy_ui.collapsed.insert(id.into());
                     }
                 }
-                let icon = if e.camera.is_some() {
-                    "◉"
-                } else if e.ui.is_some() {
-                    "▤"
-                } else if !e.has_geometry() {
-                    "▾"
-                } else {
-                    "◇"
-                };
+            } else {
+                ui.add_space(18.);
+            }
+            let icon = entity_icon(e);
+            {
                 if self
                     .hierarchy_ui
                     .rename
@@ -214,16 +354,57 @@ impl Editor {
                     }
                     return;
                 }
-                let response = ui
-                    .add(
-                        egui::Button::selectable(
-                            self.selection.ids.iter().any(|selected| selected == id),
-                            format!("{icon} {}", e.name),
-                        )
-                        .truncate()
-                        .sense(Sense::click_and_drag()),
+                let selected = self.selection.ids.iter().any(|selected| selected == id);
+                let (rect, response) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), ROW_HEIGHT),
+                    Sense::click_and_drag(),
+                );
+                icons::register_qa(ui, &format!("Objeto: {}", e.name), rect);
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::SelectableLabel,
+                        ui.is_enabled(),
+                        selected,
+                        &e.name,
                     )
-                    .on_hover_text(&e.name);
+                });
+                let (fill, text) = if selected {
+                    (theme::ACCENT_SOFT, Color32::WHITE)
+                } else if response.hovered() {
+                    (theme::BG_RAISED, theme::TEXT)
+                } else {
+                    (Color32::TRANSPARENT, theme::TEXT)
+                };
+                ui.painter().rect_filled(rect, 4., fill);
+                let icon_rect = Rect::from_center_size(
+                    egui::pos2(rect.left() + 10., rect.center().y),
+                    Vec2::splat(14.),
+                );
+                icons::paint(
+                    ui,
+                    icon_rect,
+                    icon,
+                    if selected {
+                        theme::ACCENT_BRIGHT
+                    } else {
+                        theme::TEXT_MUTED
+                    },
+                );
+                let name_rect = Rect::from_min_max(
+                    egui::pos2(rect.left() + 22., rect.top()),
+                    rect.right_bottom(),
+                );
+                let mut name = ui.new_child(
+                    UiBuilder::new()
+                        .max_rect(name_rect)
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
+                name.add(
+                    egui::Label::new(egui::RichText::new(&e.name).color(text))
+                        .truncate()
+                        .selectable(false),
+                );
+                let response = response.on_hover_text(&e.name);
                 if self.hierarchy_ui.reveal_scroll.as_deref() == Some(id) {
                     if !ui.clip_rect().contains_rect(response.rect) {
                         response.scroll_to_me(Some(egui::Align::Center));
@@ -253,22 +434,8 @@ impl Editor {
                 response.context_menu(|ui| {
                     self.object_context(ui, id);
                 });
-            });
+            }
         });
-        if self.hierarchy_ui.collapsed.contains(id) {
-            return;
-        }
-        for child in scene
-            .index
-            .as_ref()
-            .ok()
-            .and_then(|i| i.position(id).map(|p| &i.children[p]))
-            .into_iter()
-            .flatten()
-            .map(|i| &scene.scene.entities[*i])
-        {
-            self.hierarchy_item(ui, scene, &child.id, depth + 1);
-        }
     }
     pub(super) fn object_context(&mut self, ui: &mut egui::Ui, id: &str) {
         if !self.selection.ids.iter().any(|selected| selected == id) {
@@ -286,7 +453,10 @@ impl Editor {
         ] {
             if ui.button(label).clicked() {
                 self.select(Some(id.into()));
-                self.tab = tab;
+                if tab == Tab::Studio {
+                    self.studio.focus = Some(id.into());
+                }
+                self.set_tab(tab);
                 self.studio.tab = sub;
                 self.studio.owner = Some(id.into());
                 if sub == StudioTab::Animation {

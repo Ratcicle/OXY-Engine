@@ -50,6 +50,8 @@ struct Qa {
     start: Instant,
     pending_shot: bool,
     before_block: Option<CameraState>,
+    /// The "game" block starts a real play test; it is the only allowed runtime.
+    game_block: bool,
     text: Option<String>,
     menu: bool,
     idle: Option<(Instant, bool, usize)>,
@@ -113,7 +115,7 @@ impl Qa {
             || self.editor.dirty()
             || self.editor.history.undo_len() != 0
             || self.editor.history.redo_len() != 0
-            || self.editor.play.runtime.is_some()
+            || (self.editor.play.runtime.is_some() && !self.game_block)
         {
             return Err("Navegação alterou documento, histórico, estado salvo ou runtime".into());
         }
@@ -308,7 +310,10 @@ impl Qa {
                         self.text = Some("Texto de teste".into());
                         self.text_field(ctx);
                     }
-                    "game" => self.editor.tab = Tab::Game,
+                    "game" => {
+                        self.editor.start();
+                        self.game_block = true;
+                    }
                     "logic" => self.editor.tab = Tab::Logic,
                     "capture" => self.editor.play.capture = true,
                     "focus" => self.focused = false,
@@ -337,6 +342,8 @@ impl Qa {
             Step::Clear => {
                 self.editor.pending_preferences = None;
                 self.editor.modeling.creation = None;
+                self.editor.stop();
+                self.game_block = false;
                 self.editor.play.capture = false;
                 self.focused = true;
                 self.text = None;
@@ -608,6 +615,7 @@ fn native_navigation_v033() {
                 start: Instant::now(),
                 pending_shot: false,
                 before_block: None,
+                game_block: false,
                 text: None,
                 menu: false,
                 idle: None,

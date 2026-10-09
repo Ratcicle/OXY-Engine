@@ -13,11 +13,10 @@ struct Notice {
 #[derive(Default)]
 pub(super) struct Notices {
     entries: Vec<Notice>,
-    open: bool,
 }
 impl Notices {
-    pub(super) fn has_unread(&self) -> bool {
-        self.entries.iter().any(|e| e.unread)
+    pub(super) fn unread(&self) -> usize {
+        self.entries.iter().filter(|e| e.unread).count()
     }
     fn push(&mut self, text: String, persistent: bool, now: f64) {
         if let Some(entry) = self.entries.iter_mut().find(|e| e.text == text) {
@@ -55,18 +54,34 @@ impl Editor {
         self.log(text);
         self.notice_last(false);
     }
-    pub(super) fn notices_button(&mut self, ui: &mut egui::Ui) {
-        let unread = self.notices.entries.iter().filter(|e| e.unread).count();
-        if ui
-            .add_sized(
-                [96., ui.spacing().interact_size.y],
-                egui::Button::new(format!("Avisos ({unread})")),
-            )
-            .on_hover_text("Histórico de avisos e operações recusadas.")
-            .clicked()
-        {
-            self.notices.open = !self.notices.open;
+    /// Notice history, shown in the dock's Avisos tab. Viewing it marks entries as read.
+    pub(super) fn notices_body(&mut self, ui: &mut egui::Ui) {
+        if self.notices.entries.is_empty() {
+            crate::widgets::hint(
+                ui,
+                "Nenhum aviso. Operações recusadas e falhas aparecem aqui com o motivo.",
+            );
+            return;
         }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for entry in self.notices.entries.iter_mut().rev() {
+                entry.unread = false;
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(
+                        if entry.persistent {
+                            crate::theme::ERROR
+                        } else {
+                            crate::theme::WARNING
+                        },
+                        "●",
+                    );
+                    ui.label(&entry.text);
+                    if entry.count > 1 {
+                        ui.weak(format!("{} ocorrências", entry.count));
+                    }
+                });
+            }
+        });
     }
     pub(super) fn notices_ui(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
@@ -106,7 +121,7 @@ impl Editor {
                                     ui.weak(format!("{} ocorrências", entry.count));
                                 }
                                 if ui.button("Ver detalhes").clicked() {
-                                    self.console.open = true;
+                                    self.show_dock(DockTab::Notices);
                                     self.notices.entries[index].unread = false;
                                 }
                                 if ui.small_button("Dispensar").clicked() {
@@ -116,28 +131,6 @@ impl Editor {
                         });
                     });
             }
-        }
-        if self.notices.open {
-            egui::Window::new("Avisos")
-                .open(&mut self.notices.open)
-                .default_width(380.)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(ctx.content_rect().height() * 0.6)
-                        .show(ui, |ui| {
-                            for entry in self.notices.entries.iter_mut().rev() {
-                                entry.unread = false;
-                                ui.label(&entry.text);
-                                if entry.count > 1 {
-                                    ui.weak(format!("{} ocorrências", entry.count));
-                                }
-                                ui.separator();
-                            }
-                        });
-                    if ui.button("Ver detalhes no Console").clicked() {
-                        self.console.open = true;
-                    }
-                });
         }
     }
 }

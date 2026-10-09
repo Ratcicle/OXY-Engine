@@ -130,8 +130,8 @@ impl Editor {
     ) {
         let kind = self.scene().kind;
         if let Some(c) = &mut entity.camera {
-            ui.collapsing("Câmera", |ui| {
-                ui.checkbox(&mut c.active, "Câmera ativa");
+            let mut active = c.active;
+            crate::widgets::card(ui, "camera", "Câmera", Some(&mut active), None, |ui| {
                 if kind == SceneKind::TwoD {
                     ui.add(
                         egui::DragValue::new(&mut c.orthographic_size)
@@ -148,71 +148,117 @@ impl Editor {
                     "Ative apenas a câmera desejada. O alvo é configurado no Controle da câmera.",
                 );
             });
+            c.active = active;
         }
         if kind == SceneKind::ThreeD {
             self.physics_properties(ui, entity);
         }
         if kind == SceneKind::TwoD && entity.camera.is_none() && entity.ui.is_none() {
             if entity.collider.is_some() {
-                ui.collapsing("Colisor 2D", |ui| {
-                    let c = entity.collider.as_mut().unwrap();
-                    ui.checkbox(&mut c.enabled, "Colisor ativo");
-                    ui.add_enabled(
-                        entity.controller.is_none(),
-                        egui::Checkbox::new(&mut c.is_trigger, "Área de detecção"),
-                    )
-                    .on_hover_text(
-                        "Uma área detecta entradas. Um colisor sólido bloqueia movimento.",
-                    );
-                    vector3(ui, "Tamanho da caixa", &mut c.size, 0.05, true);
-                    c.size = c.size.map(|v| v.max(0.0001));
-                    vector3(ui, "Deslocamento", &mut c.offset, 0.05, false);
-                    if ui.button("Editar colisor (C)").clicked() {
-                        *tool = Some(Tool::Collider);
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Ajustar ao objeto").clicked() {
-                            *fit = Some(false);
-                        }
-                        if ui.button("Ajustar ao grupo/filhos").clicked() {
-                            *fit = Some(true);
-                        }
-                    });
+                let mut enabled = entity.collider.as_ref().is_some_and(|c| c.enabled);
+                let has_controller = entity.controller.is_some();
+                let mut remove = false;
+                let mut menu = |ui: &mut egui::Ui| {
                     if ui
-                        .add_enabled(
-                            entity.controller.is_none(),
-                            egui::Button::new("Remover componente"),
+                        .add_enabled(!has_controller, egui::Button::new("Remover componente"))
+                        .on_disabled_hover_text(
+                            "Remova primeiro o Movimento 2D que depende desta caixa.",
                         )
-                        .on_hover_text("Remova primeiro o Movimento 2D que depende desta caixa.")
                         .clicked()
                     {
-                        entity.collider = None;
+                        remove = true;
+                        ui.close();
                     }
-                });
+                };
+                crate::widgets::card(
+                    ui,
+                    "collider2d",
+                    "Colisor 2D",
+                    Some(&mut enabled),
+                    Some(&mut menu),
+                    |ui| {
+                        let c = entity.collider.as_mut().unwrap();
+                        ui.add_enabled(
+                            entity.controller.is_none(),
+                            egui::Checkbox::new(&mut c.is_trigger, "Área de detecção"),
+                        )
+                        .on_hover_text(
+                            "Uma área detecta entradas. Um colisor sólido bloqueia movimento.",
+                        );
+                        vector3(ui, "Tamanho da caixa", &mut c.size, 0.05, true);
+                        c.size = c.size.map(|v| v.max(0.0001));
+                        vector3(ui, "Deslocamento", &mut c.offset, 0.05, false);
+                        if ui.button("Editar colisor (C)").clicked() {
+                            *tool = Some(Tool::Collider);
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Ajustar ao objeto").clicked() {
+                                *fit = Some(false);
+                            }
+                            if ui.button("Ajustar ao grupo/filhos").clicked() {
+                                *fit = Some(true);
+                            }
+                        });
+                    },
+                );
+                if let Some(c) = &mut entity.collider {
+                    c.enabled = enabled;
+                }
+                if remove {
+                    entity.collider = None;
+                }
             }
             if entity.controller.is_some() {
-                ui.collapsing("Movimento 2D", |ui| {
-                    let c = entity.controller.as_mut().unwrap();
-                    ui.checkbox(&mut c.enabled, "Movimento ativo");
-                    for (value, label, max) in [
-                        (&mut c.speed, "Velocidade ", 100.),
-                        (&mut c.jump, "Pulo ", 100.),
-                        (&mut c.gravity, "Gravidade ", 200.),
-                    ] {
-                        ui.add(egui::DragValue::new(value).range(0. ..=max).prefix(label));
+                let mut enabled = entity.controller.as_ref().is_some_and(|c| c.enabled);
+                let mut remove = false;
+                let mut menu = |ui: &mut egui::Ui| {
+                    if ui
+                        .add_enabled(true, egui::Button::new("Remover componente"))
+                        .on_disabled_hover_text("")
+                        .clicked()
+                    {
+                        remove = true;
+                        ui.close();
                     }
-                    if ui.button("Remover componente").clicked() {
-                        entity.controller = None;
-                    }
-                });
+                };
+                crate::widgets::card(
+                    ui,
+                    "controller2d",
+                    "Movimento 2D",
+                    Some(&mut enabled),
+                    Some(&mut menu),
+                    |ui| {
+                        let c = entity.controller.as_mut().unwrap();
+                        for (value, label, max) in [
+                            (&mut c.speed, "Velocidade ", 100.),
+                            (&mut c.jump, "Pulo ", 100.),
+                            (&mut c.gravity, "Gravidade ", 200.),
+                        ] {
+                            ui.add(egui::DragValue::new(value).range(0. ..=max).prefix(label));
+                        }
+                    },
+                );
+                if let Some(c) = &mut entity.controller {
+                    c.enabled = enabled;
+                }
+                if remove {
+                    entity.controller = None;
+                }
             }
         }
         let choices = available(kind, entity);
+        let size = Vec2::new(ui.available_width(), 30.);
+        let add_button = egui::Button::new("+ Adicionar componente")
+            .stroke(egui::Stroke::new(1., crate::theme::BORDER))
+            .fill(Color32::TRANSPARENT)
+            .min_size(size);
         if choices.is_empty() {
-            ui.add_enabled(false, egui::Button::new("+ Adicionar componente"))
-                .on_hover_text("Nenhum componente compatível disponível para este objeto.");
+            ui.add_enabled(false, add_button).on_disabled_hover_text(
+                "Nenhum componente compatível disponível para este objeto.",
+            );
         } else {
-            ui.menu_button("+ Adicionar componente", |ui| {
+            let response = ui.add(add_button);
+            egui::Popup::menu(&response).show(|ui| {
                 for component in choices {
                     if ui.button(component.label()).clicked() {
                         // Validate an explicit authoring command before committing

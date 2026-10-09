@@ -82,7 +82,7 @@ impl Editor {
         let mut next = Some(id.clone());
         ui.horizontal_wrapped(|ui| {
             if ui.button("Editar no Estúdio").on_hover_text("Abra os pixels desta textura para pintar. Alterar uma textura compartilhada afeta seus vínculos.").clicked() {
-                self.tab=Tab::Studio;self.studio.tab=StudioTab::Paint;
+                self.set_tab(Tab::Studio);self.studio.tab=StudioTab::Paint;
             }
             if ui.button("Substituir").on_hover_text("Importe uma cópia de outro PNG e aplique somente a este objeto.").clicked()
                 && let Some(updated)=self.import_selected(AssetKind::Texture) {
@@ -93,7 +93,11 @@ impl Editor {
             if editing::asset_references(&self.state.project,&id).len()>1 && ui.button("Criar cópia independente").clicked() {
                 match self.copy_texture_asset(&id) { Ok(copy)=>next=Some(copy),Err(e)=>self.log(e) }
             }
-            if ui.button("Localizar na biblioteca").clicked() { self.asset_ui.locate=Some(id.clone());self.asset_ui.search.clear(); self.compact_panel=CompactPanel::Library; }
+            if ui.button("Localizar na biblioteca").clicked() {
+                // Filtering by name keeps the card in view without depending on scrolling.
+                self.asset_ui.search=self.state.project.asset(&id).map(|a|a.name.clone()).unwrap_or_default();
+                self.asset_ui.locate=Some(id.clone()); self.compact_panel=CompactPanel::Library;
+            }
         });
         if interface {
             if let Some(element) = &mut entity.ui {

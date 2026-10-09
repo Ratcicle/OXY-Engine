@@ -510,7 +510,7 @@ impl Editor {
         owned
     }
     pub(super) fn camera_preview_window(&mut self, ctx: &egui::Context) {
-        if !self.camera_tools.preview || self.tab == Tab::Game {
+        if !self.camera_tools.preview || self.showing_game() {
             self.renderer.close_preview(&self.render_state);
             self.camera_tools.image = None;
             self.camera_tools.image_key = None;
