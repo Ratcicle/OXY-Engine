@@ -55,7 +55,12 @@ impl NativeQa {
                 }
             }
             "m2_pressed" | "m2_released" | "m2_held" => {
-                let rt = self.editor.runtime.as_ref().ok_or("Jogo não iniciou")?;
+                let rt = self
+                    .editor
+                    .play
+                    .runtime
+                    .as_ref()
+                    .ok_or("Jogo não iniciou")?;
                 let count = rt
                     .logs
                     .iter()

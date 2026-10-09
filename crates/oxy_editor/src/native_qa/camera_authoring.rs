@@ -116,7 +116,8 @@ impl NativeQa {
                 }
             }
             "v032_preview" => {
-                if self.editor.runtime.is_some() || self.editor.camera_tools.preview_draws == 0 {
+                if self.editor.play.runtime.is_some() || self.editor.camera_tools.preview_draws == 0
+                {
                     return Err("Prévia não desenhou ou iniciou runtime".into());
                 }
             }

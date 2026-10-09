@@ -24,7 +24,7 @@ impl NativeQa {
             };
         }
         if label == "lab3d_stopped" {
-            return if self.editor.runtime.is_none()
+            return if self.editor.play.runtime.is_none()
                 && self.editor.state.project.scenes[0]
                     .entities
                     .iter()
@@ -39,7 +39,7 @@ impl NativeQa {
                 Err("Teste alterou pose-base".into())
             };
         }
-        let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+        let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
         if !rt.logs.is_empty() {
             return Err(format!("{:?}", rt.logs));
         }
@@ -65,7 +65,7 @@ impl NativeQa {
             .character_state(&body.id)
             .ok_or("Estado de movimento ausente")?;
         match label {
-            "lab3d_paused" if self.editor.capture || !rt.paused => {
+            "lab3d_paused" if self.editor.play.capture || !rt.paused => {
                 Err("Saída não liberou entrada e pausou".into())
             }
             "lab3d_tp"

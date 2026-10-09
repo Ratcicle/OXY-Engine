@@ -341,7 +341,7 @@ impl Editor {
         }
     }
     fn choose_animation(&mut self, id: &str) {
-        self.hierarchy_focus = false;
+        self.hierarchy_ui.focus = false;
         if self.studio.animation.selected.as_deref() == Some(id) {
             return;
         }
@@ -500,7 +500,7 @@ impl Editor {
         if let Some(id) = delete {
             self.delete_selected_animation(&id);
         }
-        if !self.hierarchy_focus
+        if !self.hierarchy_ui.focus
             && !text_input_active(ui.ctx())
             && ui.input(|input| input.key_pressed(egui::Key::F2))
             && let Some(clip) = self.chosen_animation()
@@ -1066,7 +1066,7 @@ impl Editor {
                                     .clicked()
                                 {
                                     self.select(Some(entity.id.clone()));
-                                    self.hierarchy_focus = false;
+                                    self.hierarchy_ui.focus = false;
                                     self.studio.animation.selection = TimelineSelection::None;
                                 }
                             },
@@ -1169,7 +1169,7 @@ impl Editor {
                 )
                 .on_hover_text(format!("Quadro completo · {:.3} s", key.time));
             if response.clicked() || response.drag_started() {
-                self.hierarchy_focus = false;
+                self.hierarchy_ui.focus = false;
                 self.studio.animation.selection = TimelineSelection::Key {
                     target: target.into(),
                     time: key.time,

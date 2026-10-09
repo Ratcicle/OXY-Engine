@@ -9,7 +9,7 @@ impl Editor {
     fn transform_controls(&mut self, ui: &mut egui::Ui, names: bool) {
         ui.add_enabled_ui(!self.mesh_operation_active(),|ui| {
             for (gizmo,icon,label) in [(Gizmo::Move,Icon::Move,"Mover (W)"),(Gizmo::Rotate,Icon::Rotate,"Girar (E)"),(Gizmo::Scale,Icon::Scale,"Escalar (R)")] {
-                if icons::button(ui,icon,label,label,self.spatial.mode==Tool::Object&&self.gizmo==gizmo,names).clicked(){self.set_spatial_tool(Tool::Object);self.gizmo=gizmo;}
+                if icons::button(ui,icon,label,label,self.spatial.mode==Tool::Object&&self.transform_ui.gizmo==gizmo,names).clicked(){self.set_spatial_tool(Tool::Object);self.transform_ui.gizmo=gizmo;}
             }
             for (tool,icon,label,tip) in [
                 (Tool::Collider,Icon::Collider,"Editar colisor (C)","Edite a caixa real, inclusive em grupos vazios. O centro desloca somente o colisor; Alt suspende encaixe e Esc cancela."),
@@ -23,7 +23,7 @@ impl Editor {
         match self.spatial.mode {
             Tool::Collider => (Icon::Collider, "Colisor (C)"),
             Tool::Pivot => (Icon::Pivot, "Pivô (P)"),
-            Tool::Object => match self.gizmo {
+            Tool::Object => match self.transform_ui.gizmo {
                 Gizmo::Move => (Icon::Move, "Mover (W)"),
                 Gizmo::Rotate => (Icon::Rotate, "Girar (E)"),
                 Gizmo::Scale => (Icon::Scale, "Escalar (R)"),
@@ -135,12 +135,13 @@ impl Editor {
     }
     pub(super) fn view_options(&mut self, ui: &mut egui::Ui, runtime: bool) {
         if !runtime {
-            ui.checkbox(&mut self.grid, "Mostrar grade").on_hover_text(
-                "A grade é somente uma referência visual; ocultá-la não desativa o encaixe.",
-            );
-            ui.checkbox(&mut self.snap_grid,"Encaixe na grade").on_hover_text("Arredonda movimento e ferramentas ao intervalo escolhido. Alt suspende o encaixe durante o gesto.");
+            ui.checkbox(&mut self.view.grid, "Mostrar grade")
+                .on_hover_text(
+                    "A grade é somente uma referência visual; ocultá-la não desativa o encaixe.",
+                );
+            ui.checkbox(&mut self.view.snap_grid,"Encaixe na grade").on_hover_text("Arredonda movimento e ferramentas ao intervalo escolhido. Alt suspende o encaixe durante o gesto.");
             ui.add(
-                egui::DragValue::new(&mut self.grid_size)
+                egui::DragValue::new(&mut self.view.grid_size)
                     .range(0.01..=10.)
                     .speed(0.01)
                     .prefix("Intervalo "),
@@ -148,11 +149,12 @@ impl Editor {
             ui.separator();
         }
         ui.label("Depuração");
-        ui.checkbox(&mut self.debug,"Colisores").on_hover_text("Mostra as caixas reais usadas pela simulação. O colisor selecionado continua visível mesmo com a opção desligada.");
-        ui.checkbox(&mut self.show_disabled_colliders, "Mostrar desativados")
-            .on_hover_text(
-                "Mostra caixas desativadas com traço atenuado, sem ativá-las na física.",
-            );
+        ui.checkbox(&mut self.view.debug,"Colisores").on_hover_text("Mostra as caixas reais usadas pela simulação. O colisor selecionado continua visível mesmo com a opção desligada.");
+        ui.checkbox(
+            &mut self.view.show_disabled_colliders,
+            "Mostrar desativados",
+        )
+        .on_hover_text("Mostra caixas desativadas com traço atenuado, sem ativá-las na física.");
         if !runtime {
             ui.separator();
             if icons::button(ui,Icon::Frame,"Enquadrar seleção","Centraliza a câmera na peça ou hierarquia selecionada. Duplo clique na peça faz o mesmo.",false,true).clicked(){self.frame_selection();ui.close();}

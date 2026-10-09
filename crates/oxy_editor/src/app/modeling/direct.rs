@@ -472,8 +472,8 @@ impl Editor {
                             .length()
                             .max(1e-8);
                     }
-                    if self.snap_grid && !ui.input(|i| i.modifiers.alt) {
-                        distance = (distance / self.grid_size).round() * self.grid_size;
+                    if self.view.snap_grid && !ui.input(|i| i.modifiers.alt) {
+                        distance = (distance / self.view.grid_size).round() * self.view.grid_size;
                     }
                     if p.operation == Operation::Extrude && p.direction == Direction::Vector {
                         p.values = vector_drag_values(p.world, p.global, drag.base, axis, distance);

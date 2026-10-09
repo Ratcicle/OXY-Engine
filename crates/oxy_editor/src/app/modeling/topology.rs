@@ -280,7 +280,7 @@ impl Editor {
             self.state.project.assets.retain(|a| a.id != id);
             self.state.images.remove(&id);
             self.renderer.clear_texture_override(&id);
-            self.game_ui.clear_texture_override(&id);
+            self.play.game_ui.clear_texture_override(&id);
         }
     }
 }

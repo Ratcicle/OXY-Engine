@@ -1119,6 +1119,7 @@ impl NativeQa {
                     !self.editor.studio.animation.drafts.is_empty()
                         && self
                             .editor
+                            .console
                             .messages
                             .iter()
                             .any(|message| message.contains("pose provisória")),
@@ -1309,6 +1310,7 @@ impl NativeQa {
             "card_one" | "card_two" | "card_three" | "card_four" => {
                 let scene = self
                     .editor
+                    .play
                     .runtime
                     .as_ref()
                     .ok_or("Runtime de carta ausente")?
@@ -1354,16 +1356,22 @@ impl NativeQa {
             ),
             "playing" => ensure(
                 self.editor.tab == Tab::Game
-                    && self.editor.capture
+                    && self.editor.play.capture
                     && self
                         .editor
+                        .play
                         .runtime
                         .as_ref()
                         .is_some_and(|runtime| !runtime.paused),
                 "Jogo deveria estar executando e capturando entrada",
             ),
             "game_moved" => {
-                let runtime = self.editor.runtime.as_ref().ok_or("Runtime não iniciou")?;
+                let runtime = self
+                    .editor
+                    .play
+                    .runtime
+                    .as_ref()
+                    .ok_or("Runtime não iniciou")?;
                 let original = self
                     .base
                     .as_ref()
@@ -1387,16 +1395,18 @@ impl NativeQa {
                 )
             }
             "left_game_paused" | "return_still_paused" | "escape_paused" => ensure(
-                !self.editor.capture
+                !self.editor.play.capture
                     && self
                         .editor
+                        .play
                         .runtime
                         .as_ref()
                         .is_some_and(|runtime| runtime.paused),
                 "Jogo deveria pausar e liberar entrada",
             ),
             "stop_isolated" => ensure(
-                self.editor.runtime.is_none() && self.base.as_ref() == Some(&self.editor.state),
+                self.editor.play.runtime.is_none()
+                    && self.base.as_ref() == Some(&self.editor.state),
                 "Parar deve descartar runtime e preservar documento exato",
             ),
             "scene_3d" => ensure(

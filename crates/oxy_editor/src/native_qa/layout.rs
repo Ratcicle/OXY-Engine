@@ -74,6 +74,7 @@ impl NativeQa {
                     || self.ux_viewport != self.surface.native_viewport
                     || self
                         .editor
+                        .console
                         .messages
                         .last()
                         .is_none_or(|m| !m.contains("não está disponível neste modo"))

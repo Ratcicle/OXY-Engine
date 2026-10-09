@@ -13,7 +13,7 @@ impl NativeQa {
         match label {
             "posture3d_standing" | "posture3d_crouched" => {
                 use oxy_core::character::Posture;
-                let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+                let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
                 let state = rt.character_state(&body.id).ok_or("Estado ausente")?;
                 let expected = if label == "posture3d_crouched" {
                     Posture::Crouched
@@ -53,7 +53,7 @@ impl NativeQa {
                 }
             }
             "fp_running" => {
-                let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+                let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
                 let state = rt
                     .character_state(&body.id)
                     .ok_or("Estado de personagem ausente")?;
@@ -71,13 +71,19 @@ impl NativeQa {
                 }
             }
             "fp_paused" => {
-                if self.editor.capture || !self.editor.runtime.as_ref().is_some_and(|rt| rt.paused)
+                if self.editor.play.capture
+                    || !self
+                        .editor
+                        .play
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|rt| rt.paused)
                 {
                     return Err("Entrada não foi liberada/pausada".into());
                 }
             }
             "fp_stopped" => {
-                if self.editor.runtime.is_some() || body.transform.position != [0., 0.02, 0.] {
+                if self.editor.play.runtime.is_some() || body.transform.position != [0., 0.02, 0.] {
                     return Err("Play alterou a pose-base".into());
                 }
             }

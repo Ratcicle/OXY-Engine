@@ -2,7 +2,12 @@ use super::*;
 use oxy_core::document::Value;
 impl NativeQa {
     pub(super) fn check_recipes(&mut self, label: &str) -> Result<(), String> {
-        let runtime = self.editor.runtime.as_ref().ok_or("Runtime não iniciou")?;
+        let runtime = self
+            .editor
+            .play
+            .runtime
+            .as_ref()
+            .ok_or("Runtime não iniciou")?;
         let id = |n: u32| format!("02000000-0000-4000-8000-{n:012x}");
         let value = |n, attribute: &str| {
             runtime

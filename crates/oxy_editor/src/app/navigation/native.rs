@@ -113,7 +113,7 @@ impl Qa {
             || self.editor.dirty()
             || self.editor.history.undo_len() != 0
             || self.editor.history.redo_len() != 0
-            || self.editor.runtime.is_some()
+            || self.editor.play.runtime.is_some()
         {
             return Err("Navegação alterou documento, histórico, estado salvo ou runtime".into());
         }
@@ -126,7 +126,7 @@ impl Qa {
                 probe.origin = Some(self.editor.camera.eye());
             }
             if self.editor.navigation.active && !self.editor.navigation.started {
-                let dt = (self.editor.frame_interval_ms / 1000.).clamp(0., 0.05);
+                let dt = (self.editor.frame.interval_ms / 1000.).clamp(0., 0.05);
                 let c = &self.editor.camera;
                 let direction = Vec3::new(
                     -c.pitch.cos() * c.yaw.sin(),
@@ -202,7 +202,7 @@ impl Qa {
             Step::Input(events) => self.events.push_back(events),
             Step::Check(label) => match label {
                 "initial" => {
-                    self.editor.gizmo = Gizmo::Scale;
+                    self.editor.transform_ui.gizmo = Gizmo::Scale;
                     self.uploads = Some(self.editor.renderer.stats().mesh_uploads);
                     self.report.lock().unwrap().measurements.push(serde_json::json!({"label":"initial",
                         "objects":self.editor.scene().entities.len(),"eye":self.editor.camera.eye().to_array(),
@@ -215,7 +215,7 @@ impl Qa {
                     if (self.editor.camera.distance - 12.).abs() > 0.0001 {
                         return Err("RMB + roda também aplicou zoom".into());
                     }
-                    if self.editor.gizmo != Gizmo::Scale {
+                    if self.editor.transform_ui.gizmo != Gizmo::Scale {
                         return Err("W com RMB trocou ferramenta".into());
                     }
                     if egui::Popup::is_any_open(ctx) {
@@ -230,7 +230,7 @@ impl Qa {
                         "rotate" => Gizmo::Rotate,
                         _ => Gizmo::Scale,
                     };
-                    if self.editor.gizmo != expected {
+                    if self.editor.transform_ui.gizmo != expected {
                         return Err(format!("Atalho {label} não restaurado"));
                     }
                 }
@@ -310,7 +310,7 @@ impl Qa {
                     }
                     "game" => self.editor.tab = Tab::Game,
                     "logic" => self.editor.tab = Tab::Logic,
-                    "capture" => self.editor.capture = true,
+                    "capture" => self.editor.play.capture = true,
                     "focus" => self.focused = false,
                     "outside" => self
                         .events
@@ -337,7 +337,7 @@ impl Qa {
             Step::Clear => {
                 self.editor.pending_preferences = None;
                 self.editor.modeling.creation = None;
-                self.editor.capture = false;
+                self.editor.play.capture = false;
                 self.focused = true;
                 self.text = None;
                 self.menu = false;

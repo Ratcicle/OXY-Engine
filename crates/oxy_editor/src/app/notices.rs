@@ -46,7 +46,7 @@ impl Notices {
 }
 impl Editor {
     pub(super) fn notice_last(&mut self, persistent: bool) {
-        if let Some(text) = self.messages.last() {
+        if let Some(text) = self.console.messages.last() {
             self.notices
                 .push(text.clone(), persistent, self.context.input(|i| i.time));
         }
@@ -106,7 +106,7 @@ impl Editor {
                                     ui.weak(format!("{} ocorrências", entry.count));
                                 }
                                 if ui.button("Ver detalhes").clicked() {
-                                    self.console = true;
+                                    self.console.open = true;
                                     self.notices.entries[index].unread = false;
                                 }
                                 if ui.small_button("Dispensar").clicked() {
@@ -135,7 +135,7 @@ impl Editor {
                             }
                         });
                     if ui.button("Ver detalhes no Console").clicked() {
-                        self.console = true;
+                        self.console.open = true;
                     }
                 });
         }

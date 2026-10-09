@@ -7,6 +7,7 @@ Resumo de cada versão. Os relatórios completos, com testes, capturas e mediç�
 - **Aparência:** tema neutro com um único destaque azul dessaturado, aplicado ao editor e ao player. Barras e botões de ícone mais compactos (24 px), espaçamentos e fonte reduzidos, viewport com fundo e grade neutros. As cores da interface passam a vir de tokens em `oxy_render::theme`.
 - **Repositório:** testes nativos e medições gravam capturas em `target/qa/` (ou `OXY_QA_DIR`), fora do Git. A pasta `qa/` guarda só as evidências da versão atual; as anteriores ficam nas tags.
 - **Erros tipados:** `migration` e `persistence` devolvem `MigrationError` e `PersistenceError` (thiserror), com as mesmas mensagens de antes. Quem chama pode distinguir, por exemplo, versão incompatível, asset ausente e salvamento revertido; `?` continua convertendo para `String` onde a interface só exibe o texto.
+- **Código do editor:** a struct `Editor` passou de 59 para 41 campos. Opções de visualização, sessão de jogo, hierarquia, biblioteca, transformação, console e tempos de quadro viraram sub-estados próprios, sem mudança de comportamento.
 - **Documentação:** README curto; fluxo de trabalho, atalhos e domínio suportado movidos para o [guia do editor](docs/guia-do-editor.md).
 
 ## 0.3.3.1 — 2026-09-13

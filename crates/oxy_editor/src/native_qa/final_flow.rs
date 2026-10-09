@@ -302,7 +302,7 @@ impl NativeQa {
                 self.base = Some(self.editor.state.clone());
             }
             "f7_runtime" => {
-                let runtime = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+                let runtime = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
                 let id = self.created.as_deref().unwrap();
                 let animated = runtime
                     .scene()

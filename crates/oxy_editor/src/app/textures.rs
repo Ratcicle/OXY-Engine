@@ -3,7 +3,7 @@ use super::*;
 impl Editor {
     pub(crate) fn ensure_texture(&mut self, id: &str) -> bool {
         if let Err(error) = self.state.images.ensure(id) {
-            if self.messages.last() != Some(&error) {
+            if self.console.messages.last() != Some(&error) {
                 self.log(error);
             }
             false
@@ -16,7 +16,11 @@ impl Editor {
             ui.colored_label(crate::theme::ERROR, "Não foi possível abrir a textura.");
             return;
         }
-        if self.thumbnail.as_ref().is_none_or(|(key, _)| key != id)
+        if self
+            .asset_ui
+            .thumbnail
+            .as_ref()
+            .is_none_or(|(key, _)| key != id)
             && let Some(image) = self.state.images.get(id)
         {
             let color = egui::ColorImage::from_rgba_unmultiplied(
@@ -26,9 +30,9 @@ impl Editor {
             let texture =
                 ui.ctx()
                     .load_texture("Miniatura da textura", color, egui::TextureOptions::NEAREST);
-            self.thumbnail = Some((id.into(), texture));
+            self.asset_ui.thumbnail = Some((id.into(), texture));
         }
-        if let Some((_, texture)) = &self.thumbnail {
+        if let Some((_, texture)) = &self.asset_ui.thumbnail {
             ui.add(egui::Image::from_texture(texture).max_size(Vec2::splat(72.)));
         }
     }
@@ -89,7 +93,7 @@ impl Editor {
             if editing::asset_references(&self.state.project,&id).len()>1 && ui.button("Criar cópia independente").clicked() {
                 match self.copy_texture_asset(&id) { Ok(copy)=>next=Some(copy),Err(e)=>self.log(e) }
             }
-            if ui.button("Localizar na biblioteca").clicked() { self.locate_asset=Some(id.clone());self.asset_search.clear(); self.compact_panel=CompactPanel::Library; }
+            if ui.button("Localizar na biblioteca").clicked() { self.asset_ui.locate=Some(id.clone());self.asset_ui.search.clear(); self.compact_panel=CompactPanel::Library; }
         });
         if interface {
             if let Some(element) = &mut entity.ui {
@@ -100,11 +104,11 @@ impl Editor {
         }
     }
     pub(super) fn asset_delete_dialog(&mut self, ctx: &egui::Context) {
-        let Some(id) = self.delete_asset.clone() else {
+        let Some(id) = self.asset_ui.delete.clone() else {
             return;
         };
         let Some(asset) = self.state.project.asset(&id).cloned() else {
-            self.delete_asset = None;
+            self.asset_ui.delete = None;
             return;
         };
         let references = editing::asset_references(&self.state.project, &id);
@@ -117,12 +121,12 @@ impl Editor {
                 ui.label("O recurso será retirado da biblioteca. O arquivo original no disco é preservado para permitir desfazer com segurança.");
                 if ui.button("Excluir recurso").clicked() {
                     match editing::remove_asset(&mut self.state.project,&id) {
-                        Ok(())=>{self.state.images.remove(&id);self.renderer.clear_texture_override(&id);self.game_ui.clear_texture_override(&id);self.thumbnail=None;self.delete_asset=None;},
+                        Ok(())=>{self.state.images.remove(&id);self.renderer.clear_texture_override(&id);self.play.game_ui.clear_texture_override(&id);self.asset_ui.thumbnail=None;self.asset_ui.delete=None;},
                         Err(error)=>self.log(error),
                     }
                 }
             }
-            if ui.button("Cancelar").clicked() { self.delete_asset=None; }
+            if ui.button("Cancelar").clicked() { self.asset_ui.delete=None; }
         });
     }
 }

@@ -10,7 +10,7 @@ fn native_editor_performance() {
         editor.scene_id = project.start_scene.clone();
         editor.state.project = project;
         editor.home.visible = false;
-        editor.debug = true;
+        editor.view.debug = true;
         editor.camera.orthographic_size = 50.;
         Box::new(editor)
     });

@@ -474,7 +474,8 @@ impl Editor {
                 delta = Vec3::ZERO;
                 delta[axis] = amount;
             }
-            let snap = (self.snap_grid && !ui.input(|i| i.modifiers.alt)).then_some(self.grid_size);
+            let snap = (self.view.snap_grid && !ui.input(|i| i.modifiers.alt))
+                .then_some(self.view.grid_size);
             let result = if collider {
                 let mut b = drag.bounds.unwrap();
                 if drag.edges != [0; 3] {

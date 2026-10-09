@@ -2,7 +2,7 @@ use super::*;
 use oxy_core::{character::*, document::*, physics3d::*};
 impl NativeQa {
     pub(super) fn check_cameras(&mut self, label: &str) -> Result<(), String> {
-        let rt = self.editor.runtime.as_ref().ok_or("Runtime ausente")?;
+        let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
         let camera = rt.active_camera().ok_or("Câmera ausente")?;
         let pose = rt.game_camera_pose().ok_or("Pose ausente")?;
         if !rt.logs.is_empty() {

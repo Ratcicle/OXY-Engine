@@ -132,7 +132,7 @@ impl Bench {
         editor.home.visible = false;
         editor.tab = Tab::Studio;
         editor.studio.tab = StudioTab::Model;
-        editor.debug = true;
+        editor.view.debug = true;
         let gpu = cc.wgpu_render_state.as_ref().unwrap().adapter.get_info();
         report.lock().unwrap().gpu = json!({"name":gpu.name,"driver":gpu.driver,"driver_info":gpu.driver_info,"backend":format!("{:?}",gpu.backend)});
         let source = fixture(0).scenes[0].entities[0].mesh.clone().unwrap();

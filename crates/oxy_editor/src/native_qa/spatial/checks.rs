@@ -69,6 +69,7 @@ impl NativeQa {
                     && self.editor.studio.animation.drafts.len() == 2
                     && self
                         .editor
+                        .console
                         .messages
                         .last()
                         .is_some_and(|s| s.contains("grave ou descarte")),
@@ -76,7 +77,7 @@ impl NativeQa {
                     "Mudança estrutural: modo objeto={}, rascunhos={}, diagnóstico={:?}",
                     self.editor.spatial.mode == crate::app::Tool::Object,
                     self.editor.studio.animation.drafts.len(),
-                    self.editor.messages.last()
+                    self.editor.console.messages.last()
                 ),
             ),
             "spatial_collective_keys" => {
@@ -131,6 +132,7 @@ impl NativeQa {
                 self.editor.spatial.mode == crate::app::Tool::Object
                     && self
                         .editor
+                        .console
                         .messages
                         .last()
                         .is_some_and(|s| s.contains("Ataque") && s.contains("bloqueada")),
@@ -226,7 +228,7 @@ impl NativeQa {
                 Ok(())
             }
             "spatial_floor" => {
-                let rt = self.editor.runtime.as_mut().ok_or("Sem runtime")?;
+                let rt = self.editor.play.runtime.as_mut().ok_or("Sem runtime")?;
                 for _ in 0..180 {
                     rt.advance(1. / 60., &oxy_core::runtime::InputFrame::default());
                 }

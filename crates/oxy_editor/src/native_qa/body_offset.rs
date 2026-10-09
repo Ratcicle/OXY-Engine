@@ -132,7 +132,12 @@ impl NativeQa {
                 }
             }
             "patch_play" => {
-                let rt = self.editor.runtime.as_ref().ok_or("Jogo não iniciou")?;
+                let rt = self
+                    .editor
+                    .play
+                    .runtime
+                    .as_ref()
+                    .ok_or("Jogo não iniciou")?;
                 let state = rt
                     .character_state("body")
                     .ok_or("Personagem não simulado")?;

@@ -165,7 +165,7 @@ impl Editor {
                             self.open_guide("");
                         }
                         if ui.button("Console").clicked() {
-                            self.console = !self.console;
+                            self.console.open = !self.console.open;
                         }
                     });
                     ui.horizontal_wrapped(|ui| {
@@ -244,8 +244,8 @@ impl Editor {
                     if let Some(error) = &self.home.error {
                         ui.colored_label(crate::theme::ERROR, error);
                     }
-                    if self.console
-                        && let Some(message) = self.messages.last()
+                    if self.console.open
+                        && let Some(message) = self.console.messages.last()
                     {
                         ui.colored_label(crate::theme::ERROR, message);
                     }
