@@ -40,24 +40,59 @@ impl PhysicsUi {
     }
 }
 
+/// "Remover componente" menu for a card; `blocked` explains why it is unavailable.
+fn remove_menu<'a>(
+    remove: &'a mut bool,
+    blocked: Option<&'a str>,
+) -> impl FnMut(&mut egui::Ui) + 'a {
+    move |ui: &mut egui::Ui| {
+        let response = ui.add_enabled(blocked.is_none(), egui::Button::new("Remover componente"));
+        if let Some(reason) = blocked {
+            response.clone().on_disabled_hover_text(reason);
+        }
+        if response.clicked() {
+            *remove = true;
+            ui.close();
+        }
+    }
+}
+
+/// Picks an input action by id, showing its readable label.
+fn action_row(
+    ui: &mut egui::Ui,
+    project: &Project,
+    label: &str,
+    id_salt: &str,
+    action: &mut String,
+) {
+    crate::widgets::combo_row(
+        ui,
+        label,
+        "Ação de entrada que aciona este comando.",
+        id_salt,
+        &oxy_core::input_actions::label(project, action),
+        |ui| {
+            for id in project.input_bindings.keys() {
+                ui.selectable_value(
+                    action,
+                    id.clone(),
+                    oxy_core::input_actions::label(project, id),
+                );
+            }
+        },
+    );
+}
+
 impl Editor {
     fn platform_properties(&mut self, ui: &mut egui::Ui, entity: &mut Entity) {
+        use crate::widgets::{combo_row, number_row, vec3_row};
         use oxy_core::surface::{PlatformMode, VelocitySpace};
         if entity.platform.is_none() {
             return;
         }
         let mut enabled = entity.platform.as_ref().is_some_and(|p| p.enabled);
         let mut remove = false;
-        let mut menu = |ui: &mut egui::Ui| {
-            if ui
-                .add_enabled(true, egui::Button::new("Remover componente"))
-                .on_disabled_hover_text("")
-                .clicked()
-            {
-                remove = true;
-                ui.close();
-            }
-        };
+        let mut menu = remove_menu(&mut remove, None);
         crate::widgets::card(
             ui,
             "platform",
@@ -68,13 +103,18 @@ impl Editor {
                 let Some(platform) = &mut entity.platform else {
                     return;
                 };
-                egui::ComboBox::from_id_salt("platform_mode")
-                    .selected_text(if platform.mode == PlatformMode::Animation {
+                let animation = platform.mode == PlatformMode::Animation;
+                combo_row(
+                    ui,
+                    "Movimento",
+                    "",
+                    "platform_mode",
+                    if animation {
                         "Seguir animação"
                     } else {
                         "Velocidade constante"
-                    })
-                    .show_ui(ui, |ui| {
+                    },
+                    |ui| {
                         ui.selectable_value(
                             &mut platform.mode,
                             PlatformMode::Animation,
@@ -85,78 +125,293 @@ impl Editor {
                             PlatformMode::Velocity,
                             "Velocidade constante",
                         );
-                    });
+                    },
+                );
                 if platform.mode == PlatformMode::Velocity {
-                    vector3(ui, "Velocidade (m/s)", &mut platform.velocity, 0.1, false);
-                    egui::ComboBox::from_id_salt("platform_space")
-                        .selected_text(if platform.space == VelocitySpace::Local {
-                            "Eixos locais"
-                        } else {
-                            "Eixos da cena"
-                        })
-                        .show_ui(ui, |ui| {
+                    vec3_row(
+                        ui,
+                        "Velocidade",
+                        "Metros por segundo.",
+                        &mut platform.velocity,
+                        0.1,
+                        false,
+                    );
+                    let local = platform.space == VelocitySpace::Local;
+                    combo_row(
+                        ui,
+                        "Eixos",
+                        "",
+                        "platform_space",
+                        if local { "Locais" } else { "Da cena" },
+                        |ui| {
                             ui.selectable_value(
                                 &mut platform.space,
                                 VelocitySpace::World,
-                                "Eixos da cena",
+                                "Da cena",
                             );
                             ui.selectable_value(
                                 &mut platform.space,
                                 VelocitySpace::Local,
-                                "Eixos locais",
+                                "Locais",
                             );
-                        });
+                        },
+                    );
                 }
-                ui.add(
-                    egui::DragValue::new(&mut platform.max_transport_per_step)
-                        .speed(0.01)
-                        .range(0.001..=10.)
-                        .prefix("Salto máximo entre passos (m) "),
-                )
-                .on_hover_text(
-                    "Mudanças maiores soltam o passageiro; não geram uma velocidade de lançamento.",
+                number_row(
+                    ui,
+                    "Salto máximo",
+                    "Deslocamento máximo entre passos. Mudanças maiores soltam o passageiro, sem gerar velocidade de lançamento.",
+                    &mut platform.max_transport_per_step,
+                    0.001..=10.,
+                    0.01,
+                    " m",
                 );
-                ui.small("Transporte por translação. Rotações, mudança de escala e saltos de animação soltam o apoio com diagnóstico.");
+                crate::widgets::hint(
+                    ui,
+                    "Transporta por translação. Rotações, mudança de escala e saltos de animação soltam o apoio com diagnóstico.",
+                );
             },
         );
         if let Some(platform) = &mut entity.platform {
             platform.enabled = enabled;
         }
+        drop(menu);
         if remove {
             entity.platform = None;
         }
     }
-    fn surface_properties(&mut self, ui: &mut egui::Ui, link: &mut Option<Id>) {
-        use oxy_core::surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace};
-        ui.collapsing("Superfície física",|ui|{
-            egui::ComboBox::from_id_salt("surface_link").selected_text(link.as_ref().and_then(|id|self.state.project.surfaces.iter().find(|s|s.id==*id)).map_or("Padrão sem vínculo",|s|s.name.as_str())).show_ui(ui,|ui|{
-                ui.selectable_value(link,None,"Padrão sem vínculo");
-                for surface in &self.state.project.surfaces {ui.selectable_value(link,Some(surface.id.clone()),&surface.name);}
-            });
-            ui.menu_button("Nova superfície",|ui|{for(preset,label)in[(SurfacePreset::Common,"Comum"),(SurfacePreset::Ice,"Gelo"),(SurfacePreset::Mud,"Lama"),(SurfacePreset::Conveyor,"Esteira")]{if ui.button(label).clicked(){let surface=SurfaceMaterial::preset(preset);*link=Some(surface.id.clone());self.physics_ui.surface_edit=Some(surface.id.clone());self.state.project.surfaces.push(surface);ui.close();}}});
-            if let Some(id)=link.clone(){
-                let uses=surface::references(&self.state.project,&id);
-                ui.small(format!("Material físico compartilhado · {} vínculo(s)",uses.len().max(1))).on_hover_text(uses.join("\n"));
-                if ui.button("Criar cópia independente da superfície").clicked(){match surface::duplicate(&mut self.state.project,&id){Ok(copy)=>{self.physics_ui.surface_edit=Some(copy.clone());*link=Some(copy);},Err(e)=>self.warn(e)}}
-                if ui.button("Editar superfície original").on_hover_text("Afeta todos os objetos vinculados, listados acima. Use uma cópia para mudar apenas esta peça.").clicked(){self.physics_ui.surface_edit=Some(id);}
-                if ui.button("Remover vínculo físico").clicked(){*link=None;}
-            }
-            if let Some(id)=self.physics_ui.surface_edit.clone(){
-                let uses=surface::references(&self.state.project,&id);
-                if let Some(surface)=self.state.project.surfaces.iter_mut().find(|s|s.id==id){
-                    ui.separator();ui.label("Editando material físico original");
-                    ui.text_edit_singleline(&mut surface.name);
-                    for(value,label)in[(&mut surface.friction,"Atrito · multiplicador "),(&mut surface.traction,"Tração · multiplicador "),(&mut surface.speed_multiplier,"Velocidade desejada · multiplicador ")]{ui.add(egui::DragValue::new(value).speed(0.01).range(0. ..=100.).prefix(label));}
-                    vector3(ui,"Velocidade da esteira (m/s)",&mut surface.conveyor,0.1,false);
-                    egui::ComboBox::from_id_salt("conveyor_space").selected_text(if surface.conveyor_space==VelocitySpace::Local{"Esteira nos eixos locais"}else{"Esteira nos eixos da cena"}).show_ui(ui,|ui|{ui.selectable_value(&mut surface.conveyor_space,VelocitySpace::Local,"Esteira nos eixos locais");ui.selectable_value(&mut surface.conveyor_space,VelocitySpace::World,"Esteira nos eixos da cena");});
+    /// Surface link with its actions in a "⋯" menu. Editing a surface opens below it.
+    fn surface_row(&mut self, ui: &mut egui::Ui, link: &mut Option<Id>) {
+        use crate::icons::{self, Icon};
+        use oxy_core::surface::{self, SurfaceMaterial, SurfacePreset};
+        let name = link
+            .as_ref()
+            .and_then(|id| self.state.project.surfaces.iter().find(|s| s.id == *id))
+            .map_or("Padrão", |s| s.name.as_str())
+            .to_owned();
+        let surfaces: Vec<_> = self
+            .state
+            .project
+            .surfaces
+            .iter()
+            .map(|s| (s.id.clone(), s.name.clone()))
+            .collect();
+        let mut action = None;
+        crate::widgets::property_row(
+            ui,
+            "Superfície",
+            "Atrito, tração e esteira do contato. Superfícies são compartilhadas entre objetos.",
+            |ui| {
+                let width = ui.available_width() - 26. - ui.spacing().item_spacing.x;
+                crate::widgets::combo(ui, "surface_link", &name, width, |ui| {
+                    ui.selectable_value(link, None, "Padrão");
+                    for (id, name) in &surfaces {
+                        ui.selectable_value(link, Some(id.clone()), name);
+                    }
+                });
+                let more = icons::small(ui, Icon::More, "Ações da superfície", 26.);
+                egui::Popup::menu(&more).show(|ui| {
+                ui.menu_button("Nova superfície", |ui| {
+                    for (preset, label) in [(SurfacePreset::Common, "Comum"), (SurfacePreset::Ice, "Gelo"), (SurfacePreset::Mud, "Lama"), (SurfacePreset::Conveyor, "Esteira")] {
+                        if ui.button(label).clicked() {
+                            action = Some(("new", Some(preset)));
+                            ui.close();
+                        }
+                    }
+                });
+                if link.is_some() {
+                    if ui.button("Editar superfície").on_hover_text("Afeta todos os objetos vinculados. Use uma cópia para mudar só este.").clicked() {
+                        action = Some(("edit", None));
+                        ui.close();
+                    }
+                    if ui.button("Criar cópia independente").clicked() {
+                        action = Some(("copy", None));
+                        ui.close();
+                    }
+                    if ui.button("Remover vínculo").clicked() {
+                        action = Some(("unlink", None));
+                        ui.close();
+                    }
                 }
-                let can_delete=uses.is_empty() && link.as_deref()!=Some(id.as_str());
-                if ui.add_enabled(can_delete,egui::Button::new("Excluir superfície do projeto")).on_hover_text(if can_delete{"Remove apenas este material físico sem referências.".into()}else{format!("Remova os vínculos antes de excluir:\n{}",uses.join("\n"))}).clicked(){match surface::remove(&mut self.state.project,&id){Ok(())=>self.physics_ui.surface_edit=None,Err(e)=>self.warn(e)}}
-                if ui.button("Concluir edição da superfície").clicked(){self.physics_ui.surface_edit=None;}
+            });
+            },
+        );
+        match action {
+            Some(("new", Some(preset))) => {
+                let surface = SurfaceMaterial::preset(preset);
+                *link = Some(surface.id.clone());
+                self.physics_ui.surface_edit = Some(surface.id.clone());
+                self.state.project.surfaces.push(surface);
             }
+            Some(("edit", _)) => self.physics_ui.surface_edit = link.clone(),
+            Some(("copy", _)) => {
+                if let Some(id) = link.clone() {
+                    match surface::duplicate(&mut self.state.project, &id) {
+                        Ok(copy) => {
+                            self.physics_ui.surface_edit = Some(copy.clone());
+                            *link = Some(copy);
+                        }
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
+            Some(("unlink", _)) => *link = None,
+            _ => {}
+        }
+        if let Some(id) = link.clone() {
+            let uses = surface::references(&self.state.project, &id);
+            if uses.len() > 1 {
+                crate::widgets::hint(ui, &format!("Compartilhada com {} vínculos.", uses.len()))
+            }
+        }
+        if let Some(id) = self.physics_ui.surface_edit.clone()
+            && link.as_deref() == Some(id.as_str())
+        {
+            self.surface_editor(ui, &id, link);
+        }
+    }
+    fn surface_editor(&mut self, ui: &mut egui::Ui, id: &str, link: &Option<Id>) {
+        use crate::widgets::{combo_row, number_row, property_row, vec3_row};
+        use oxy_core::surface::{self, VelocitySpace};
+        let uses = surface::references(&self.state.project, id);
+        egui::Frame::new()
+            .fill(crate::theme::BG_RAISED)
+            .corner_radius(5)
+            .inner_margin(6)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if let Some(surface) = self.state.project.surfaces.iter_mut().find(|s| s.id == id) {
+                    property_row(ui, "Nome", "", |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut surface.name)
+                                .desired_width(ui.available_width()),
+                        )
+                    });
+                    number_row(
+                        ui,
+                        "Atrito",
+                        "Multiplicador do atrito do personagem neste chão.",
+                        &mut surface.friction,
+                        0. ..=100.,
+                        0.01,
+                        "×",
+                    );
+                    number_row(
+                        ui,
+                        "Tração",
+                        "Multiplicador da aceleração neste chão.",
+                        &mut surface.traction,
+                        0. ..=100.,
+                        0.01,
+                        "×",
+                    );
+                    number_row(
+                        ui,
+                        "Velocidade",
+                        "Multiplicador da velocidade desejada neste chão.",
+                        &mut surface.speed_multiplier,
+                        0. ..=100.,
+                        0.01,
+                        "×",
+                    );
+                    vec3_row(
+                        ui,
+                        "Esteira",
+                        "Velocidade transmitida pela superfície, em m/s.",
+                        &mut surface.conveyor,
+                        0.1,
+                        false,
+                    );
+                    let local = surface.conveyor_space == VelocitySpace::Local;
+                    combo_row(
+                        ui,
+                        "Eixos",
+                        "",
+                        "conveyor_space",
+                        if local { "Locais" } else { "Da cena" },
+                        |ui| {
+                            ui.selectable_value(
+                                &mut surface.conveyor_space,
+                                VelocitySpace::World,
+                                "Da cena",
+                            );
+                            ui.selectable_value(
+                                &mut surface.conveyor_space,
+                                VelocitySpace::Local,
+                                "Locais",
+                            );
+                        },
+                    );
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Concluir").clicked() {
+                        self.physics_ui.surface_edit = None;
+                    }
+                    let can_delete = uses.is_empty() && link.as_deref() != Some(id);
+                    if ui
+                        .add_enabled(can_delete, egui::Button::new("Excluir superfície"))
+                        .on_disabled_hover_text(format!(
+                            "Remova os vínculos antes de excluir:\n{}",
+                            uses.join("\n")
+                        ))
+                        .clicked()
+                    {
+                        match surface::remove(&mut self.state.project, id) {
+                            Ok(()) => self.physics_ui.surface_edit = None,
+                            Err(e) => self.warn(e),
+                        }
+                    }
+                });
+            });
+    }
+    /// Groups this shape belongs to and interacts with, and the project's group names.
+    fn collision_groups(
+        &mut self,
+        ui: &mut egui::Ui,
+        filter: &mut oxy_core::physics3d::CollisionFilter,
+    ) {
+        crate::widgets::sub_section(ui, "collision_groups", "Grupos de colisão", |ui| {
+            crate::graph_ui::collision_filter_picker(
+                ui,
+                &mut filter.category,
+                &self.state.project,
+                "Pertence aos grupos…",
+            );
+            crate::graph_ui::collision_filter_picker(
+                ui,
+                &mut filter.mask,
+                &self.state.project,
+                "Interage com grupos…",
+            );
+            crate::widgets::sub_section(ui, "collision_group_names", "Nomes dos grupos", |ui| {
+                crate::widgets::hint(
+                    ui,
+                    "Renomear organiza as escolhas; não muda vínculos nem colisões.",
+                );
+                egui::ScrollArea::vertical()
+                    .max_height(160.)
+                    .show(ui, |ui| {
+                        for bit in 0..32_u8 {
+                            let mut name = self.state.project.collision_group_label(bit);
+                            crate::widgets::property_row(ui, &format!("{}", bit + 1), "", |ui| {
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut name)
+                                            .desired_width(ui.available_width()),
+                                    )
+                                    .changed()
+                                    && !name.trim().is_empty()
+                                {
+                                    self.state.project.collision_groups.insert(bit, name);
+                                }
+                            });
+                        }
+                    });
+            });
         });
     }
     pub(super) fn physics_properties(&mut self, ui: &mut egui::Ui, entity: &mut Entity) {
+        use crate::widgets::{number_row, property_row, vec3_row};
         if entity.camera.is_some() {
             self.camera_properties(ui, entity);
             return;
@@ -166,23 +421,32 @@ impl Editor {
         }
         self.character_properties(ui, entity);
         self.platform_properties(ui, entity);
-        if entity.physics3d.is_none() || entity.camera.is_some() {
+        if entity.physics3d.is_none() {
             return;
         }
         let character = entity.character3d.is_some();
-        let removable = !character && entity.platform.is_none();
+        let blocked = if character || entity.platform.is_some() {
+            Some("Remova primeiro o Personagem 3D ou a Plataforma móvel que depende desta forma.")
+        } else {
+            None
+        };
+        let generate = entity.has_geometry() && !character;
+        let fingerprint = if entity.physics3d.as_ref().is_some_and(|c| {
+            matches!(
+                c.shape,
+                CollisionShape::Convex { .. } | CollisionShape::TriMesh { .. }
+            )
+        }) {
+            self.physics_ui.fingerprint(entity)
+        } else {
+            None
+        };
+        let dimensions = entity.dimensions;
+        let platform = entity.platform.is_some();
         let mut enabled = entity.physics3d.as_ref().is_some_and(|c| c.enabled);
         let mut remove = false;
-        let mut menu = |ui: &mut egui::Ui| {
-            if ui
-                .add_enabled(removable, egui::Button::new("Remover componente"))
-                .on_disabled_hover_text("Remova primeiro o Personagem 3D ou a Plataforma móvel que depende desta forma.")
-                .clicked()
-            {
-                remove = true;
-                ui.close();
-            }
-        };
+        let mut regenerate = None;
+        let mut menu = remove_menu(&mut remove, blocked);
         crate::widgets::card(
             ui,
             "collider3d",
@@ -190,91 +454,64 @@ impl Editor {
             (!character).then_some(&mut enabled),
             Some(&mut menu),
             |ui| {
-                if entity.has_geometry() && entity.character3d.is_none() {
-                    ui.horizontal_wrapped(|ui| {
-                    for (convex,label) in [(true,"Gerar colisor convexo"),(false,"Usar malha estática de colisão")] {
-                        if ui.button(label).on_hover_text(if convex{"Envolve a peça com um volume convexo: aberturas e concavidades serão fechadas. A sobreposição mostra o volume resultante."}else{"Preserva triângulos e aberturas da peça. Não cria um corpo dinâmico."}).clicked() {
-                            match generate_collider(entity,convex) {
-                                Ok(generated)=>{if let Some(current)=&mut entity.physics3d {current.shape=generated.shape;}else{entity.physics3d=Some(generated);}},
-                                Err(error)=>self.warn(error),
-                            }
-                        }
-                    }
-                });
-                }
-                let fingerprint = if entity.physics3d.as_ref().is_some_and(|c| {
-                    matches!(
-                        c.shape,
-                        CollisionShape::Convex { .. } | CollisionShape::TriMesh { .. }
-                    )
-                }) {
-                    self.physics_ui.fingerprint(entity)
-                } else {
-                    None
-                };
                 let Some(config) = &mut entity.physics3d else {
                     return;
                 };
-                if character {
-                    ui.small("Forma necessária ao Personagem 3D. Use Simular personagem para pausar seu controlador.");
-                }
-                ui.add_enabled(entity.character3d.is_none() && entity.platform.is_none(),egui::Checkbox::new(&mut config.sensor,"Área de detecção")).on_hover_text("Detecta passagem; não bloqueia o personagem. A aparência visível é independente da colisão.");
-                let original_kind = match config.shape {
+                const SHAPES: [&str; 5] = [
+                    "Caixa",
+                    "Cápsula",
+                    "Esfera",
+                    "Convexo da peça",
+                    "Malha estática da peça",
+                ];
+                let kind = match config.shape {
                     CollisionShape::Box { .. } => 0,
                     CollisionShape::Capsule { .. } => 1,
                     CollisionShape::Sphere { .. } => 2,
                     CollisionShape::Convex { .. } => 3,
                     CollisionShape::TriMesh { .. } => 4,
                 };
-                let mut kind = original_kind;
-                let labels = [
-                    "Caixa orientada",
-                    "Cápsula vertical",
-                    "Esfera",
-                    "Convexo preparado",
-                    "Malha estática preparada",
-                ];
-                ui.add_enabled_ui(entity.character3d.is_none(), |ui| {
-                    egui::ComboBox::from_id_salt("physics_shape")
-                        .selected_text(labels[kind])
-                        .show_ui(ui, |ui| {
-                            for (i, label) in labels[..3].iter().enumerate() {
-                                ui.selectable_value(&mut kind, i, *label);
-                            }
-                        });
+                let mut choice = kind;
+                ui.add_enabled_ui(!character, |ui| {
+                crate::widgets::combo_row(ui, "Forma", "Caixa, cápsula e esfera são volumes simples. Convexo envolve a peça e fecha aberturas; a malha estática preserva triângulos e aberturas.", "physics_shape", SHAPES[kind], |ui| {
+                    for (i, label) in SHAPES.iter().enumerate() {
+                        if i < 3 || generate {
+                            ui.selectable_value(&mut choice, i, *label);
+                        }
+                    }
                 });
-                if kind != original_kind {
-                    config.shape = match kind {
-                        1 => CollisionShape::Capsule {
-                            height: 1.8,
-                            radius: 0.3,
-                        },
-                        2 => CollisionShape::Sphere { radius: 0.5 },
-                        _ => CollisionShape::Box {
-                            size: entity.dimensions,
-                        },
-                    };
+            });
+                if choice != kind {
+                    match choice {
+                        0 => config.shape = CollisionShape::Box { size: dimensions },
+                        1 => {
+                            config.shape = CollisionShape::Capsule {
+                                height: 1.8,
+                                radius: 0.3,
+                            }
+                        }
+                        2 => config.shape = CollisionShape::Sphere { radius: 0.5 },
+                        _ => regenerate = Some(choice == 3),
+                    }
                 }
-                let mut refresh = None;
                 match &mut config.shape {
-                    CollisionShape::Box { size } => vector3(ui, "Dimensões (m)", size, 0.02, true),
+                    CollisionShape::Box { size } => {
+                        vec3_row(
+                            ui,
+                            "Tamanho",
+                            "Dimensões da caixa em metros.",
+                            size,
+                            0.02,
+                            true,
+                        );
+                    }
                     CollisionShape::Capsule { height, radius } => {
-                        let changed = ui
-                            .add(
-                                egui::DragValue::new(height)
-                                    .speed(0.01)
-                                    .range((*radius * 2.)..=100.)
-                                    .prefix("Altura (m) "),
-                            )
-                            .changed();
-                        let radius_changed = ui
-                            .add(
-                                egui::DragValue::new(radius)
-                                    .speed(0.01)
-                                    .range(0.01..=(*height * 0.5))
-                                    .prefix("Raio (m) "),
-                            )
-                            .changed();
+                        let range = (*radius * 2.)..=100.;
+                        let changed =
+                            number_row(ui, "Altura", "", height, range, 0.01, " m").changed();
+                        let range = 0.01..=(*height * 0.5);
+                        let radius_changed =
+                            number_row(ui, "Raio", "", radius, range, 0.01, " m").changed();
                         if let Some(character) = &mut entity.character3d
                             && (changed || radius_changed)
                         {
@@ -284,210 +521,556 @@ impl Editor {
                         }
                     }
                     CollisionShape::Sphere { radius } => {
-                        ui.add(
-                            egui::DragValue::new(radius)
-                                .range(0.01..=100.)
-                                .prefix("Raio (m) "),
-                        );
+                        number_row(ui, "Raio", "", radius, 0.01..=100., 0.01, " m");
                     }
                     CollisionShape::Convex { geometry } | CollisionShape::TriMesh { geometry } => {
-                        ui.small(format!(
-                            "{} vértices · {} triângulos de origem",
-                            geometry.vertices.len(),
-                            geometry.triangles.len()
-                        ));
+                        property_row(
+                            ui,
+                            "Origem",
+                            "Geometria preparada a partir da aparência da peça.",
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} vértices · {} triângulos",
+                                        geometry.vertices.len(),
+                                        geometry.triangles.len()
+                                    ))
+                                    .size(12.)
+                                    .color(crate::theme::TEXT_MUTED),
+                                );
+                            },
+                        );
                         if fingerprint.is_some() && fingerprint != geometry.source_fingerprint {
                             ui.colored_label(
                                 crate::theme::WARNING,
-                                "A aparência mudou. A colisão preparada foi preservada.",
+                                "A aparência mudou; a colisão preparada foi preservada.",
                             );
+                            if ui.button("Atualizar geometria de colisão").on_hover_text("Substitui a forma física pela geometria visual atual. Uma operação de desfazer.").clicked() {
+                            regenerate = Some(kind == 3);
                         }
-                        if ui.button("Atualizar geometria de colisão").on_hover_text("Substitui a forma física pela geometria visual atual. Uma operação de desfazer.").clicked(){refresh=Some(original_kind==3);}
+                        }
                     }
                 }
-                ui.add_enabled_ui(entity.character3d.is_none(), |ui| {
-                    vector3(ui, "Centro local (m)", &mut config.center, 0.02, false)
+                ui.add_enabled_ui(!character, |ui| {
+                    vec3_row(
+                        ui,
+                        "Centro",
+                        "Posição do volume em relação ao objeto, em metros.",
+                        &mut config.center,
+                        0.02,
+                        false,
+                    )
                 });
-                if entity.character3d.is_some() {
-                    ui.small("Origem nos pés; o centro acompanha metade da altura.");
+                if character {
+                    crate::widgets::hint(
+                        ui,
+                        "Forma do Personagem 3D: origem nos pés, centro na metade da altura. Use Simular para pausar o controlador.",
+                    );
+                } else {
+                    let mut kind = config.sensor;
+                    ui.add_enabled_ui(!platform, |ui| {
+                    property_row(ui, "Tipo", "Sólido bloqueia o movimento. Área apenas detecta a passagem, para lógica e sensores.", |ui| {
+                        crate::widgets::segmented(ui, &mut kind, &[(false, "Sólido"), (true, "Área")]);
+                    });
+                });
+                    config.sensor = kind;
                 }
-                self.surface_properties(ui, &mut config.surface);
-                ui.collapsing("Filtros de colisão",|ui| {
-                ui.checkbox(&mut config.filter.blocks_character,"Bloqueia personagem");ui.checkbox(&mut config.filter.blocks_camera,"Bloqueia câmera");
-                crate::graph_ui::collision_filter_picker(ui,&mut config.filter.category,&self.state.project,"Pertence aos grupos…");
-                crate::graph_ui::collision_filter_picker(ui,&mut config.filter.mask,&self.state.project,"Interage com grupos…");
-                ui.collapsing("Nomes dos grupos no projeto",|ui|{
-                    ui.small("Renomear organiza as escolhas; não muda vínculos nem colisões existentes.");
-                    egui::ScrollArea::vertical().max_height(160.).show(ui,|ui|{for bit in 0..32_u8 {
-                        let mut name=self.state.project.collision_group_label(bit);
-                        ui.horizontal(|ui|{ui.label(format!("{}",bit+1)); if ui.text_edit_singleline(&mut name).changed() && !name.trim().is_empty() {self.state.project.collision_groups.insert(bit,name);}});
-                    }});
-                });
-            });
+                property_row(
+                    ui,
+                    "Bloqueia",
+                    "O que esta forma impede de atravessar.",
+                    |ui| {
+                        ui.toggle_value(&mut config.filter.blocks_character, "Personagem");
+                        ui.toggle_value(&mut config.filter.blocks_camera, "Câmera");
+                    },
+                );
+                self.surface_row(ui, &mut config.surface);
+                self.collision_groups(ui, &mut config.filter);
                 if let Err(error) = config.validate() {
                     ui.colored_label(crate::theme::WARNING, error);
                 }
-                if let Some(convex) = refresh {
-                    match generate_collider(entity, convex) {
-                        Ok(next) => entity.physics3d.as_mut().unwrap().shape = next.shape,
-                        Err(e) => self.warn(e),
-                    }
-                }
             },
         );
+        if let Some(convex) = regenerate {
+            match generate_collider(entity, convex) {
+                Ok(generated) => {
+                    if let Some(current) = &mut entity.physics3d {
+                        current.shape = generated.shape;
+                    }
+                }
+                Err(e) => self.warn(e),
+            }
+        }
         if !character && let Some(config) = &mut entity.physics3d {
             config.enabled = enabled;
         }
+        drop(menu);
         if remove {
             entity.physics3d = None;
         }
     }
 
     fn character_properties(&mut self, ui: &mut egui::Ui, entity: &mut Entity) {
-        use oxy_core::character::MovementReference;
+        use crate::widgets::{combo_row, number_row, sub_section, toggle_row};
+        use oxy_core::character::{
+            BodyFacing, InheritPlatform, JumpMode, MovementProfile, MovementReference,
+        };
         if entity.character3d.is_none() || entity.camera.is_some() {
             return;
         }
+        let mut enabled = entity.character3d.as_ref().is_some_and(|c| c.enabled);
         let mut remove = false;
-        let mut menu = |ui: &mut egui::Ui| {
-            if ui
-                .add_enabled(true, egui::Button::new("Remover componente"))
-                .on_disabled_hover_text("")
-                .clicked()
-            {
-                remove = true;
-                ui.close();
-            }
-        };
+        let mut menu = remove_menu(&mut remove, None);
         crate::widgets::card(
             ui,
             "character3d",
             "Personagem 3D",
-            None,
+            Some(&mut enabled),
             Some(&mut menu),
             |ui| {
                 self.movement_body_properties(ui, entity);
-                if let Some(config) = &mut entity.character3d {
-                    ui.collapsing("Básico", |ui| {
-                ui.menu_button("Aplicar perfil de movimento",|ui|{
-                    use oxy_core::character::MovementProfile;
-                    for(profile,label)in[(MovementProfile::Direct,"Direto"),(MovementProfile::Parkour,"Parkour"),(MovementProfile::ChainedJumps,"Saltos encadeados")]{
-                        if ui.button(label).on_hover_text("Aplica valores iniciais editáveis. Preserva ações, vínculos e geometria; pode ser desfeito.").clicked(){config.apply_profile(profile);ui.close();}
+                let Some(config) = &mut entity.character3d else {
+                    return;
+                };
+                sub_section(ui, "character_basic", "Básico", |ui| {
+                    ui.menu_button("Aplicar perfil de movimento", |ui| {
+                    for (profile, label) in [(MovementProfile::Direct, "Direto"), (MovementProfile::Parkour, "Parkour"), (MovementProfile::ChainedJumps, "Saltos encadeados")] {
+                        if ui.button(label).on_hover_text("Aplica valores iniciais editáveis. Preserva ações, vínculos e geometria; pode ser desfeito.").clicked() {
+                            config.apply_profile(profile);
+                            ui.close();
+                        }
                     }
                 });
-                ui.checkbox(&mut config.enabled,"Simular personagem");
-                ui.checkbox(&mut config.automatic_input,"Ler ações de movimento automaticamente").on_hover_text("Desative para enviar a intenção e os pedidos de pulo por nós. A simulação continua independente da entrada.");
-                egui::ComboBox::from_id_salt("movement_reference").selected_text(match config.reference {MovementReference::World=>"Eixos da cena",MovementReference::Body=>"Direção do corpo",MovementReference::Camera=>"Direção da câmera"}).show_ui(ui,|ui|{ui.selectable_value(&mut config.reference,MovementReference::World,"Eixos da cena");ui.selectable_value(&mut config.reference,MovementReference::Body,"Direção do corpo");ui.selectable_value(&mut config.reference,MovementReference::Camera,"Direção da câmera");});
-                ui.add(egui::DragValue::new(&mut config.gravity).speed(0.1).range(0. ..=200.).prefix("Gravidade (m/s²) "));
-                });
-                    ui.collapsing("Movimento no chão", |ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut config.speed)
-                                .speed(0.1)
-                                .range(0. ..=100.)
-                                .prefix("Velocidade (m/s) "),
-                        );
-                        for (value, label, max) in [
-                            (&mut config.ground_acceleration, "Aceleração (m/s²) ", 1000.),
-                            (&mut config.ground_braking, "Frenagem (m/s²) ", 1000.),
-                            (&mut config.ground_friction, "Atrito (por segundo) ", 100.),
-                        ] {
-                            ui.add(
-                                egui::DragValue::new(value)
-                                    .speed(0.1)
-                                    .range(0. ..=max)
-                                    .prefix(label),
+                    toggle_row(
+                        ui,
+                        "Entrada automática",
+                        "Lê as ações de movimento sozinho. Desative para enviar intenção e pulos por nós.",
+                        &mut config.automatic_input,
+                    );
+                    let reference = match config.reference {
+                        MovementReference::World => "Eixos da cena",
+                        MovementReference::Body => "Corpo",
+                        MovementReference::Camera => "Câmera",
+                    };
+                    combo_row(
+                        ui,
+                        "Direção",
+                        "Referência das teclas de movimento.",
+                        "movement_reference",
+                        reference,
+                        |ui| {
+                            ui.selectable_value(
+                                &mut config.reference,
+                                MovementReference::World,
+                                "Eixos da cena",
                             );
-                        }
-                        ui.small("A velocidade desejada não elimina impulsos externos.");
-                    });
-                    ui.collapsing("Pulo",|ui|{
-                    ui.add(egui::DragValue::new(&mut config.jump_speed).speed(0.1).range(0. ..=100.).prefix("Impulso do pulo (m/s) "));
-                    use oxy_core::character::JumpMode;
-                    egui::ComboBox::from_id_salt("jump_mode").selected_text(if config.jump_mode==JumpMode::Manual{"Pulo manual"}else{"Pulo automático ao segurar"}).show_ui(ui,|ui|{ui.selectable_value(&mut config.jump_mode,JumpMode::Manual,"Pulo manual");ui.selectable_value(&mut config.jump_mode,JumpMode::Automatic,"Pulo automático ao segurar");}).response.on_hover_text("Manual exige novo toque. Automático repete ao encontrar chão; não adiciona um passo de simulação ao pousar.");
-                    for(value,label) in [(&mut config.coyote_ms,"Tolerância após sair da borda (ms) "),(&mut config.jump_buffer_ms,"Antecipação do pulo (ms) ")] {ui.add(egui::DragValue::new(value).range(0. ..=1000.).prefix(label)).on_hover_text("Zero desativa a tolerância. O pedido é consumido uma única vez.");}
+                            ui.selectable_value(
+                                &mut config.reference,
+                                MovementReference::Body,
+                                "Corpo",
+                            );
+                            ui.selectable_value(
+                                &mut config.reference,
+                                MovementReference::Camera,
+                                "Câmera",
+                            );
+                        },
+                    );
+                    number_row(
+                        ui,
+                        "Gravidade",
+                        "",
+                        &mut config.gravity,
+                        0. ..=200.,
+                        0.1,
+                        " m/s²",
+                    );
                 });
-                    ui.collapsing("Movimento no ar",|ui|{
-                    for(value,label,max)in[(&mut config.air_acceleration,"Aceleração aérea (m/s²) ",1000.),(&mut config.air_projected_limit,"Limite na direção desejada (m/s) ",1000.),(&mut config.air_resistance,"Resistência horizontal do ar ",100.),(&mut config.horizontal_limit,"Limite horizontal absoluto (0 desliga) ",1000.)]{ui.add(egui::DragValue::new(value).speed(0.1).range(0. ..=max).prefix(label));}
-                    ui.small("O limite direcional só limita o acréscimo nessa direção. A velocidade perpendicular é preservada.");
-                    for(value,label)in[(&mut config.jump_retention,"Conservação ao saltar "),(&mut config.landing_retention,"Conservação ao pousar sem re-salto ")]{ui.add(egui::DragValue::new(value).speed(0.01).range(0. ..=1.).prefix(label)).on_hover_text("1 conserva toda a velocidade própria; 0 elimina o embalo horizontal. Um re-salto já elegível evita a perda do pouso.");}
-                    ui.add(egui::DragValue::new(&mut config.absolute_speed_limit).range(1. ..=10000.).prefix("Proteção numérica (m/s) ")).on_hover_text("Limite final separado da velocidade de caminhar e do controle aéreo.");
+                sub_section(ui, "character_ground", "Movimento no chão", |ui| {
+                    number_row(
+                        ui,
+                        "Velocidade",
+                        "Velocidade desejada. Não elimina impulsos externos.",
+                        &mut config.speed,
+                        0. ..=100.,
+                        0.1,
+                        " m/s",
+                    );
+                    number_row(
+                        ui,
+                        "Aceleração",
+                        "",
+                        &mut config.ground_acceleration,
+                        0. ..=1000.,
+                        0.1,
+                        " m/s²",
+                    );
+                    number_row(
+                        ui,
+                        "Frenagem",
+                        "",
+                        &mut config.ground_braking,
+                        0. ..=1000.,
+                        0.1,
+                        " m/s²",
+                    );
+                    number_row(
+                        ui,
+                        "Atrito",
+                        "Perda de velocidade por segundo.",
+                        &mut config.ground_friction,
+                        0. ..=100.,
+                        0.1,
+                        " /s",
+                    );
                 });
-                    ui.collapsing("Corrida", |ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut config.sprint_speed)
-                                .speed(0.1)
-                                .range(0. ..=100.)
-                                .prefix("Velocidade correndo (m/s) "),
+                sub_section(ui, "character_jump", "Pulo", |ui| {
+                    number_row(
+                        ui,
+                        "Impulso",
+                        "",
+                        &mut config.jump_speed,
+                        0. ..=100.,
+                        0.1,
+                        " m/s",
+                    );
+                    let manual = config.jump_mode == JumpMode::Manual;
+                    combo_row(
+                        ui,
+                        "Modo",
+                        "Manual exige novo toque. Automático repete ao encontrar chão.",
+                        "jump_mode",
+                        if manual {
+                            "Manual"
+                        } else {
+                            "Automático ao segurar"
+                        },
+                        |ui| {
+                            ui.selectable_value(&mut config.jump_mode, JumpMode::Manual, "Manual");
+                            ui.selectable_value(
+                                &mut config.jump_mode,
+                                JumpMode::Automatic,
+                                "Automático ao segurar",
+                            );
+                        },
+                    );
+                    number_row(
+                        ui,
+                        "Tolerância",
+                        "Tempo para ainda pular depois de sair da borda. Zero desativa.",
+                        &mut config.coyote_ms,
+                        0. ..=1000.,
+                        1.,
+                        " ms",
+                    );
+                    number_row(
+                        ui,
+                        "Antecipação",
+                        "Tempo em que um pulo pedido antes de pousar ainda vale. Zero desativa.",
+                        &mut config.jump_buffer_ms,
+                        0. ..=1000.,
+                        1.,
+                        " ms",
+                    );
+                });
+                sub_section(ui, "character_air", "Movimento no ar", |ui| {
+                    number_row(
+                        ui,
+                        "Aceleração",
+                        "Aceleração aérea.",
+                        &mut config.air_acceleration,
+                        0. ..=1000.,
+                        0.1,
+                        " m/s²",
+                    );
+                    number_row(
+                        ui,
+                        "Limite direcional",
+                        "Limita só o acréscimo na direção desejada; a velocidade perpendicular é preservada.",
+                        &mut config.air_projected_limit,
+                        0. ..=1000.,
+                        0.1,
+                        " m/s",
+                    );
+                    number_row(
+                        ui,
+                        "Resistência",
+                        "Resistência horizontal do ar.",
+                        &mut config.air_resistance,
+                        0. ..=100.,
+                        0.1,
+                        "",
+                    );
+                    number_row(
+                        ui,
+                        "Limite horizontal",
+                        "Limite absoluto; zero desliga.",
+                        &mut config.horizontal_limit,
+                        0. ..=1000.,
+                        0.1,
+                        " m/s",
+                    );
+                    number_row(
+                        ui,
+                        "Conservar ao saltar",
+                        "1 conserva toda a velocidade; 0 elimina o embalo horizontal.",
+                        &mut config.jump_retention,
+                        0. ..=1.,
+                        0.01,
+                        "",
+                    );
+                    number_row(
+                        ui,
+                        "Conservar ao pousar",
+                        "Sem re-salto. 1 conserva toda a velocidade; 0 elimina o embalo.",
+                        &mut config.landing_retention,
+                        0. ..=1.,
+                        0.01,
+                        "",
+                    );
+                    number_row(
+                        ui,
+                        "Proteção numérica",
+                        "Limite final, separado da velocidade de caminhar e do controle aéreo.",
+                        &mut config.absolute_speed_limit,
+                        1. ..=10000.,
+                        1.,
+                        " m/s",
+                    );
+                });
+                sub_section(ui, "character_sprint", "Corrida", |ui| {
+                    number_row(
+                        ui,
+                        "Velocidade",
+                        "",
+                        &mut config.sprint_speed,
+                        0. ..=100.,
+                        0.1,
+                        " m/s",
+                    );
+                    action_row(
+                        ui,
+                        &self.state.project,
+                        "Ação",
+                        "sprint_action",
+                        &mut config.sprint_action,
+                    );
+                });
+                sub_section(ui, "character_crouch", "Agachamento/deslize", |ui| {
+                    number_row(
+                        ui,
+                        "Velocidade",
+                        "Velocidade agachado.",
+                        &mut config.crouch_speed,
+                        0. ..=100.,
+                        0.1,
+                        " m/s",
+                    );
+                    toggle_row(
+                        ui,
+                        "Alternar",
+                        "Cada toque alterna entre agachado e em pé.",
+                        &mut config.crouch_toggle,
+                    );
+                    action_row(
+                        ui,
+                        &self.state.project,
+                        "Ação",
+                        "crouch_action",
+                        &mut config.crouch_action,
+                    );
+                    toggle_row(
+                        ui,
+                        "Deslize",
+                        "Agachar com embalo inicia um deslize.",
+                        &mut config.slide_enabled,
+                    );
+                    ui.add_enabled_ui(config.slide_enabled, |ui| {
+                        let exit = config.slide_exit_speed;
+                        number_row(
+                            ui,
+                            "Iniciar acima de",
+                            "",
+                            &mut config.slide_min_speed,
+                            exit..=1000.,
+                            0.1,
+                            " m/s",
                         );
-                        let action = &mut config.sprint_action;
-                        egui::ComboBox::from_id_salt("sprint_action")
-                            .selected_text(oxy_core::input_actions::label(
-                                &self.state.project,
-                                action,
-                            ))
-                            .show_ui(ui, |ui| {
-                                for id in self.state.project.input_bindings.keys() {
-                                    ui.selectable_value(
-                                        action,
-                                        id.clone(),
-                                        oxy_core::input_actions::label(&self.state.project, id),
-                                    );
-                                }
-                            });
+                        let min = config.slide_min_speed;
+                        number_row(
+                            ui,
+                            "Encerrar abaixo de",
+                            "",
+                            &mut config.slide_exit_speed,
+                            0. ..=min,
+                            0.1,
+                            " m/s",
+                        );
+                        number_row(
+                            ui,
+                            "Duração máxima",
+                            "",
+                            &mut config.slide_duration,
+                            0.01..=60.,
+                            0.05,
+                            " s",
+                        );
+                        number_row(
+                            ui,
+                            "Atrito",
+                            "Atrito do deslize.",
+                            &mut config.slide_friction,
+                            0. ..=100.,
+                            0.1,
+                            "",
+                        );
+                        number_row(
+                            ui,
+                            "Controle",
+                            "Controle direcional durante o deslize.",
+                            &mut config.slide_control,
+                            0. ..=100.,
+                            0.1,
+                            " m/s²",
+                        );
                     });
-                    ui.collapsing("Agachamento/deslize",|ui|{
-                    ui.add(egui::DragValue::new(&mut config.crouch_speed).speed(0.1).range(0. ..=100.).prefix("Velocidade agachado (m/s) "));
-
-                    ui.checkbox(&mut config.crouch_toggle,"Alternar agachamento a cada toque");
-                    let action=&mut config.crouch_action;
-                    egui::ComboBox::from_id_salt(("character_extra_action","Agachar")).selected_text(format!("Agachar: {}",oxy_core::input_actions::label(&self.state.project,action))).show_ui(ui,|ui|{for id in self.state.project.input_bindings.keys(){ui.selectable_value(action,id.clone(),oxy_core::input_actions::label(&self.state.project,id));}});
-
-                    ui.checkbox(&mut config.slide_enabled,"Permitir deslize ao agachar com embalo");
-                    ui.add_enabled_ui(config.slide_enabled,|ui|{
-                        ui.add(egui::DragValue::new(&mut config.slide_min_speed).speed(0.1).range(config.slide_exit_speed..=1000.).prefix("Velocidade mínima para iniciar (m/s) "));
-                        ui.add(egui::DragValue::new(&mut config.slide_exit_speed).speed(0.1).range(0. ..=config.slide_min_speed).prefix("Encerrar abaixo de (m/s) "));
-                        ui.add(egui::DragValue::new(&mut config.slide_duration).speed(0.05).range(0.01..=60.).prefix("Duração máxima (s) "));
-                        for(value,label)in[(&mut config.slide_friction,"Atrito do deslize "),(&mut config.slide_control,"Controle direcional (m/s²) ")]{ui.add(egui::DragValue::new(value).speed(0.1).range(0. ..=100.).prefix(label));}
-                    });
-                    ui.small("Atrito e tração do piso continuam valendo. Solte o agachamento para encerrar; sob teto permanece agachado.");
+                    crate::widgets::hint(
+                        ui,
+                        "Atrito e tração do piso continuam valendo. Sob teto, o personagem permanece agachado.",
+                    );
                 });
-                    ui.collapsing("Avançado",|ui|{
-                    ui.add(egui::DragValue::new(&mut config.recovery_distance).speed(0.01).range(0. ..=10.).prefix("Recuperação máxima (m) ")).on_hover_text("Limita a correção quando um obstáculo entra no personagem. Se não houver espaço seguro, interrompe o movimento e informa o problema.");
-                    for (value,label,max) in [(&mut config.slope_degrees,"Rampa máxima (°) ",89.),(&mut config.step_height,"Degrau máximo (m) ",2.),(&mut config.step_width,"Largura mínima (m) ",2.),(&mut config.snap,"Aderência ao chão (m) ",2.)] {ui.add(egui::DragValue::new(value).speed(0.01).range(0.001..=max).prefix(label));}
-                    use oxy_core::character::InheritPlatform;
-                    egui::ComboBox::from_id_salt("platform_inheritance").selected_text(match config.inherit_platform{InheritPlatform::None=>"Sem herança",InheritPlatform::Horizontal=>"Herdar velocidade horizontal",InheritPlatform::All=>"Herdar toda a velocidade"}).show_ui(ui,|ui|{ui.selectable_value(&mut config.inherit_platform,InheritPlatform::None,"Sem herança");ui.selectable_value(&mut config.inherit_platform,InheritPlatform::Horizontal,"Herdar velocidade horizontal");ui.selectable_value(&mut config.inherit_platform,InheritPlatform::All,"Herdar toda a velocidade");}).response.on_hover_text("Ao pular ou sair da plataforma, soma esta parte da velocidade do apoio uma única vez.");
+                sub_section(ui, "character_advanced", "Avançado", |ui| {
+                    number_row(
+                        ui,
+                        "Recuperação",
+                        "Correção máxima quando um obstáculo entra no personagem.",
+                        &mut config.recovery_distance,
+                        0. ..=10.,
+                        0.01,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Rampa máxima",
+                        "",
+                        &mut config.slope_degrees,
+                        0.001..=89.,
+                        0.1,
+                        "°",
+                    );
+                    number_row(
+                        ui,
+                        "Degrau máximo",
+                        "",
+                        &mut config.step_height,
+                        0.001..=2.,
+                        0.01,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Largura mínima",
+                        "Largura mínima de um degrau.",
+                        &mut config.step_width,
+                        0.001..=2.,
+                        0.01,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Aderência",
+                        "Distância em que o personagem se mantém colado ao chão.",
+                        &mut config.snap,
+                        0.001..=2.,
+                        0.01,
+                        " m",
+                    );
+                    let inherit = match config.inherit_platform {
+                        InheritPlatform::None => "Nenhuma",
+                        InheritPlatform::Horizontal => "Horizontal",
+                        InheritPlatform::All => "Toda",
+                    };
+                    combo_row(
+                        ui,
+                        "Herança",
+                        "Velocidade do apoio somada uma vez ao pular ou sair da plataforma.",
+                        "platform_inheritance",
+                        inherit,
+                        |ui| {
+                            ui.selectable_value(
+                                &mut config.inherit_platform,
+                                InheritPlatform::None,
+                                "Nenhuma",
+                            );
+                            ui.selectable_value(
+                                &mut config.inherit_platform,
+                                InheritPlatform::Horizontal,
+                                "Horizontal",
+                            );
+                            ui.selectable_value(
+                                &mut config.inherit_platform,
+                                InheritPlatform::All,
+                                "Toda",
+                            );
+                        },
+                    );
                 });
-                    ui.collapsing("Orientação do personagem",|ui|{
-                    use oxy_core::character::BodyFacing;
-                    egui::ComboBox::from_id_salt("character_facing").selected_text(match config.facing {BodyFacing::Movement=>"Virar para o movimento",BodyFacing::Look=>"Virar para o olhar"}).show_ui(ui,|ui|{
-                        ui.selectable_value(&mut config.facing,BodyFacing::Movement,"Virar para o movimento");
-                        ui.selectable_value(&mut config.facing,BodyFacing::Look,"Virar para o olhar");
-                    }).response.on_hover_text("Na primeira pessoa, o corpo acompanha diretamente o olhar horizontal. Na terceira pessoa, esta opção controla o corpo sem limitar a órbita da câmera.");
-                    ui.add(egui::DragValue::new(&mut config.angular_speed).speed(5.).range(0. ..=3600.).prefix("Velocidade de giro (°/s) ")).on_hover_text("Zero mantém a orientação do corpo. Não altera a velocidade de olhar com o mouse.");
+                sub_section(ui, "character_facing", "Orientação", |ui| {
+                    let facing = if config.facing == BodyFacing::Movement {
+                        "Movimento"
+                    } else {
+                        "Olhar"
+                    };
+                    combo_row(
+                        ui,
+                        "Virar para",
+                        "Na primeira pessoa, o corpo acompanha o olhar horizontal.",
+                        "character_facing",
+                        facing,
+                        |ui| {
+                            ui.selectable_value(
+                                &mut config.facing,
+                                BodyFacing::Movement,
+                                "Movimento",
+                            );
+                            ui.selectable_value(&mut config.facing, BodyFacing::Look, "Olhar");
+                        },
+                    );
+                    number_row(
+                        ui,
+                        "Giro",
+                        "Zero mantém a orientação do corpo.",
+                        &mut config.angular_speed,
+                        0. ..=3600.,
+                        5.,
+                        "°/s",
+                    );
                 });
-                }
             },
         );
+        if let Some(config) = &mut entity.character3d {
+            config.enabled = enabled;
+        }
+        drop(menu);
         if remove {
             entity.character3d = None;
         }
     }
     fn camera_properties(&mut self, ui: &mut egui::Ui, entity: &mut Entity) {
+        use crate::widgets::{combo_row, number_row, sub_section, toggle_row};
+        use oxy_core::character::CameraMode;
         if entity.camera.is_none() || entity.camera_rig.is_none() {
             return;
         }
         let mut remove = false;
-        let mut menu = |ui: &mut egui::Ui| {
-            if ui
-                .add_enabled(true, egui::Button::new("Remover componente"))
-                .on_disabled_hover_text("")
-                .clicked()
-            {
-                remove = true;
-                ui.close();
-            }
-        };
+        let mut menu = remove_menu(&mut remove, None);
+        let targets: Vec<_> = self
+            .scene()
+            .entities
+            .iter()
+            .filter(|e| e.id != entity.id)
+            .map(|e| (e.id.clone(), e.name.clone()))
+            .collect();
         crate::widgets::card(
             ui,
             "camera_rig",
@@ -495,86 +1078,266 @@ impl Editor {
             None,
             Some(&mut menu),
             |ui| {
-                if entity
-                    .camera_rig
-                    .as_ref()
-                    .is_some_and(|r| r.mode != oxy_core::character::CameraMode::Fixed)
-                {
-                    ui.label("Pose controlada pelo alvo durante o jogo.");
-                }
                 if ui.button("Prévia da câmera").clicked() {
                     self.camera_tools.preview = true;
                 }
                 let Some(rig) = &mut entity.camera_rig else {
                     return;
                 };
-                let targets: Vec<_> = self
-                    .scene()
-                    .entities
-                    .iter()
-                    .filter(|e| e.id != entity.id)
-                    .map(|e| (e.id.clone(), e.name.clone()))
-                    .collect();
-                use oxy_core::character::CameraMode;
-                ui.collapsing("Básico",|ui|{
-            egui::ComboBox::from_id_salt("camera_mode").selected_text(match rig.mode {CameraMode::FirstPerson=>"Primeira pessoa",CameraMode::ThirdPerson=>"Terceira pessoa",CameraMode::Fixed=>"Câmera fixa"}).show_ui(ui,|ui|{
-                ui.selectable_value(&mut rig.mode,CameraMode::FirstPerson,"Primeira pessoa");
-                ui.selectable_value(&mut rig.mode,CameraMode::ThirdPerson,"Terceira pessoa");
-                ui.selectable_value(&mut rig.mode,CameraMode::Fixed,"Câmera fixa");
-            });
-
-            ui.label("Alvo").on_hover_text("Objeto acompanhado por esta câmera. O vínculo independe do parentesco na Hierarquia.");
-            egui::ComboBox::from_id_salt("rig_target").selected_text(rig.target.as_ref().and_then(|id|targets.iter().find(|(t,_)|t==id).map(|(_,name)|name.as_str())).unwrap_or("Escolha o personagem")).show_ui(ui,|ui|{ui.selectable_value(&mut rig.target,None,"Sem alvo");for (id,name) in &targets{ui.selectable_value(&mut rig.target,Some(id.clone()),name);}});
-            });
-                ui.collapsing("Primeira pessoa", |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut rig.eye_height)
-                            .speed(0.01)
-                            .range(0. ..=100.)
-                            .prefix("Altura dos olhos (m) "),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut rig.crouched_eye_height)
-                            .speed(0.01)
-                            .range(0. ..=100.)
-                            .prefix("Olhos agachado (m) "),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut rig.posture_smoothing)
-                            .speed(0.01)
-                            .range(0. ..=2.)
-                            .prefix("Transição de postura (s) "),
+                if rig.mode != CameraMode::Fixed {
+                    crate::widgets::hint(ui, "Durante o jogo, a pose é controlada pelo alvo.");
+                }
+                sub_section(ui, "camera_basic", "Básico", |ui| {
+                    let mode = match rig.mode {
+                        CameraMode::FirstPerson => "Primeira pessoa",
+                        CameraMode::ThirdPerson => "Terceira pessoa",
+                        CameraMode::Fixed => "Câmera fixa",
+                    };
+                    combo_row(ui, "Modo", "", "camera_mode", mode, |ui| {
+                        ui.selectable_value(
+                            &mut rig.mode,
+                            CameraMode::FirstPerson,
+                            "Primeira pessoa",
+                        );
+                        ui.selectable_value(
+                            &mut rig.mode,
+                            CameraMode::ThirdPerson,
+                            "Terceira pessoa",
+                        );
+                        ui.selectable_value(&mut rig.mode, CameraMode::Fixed, "Câmera fixa");
+                    });
+                    let target = rig
+                        .target
+                        .as_ref()
+                        .and_then(|id| {
+                            targets
+                                .iter()
+                                .find(|(t, _)| t == id)
+                                .map(|(_, name)| name.as_str())
+                        })
+                        .unwrap_or("Escolha o personagem");
+                    combo_row(
+                        ui,
+                        "Alvo",
+                        "Objeto acompanhado por esta câmera. O vínculo independe do parentesco na Hierarquia.",
+                        "rig_target",
+                        target,
+                        |ui| {
+                            ui.selectable_value(&mut rig.target, None, "Sem alvo");
+                            for (id, name) in &targets {
+                                ui.selectable_value(&mut rig.target, Some(id.clone()), name);
+                            }
+                        },
                     );
                 });
-                ui.collapsing("Olhar",|ui|{
-            ui.add(egui::DragValue::new(&mut rig.sensitivity).speed(0.005).range(0.001..=10.).prefix("Sensibilidade ")).on_hover_text("Graus por unidade relativa do mouse. Não depende da taxa de quadros nem da escala da interface.");
-            ui.checkbox(&mut rig.invert_x,"Inverter olhar horizontal");ui.checkbox(&mut rig.invert_y,"Inverter olhar vertical");
-            ui.add(egui::Slider::new(&mut rig.pitch_limit,1. ..=89.).text("Limite vertical (°)"));
-            });
-                ui.collapsing("Terceira pessoa",|ui|{
-                ui.add(egui::DragValue::new(&mut rig.min_distance).speed(0.05).range(0. ..=rig.distance).prefix("Distância mínima (m) "));
-                ui.add(egui::DragValue::new(&mut rig.max_distance).speed(0.05).range(rig.distance..=1000.).prefix("Distância máxima (m) "));
-                ui.add(egui::DragValue::new(&mut rig.distance).speed(0.05).range(rig.min_distance..=rig.max_distance).prefix("Distância desejada (m) ")).on_hover_text("A câmera recolhe diante de paredes. A roda ajusta a distância quando não está vinculada a uma ação do jogo.");
-                ui.add(egui::DragValue::new(&mut rig.shoulder).speed(0.02).range(-10. ..=10.).prefix("Deslocamento do ombro (m) "));
-                ui.add(egui::DragValue::new(&mut rig.follow_height).speed(0.02).range(0. ..=100.).prefix("Altura acompanhada (m) "));
-                ui.add(egui::DragValue::new(&mut rig.zoom_step).speed(0.05).range(0. ..=10.).prefix("Zoom por passo da roda (m) "));
-                for(value,label) in [(&mut rig.position_smoothing,"Suavização da posição (s) "),(&mut rig.rotation_smoothing,"Suavização da rotação (s) "),(&mut rig.obstruction_return,"Retorno após obstáculo (s) "),(&mut rig.transition_seconds,"Troca de modo (s) ")] {
-                    ui.add(egui::DragValue::new(value).speed(0.01).range(0. ..=5.).prefix(label)).on_hover_text("Zero aplica imediatamente. A proteção contra obstáculos tem prioridade sobre a suavização.");
-                }
-                for(label,action) in [("Trocar ombro",&mut rig.shoulder_action),("Alternar modo",&mut rig.mode_action)] {
-                    egui::ComboBox::from_id_salt(("camera_action",label)).selected_text(format!("{label}: {}",oxy_core::input_actions::label(&self.state.project,action))).show_ui(ui,|ui|{for id in self.state.project.input_bindings.keys(){ui.selectable_value(action,id.clone(),oxy_core::input_actions::label(&self.state.project,id));}});
-                }
-            });
-                ui.collapsing("Proteção contra obstáculos",|ui|{
-                ui.add(egui::DragValue::new(&mut rig.collision_radius).speed(0.01).range(rig.collision_margin.max(0.01)+0.001..=5.).prefix("Raio mínimo (m) "));
-                ui.add(egui::DragValue::new(&mut rig.collision_margin).speed(0.001).range(0.001..=rig.collision_radius-0.001).prefix("Folga de proteção (m) "));
-                ui.small("O volume também protege os cantos próximos da imagem, conforme o campo de visão e a janela. Colisores podem permitir ou impedir a câmera.");
-            });
-                ui.checkbox(
-                    &mut rig.hide_first_person_only,
-                    "Ocultar as peças abaixo apenas em primeira pessoa",
+                sub_section(ui, "camera_first", "Primeira pessoa", |ui| {
+                    number_row(
+                        ui,
+                        "Olhos",
+                        "Altura dos olhos.",
+                        &mut rig.eye_height,
+                        0. ..=100.,
+                        0.01,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Olhos agachado",
+                        "",
+                        &mut rig.crouched_eye_height,
+                        0. ..=100.,
+                        0.01,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Transição",
+                        "Tempo da troca de postura.",
+                        &mut rig.posture_smoothing,
+                        0. ..=2.,
+                        0.01,
+                        " s",
+                    );
+                });
+                sub_section(ui, "camera_look", "Olhar", |ui| {
+                    number_row(
+                        ui,
+                        "Sensibilidade",
+                        "Graus por unidade relativa do mouse. Não depende da taxa de quadros nem da escala da interface.",
+                        &mut rig.sensitivity,
+                        0.001..=10.,
+                        0.005,
+                        "",
+                    );
+                    toggle_row(
+                        ui,
+                        "Inverter X",
+                        "Inverte o olhar horizontal.",
+                        &mut rig.invert_x,
+                    );
+                    toggle_row(
+                        ui,
+                        "Inverter Y",
+                        "Inverte o olhar vertical.",
+                        &mut rig.invert_y,
+                    );
+                    number_row(
+                        ui,
+                        "Limite vertical",
+                        "",
+                        &mut rig.pitch_limit,
+                        1. ..=89.,
+                        0.5,
+                        "°",
+                    );
+                });
+                sub_section(ui, "camera_third", "Terceira pessoa", |ui| {
+                    let (min, max) = (rig.min_distance, rig.max_distance);
+                    number_row(
+                        ui,
+                        "Distância",
+                        "A câmera recolhe diante de paredes. A roda ajusta a distância quando não está vinculada a uma ação do jogo.",
+                        &mut rig.distance,
+                        min..=max,
+                        0.05,
+                        " m",
+                    );
+                    let distance = rig.distance;
+                    number_row(
+                        ui,
+                        "Mínima",
+                        "",
+                        &mut rig.min_distance,
+                        0. ..=distance,
+                        0.05,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Máxima",
+                        "",
+                        &mut rig.max_distance,
+                        distance..=1000.,
+                        0.05,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Ombro",
+                        "Deslocamento lateral do ombro.",
+                        &mut rig.shoulder,
+                        -10. ..=10.,
+                        0.02,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Altura",
+                        "Altura acompanhada.",
+                        &mut rig.follow_height,
+                        0. ..=100.,
+                        0.02,
+                        " m",
+                    );
+                    number_row(
+                        ui,
+                        "Zoom por passo",
+                        "Ajuste da roda do mouse.",
+                        &mut rig.zoom_step,
+                        0. ..=10.,
+                        0.05,
+                        " m",
+                    );
+                    let hint = "Zero aplica imediatamente. A proteção contra obstáculos tem prioridade sobre a suavização.";
+                    number_row(
+                        ui,
+                        "Suavizar posição",
+                        hint,
+                        &mut rig.position_smoothing,
+                        0. ..=5.,
+                        0.01,
+                        " s",
+                    );
+                    number_row(
+                        ui,
+                        "Suavizar rotação",
+                        hint,
+                        &mut rig.rotation_smoothing,
+                        0. ..=5.,
+                        0.01,
+                        " s",
+                    );
+                    number_row(
+                        ui,
+                        "Retorno",
+                        "Retorno após obstáculo.",
+                        &mut rig.obstruction_return,
+                        0. ..=5.,
+                        0.01,
+                        " s",
+                    );
+                    number_row(
+                        ui,
+                        "Troca de modo",
+                        "",
+                        &mut rig.transition_seconds,
+                        0. ..=5.,
+                        0.01,
+                        " s",
+                    );
+                    action_row(
+                        ui,
+                        &self.state.project,
+                        "Trocar ombro",
+                        "camera_shoulder_action",
+                        &mut rig.shoulder_action,
+                    );
+                    action_row(
+                        ui,
+                        &self.state.project,
+                        "Alternar modo",
+                        "camera_mode_action",
+                        &mut rig.mode_action,
+                    );
+                });
+                sub_section(
+                    ui,
+                    "camera_protection",
+                    "Proteção contra obstáculos",
+                    |ui| {
+                        let margin = rig.collision_margin;
+                        number_row(
+                            ui,
+                            "Raio mínimo",
+                            "",
+                            &mut rig.collision_radius,
+                            margin.max(0.01) + 0.001..=5.,
+                            0.01,
+                            " m",
+                        );
+                        let radius = rig.collision_radius;
+                        number_row(
+                            ui,
+                            "Folga",
+                            "Folga de proteção.",
+                            &mut rig.collision_margin,
+                            0.001..=radius - 0.001,
+                            0.001,
+                            " m",
+                        );
+                        crate::widgets::hint(
+                            ui,
+                            "O volume também protege os cantos próximos da imagem. Colisores podem permitir ou impedir a câmera.",
+                        );
+                    },
                 );
-                ui.collapsing("Ocultar peças nesta câmera", |ui| {
+                sub_section(ui, "camera_hidden", "Ocultar peças nesta câmera", |ui| {
+                    toggle_row(
+                        ui,
+                        "Só em 1ª pessoa",
+                        "Oculta as peças abaixo apenas em primeira pessoa.",
+                        &mut rig.hide_first_person_only,
+                    );
                     for (id, name) in &targets {
                         let mut hidden = rig.hidden.contains(id);
                         if ui.checkbox(&mut hidden, name).changed() {
@@ -586,9 +1349,13 @@ impl Editor {
                         }
                     }
                 });
-                ui.small("Jogar/Retomar captura o mouse. Esc ou abrir a Lógica libera a entrada.");
+                crate::widgets::hint(
+                    ui,
+                    "Jogar/Retomar captura o mouse. Esc ou abrir a Lógica libera a entrada.",
+                );
             },
         );
+        drop(menu);
         if remove {
             entity.camera_rig = None;
         }

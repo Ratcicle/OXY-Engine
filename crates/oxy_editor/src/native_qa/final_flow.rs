@@ -464,7 +464,8 @@ fn native_final_creation_workflow() {
                 Action::Click("+ Adicionar componente"),
                 Action::Click("Colisor 3D"),
                 Action::Click("Colisor 3D"),
-                Action::Click("Gerar colisor convexo"),
+                Action::Click("Caixa"),
+                Action::Click("Convexo da peça"),
                 Action::Check("f7_spatial_base"),
                 Action::Key(Key::P, false),
                 Action::SpatialDrag {

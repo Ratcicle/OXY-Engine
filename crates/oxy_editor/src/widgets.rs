@@ -277,7 +277,11 @@ pub fn card<R>(
                 };
                 let mut clicked = icons::small(ui, chevron, &toggle_label, 20.).clicked();
                 clicked |= ui
-                    .add(egui::Label::new(RichText::new(title).strong()).sense(Sense::click()))
+                    .add(
+                        egui::Label::new(RichText::new(title).strong())
+                            .selectable(false)
+                            .sense(Sense::click()),
+                    )
                     .clicked();
                 if clicked {
                     state.set_open(!open);
@@ -327,21 +331,21 @@ pub fn property_row<R>(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&m
     .inner
 }
 
-/// X/Y/Z fields in one row, each marked with its axis colour.
-pub fn vec3_row(
+/// X/Y/Z fields in one row, each marked with its axis colour. Returns the field responses.
+pub fn vec3_fields(
     ui: &mut Ui,
     label: &str,
     hint: &str,
     values: &mut [f32; 3],
     speed: f64,
     nonzero: bool,
-) -> bool {
+) -> [Response; 3] {
     property_row(ui, label, hint, |ui| {
         let gap = 4.;
         ui.spacing_mut().item_spacing.x = gap;
-        let width = ((ui.available_width() - 2. * gap) / 3.).max(36.);
-        let mut changed = false;
-        for (axis, value) in values.iter_mut().enumerate() {
+        // Never wider than the column: a wider row would grow the side panel.
+        let width = ((ui.available_width() - 2. * gap) / 3.).max(12.);
+        let mut field = |axis: usize, value: &mut f32| {
             let response = ui.add_sized(
                 [width, theme::CONTROL_HEIGHT],
                 egui::DragValue::new(value)
@@ -354,13 +358,144 @@ pub fn vec3_row(
                 Vec2::new(2., response.rect.height()),
             );
             ui.painter().rect_filled(strip, 1., theme::AXES[axis]);
-            changed |= response.changed();
             if nonzero && value.abs() < 0.0001 {
                 *value = 0.0001;
             }
-        }
-        changed
+            response
+        };
+        let [x, y, z] = values;
+        [field(0, x), field(1, y), field(2, z)]
     })
+}
+
+/// X/Y/Z fields in one row. Returns whether any value changed.
+pub fn vec3_row(
+    ui: &mut Ui,
+    label: &str,
+    hint: &str,
+    values: &mut [f32; 3],
+    speed: f64,
+    nonzero: bool,
+) -> bool {
+    vec3_fields(ui, label, hint, values, speed, nonzero)
+        .iter()
+        .any(Response::changed)
+}
+
+/// Number field filling the field column, with the unit after the value.
+pub fn number_row<N: egui::emath::Numeric>(
+    ui: &mut Ui,
+    label: &str,
+    hint: &str,
+    value: &mut N,
+    range: std::ops::RangeInclusive<N>,
+    speed: f64,
+    unit: &str,
+) -> Response {
+    property_row(ui, label, hint, |ui| {
+        ui.add_sized(
+            [ui.available_width(), theme::CONTROL_HEIGHT],
+            egui::DragValue::new(value)
+                .range(range)
+                .speed(speed)
+                .suffix(unit),
+        )
+    })
+}
+
+/// On/off setting with its switch in the field column.
+pub fn toggle_row(ui: &mut Ui, label: &str, hint: &str, value: &mut bool) -> Response {
+    property_row(ui, label, hint, |ui| toggle(ui, value, label))
+}
+
+/// Drop-down filling the field column.
+pub fn combo_row<R>(
+    ui: &mut Ui,
+    label: &str,
+    hint: &str,
+    id_salt: impl Hash,
+    selected: &str,
+    options: impl FnOnce(&mut Ui) -> R,
+) {
+    property_row(ui, label, hint, |ui| {
+        combo(ui, id_salt, selected, ui.available_width(), options)
+    });
+}
+
+/// Drop-down whose whole button, arrow included, is `width` wide.
+pub fn combo<R>(
+    ui: &mut Ui,
+    id_salt: impl Hash,
+    selected: &str,
+    width: f32,
+    options: impl FnOnce(&mut Ui) -> R,
+) {
+    egui::ComboBox::from_id_salt(id_salt)
+        .width(combo_inner_width(ui, width))
+        .selected_text(selected)
+        .truncate()
+        .show_ui(ui, options);
+}
+
+/// Inner width for a ComboBox whose button, arrow included, spans `outer` points.
+pub fn combo_inner_width(ui: &Ui, outer: f32) -> f32 {
+    let padding = 2. * ui.spacing().button_padding.x + ui.spacing().icon_width + 4.;
+    (outer - padding).max(24.)
+}
+
+/// Collapsible group inside a card, closed until opened; remembered per `id_salt`.
+pub fn sub_section(ui: &mut Ui, id_salt: impl Hash, title: &str, body: impl FnOnce(&mut Ui)) {
+    let id = ui.make_persistent_id(id_salt);
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let open = state.is_open();
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title)
+    });
+    let color = if response.hovered() {
+        theme::TEXT
+    } else {
+        theme::TEXT_MUTED
+    };
+    icons::paint(
+        ui,
+        Rect::from_center_size(
+            egui::pos2(rect.left() + 8., rect.center().y),
+            Vec2::splat(12.),
+        ),
+        if open {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        },
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 20., rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        egui::FontId::proportional(12.5),
+        color,
+    );
+    if response.clicked() {
+        state.set_open(!open);
+    }
+    if state.is_open() {
+        egui::Frame::new()
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 0,
+                top: 0,
+                bottom: 4,
+            })
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                body(ui)
+            });
+    }
+    state.store(ui.ctx());
 }
 
 /// Muted explanatory text for empty states and short hints.
