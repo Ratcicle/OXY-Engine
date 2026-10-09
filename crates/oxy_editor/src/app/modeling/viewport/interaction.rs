@@ -45,7 +45,7 @@ impl Editor {
                     egui::Align2::CENTER_CENTER,
                     error,
                     egui::FontId::proportional(14.),
-                    Color32::LIGHT_GRAY,
+                    crate::theme::TEXT,
                 );
                 return true;
             }
@@ -250,8 +250,8 @@ impl Editor {
             painter.rect(
                 bounds,
                 0.,
-                Color32::from_rgba_unmultiplied(82, 177, 185, 25),
-                egui::Stroke::new(1., Color32::from_rgb(112, 209, 207)),
+                crate::theme::ACCENT_FILL,
+                egui::Stroke::new(1., crate::theme::ACCENT_BRIGHT),
                 egui::StrokeKind::Inside,
             );
             if gesture.through {
@@ -260,7 +260,7 @@ impl Editor {
                     egui::Align2::LEFT_BOTTOM,
                     "Seleção através",
                     egui::FontId::proportional(12.),
-                    Color32::from_rgb(112, 209, 207),
+                    crate::theme::ACCENT_BRIGHT,
                 );
             }
             if ui.input(|i| i.pointer.primary_down()) {

@@ -113,7 +113,7 @@ impl Editor {
                                 ui.painter().rect_stroke(
                                     card.response.rect,
                                     3.,
-                                    egui::Stroke::new(2., Color32::GOLD),
+                                    egui::Stroke::new(2., crate::theme::HIGHLIGHT),
                                     egui::StrokeKind::Inside,
                                 );
                                 self.locate_asset = None;

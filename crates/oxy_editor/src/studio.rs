@@ -72,12 +72,12 @@ impl Editor {
         let previous = self.studio.tab;
         // Decide once from the whole Studio area, before its tabs consume horizontal space.
         // The same decision drives the context menu and the animation properties panel.
-        let context_row_height =
-            30.0_f32.max(ui.spacing().interact_size.y) + ui.spacing().item_spacing.y;
+        let context_row_height = crate::theme::CONTROL_HEIGHT.max(ui.spacing().interact_size.y)
+            + ui.spacing().item_spacing.y;
         let compact_animation =
             ui.available_width() < 850. || ui.available_height() - context_row_height < 450.;
         ui.horizontal(|ui| {
-            ui.set_min_height(30.);
+            ui.set_min_height(crate::theme::CONTROL_HEIGHT);
             ui.add_enabled_ui(!self.mesh_operation_active(),|ui| {
                 if ui.available_width()<310. {
                     let label=match self.studio.tab {StudioTab::Model=>"Modelagem",StudioTab::Paint=>"Pintura",StudioTab::Animation=>"Animação"};
@@ -101,7 +101,7 @@ impl Editor {
             if ui.available_width()>72.
                 && let Some(id)=if self.studio.tab==StudioTab::Animation {self.studio.owner.as_ref().or(self.selected.as_ref())} else {self.selected.as_ref().or(self.studio.owner.as_ref())}
                 && let Some(entity)=self.scene().entity(id) {
-                ui.add_sized([ui.available_width(),30.],egui::Label::new(&entity.name).truncate()).on_hover_text(format!("Peça em edição: {}",entity.name));
+                ui.add_sized([ui.available_width(),crate::theme::CONTROL_HEIGHT],egui::Label::new(&entity.name).truncate()).on_hover_text(format!("Peça em edição: {}",entity.name));
             }
         });
         if previous != self.studio.tab {

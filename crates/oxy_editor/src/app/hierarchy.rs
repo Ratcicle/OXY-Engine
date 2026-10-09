@@ -338,9 +338,9 @@ impl Editor {
             let mut validation = self.scene().clone();
             let result = editing::reparent_selection(&mut validation, &ids, parent.clone());
             let color = if result.is_ok() {
-                Color32::from_rgb(123, 224, 202)
+                crate::theme::SUCCESS
             } else {
-                Color32::from_rgb(238, 113, 113)
+                crate::theme::ERROR
             };
             ui.painter().rect_stroke(
                 response.rect,

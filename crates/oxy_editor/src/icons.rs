@@ -1,4 +1,5 @@
 //! Small vector pictograms: no platform glyphs, emoji or texture assets.
+use crate::theme;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 #[cfg(test)]
 static QA_CONTROLS_ENABLED: std::sync::atomic::AtomicBool =
@@ -36,18 +37,18 @@ pub enum Icon {
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
-        40. + ui
+        34. + ui
             .fonts_mut(|f| {
                 f.layout_no_wrap(
                     label.into(),
-                    egui::FontId::proportional(13.),
+                    egui::FontId::proportional(theme::LABEL_SIZE),
                     Color32::WHITE,
                 )
             })
             .size()
             .x
     } else {
-        32.
+        theme::CONTROL_HEIGHT + 2.
     }
 }
 pub fn menu_button(
@@ -87,7 +88,8 @@ pub fn button(
     names: bool,
 ) -> Response {
     let width = width(ui, label, names);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 30.), Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::click());
     #[cfg(test)]
     if QA_CONTROLS_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
         let frame = ui.ctx().cumulative_frame_nr();
@@ -113,22 +115,22 @@ pub fn button(
     let visuals = ui.style().interact_selectable(&response, selected);
     ui.painter().rect(
         rect,
-        4.,
+        3.,
         visuals.bg_fill,
         visuals.bg_stroke,
         egui::StrokeKind::Inside,
     );
     let r = Rect::from_center_size(
-        Pos2::new(rect.left() + 16., rect.center().y),
-        Vec2::splat(20.),
+        Pos2::new(rect.left() + 13., rect.center().y),
+        Vec2::splat(theme::ICON_SIZE),
     );
     draw(ui, r, icon, visuals.fg_stroke.color);
     if names {
         ui.painter().text(
-            Pos2::new(rect.left() + 31., rect.center().y),
+            Pos2::new(rect.left() + 26., rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            egui::FontId::proportional(13.),
+            egui::FontId::proportional(theme::LABEL_SIZE),
             visuals.fg_stroke.color,
         );
     }
@@ -450,10 +452,10 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 line(points[a], points[b]);
             }
             if matches!(icon, Icon::Edge) {
-                p.line_segment([points[1], points[2]], Stroke::new(3., Color32::GOLD));
+                p.line_segment([points[1], points[2]], Stroke::new(2.5, theme::HIGHLIGHT));
             }
             if matches!(icon, Icon::Vertex) {
-                p.circle_filled(points[1], 3.2, Color32::GOLD);
+                p.circle_filled(points[1], 2.6, theme::HIGHLIGHT);
             }
         }
         Icon::Move => {

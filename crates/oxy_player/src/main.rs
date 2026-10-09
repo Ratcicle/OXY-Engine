@@ -51,7 +51,7 @@ struct Player {
 }
 impl Player {
     fn new(cc: &eframe::CreationContext<'_>, path: PathBuf) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        oxy_render::theme::apply(&cc.egui_ctx);
         let path = if path.is_dir() {
             path.join(persistence::PROJECT_FILE)
         } else {

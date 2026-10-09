@@ -13,7 +13,7 @@ impl Editor {
     }
     pub(crate) fn texture_thumbnail(&mut self, ui: &mut egui::Ui, id: &str) {
         if !self.ensure_texture(id) {
-            ui.colored_label(Color32::LIGHT_RED, "Não foi possível abrir a textura.");
+            ui.colored_label(crate::theme::ERROR, "Não foi possível abrir a textura.");
             return;
         }
         if self.thumbnail.as_ref().is_none_or(|(key, _)| key != id)
@@ -111,7 +111,7 @@ impl Editor {
         egui::Window::new("Excluir recurso do projeto").collapsible(false).resizable(true).show(ctx,|ui| {
             ui.strong(&asset.name);
             if !references.is_empty() {
-                ui.colored_label(Color32::LIGHT_RED,"Este recurso ainda está em uso. Remova os vínculos antes de excluí-lo.");
+                ui.colored_label(crate::theme::ERROR,"Este recurso ainda está em uso. Remova os vínculos antes de excluí-lo.");
                 egui::ScrollArea::vertical().max_height(240.).show(ui,|ui| { for reference in &references { ui.label(reference); } });
             } else {
                 ui.label("O recurso será retirado da biblioteca. O arquivo original no disco é preservado para permitir desfazer com segurança.");

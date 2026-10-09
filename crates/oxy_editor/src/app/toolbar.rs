@@ -31,7 +31,7 @@ impl Editor {
             ui.painter().circle_filled(
                 response.response.rect.right_top() + Vec2::new(-3., 3.),
                 3.,
-                Color32::LIGHT_YELLOW,
+                crate::theme::WARNING,
             );
         }
     }
@@ -45,14 +45,14 @@ impl Editor {
                     ui.label(
                         egui::RichText::new(concat!("OXY\n", env!("OXY_APP_VERSION")))
                             .strong()
-                            .color(Color32::from_rgb(131, 224, 207)),
+                            .color(crate::theme::ACCENT_BRIGHT),
                     );
                 } else {
                     ui.label(
                         egui::RichText::new("OXY")
                             .size(26.)
                             .strong()
-                            .color(Color32::from_rgb(131, 224, 207)),
+                            .color(crate::theme::ACCENT_BRIGHT),
                     );
                     ui.label(
                         egui::RichText::new(concat!("ENGINE\n", env!("OXY_APP_VERSION")))
@@ -149,12 +149,12 @@ impl Editor {
                     let (rect, response) =
                         ui.allocate_exact_size(Vec2::splat(14.), egui::Sense::hover());
                     if dirty {
-                        ui.painter().circle_filled(rect.center(), 4., Color32::GOLD);
+                        ui.painter().circle_filled(rect.center(), 4., crate::theme::HIGHLIGHT);
                     } else {
                         ui.painter().circle_stroke(
                             rect.center(),
                             4.,
-                            egui::Stroke::new(1.5, Color32::from_rgb(131, 224, 207)),
+                            egui::Stroke::new(1.5, crate::theme::ACCENT_BRIGHT),
                         );
                     }
                     response.widget_info(|| {

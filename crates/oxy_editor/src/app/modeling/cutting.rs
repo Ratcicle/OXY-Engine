@@ -107,14 +107,14 @@ impl Editor {
                 local(&source, segment.to)
                     .and_then(|p| project(&self.camera, rect, world.transform_point3(p))),
             ) {
-                painter.line_segment([a, b], egui::Stroke::new(2.5, Color32::GOLD));
+                painter.line_segment([a, b], egui::Stroke::new(2.5, crate::theme::HIGHLIGHT));
             }
         }
         for p in [anchor, hovered].into_iter().flatten() {
             if let Some(screen) = local(&source, p)
                 .and_then(|p| project(&self.camera, rect, world.transform_point3(p)))
             {
-                painter.circle_filled(screen, 5., Color32::from_rgb(112, 239, 213));
+                painter.circle_filled(screen, 5., crate::theme::ACCENT_BRIGHT);
             }
         }
         if let (Some(a), Some(b)) = (anchor, hovered)
@@ -256,7 +256,7 @@ impl Editor {
         }
         if let Some((_, factor, a, b)) = hit {
             let painter = ui.painter_at(rect);
-            painter.line_segment([a, b], egui::Stroke::new(2., Color32::GOLD));
+            painter.line_segment([a, b], egui::Stroke::new(2., crate::theme::HIGHLIGHT));
             painter.circle_filled(a.lerp(b, factor), 5., Color32::WHITE);
         }
         let press = response.contains_pointer()

@@ -80,8 +80,8 @@ impl Editor {
                 egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-100.).max(120.)).show(ui,|ui|{
                     primitive_values(ui,&mut creation.candidate);
                     let remapping=creation.original.as_ref().is_some_and(|old|old.material.texture.is_some() && (old.segments!=creation.candidate.segments || primitives::Parameters::for_entity(old)!=primitives::Parameters::for_entity(&creation.candidate)));
-                    if remapping {ui.colored_label(Color32::LIGHT_YELLOW,"A nova topologia pode mudar onde a pintura aparece. Os pixels do PNG serão preservados.");ui.checkbox(&mut creation.allow_mapping,"Aceitar mudança do mapeamento");}
-                    if let Some(error)=&creation.error{ui.colored_label(Color32::LIGHT_YELLOW,error);}
+                    if remapping {ui.colored_label(crate::theme::WARNING,"A nova topologia pode mudar onde a pintura aparece. Os pixels do PNG serão preservados.");ui.checkbox(&mut creation.allow_mapping,"Aceitar mudança do mapeamento");}
+                    if let Some(error)=&creation.error{ui.colored_label(crate::theme::WARNING,error);}
                     ui.horizontal_wrapped(|ui|{confirm=ui.add_enabled(creation.error.is_none()&&(!remapping||creation.allow_mapping),egui::Button::new("Confirmar forma (Enter)")).clicked();cancel=ui.button("Cancelar forma (Esc)").clicked();frame=ui.button("Enquadrar prévia").clicked();});
                     ui.small("Clique fora confirma a forma válida; Esc cancela.");
                 });

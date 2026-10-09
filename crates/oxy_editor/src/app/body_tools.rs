@@ -136,9 +136,9 @@ impl Editor {
                 continue;
             };
             let color = [
-                Color32::LIGHT_RED,
-                Color32::LIGHT_GREEN,
-                Color32::LIGHT_BLUE,
+                crate::theme::AXIS_X,
+                crate::theme::AXIS_Y,
+                crate::theme::AXIS_Z,
             ][i];
             painter.line_segment([origin, end], egui::Stroke::new(4., Color32::BLACK));
             painter.line_segment([origin, end], egui::Stroke::new(2., color));

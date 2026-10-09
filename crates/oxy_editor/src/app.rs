@@ -184,19 +184,7 @@ impl Editor {
         self.console
     }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut style = (*cc.egui_ctx.style()).clone();
-        style.visuals = egui::Visuals::dark();
-        style.visuals.panel_fill = Color32::from_rgb(26, 30, 37);
-        style.visuals.window_fill = Color32::from_rgb(31, 36, 43);
-        style.visuals.extreme_bg_color = Color32::from_rgb(18, 22, 28);
-        style.visuals.selection.bg_fill = Color32::from_rgb(43, 103, 100);
-        style.visuals.selection.stroke = egui::Stroke::new(1., Color32::from_rgb(140, 229, 214));
-        style.spacing.item_spacing = Vec2::new(8., 7.);
-        style.spacing.button_padding = Vec2::new(10., 6.);
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(14.));
-        cc.egui_ctx.set_style(style);
+        crate::theme::apply(&cc.egui_ctx);
         let rs = cc
             .wgpu_render_state
             .clone()

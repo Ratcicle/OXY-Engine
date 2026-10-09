@@ -9,6 +9,7 @@ pub mod input;
 pub mod labels;
 pub mod mesh;
 pub mod mesh_selection;
+pub mod theme;
 pub use camera::CameraState;
 pub use game_ui::GameUi;
 pub use game_ui::pick_ui;
@@ -571,9 +572,9 @@ impl Renderer {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.048,
-                        g: 0.058,
-                        b: 0.074,
+                        r: 0.068,
+                        g: 0.068,
+                        b: 0.072,
                         a: 1.,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -1145,7 +1146,7 @@ fn grid_lines(vertices: &mut Vec<Vertex>, camera: &CameraState, kind: SceneKind)
     let extent = step * 40.;
     for index in -40..=40 {
         let offset = index as f32 * step;
-        let color = [0.115, 0.135, 0.16, 1.];
+        let color = [0.135, 0.135, 0.145, 1.];
         if kind == SceneKind::TwoD {
             line(
                 vertices,

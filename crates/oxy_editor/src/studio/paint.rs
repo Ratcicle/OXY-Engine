@@ -313,7 +313,7 @@ impl Editor {
             PaintTool::Select => (Icon::PaintSelect, "Selecionar faces"),
         };
         ui.horizontal(|ui| {
-            ui.set_min_height(30.);
+            ui.set_min_height(crate::theme::CONTROL_HEIGHT);
             let minimum=icons::width(ui,"Pincel",names)+icons::width(ui,"Textura",names)+icons::width(ui,"Visualização",names)+132.;
             if ui.available_width()<minimum {
                 icons::menu_button(ui,active_icon,"Pintar",&format!("Ferramenta: {active_label}. Raio do pincel: {} px. Abra para escolher ferramenta, textura e visualização.",self.studio.radius),names,|ui| {
@@ -358,7 +358,7 @@ impl Editor {
         };
         let uses = self.texture_uses(&id);
         if uses > 1 && self.studio.shared_edit.as_ref() != Some(&id) {
-            ui.group(|ui|{ui.colored_label(Color32::from_rgb(232,190,113),format!("Esta textura está vinculada a {uses} peças ou imagens. A pintura afetará todas essas referências."));ui.horizontal(|ui|{if ui.button("Criar cópia independente").clicked(){self.copy_texture(&id)}
+            ui.group(|ui|{ui.colored_label(crate::theme::WARNING,format!("Esta textura está vinculada a {uses} peças ou imagens. A pintura afetará todas essas referências."));ui.horizontal(|ui|{if ui.button("Criar cópia independente").clicked(){self.copy_texture(&id)}
 if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=Some(id.clone());}});});
         }
         let width = (ui.available_width() * if compact { 0.35 } else { 0.48 }).max(100.);
@@ -476,7 +476,7 @@ if ui.button("Editar textura compartilhada").clicked(){self.studio.shared_edit=S
                     }
                 } else {
                     ui.colored_label(
-                        Color32::LIGHT_RED,
+                        crate::theme::ERROR,
                         "Não foi possível carregar os pixels desta textura.",
                     );
                 }

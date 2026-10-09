@@ -129,9 +129,9 @@ impl Editor {
                 Color32::WHITE
             } else {
                 [
-                    Color32::LIGHT_RED,
-                    Color32::LIGHT_GREEN,
-                    Color32::LIGHT_BLUE,
+                    crate::theme::AXIS_X,
+                    crate::theme::AXIS_Y,
+                    crate::theme::AXIS_Z,
                 ][axis]
             };
             ui.painter_at(rect)

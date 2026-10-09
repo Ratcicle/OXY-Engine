@@ -240,7 +240,7 @@ impl GraphView {
             }
         });
         if !self.error.is_empty() {
-            ui.colored_label(Color32::from_rgb(225, 181, 113), &self.error);
+            ui.colored_label(crate::theme::WARNING, &self.error);
         }
         ui.label("Arraste títulos e conecte portas. Botão central move a área. Clique na curva para selecionar; Delete exclui. Ctrl+D duplica o nó.");
         ui.separator();
@@ -323,7 +323,7 @@ impl GraphView {
                         }
                         ui.separator();
                         ui.small("Parâmetros são valores padrão. Uma entrada conectada recebe o valor do outro nó.");
-                    } else {ui.colored_label(Color32::LIGHT_RED,"Operação desconhecida");}
+                    } else {ui.colored_label(crate::theme::ERROR,"Operação desconhecida");}
                     if ui.button("Duplicar nó").clicked() { duplicate=true; }
                     if ui.button("Excluir nó").clicked() { delete=true; }
                 } else if let Some(edge) = &self.selected_edge {
@@ -349,7 +349,7 @@ impl GraphView {
                     Sense::click_and_drag(),
                 );
                 let painter = ui.painter_at(rect);
-                painter.rect_filled(rect, 0., Color32::from_rgb(20, 24, 31));
+                painter.rect_filled(rect, 0., crate::theme::BG_BASE);
                 if ui.input(|input| {
                     input.pointer.button_down(egui::PointerButton::Middle)
                         && input
@@ -379,7 +379,7 @@ impl GraphView {
                         painter.circle_filled(
                             Pos2::new(startx + x as f32 * step, starty + y as f32 * step),
                             0.8,
-                            Color32::from_gray(45),
+                            crate::theme::GRID,
                         );
                     }
                 }
@@ -445,7 +445,7 @@ impl GraphView {
                             Stroke::new(
                                 if hovered || selected { 3.5 } else { 2.0 },
                                 if selected {
-                                    Color32::GOLD
+                                    crate::theme::HIGHLIGHT
                                 } else {
                                     port_color(kind)
                                 },
@@ -481,24 +481,24 @@ impl GraphView {
                     let body = Rect::from_min_size(p, Vec2::new(205., height) * self.zoom);
                     let selected = self.selected.as_ref() == Some(&node.id);
                     let active = trace.contains(&node.id);
-                    painter.rect_filled(body, 5., Color32::from_rgb(38, 44, 54));
+                    painter.rect_filled(body, 5., crate::theme::BG_RAISED);
                     painter.rect_stroke(
                         body,
                         5.,
                         Stroke::new(
                             if selected { 2. } else { 1. },
                             if active {
-                                Color32::GOLD
+                                crate::theme::HIGHLIGHT
                             } else if selected {
-                                Color32::from_rgb(107, 203, 190)
+                                crate::theme::ACCENT_BRIGHT
                             } else {
-                                Color32::from_gray(77)
+                                crate::theme::BORDER
                             },
                         ),
                         egui::StrokeKind::Inside,
                     );
                     let title = Rect::from_min_size(p, Vec2::new(205., 32.) * self.zoom);
-                    painter.rect_filled(title, 4., Color32::from_rgb(47, 58, 69));
+                    painter.rect_filled(title, 4., crate::theme::BG_HEADER);
                     painter.text(
                         title.left_center() + Vec2::new(9., 0.),
                         egui::Align2::LEFT_CENTER,
@@ -541,7 +541,7 @@ impl GraphView {
                                 },
                                 port.label,
                                 egui::FontId::proportional(11. * self.zoom),
-                                Color32::LIGHT_GRAY,
+                                crate::theme::TEXT,
                             );
                             let resp = ui
                                 .interact(

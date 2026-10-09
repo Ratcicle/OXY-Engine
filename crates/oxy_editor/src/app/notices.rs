@@ -95,9 +95,9 @@ impl Editor {
                             ui.set_max_width((ctx.content_rect().width() - 40.).clamp(100., 360.));
                             ui.colored_label(
                                 if entry.persistent {
-                                    Color32::LIGHT_RED
+                                    crate::theme::ERROR
                                 } else {
-                                    Color32::LIGHT_YELLOW
+                                    crate::theme::WARNING
                                 },
                                 &entry.text,
                             );

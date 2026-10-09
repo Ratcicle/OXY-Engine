@@ -256,7 +256,7 @@ impl Editor {
                 ui.painter().rect_stroke(
                     outline,
                     0.,
-                    egui::Stroke::new(1.5, Color32::GOLD),
+                    egui::Stroke::new(1.5, crate::theme::HIGHLIGHT),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -296,9 +296,9 @@ impl Editor {
         };
         let origin = rect.min + Vec2::from(origin);
         for (axis, color) in [
-            (0, Color32::from_rgb(239, 113, 117)),
-            (1, Color32::from_rgb(127, 215, 153)),
-            (2, Color32::from_rgb(122, 169, 240)),
+            (0, crate::theme::AXIS_X),
+            (1, crate::theme::AXIS_Y),
+            (2, crate::theme::AXIS_Z),
             (3, Color32::WHITE),
         ] {
             let uniform = axis == 3;
@@ -509,7 +509,7 @@ impl Editor {
                 painter.rect_stroke(
                     oxy_render::game_ui::element_rect(element, rect),
                     0.,
-                    egui::Stroke::new(1.5, Color32::GOLD),
+                    egui::Stroke::new(1.5, crate::theme::HIGHLIGHT),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -543,10 +543,8 @@ impl Editor {
                     if i < j
                         && let (Some(a), Some(b)) = (points[i], points[j])
                     {
-                        painter.line_segment(
-                            [a, b],
-                            egui::Stroke::new(1., Color32::from_rgb(216, 184, 96)),
-                        );
+                        painter
+                            .line_segment([a, b], egui::Stroke::new(1., crate::theme::HIGHLIGHT));
                     }
                 }
             }

@@ -104,7 +104,7 @@ impl Editor {
                 let objects:Vec<_>=self.scene().entities.iter().map(|e|(e.id.clone(),e.name.clone())).collect();
                 let textures:Vec<_>=self.state.project.assets.iter().filter(|a|a.kind==AssetKind::Texture).map(|a|(a.id.clone(),a.name.clone())).collect();
                 ui.text_edit_singleline(&mut entity.name);
-                ui.label(egui::RichText::new("INSTÂNCIA NA CENA").small().color(Color32::from_rgb(128,203,192)));
+                ui.label(egui::RichText::new("INSTÂNCIA NA CENA").small().color(crate::theme::ACCENT_BRIGHT));
                 if entity.model_source.is_some(){ui.small("Cópia editável de um modelo").on_hover_text("Salvar como modelo cria um recurso independente na biblioteca.");}
                 ui.horizontal(|ui|{ui.checkbox(&mut entity.visible,"Visível").on_hover_text("Mostra ou oculta a aparência deste objeto e de seus filhos.");ui.label("Camada").on_hover_text("No 2D, valores maiores aparecem na frente de valores menores.");ui.add(egui::DragValue::new(&mut entity.layer));});
                 ui.collapsing("Transformação",|ui| {

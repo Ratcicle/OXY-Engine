@@ -33,7 +33,7 @@ impl Editor {
     pub(super) fn viewport_tools_row(&mut self, ui: &mut egui::Ui) {
         let names = self.preferences.tool_names;
         ui.horizontal(|ui| {
-            ui.set_min_height(30.);
+            ui.set_min_height(crate::theme::CONTROL_HEIGHT);
             let (icon, label) = self.active_tool();
             let menus_width = icons::width(ui, label, names)
                 + icons::width(ui, "Visualização", names)
