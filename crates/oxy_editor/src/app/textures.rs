@@ -93,7 +93,11 @@ impl Editor {
             if editing::asset_references(&self.state.project,&id).len()>1 && ui.button("Criar cópia independente").clicked() {
                 match self.copy_texture_asset(&id) { Ok(copy)=>next=Some(copy),Err(e)=>self.log(e) }
             }
-            if ui.button("Localizar na biblioteca").clicked() { self.asset_ui.locate=Some(id.clone());self.asset_ui.search.clear(); self.compact_panel=CompactPanel::Library; }
+            if ui.button("Localizar na biblioteca").clicked() {
+                // Filtering by name keeps the card in view without depending on scrolling.
+                self.asset_ui.search=self.state.project.asset(&id).map(|a|a.name.clone()).unwrap_or_default();
+                self.asset_ui.locate=Some(id.clone()); self.compact_panel=CompactPanel::Library;
+            }
         });
         if interface {
             if let Some(element) = &mut entity.ui {

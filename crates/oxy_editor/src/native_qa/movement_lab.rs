@@ -134,7 +134,7 @@ fn native_movement_scale_v030() {
         Box::new(move |cc| {
             let mut qa = NativeQa::new(cc, path, artifacts, shared);
             qa.actions = VecDeque::from([
-                Action::Click("▶ Jogar"),
+                Action::Click("Jogar"),
                 Action::Wait(30),
                 Action::Check("lab3d_scale_running"),
                 Action::HoldSeconds(Key::W, 1.5),
@@ -142,7 +142,7 @@ fn native_movement_scale_v030() {
                 Action::Screenshot("50-characters.png"),
                 Action::Key(Key::Escape, false),
                 Action::Click("Cena"),
-                Action::Click("■ Parar"),
+                Action::Click("Parar"),
                 Action::Idle,
                 Action::Key(Key::S, true),
                 Action::ReopenProject,
@@ -210,7 +210,7 @@ fn native_movement_lab_v030() {
                 Action::Click("Lógica"),
                 Action::Screenshot("movement-graph.png"),
                 Action::Click("Cena"),
-                Action::Click("▶ Jogar"),
+                Action::Click("Jogar"),
                 Action::Wait(20),
                 Action::Check("lab3d_running"),
                 Action::Screenshot("first-person-start.png"),
@@ -233,7 +233,7 @@ fn native_movement_lab_v030() {
                 Action::Key(Key::Escape, false),
                 Action::Click("Cena"),
                 Action::Check("lab3d_paused"),
-                Action::Click("■ Parar"),
+                Action::Click("Parar"),
                 Action::Check("lab3d_stopped"),
                 Action::Key(Key::S, true),
                 Action::ReopenProject,

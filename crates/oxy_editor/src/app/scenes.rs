@@ -26,14 +26,28 @@ impl Editor {
         self.pause();
         self.new_project = Some(NewProject::default());
     }
+    /// Scene picker at the top of the Hierarchy, with create and scene actions beside it.
     pub(super) fn scene_bar(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.ctx().content_rect().width() < 700.;
-        if !compact {
-            ui.label("Cena:");
-        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.;
+            let buttons = 2. * 26. + 2. * ui.spacing().item_spacing.x;
+            let combo_padding = 2. * ui.spacing().button_padding.x + ui.spacing().icon_width + 4.;
+            let width = (ui.available_width() - buttons - combo_padding).max(60.);
+            self.scene_picker(ui, width);
+            if crate::icons::small(ui, crate::icons::Icon::Plus, "Criar cena", 26.).clicked() {
+                self.scene_dialog = Some(SceneDialog::Create {
+                    name: "Nova cena".into(),
+                    kind: self.scene().kind,
+                });
+            }
+            let more = crate::icons::small(ui, crate::icons::Icon::More, "Ações da cena", 26.);
+            egui::Popup::menu(&more).show(|ui| self.scene_actions(ui));
+        });
+    }
+    fn scene_picker(&mut self, ui: &mut egui::Ui, width: f32) {
         let mut scene_id = self.scene_id.clone();
         egui::ComboBox::from_id_salt("scene")
-            .width(if compact { 105. } else { 150. })
+            .width(width)
             .selected_text(format!(
                 "{} · {}",
                 self.scene().name,
@@ -62,13 +76,9 @@ impl Editor {
         if scene_id != self.scene_id {
             self.set_scene(scene_id);
         }
-        if ui.button("+").on_hover_text("Criar cena").clicked() {
-            self.scene_dialog = Some(SceneDialog::Create {
-                name: "Nova cena".into(),
-                kind: self.scene().kind,
-            });
-        }
-        ui.menu_button("...", |ui| {
+    }
+    fn scene_actions(&mut self, ui: &mut egui::Ui) {
+        {
             if ui.button("Renomear cena").clicked() {
                 self.scene_dialog = Some(SceneDialog::Rename {
                     id: self.scene_id.clone(),
@@ -100,7 +110,7 @@ impl Editor {
                 self.state.project.start_scene = self.scene_id.clone();
                 ui.close();
             }
-        });
+        }
     }
     pub(super) fn project_dialogs(&mut self, ctx: &egui::Context) {
         if let Some(mut new) = self.new_project.take() {

@@ -34,6 +34,27 @@ pub enum Icon {
     TextureNew,
     Import,
     Export,
+    // Object kinds shown in the hierarchy and the inspector header.
+    Person,
+    Camera,
+    Group,
+    Cube,
+    Sphere,
+    Plane,
+    Sprite,
+    Interface,
+    Sound,
+    // Shell controls.
+    Play,
+    Pause,
+    Stop,
+    Undo,
+    Redo,
+    Eye,
+    EyeOff,
+    ChevronRight,
+    ChevronDown,
+    Plus,
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
@@ -90,20 +111,7 @@ pub fn button(
     let width = width(ui, label, names);
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::click());
-    #[cfg(test)]
-    if QA_CONTROLS_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
-        let frame = ui.ctx().cumulative_frame_nr();
-        ui.ctx().data_mut(|data| {
-            let controls = data.get_temp_mut_or_default::<(u64, Vec<(String, Rect)>)>(
-                egui::Id::new("oxy_native_icon_controls"),
-            );
-            if controls.0 != frame {
-                controls.0 = frame;
-                controls.1.clear();
-            }
-            controls.1.push((label.to_owned(), rect));
-        });
-    }
+    register_qa(ui, label, rect);
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::SelectableLabel,
@@ -135,6 +143,45 @@ pub fn button(
         );
     }
     response.on_hover_text(tooltip)
+}
+/// Records an unlabeled control under its accessible name, so native QA can click it
+/// by the same text a labelled button would show.
+pub(crate) fn register_qa(ui: &Ui, label: &str, rect: Rect) {
+    #[cfg(test)]
+    if QA_CONTROLS_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        let frame = ui.ctx().cumulative_frame_nr();
+        ui.ctx().data_mut(|data| {
+            let controls = data.get_temp_mut_or_default::<(u64, Vec<(String, Rect)>)>(
+                egui::Id::new("oxy_native_icon_controls"),
+            );
+            if controls.0 != frame {
+                controls.0 = frame;
+                controls.1.clear();
+            }
+            controls.1.push((label.to_owned(), rect));
+        });
+    }
+    #[cfg(not(test))]
+    let _ = (ui, label, rect);
+}
+/// Paints `icon` without interaction, for rows and headers that own their own response.
+pub fn paint(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
+    draw(ui, rect, icon, color);
+}
+/// Icon-only button of `size` points with an accessible name and tooltip.
+pub fn small(ui: &mut Ui, icon: Icon, label: &str, size: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    register_qa(ui, label, rect);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let visuals = ui.style().interact(&response);
+    if response.hovered() || response.has_focus() {
+        ui.painter().rect_filled(rect, 4., visuals.weak_bg_fill);
+    }
+    let inner = Rect::from_center_size(rect.center(), Vec2::splat((size - 8.).max(10.)));
+    draw(ui, inner, icon, visuals.fg_stroke.color);
+    response.on_hover_text(label)
 }
 /// Native QA uses the real response allocation, including unlabeled accessible icons.
 #[cfg(test)]
@@ -457,6 +504,192 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
             if matches!(icon, Icon::Vertex) {
                 p.circle_filled(points[1], 2.6, theme::HIGHLIGHT);
             }
+        }
+        Icon::Person => {
+            p.circle_stroke(at(0.5, 0.28), r.width() * 0.19, Stroke::new(1.3, color));
+            p.add(egui::Shape::line(
+                (0..=12)
+                    .map(|i| {
+                        let a = std::f32::consts::PI * (1. + i as f32 / 12.);
+                        at(0.5 + 0.34 * a.cos(), 0.94 + 0.4 * a.sin())
+                    })
+                    .collect(),
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Camera => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.06, 0.3), at(0.66, 0.78)),
+                1.5,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            p.add(egui::Shape::closed_line(
+                vec![
+                    at(0.68, 0.46),
+                    at(0.94, 0.3),
+                    at(0.94, 0.78),
+                    at(0.68, 0.62),
+                ],
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Group => {
+            p.add(egui::Shape::closed_line(
+                vec![
+                    at(0.06, 0.24),
+                    at(0.4, 0.24),
+                    at(0.5, 0.36),
+                    at(0.94, 0.36),
+                    at(0.94, 0.84),
+                    at(0.06, 0.84),
+                ],
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Cube => {
+            let v = [
+                at(0.5, 0.06),
+                at(0.92, 0.28),
+                at(0.92, 0.72),
+                at(0.5, 0.94),
+                at(0.08, 0.72),
+                at(0.08, 0.28),
+                at(0.5, 0.5),
+            ];
+            p.add(egui::Shape::closed_line(
+                v[..6].to_vec(),
+                Stroke::new(1.3, color),
+            ));
+            for i in [5, 1, 3] {
+                line(v[6], v[i]);
+            }
+        }
+        Icon::Sphere => {
+            p.circle_stroke(r.center(), r.width() * 0.42, Stroke::new(1.3, color));
+            p.add(egui::Shape::line(
+                (0..=12)
+                    .map(|i| {
+                        let a = std::f32::consts::PI * i as f32 / 12.;
+                        at(0.5 - 0.42 * a.cos(), 0.5 + 0.14 * a.sin())
+                    })
+                    .collect(),
+                Stroke::new(1.1, color),
+            ));
+        }
+        Icon::Plane => {
+            p.add(egui::Shape::closed_line(
+                vec![at(0.04, 0.72), at(0.3, 0.32), at(0.96, 0.32), at(0.7, 0.72)],
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Sprite => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.08, 0.12), at(0.92, 0.88)),
+                1.5,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            p.circle_filled(at(0.34, 0.38), r.width() * 0.08, color);
+            p.add(egui::Shape::line(
+                vec![at(0.12, 0.8), at(0.42, 0.56), at(0.62, 0.7), at(0.88, 0.48)],
+                Stroke::new(1.2, color),
+            ));
+        }
+        Icon::Interface => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.06, 0.16), at(0.94, 0.84)),
+                1.5,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            p.rect_filled(Rect::from_min_max(at(0.2, 0.42), at(0.62, 0.58)), 1., color);
+        }
+        Icon::Sound => {
+            for (x, h) in [
+                (0.12, 0.16),
+                (0.32, 0.42),
+                (0.52, 0.7),
+                (0.72, 0.36),
+                (0.9, 0.14),
+            ] {
+                line(at(x, 0.5 - h / 2.), at(x, 0.5 + h / 2.));
+            }
+        }
+        Icon::Play => {
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.22, 0.1), at(0.9, 0.5), at(0.22, 0.9)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Pause => {
+            for x in [0.22, 0.6] {
+                p.rect_filled(
+                    Rect::from_min_max(at(x, 0.12), at(x + 0.18, 0.88)),
+                    1.,
+                    color,
+                );
+            }
+        }
+        Icon::Stop => {
+            p.rect_filled(
+                Rect::from_min_max(at(0.16, 0.16), at(0.84, 0.84)),
+                1.5,
+                color,
+            );
+        }
+        Icon::Undo | Icon::Redo => {
+            let undo = matches!(icon, Icon::Undo);
+            let flip = |x: f32| if undo { x } else { 1. - x };
+            let arc: Vec<_> = (0..=12)
+                .map(|i| {
+                    let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 12.;
+                    at(flip(0.55 + 0.32 * a.cos()), 0.62 + 0.28 * a.sin())
+                })
+                .collect();
+            p.add(egui::Shape::line(arc, Stroke::new(1.4, color)));
+            line(at(flip(0.55), 0.34), at(flip(0.1), 0.34));
+            line(at(flip(0.1), 0.34), at(flip(0.3), 0.14));
+            line(at(flip(0.1), 0.34), at(flip(0.3), 0.54));
+            line(at(flip(0.55), 0.9), at(flip(0.3), 0.9));
+        }
+        Icon::Eye | Icon::EyeOff => {
+            let upper: Vec<_> = (0..=12)
+                .map(|i| {
+                    let t = i as f32 / 12.;
+                    at(
+                        0.04 + 0.92 * t,
+                        0.5 - 0.3 * (std::f32::consts::PI * t).sin(),
+                    )
+                })
+                .collect();
+            let lower: Vec<_> = upper
+                .iter()
+                .map(|q| Pos2::new(q.x, 2. * r.center().y - q.y))
+                .collect();
+            p.add(egui::Shape::line(upper, Stroke::new(1.3, color)));
+            p.add(egui::Shape::line(lower, Stroke::new(1.3, color)));
+            p.circle_stroke(r.center(), r.width() * 0.13, Stroke::new(1.3, color));
+            if matches!(icon, Icon::EyeOff) {
+                p.line_segment([at(0.12, 0.88), at(0.88, 0.12)], Stroke::new(1.5, color));
+            }
+        }
+        Icon::ChevronRight => {
+            p.add(egui::Shape::line(
+                vec![at(0.36, 0.2), at(0.66, 0.5), at(0.36, 0.8)],
+                Stroke::new(1.5, color),
+            ));
+        }
+        Icon::ChevronDown => {
+            p.add(egui::Shape::line(
+                vec![at(0.2, 0.36), at(0.5, 0.66), at(0.8, 0.36)],
+                Stroke::new(1.5, color),
+            ));
+        }
+        Icon::Plus => {
+            p.line_segment([at(0.5, 0.14), at(0.5, 0.86)], Stroke::new(1.5, color));
+            p.line_segment([at(0.14, 0.5), at(0.86, 0.5)], Stroke::new(1.5, color));
         }
         Icon::Move => {
             for end in [at(0.5, 0.), at(1., 0.5), at(0.5, 1.), at(0., 0.5)] {

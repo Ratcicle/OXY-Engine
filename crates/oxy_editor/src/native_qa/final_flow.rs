@@ -88,8 +88,9 @@ impl NativeQa {
                     .texts
                     .iter()
                     .filter(|t| {
+                        // Property rows put the axis fields on the label's own line.
                         t.text.starts_with(prefix)
-                            && t.rect.center().y > anchor.y
+                            && t.rect.center().y > anchor.y - 8.
                             && t.rect.center().x > anchor.x - 80.
                     })
                     .min_by(|a, b| a.rect.center().y.total_cmp(&b.rect.center().y))
@@ -519,11 +520,11 @@ fn native_final_creation_workflow() {
                 Action::Key(Key::S, true),
                 Action::ReopenProject,
                 Action::SelectEntity("Instância articulada"),
-                Action::Click("▶ Jogar"),
+                Action::Click("Jogar"),
                 Action::Wait(20),
                 Action::Check("f7_runtime"),
                 Action::Screenshot("tube-runtime.png"),
-                Action::Click("■ Parar"),
+                Action::Click("Parar"),
                 Action::Key(Key::S, true),
                 Action::ReopenProject,
                 Action::SelectEntity("Instância articulada"),

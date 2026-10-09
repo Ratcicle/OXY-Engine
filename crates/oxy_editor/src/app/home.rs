@@ -160,12 +160,15 @@ impl Editor {
                     });
                     ui.horizontal_wrapped(|ui| {
                         self.interface_button(ui);
-                        self.notices_button(ui);
                         if ui.button("Guia de lógica visual").clicked() {
                             self.open_guide("");
                         }
                         if ui.button("Console").clicked() {
-                            self.console.open = !self.console.open;
+                            if self.console_visible() {
+                                self.dock.open = false;
+                            } else {
+                                self.show_dock(DockTab::Console);
+                            }
                         }
                     });
                     ui.horizontal_wrapped(|ui| {
@@ -244,7 +247,7 @@ impl Editor {
                     if let Some(error) = &self.home.error {
                         ui.colored_label(crate::theme::ERROR, error);
                     }
-                    if self.console.open
+                    if self.console_visible()
                         && let Some(message) = self.console.messages.last()
                     {
                         ui.colored_label(crate::theme::ERROR, message);

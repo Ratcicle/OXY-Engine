@@ -1,6 +1,6 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
-use crate::app::{Editor, Snapshot, Tab};
+use crate::app::{Editor, Snapshot};
 mod body_offset;
 mod camera_authoring;
 mod cameras;
@@ -207,20 +207,20 @@ impl NativeQa {
             Action::Check("node_undo"),
             Action::Click("Cena"),
             Action::Check("play_baseline"),
-            Action::Click("▶ Jogar"),
+            Action::Click("Jogar"),
             Action::Check("playing"),
             Action::Hold(Key::D, 24),
             Action::Check("game_moved"),
             Action::Screenshot("game.png"),
-            Action::Click("Cena"),
+            Action::Click("Lógica"),
             Action::Check("left_game_paused"),
-            Action::Click("Jogo"),
+            Action::Click("Cena"),
             Action::Check("return_still_paused"),
-            Action::Click("▶ Retomar · Pausado"),
+            Action::Click("Retomar"),
             Action::Check("playing"),
             Action::Key(Key::Escape, false),
             Action::Check("escape_paused"),
-            Action::Click("■ Parar"),
+            Action::Click("Parar"),
             Action::Check("stop_isolated"),
             Action::Resize(Vec2::new(920., 600.)),
             Action::Screenshot("editor-small.png"),
@@ -254,6 +254,8 @@ impl NativeQa {
             Action::Click("Localizar na biblioteca"),
             Action::Key(Key::Escape, false),
             Action::DeleteTextureAsset,
+            // A new egui window is measured invisibly on its first frame.
+            Action::Wait(4),
             Action::Check("texture_reference_blocked"),
             Action::Screenshot("texture-reference.png"),
             Action::Click("Cancelar"),
@@ -301,7 +303,7 @@ impl NativeQa {
             Action::Click("B · Oficina 3D e golpe articulado"),
             Action::Click("C · Carta, custo, energia e alvo"),
             Action::Check("play_baseline"),
-            Action::Click("▶ Jogar"),
+            Action::Click("Jogar"),
             Action::Check("playing"),
             Action::Card,
             Action::Check("card_one"),
@@ -312,11 +314,11 @@ impl NativeQa {
             Action::Card,
             Action::Check("card_four"),
             Action::Screenshot("card.png"),
-            Action::Click("■ Parar"),
+            Action::Click("Parar"),
             Action::Check("stop_isolated"),
         ]);
         actions.extend([
-            Action::Click("+"),
+            Action::Click("Criar cena"),
             Action::Click("Cena 3D"),
             Action::Click("Criar cena"),
             Action::Click("+ Objeto"),
@@ -360,7 +362,7 @@ impl NativeQa {
             Action::Check("pieces_parented"),
             Action::Reparent("Articulação", "Montagem"),
             Action::Check("group_parented"),
-            Action::Reparent("Articulação", "Raiz da cena · solte aqui"),
+            Action::Reparent("Articulação", "Raiz da cena"),
             Action::Check("group_root"),
             Action::SelectEntity("Peça A"),
             Action::ControlSelect("Peça B"),
@@ -536,15 +538,11 @@ impl NativeQa {
         self.events.push_back(vec![]);
     }
 
+    /// Hierarchy rows register their rect under "Objeto: <name>".
     fn entity_position(&self, label: &str) -> Option<Pos2> {
-        self.surface
-            .texts
-            .iter()
-            .find(|target| {
-                target.text.ends_with(&format!(" {label}"))
-                    && target.text.starts_with(['▾', '◇', '▤', '◉'])
-            })
-            .map(|target| target.rect.center())
+        self.editor
+            .qa_icon_rect(&format!("Objeto: {label}"))
+            .map(|rect| rect.center())
     }
 
     fn key(&mut self, key: Key, control: bool) {
@@ -1355,7 +1353,7 @@ impl NativeQa {
                 "Undo deve restaurar o arrasto inteiro de transformação",
             ),
             "playing" => ensure(
-                self.editor.tab == Tab::Game
+                self.editor.showing_game()
                     && self.editor.play.capture
                     && self
                         .editor
@@ -1524,20 +1522,13 @@ impl NativeQa {
                 description = "Pan e zoom reais no viewport".into();
             }
             Action::CollapseEntity(label) => {
-                let at = self
-                    .entity_position(label)
+                self.entity_position(label)
                     .ok_or("Grupo fora da hierarquia")?;
                 let button = self
-                    .surface
-                    .texts
-                    .iter()
-                    .find(|t| {
-                        matches!(t.text.as_str(), "▾" | "▸")
-                            && (t.rect.center().y - at.y).abs() < 10.
-                            && t.rect.center().x < at.x
-                    })
+                    .editor
+                    .qa_icon_rect(&format!("Recolher {label}"))
+                    .or_else(|| self.editor.qa_icon_rect(&format!("Expandir {label}")))
                     .ok_or("Controle de expansão ausente")?
-                    .rect
                     .center();
                 self.click(button);
                 description = format!("Recolher/expandir {label}");
@@ -1714,29 +1705,13 @@ impl NativeQa {
                     .project
                     .asset(id)
                     .ok_or("Recurso selecionado ausente")?;
-                let library = self
-                    .find("BIBLIOTECA DO PROJETO", false)
+                self.find("Biblioteca", false)
                     .ok_or("Biblioteca não visível")?;
-                let title = self
-                    .surface
-                    .texts
-                    .iter()
-                    .find(|target| target.text == asset.name && target.rect.center().y > library.y)
-                    .map(|target| target.rect.center())
+                let delete = self
+                    .editor
+                    .qa_icon_rect(&format!("Excluir {}", asset.name))
                     .ok_or("Localizar na biblioteca não revelou o recurso")?;
-                let point = self
-                    .surface
-                    .texts
-                    .iter()
-                    .filter(|target| {
-                        target.text == "Excluir recurso do projeto"
-                            && (target.rect.center().x - title.x).abs() < 130.
-                            && target.rect.center().y > title.y
-                    })
-                    .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
-                    .map(|target| target.rect.center())
-                    .ok_or("Ação da biblioteca não está visível no cartão localizado")?;
-                self.click(point);
+                self.click(delete.center());
                 description = "Excluir recurso pelo cartão de sua própria textura".into();
             }
             Action::Click(label) | Action::OptionalClick(label) => {

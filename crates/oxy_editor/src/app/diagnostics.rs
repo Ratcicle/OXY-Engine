@@ -25,7 +25,7 @@ impl Editor {
             .play
             .runtime
             .as_ref()
-            .filter(|_| self.tab == Tab::Game)
+            .filter(|_| self.showing_game())
             .map_or(self.scene(), |r| r.scene());
         let count = scene.entities.len();
         let view = oxy_core::scene_view::SceneView::new(scene);

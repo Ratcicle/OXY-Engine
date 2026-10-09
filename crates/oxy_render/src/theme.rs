@@ -34,6 +34,17 @@ pub const AXIS_Y: Color32 = Color32::from_rgb(124, 206, 144);
 pub const AXIS_Z: Color32 = Color32::from_rgb(110, 156, 236);
 pub const AXES: [Color32; 3] = [AXIS_X, AXIS_Y, AXIS_Z];
 
+/// Collapsible blocks in the inspector.
+pub const CARD_FILL: Color32 = Color32::from_rgb(42, 42, 45);
+pub const CARD_BORDER: Color32 = Color32::from_rgb(56, 56, 61);
+pub const CARD_RADIUS: u8 = 6;
+/// Shell bars, in points before interface scale. Sizes follow a 4-point grid.
+pub const TOPBAR_HEIGHT: f32 = 48.;
+pub const STATUS_HEIGHT: f32 = 26.;
+pub const PANEL_HEADER_HEIGHT: f32 = 36.;
+/// Width of the label column in property rows.
+pub const LABEL_COLUMN: f32 = 96.;
+
 /// Height of toolbar rows and icon buttons, in points before interface scale.
 pub const CONTROL_HEIGHT: f32 = 24.;
 pub const ICON_SIZE: f32 = 16.;

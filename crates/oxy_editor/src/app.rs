@@ -49,9 +49,20 @@ pub struct Snapshot {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tab {
     Scene,
-    Game,
     Studio,
     Logic,
+}
+/// Tabs of the bottom dock.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum DockTab {
+    Library,
+    Console,
+    Notices,
+}
+/// Bottom dock shared by the Library, the Console and the notice history.
+pub(crate) struct Dock {
+    pub(crate) open: bool,
+    pub(crate) tab: DockTab,
 }
 #[derive(Clone, Copy, PartialEq, Default)]
 enum CompactPanel {
@@ -104,7 +115,7 @@ impl Default for ViewOptions {
         }
     }
 }
-/// The isolated play test and the input capture of the Game tab.
+/// The isolated play test. While it runs, the central area shows the game.
 pub(crate) struct PlaySession {
     pub(crate) runtime: Option<Runtime>,
     pub(crate) game_ui: oxy_render::game_ui::GameUi,
@@ -127,6 +138,7 @@ impl Default for PlaySession {
 }
 #[derive(Default)]
 pub(crate) struct HierarchyUi {
+    pub(crate) search: String,
     pub(crate) rename: Option<Rename>,
     pub(crate) focus: bool,
     pub(crate) last_object_click: Option<Id>,
@@ -159,7 +171,6 @@ impl Default for TransformUi {
     }
 }
 pub(crate) struct ConsoleLog {
-    pub(crate) open: bool,
     pub(crate) messages: Vec<String>,
 }
 /// Frame timing shown by the performance overlay.
@@ -209,6 +220,7 @@ pub struct Editor {
     editor_size: [u32; 2],
     pub(crate) play: PlaySession,
     pub(crate) console: ConsoleLog,
+    pub(crate) dock: Dock,
     pub(crate) frame: FrameStats,
     pub(crate) view: ViewOptions,
     pub(crate) transform_ui: TransformUi,
@@ -225,7 +237,7 @@ pub struct Editor {
 impl Editor {
     #[cfg(test)]
     pub(crate) fn qa_ux_refusal(&self) -> Result<(), String> {
-        if self.console.open {
+        if self.console_visible() {
             return Err("Recusa abriu o console automaticamente".into());
         }
         if self.dirty() {
@@ -243,7 +255,22 @@ impl Editor {
     }
     #[cfg(test)]
     pub(crate) fn qa_console_open(&self) -> bool {
-        self.console.open
+        self.console_visible()
+    }
+    pub(crate) fn console_visible(&self) -> bool {
+        self.dock.open && self.dock.tab == DockTab::Console
+    }
+    pub(crate) fn show_dock(&mut self, tab: DockTab) {
+        self.dock.open = true;
+        self.dock.tab = tab;
+    }
+    /// A play test exists (running or paused).
+    pub(crate) fn playing(&self) -> bool {
+        self.play.runtime.is_some()
+    }
+    /// The central area shows the game: a test exists and Logic is not open.
+    pub(crate) fn showing_game(&self) -> bool {
+        self.playing() && self.tab != Tab::Logic
     }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::theme::apply(&cc.egui_ctx);
@@ -292,8 +319,11 @@ impl Editor {
             editor_size: [1280, 720],
             play: Default::default(),
             console: ConsoleLog {
-                open: false,
                 messages: vec!["OXY Engine · editor nativo · documentos locais".into()],
+            },
+            dock: Dock {
+                open: true,
+                tab: DockTab::Library,
             },
             frame: FrameStats {
                 visible: false,
@@ -686,13 +716,9 @@ impl Editor {
         self.finish_history(true);
         match Runtime::new(&self.state.project, &self.scene_id) {
             Ok(runtime) => {
-                self.play.previous_tab = if self.tab == Tab::Game {
-                    Tab::Scene
-                } else {
-                    self.tab
-                };
+                self.play.previous_tab = self.tab;
                 self.play.runtime = Some(runtime);
-                self.tab = Tab::Game;
+                self.tab = Tab::Scene;
                 self.play.capture = true;
                 self.play.last_runtime_scene = Some(self.scene_id.clone());
                 self.frame.last_frame = Instant::now();
@@ -902,16 +928,6 @@ impl Editor {
     }
     fn game(&mut self, ui: &mut egui::Ui, dt: f32) {
         if self.play.runtime.is_none() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(90.);
-                ui.heading("Teste seu projeto");
-                ui.label(
-                    "Jogar cria uma cópia isolada da cena. Parar descarta o estado de execução.",
-                );
-                if ui.button("▶ Jogar cena selecionada").clicked() {
-                    self.start();
-                }
-            });
             return;
         }
         if !ui.ctx().input(|i| i.focused) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -1007,51 +1023,50 @@ impl Editor {
             }
         }
     }
-    fn console(&mut self, ctx: &egui::Context) {
-        if !self.console.open {
+    /// Console on the home screen, where the editor dock does not exist.
+    fn home_console(&mut self, ctx: &egui::Context) {
+        if !self.console_visible() {
             return;
         }
         egui::TopBottomPanel::bottom("console")
             .resizable(true)
             .default_height(155.)
             .height_range(80.0..=400.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("CONSOLE E EXECUÇÃO");
-                    if ui.button("Limpar").clicked() {
-                        self.console.messages.clear();
-                        if let Some(rt) = &mut self.play.runtime {
-                            rt.logs.clear();
-                        }
+            .show(ctx, |ui| self.console_body(ui));
+    }
+    pub(super) fn clear_console(&mut self) {
+        self.console.messages.clear();
+        if let Some(rt) = &mut self.play.runtime {
+            rt.logs.clear();
+        }
+    }
+    pub(super) fn console_body(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for line in &self.console.messages {
+                    ui.monospace(line);
+                }
+                if let Some(rt) = &self.play.runtime {
+                    for line in &rt.logs {
+                        ui.monospace(line);
                     }
-                });
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for line in &self.console.messages {
-                            ui.monospace(line);
-                        }
-                        if let Some(rt) = &self.play.runtime {
-                            for line in &rt.logs {
-                                ui.monospace(line);
-                            }
-                            let operations = oxy_core::graph::registry();
-                            for trace in rt.traces.iter().rev().take(5).rev() {
-                                let operation = operations
-                                    .iter()
-                                    .find(|op| op.id == trace.operation)
-                                    .map_or("Ação não reconhecida", |op| op.label);
-                                let object = rt
-                                    .scene()
-                                    .entity(&trace.object)
-                                    .map_or(trace.object.as_str(), |e| e.name.as_str());
-                                ui.small(format!(
-                                    "{:.3}s · objeto {} · nó {} · {}",
-                                    trace.time, object, trace.node, operation
-                                ));
-                            }
-                        }
-                    });
+                    let operations = oxy_core::graph::registry();
+                    for trace in rt.traces.iter().rev().take(5).rev() {
+                        let operation = operations
+                            .iter()
+                            .find(|op| op.id == trace.operation)
+                            .map_or("Ação não reconhecida", |op| op.label);
+                        let object = rt
+                            .scene()
+                            .entity(&trace.object)
+                            .map_or(trace.object.as_str(), |e| e.name.as_str());
+                        ui.small(format!(
+                            "{:.3}s · objeto {} · nó {} · {}",
+                            trace.time, object, trace.node, operation
+                        ));
+                    }
+                }
             });
     }
 }
@@ -1063,7 +1078,7 @@ impl eframe::App for Editor {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_started = Instant::now();
-        if !self.play.capture || self.tab != Tab::Game {
+        if !self.play.capture || !self.showing_game() {
             oxy_render::input::release_cursor(ctx);
         }
         self.frame.interval_ms = self.frame.last_frame.elapsed().as_secs_f32() * 1000.;
@@ -1074,7 +1089,7 @@ impl eframe::App for Editor {
         }
         if self.home.visible {
             self.stop_navigation(ctx);
-            self.console(ctx);
+            self.home_console(ctx);
             self.home_ui(ctx);
             self.project_dialogs(ctx);
             self.preferences_ui(ctx);
@@ -1179,9 +1194,7 @@ impl eframe::App for Editor {
                 self.undo(true);
             }
             let animation = self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation;
-            if self.tab != Tab::Logic
-                && self.tab != Tab::Game
-                && (!animation || self.hierarchy_ui.focus)
+            if self.tab != Tab::Logic && !self.playing() && (!animation || self.hierarchy_ui.focus)
             {
                 if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
                     self.delete();
@@ -1235,30 +1248,34 @@ impl eframe::App for Editor {
                 .begin("Gesto de edição", &self.state.project, &self.state.images);
         }
         self.toolbar(ctx);
-        if !self.play.capture || self.tab != Tab::Game {
+        if !self.play.capture || !self.showing_game() {
             oxy_render::input::release_cursor(ctx);
         }
-        self.console(ctx);
+        self.status_bar(ctx);
         let compact = Self::compact_layout(ctx);
         let panel = if self.mesh_operation_active() {
             CompactPanel::Properties
         } else {
             self.compact_panel
         };
+        let animation = self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation;
+        let dock = !animation && (!compact || panel == CompactPanel::Library);
         match self.tab {
             Tab::Scene | Tab::Studio => {
-                let animation = self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation;
-                if !animation && (!compact || panel == CompactPanel::Library) {
-                    self.library(ctx);
-                }
                 if !compact || (panel == CompactPanel::Hierarchy && !animation) {
                     self.hierarchy(ctx);
                 }
                 if !animation && (!compact || panel == CompactPanel::Properties) {
                     self.properties(ctx);
                 }
+                // Side panels first: the dock then spans only the central column.
+                if dock {
+                    self.dock(ctx);
+                }
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    if self.tab == Tab::Studio {
+                    if self.showing_game() {
+                        self.game(ui, dt);
+                    } else if self.tab == Tab::Studio {
                         self.studio_ui(ui, dt);
                     } else {
                         self.viewport(ui, false);
@@ -1268,6 +1285,9 @@ impl eframe::App for Editor {
             Tab::Logic => {
                 if !compact || panel == CompactPanel::Hierarchy {
                     self.hierarchy(ctx);
+                }
+                if dock {
+                    self.dock(ctx);
                 }
                 egui::CentralPanel::default().show(ctx, |ui| {
                     self.logic_toolbar(ui);
@@ -1313,11 +1333,6 @@ impl eframe::App for Editor {
                             ui.label("Selecione um objeto para criar seu comportamento.");
                         });
                     }
-                });
-            }
-            Tab::Game => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    self.game(ui, dt);
                 });
             }
         }
@@ -1387,7 +1402,7 @@ if ui.button("Cancelar").clicked(){self.pending=None;}});
         }
         self.frame.cpu_ms = frame_started.elapsed().as_secs_f32() * 1000.;
         if let Some(delay) = diagnostics::repaint_delay(
-            self.play.runtime.as_ref().is_some_and(|r| !r.paused) && self.tab == Tab::Game,
+            self.play.runtime.as_ref().is_some_and(|r| !r.paused) && self.showing_game(),
             self.studio.playing
                 && self.tab == Tab::Studio
                 && self.studio.tab == StudioTab::Animation,

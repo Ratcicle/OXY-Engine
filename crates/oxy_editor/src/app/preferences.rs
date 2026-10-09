@@ -110,8 +110,11 @@ fn local_number(
 }
 impl Editor {
     pub(super) fn interface_button(&mut self, ui: &mut egui::Ui) {
+        let label = egui::RichText::new(format!("Interface: {:.0}%", self.scale * 100.))
+            .size(12.)
+            .color(crate::theme::TEXT_MUTED);
         if ui
-            .button(format!("Interface: {:.0}%", self.scale * 100.))
+            .add(egui::Button::new(label).frame(false))
             .on_hover_text("Ajuste o tamanho dos controles e confirme em Aplicar.")
             .clicked()
         {
