@@ -296,11 +296,10 @@ fn schema_three_migration_preserves_ids_feet_filters_and_requires_no_external_co
     assert_eq!(std::fs::read(backup).unwrap(), bytes);
     std::fs::remove_dir_all(folder).unwrap();
     value["scenes"][0]["entities"][1]["physics3d"]["center"][0] = 0.2.into();
-    assert!(
-        oxy_core::migration::read(&serde_json::to_vec(&value).unwrap())
-            .unwrap_err()
-            .contains("origem nos pés")
-    );
+    assert!(matches!(
+        oxy_core::migration::read(&serde_json::to_vec(&value).unwrap()).unwrap_err(),
+        oxy_core::migration::MigrationError::Character { reason, .. } if reason.contains("origem nos pés")
+    ));
     assert_eq!(oxy_core::migration::read(&bytes).unwrap(), converted);
     value["scenes"][0]["entities"][1]["physics3d"]["center"][0] = 0.0.into();
     value["scenes"][0]["entities"][1]["physics3d"]["enabled"] = false.into();

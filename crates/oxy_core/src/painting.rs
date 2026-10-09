@@ -80,7 +80,7 @@ impl PaintImage {
         Ok(bytes)
     }
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        crate::persistence::safe_write(path, &self.to_png()?)
+        Ok(crate::persistence::safe_write(path, &self.to_png()?)?)
     }
     pub fn rgba(&self) -> &[u8] {
         &self.pixels

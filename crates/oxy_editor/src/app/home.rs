@@ -49,7 +49,7 @@ impl Home {
             let result = serde_json::to_vec_pretty(
                 &serde_json::json!({"schema_version": 1, "projects": self.recent}),
             )
-            .map_err(|e| e.to_string())
+            .map_err(persistence::PersistenceError::from)
             .and_then(|bytes| persistence::safe_write(path, &bytes));
             if let Err(error) = result {
                 self.error = Some(format!(

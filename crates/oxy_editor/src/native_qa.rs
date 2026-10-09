@@ -2336,14 +2336,12 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                 }
             }
             egui::Shape::Circle(circle)
-                if circle.fill == crate::theme::AXIS_Z
-                    && (circle.radius - 6.).abs() < 0.1 =>
+                if circle.fill == crate::theme::AXIS_Z && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.gizmo_z = Some(circle.center)
             }
             egui::Shape::Circle(circle)
-                if circle.fill == crate::theme::AXIS_X
-                    && (circle.radius - 6.).abs() < 0.1 =>
+                if circle.fill == crate::theme::AXIS_X && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.gizmo_x = Some(circle.center)
             }

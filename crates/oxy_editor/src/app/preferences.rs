@@ -82,13 +82,12 @@ impl Preferences {
         Ok(())
     }
     fn save_to(&self, path: &Path) -> Result<(), String> {
-        persistence::safe_write(
-            path,
-            &serde_json::to_vec_pretty(&serde_json::json!({"scale_percent":self.scale_percent,
-                "tool_names":self.tool_names,"navigation_speed":self.navigation_speed,
-                "navigation_sensitivity":self.navigation_sensitivity}))
-            .map_err(|e| e.to_string())?,
-        )
+        let bytes =
+            serde_json::to_vec_pretty(&serde_json::json!({"scale_percent":self.scale_percent,
+            "tool_names":self.tool_names,"navigation_speed":self.navigation_speed,
+            "navigation_sensitivity":self.navigation_sensitivity}))
+            .map_err(|e| e.to_string())?;
+        Ok(persistence::safe_write(path, &bytes)?)
     }
 }
 fn local_number(

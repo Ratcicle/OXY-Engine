@@ -47,3 +47,39 @@ fn future_and_unknown_geometry_cannot_be_silently_ignored() {
     json["scenes"][0]["entities"] = serde_json::json!([entity]);
     assert!(migration::read(&serde_json::to_vec(&json).unwrap()).is_err());
 }
+
+#[test]
+fn errors_are_typed_and_keep_their_messages() {
+    let future = format!(r#"{{"schema_version": {}}}"#, SCHEMA_VERSION + 1);
+    let error = migration::read(future.as_bytes()).unwrap_err();
+    assert!(matches!(
+        error,
+        migration::MigrationError::UnsupportedVersion { found } if found == u64::from(SCHEMA_VERSION) + 1
+    ));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Versão de projeto {} incompatível; esta OXY Engine lê 1 a {SCHEMA_VERSION}. O arquivo foi preservado.",
+            SCHEMA_VERSION + 1
+        )
+    );
+    assert!(matches!(
+        migration::read(br#"{"name": "sem versao"}"#),
+        Err(migration::MigrationError::MissingVersion)
+    ));
+    let root = std::env::temp_dir();
+    let error = persistence::resolve_asset_path(&root, "../fora.png").unwrap_err();
+    assert!(matches!(
+        error,
+        persistence::PersistenceError::InvalidAssetPath(_)
+    ));
+    assert_eq!(error.to_string(), "Caminho de asset inválido: ../fora.png");
+    let missing = root.join(format!("oxy-ausente-{}", new_id()));
+    assert!(matches!(
+        persistence::load_project(&missing),
+        Err(persistence::PersistenceError::Open { .. })
+    ));
+    // Callers that still report text keep using `?` into String.
+    let text: Result<(), String> = (|| Ok(persistence::load_project(&missing).map(drop)?))();
+    assert!(text.unwrap_err().starts_with("Não foi possível abrir"));
+}
