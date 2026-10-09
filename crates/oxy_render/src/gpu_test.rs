@@ -118,7 +118,7 @@ fn native_mesh_upload_measurements() {
         assert!(pixels.chunks_exact(4).any(|p| p[0] > 30));
         rows.push(serde_json::json!({"triangles":triangles,"buffer_size_bytes":bytes,"cpu_create_vertex_index_buffers":summary(cold),"cpu_cached_render_submission":summary(warm),"warm_mesh_uploads":0,"phase_limit_seconds":10}));
     }
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m6");
+    let output = oxy_core::qa::output_dir("v0.2.1/m6");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("mesh-upload.json"),serde_json::to_vec_pretty(&serde_json::json!({"gpu":info,"physical_offscreen_resolution":[920,600],"method":"Release locked; 3 warmups then 101 samples. CPU Instant around WGPU creation/submission; device drain outside measured interval; no VSync and no GPU timestamps. Buffer sizes are actual descriptor bytes, not VRAM residency. CPU mesh cache warm, GPU buffers cold per sample.","rows":rows})).unwrap()).unwrap();
 }
@@ -303,8 +303,7 @@ fn native_gpu_depth_texture_and_resize() {
         renderer.stats().instance_uploads,
         first_stats.instance_uploads + 1
     );
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m3/native-depth-proof.png");
+    let path = oxy_core::qa::output_dir("v0.2.1/m3/native-depth-proof.png");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     image::save_buffer(&path, &pixels, 512, 256, image::ColorType::Rgba8).unwrap();
     println!("GPU depth readback evidence: {}", path.display());

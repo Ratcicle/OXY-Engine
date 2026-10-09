@@ -7,8 +7,7 @@ mod checks;
 #[cfg(target_os = "windows")]
 fn native_spatial_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.3.1/spatial");
+    let output = oxy_core::qa::output_dir("v0.3.1/spatial");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-spatial-{}", new_id()));
     std::fs::create_dir_all(&fixture).unwrap();

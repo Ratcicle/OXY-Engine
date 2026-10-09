@@ -40,8 +40,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_physics_v030_authoring() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.3.1/physics");
+    let output = oxy_core::qa::output_dir("v0.3.1/physics");
     std::fs::create_dir_all(&output).unwrap();
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();

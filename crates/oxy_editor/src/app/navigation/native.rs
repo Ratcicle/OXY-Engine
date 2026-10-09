@@ -495,7 +495,7 @@ impl App for Qa {
 #[ignore = "Real Windows WGPU editor navigation, focus, document isolation and portable viewport sizes"]
 fn native_navigation_v033() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.3/navigation");
+    let output = oxy_core::qa::output_dir("v0.3.3/navigation");
     let path = output.join("project/project.oxy.json");
     let mut project = Project::new("Navegação livre — 602 objetos");
     project.scenes[0].kind = SceneKind::ThreeD;

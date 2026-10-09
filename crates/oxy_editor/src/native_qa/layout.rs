@@ -5,9 +5,10 @@ impl NativeQa {
         match label {
             "l7_viewport" => {
                 let header = self.editor.studio.header_bottom - self.editor.studio.header_top;
-                // Two 30-point targets plus theme item spacing / ComboBox margins and DPI rounding.
-                // A third 30-point tool row cannot fit this bound.
-                if !(60.0..=86.0).contains(&header) {
+                // Two control rows plus theme item spacing / ComboBox margins and DPI rounding.
+                // A third row (at least three control heights) cannot fit this bound.
+                let row = crate::theme::CONTROL_HEIGHT;
+                if !(2. * row..=2. * row + 22.).contains(&header) {
                     return Err(format!(
                         "Cabeçalho ultrapassa duas linhas ou perdeu ferramentas: {header:.1} pontos"
                     ));
@@ -90,7 +91,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_layout_matrix_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m7");
+    let output = oxy_core::qa::output_dir("v0.2.1/m7");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-layout-{}", new_id()));
     std::fs::create_dir_all(root.join("assets")).unwrap();

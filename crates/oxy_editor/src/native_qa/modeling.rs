@@ -124,7 +124,7 @@ impl NativeQa {
 #[cfg(target_os = "windows")]
 fn native_basic_modeling_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.2.1/m4");
+    let output = oxy_core::qa::output_dir("v0.2.1/m4");
     std::fs::create_dir_all(&output).unwrap();
     let root = std::env::temp_dir().join(format!("oxy-modeling-qa-{}", new_id()));
     std::fs::create_dir_all(root.join("assets")).unwrap();

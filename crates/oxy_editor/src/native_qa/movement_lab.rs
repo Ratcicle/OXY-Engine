@@ -95,7 +95,7 @@ impl NativeQa {
 #[ignore = "Native WGPU 400-entity/50-character regression; not a GPU benchmark"]
 fn native_movement_scale_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m7-scale");
+    let output = oxy_core::qa::output_dir("v0.3.0/m7-scale");
     let path = output.join("project/project.oxy.json");
     let mut project = scale_fixture::fixture(50, "dense");
     project.scenes[0].name = "50 personagens · 400 objetos".into();
@@ -167,7 +167,7 @@ fn native_movement_lab_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let output = std::env::var_os("OXY_MOVEMENT_QA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m6"));
+        .unwrap_or_else(|| oxy_core::qa::output_dir("v0.3.0/m6"));
     let path = output.join("project/project.oxy.json");
     oxy_core::persistence::save_project(
         &path,

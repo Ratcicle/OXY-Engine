@@ -686,7 +686,7 @@ fn native_component_v021_measurements() {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     );
-    let output = root.join(format!("qa/v0.2.1/{label}"));
+    let output = oxy_core::qa::output_dir(&format!("v0.2.1/{label}"));
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let result = report.clone();

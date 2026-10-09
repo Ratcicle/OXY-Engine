@@ -92,7 +92,7 @@ impl NativeQa {
 fn native_ground_posture_v030() {
     use oxy_core::{character::CharacterConfig, surface::*};
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.1/posture");
+    let output = oxy_core::qa::output_dir("v0.3.1/posture");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");
@@ -193,7 +193,7 @@ fn native_ground_posture_v030() {
 #[ignore = "Native WGPU and isolated RawInput. Does not certify physical mouse capture"]
 fn native_first_person_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m2");
+    let output = oxy_core::qa::output_dir("v0.3.0/m2");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");

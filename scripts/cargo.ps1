@@ -9,5 +9,7 @@ if ($bundledCompiler) {
 }
 $cargoExe = Join-Path $env:USERPROFILE '.cargo/bin/cargo.exe'
 if (!(Test-Path -LiteralPath $cargoExe)) { $cargoExe = 'cargo' }
+# Windows PowerShell 5.1 turns redirected native stderr into errors; let Cargo report its own failures.
+$ErrorActionPreference = 'Continue'
 & $cargoExe @args
 exit $LASTEXITCODE

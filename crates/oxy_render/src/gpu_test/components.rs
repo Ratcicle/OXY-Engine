@@ -23,9 +23,7 @@ fn adapter() -> RenderState {
     }
 }
 fn save(pixels: &[u8], name: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../qa/v0.2.1/m5")
-        .join(name);
+    let path = oxy_core::qa::output_dir("v0.2.1/m5").join(name);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     image::save_buffer(path, pixels, 512, 384, image::ColorType::Rgba8).unwrap();
 }

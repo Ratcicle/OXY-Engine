@@ -642,7 +642,7 @@ impl eframe::App for MeasuredEditor {
 fn native_mesh_editor_measurements() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = root.join("qa/v0.2.0/m7");
+    let output = oxy_core::qa::output_dir("v0.2.0/m7");
     std::fs::create_dir_all(&output).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let result = report.clone();

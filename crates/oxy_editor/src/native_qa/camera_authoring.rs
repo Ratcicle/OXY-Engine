@@ -140,7 +140,7 @@ impl NativeQa {
 #[ignore = "Native WGPU 0.3.2 bodies, camera gizmos, preview and measured host updates"]
 fn native_camera_body_v032() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.2/authoring");
+    let output = oxy_core::qa::output_dir("v0.3.2/authoring");
     let folder = output.join("project");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");

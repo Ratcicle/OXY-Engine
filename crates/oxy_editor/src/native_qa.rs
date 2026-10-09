@@ -2308,21 +2308,21 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                     inspect(shape, clip, surface);
                 }
             }
-            egui::Shape::Rect(rect) if rect.fill == Color32::from_rgb(20, 24, 31) => {
+            egui::Shape::Rect(rect) if rect.fill == crate::theme::BG_BASE => {
                 surface.canvas = Some(rect.rect.intersect(clip))
             }
             egui::Shape::Rect(rect)
-                if rect.fill == Color32::LIGHT_RED && (rect.rect.width() - 9.).abs() < 0.1 =>
+                if rect.fill == crate::theme::AXIS_X && (rect.rect.width() - 9.).abs() < 0.1 =>
             {
                 surface.gizmo_x = Some(rect.rect.center());
             }
             egui::Shape::Rect(rect)
-                if rect.fill == Color32::LIGHT_BLUE && (rect.rect.width() - 9.).abs() < 0.1 =>
+                if rect.fill == crate::theme::AXIS_Z && (rect.rect.width() - 9.).abs() < 0.1 =>
             {
                 surface.gizmo_z = Some(rect.rect.center());
             }
             egui::Shape::Circle(circle)
-                if circle.fill == Color32::from_rgb(112, 239, 213)
+                if circle.fill == crate::theme::ACCENT_BRIGHT
                     && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.direct_handle = Some(circle.center);
@@ -2336,13 +2336,13 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                 }
             }
             egui::Shape::Circle(circle)
-                if circle.fill == Color32::from_rgb(122, 169, 240)
+                if circle.fill == crate::theme::AXIS_Z
                     && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.gizmo_z = Some(circle.center)
             }
             egui::Shape::Circle(circle)
-                if circle.fill == Color32::from_rgb(239, 113, 117)
+                if circle.fill == crate::theme::AXIS_X
                     && (circle.radius - 6.).abs() < 0.1 =>
             {
                 surface.gizmo_x = Some(circle.center)
@@ -2398,7 +2398,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 fn native_editor_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("qa/v0.2.1/regression");
+    let output = oxy_core::qa::output_dir("v0.2.1/regression");
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir().join(format!("oxy-native-qa-{}", new_id()));
     copy_directory(&workspace.join("examples/validacao"), &fixture).unwrap();

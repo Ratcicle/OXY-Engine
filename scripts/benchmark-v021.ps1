@@ -41,7 +41,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "O benchmark falhou. Consulte artifacts/v021-$Label.log." }
     }
     Write-Output "Medições CPU: benchmarks/results/v021-native-$Label.json"
-    Write-Output "Capturas WGPU reais: qa/v0.2.1/$Label"
+    Write-Output "Capturas WGPU reais: target/qa/v0.2.1/$Label"
     Write-Output 'Limites de duração preservam amostras parciais; não equivalem a completar 101 ciclos. Não execute outros testes/builds durante a medição.'
 } finally {
     Pop-Location

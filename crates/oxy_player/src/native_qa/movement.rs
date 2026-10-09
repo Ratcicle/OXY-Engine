@@ -223,7 +223,7 @@ fn native_player_movement_v030() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let output = std::env::var_os("OXY_MOVEMENT_QA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../qa/v0.3.0/m6"));
+        .unwrap_or_else(|| oxy_core::qa::output_dir("v0.3.0/m6"));
     std::fs::create_dir_all(&output).unwrap();
     let fixture = std::env::temp_dir()
         .join(format!("oxy-movement-player-{}", new_id()))
