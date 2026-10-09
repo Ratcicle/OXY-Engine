@@ -2,6 +2,14 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
+## Não publicado
+
+- **Nova estrutura da tela:** barra superior única (projeto, desfazer/refazer e salvamento; modos Cena · Estúdio · Lógica no centro; Jogar/Pausar/Parar à direita), painel inferior com abas Biblioteca, Console e Avisos, e barra de status. A aba Jogo deixa de existir: o teste aparece na área central.
+- **Hierarquia:** seletor de cena e busca no topo, ícone por tipo de objeto e chevrons desenhados.
+- **Propriedades:** cabeçalho do objeto e blocos recolhíveis com campos alinhados; interruptor de ativo no cabeçalho e Remover componente no menu ⋯.
+- **Estúdio isolado:** o objeto selecionado e seus filhos aparecem sozinhos, com câmera própria enquadrada nele. A Hierarquia mostra só a peça em edição e **Voltar à cena**.
+- **Biblioteca:** cartões compactos; Localizar na biblioteca filtra pelo nome do recurso.
+
 ## 0.3.4 — 2026-10-09
 
 - **Aparência:** tema neutro com um único destaque azul dessaturado, aplicado ao editor e ao player. Barras e botões de ícone mais compactos (24 px), espaçamentos e fonte reduzidos, viewport com fundo e grade neutros. As cores da interface passam a vir de tokens em `oxy_render::theme`.

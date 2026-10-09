@@ -19,6 +19,7 @@ mod viewport;
 mod viewport_controls;
 use spatial_tools::SpatialTools;
 pub(crate) use spatial_tools::Tool;
+pub(crate) use viewport::frame_camera;
 
 use crate::{
     graph_ui::{GraphView, object_picker, value_editor},
@@ -217,7 +218,7 @@ pub struct Editor {
     render_state: eframe::egui_wgpu::RenderState,
     context: egui::Context,
     pub(crate) camera: CameraState,
-    editor_size: [u32; 2],
+    pub(crate) editor_size: [u32; 2],
     pub(crate) play: PlaySession,
     pub(crate) console: ConsoleLog,
     pub(crate) dock: Dock,
@@ -718,7 +719,7 @@ impl Editor {
             Ok(runtime) => {
                 self.play.previous_tab = self.tab;
                 self.play.runtime = Some(runtime);
-                self.tab = Tab::Scene;
+                self.set_tab(Tab::Scene);
                 self.play.capture = true;
                 self.play.last_runtime_scene = Some(self.scene_id.clone());
                 self.frame.last_frame = Instant::now();
@@ -733,7 +734,7 @@ impl Editor {
     fn stop(&mut self) {
         self.play.runtime = None;
         self.play.capture = false;
-        self.tab = self.play.previous_tab;
+        self.set_tab(self.play.previous_tab);
         self.play.last_runtime_scene = None;
     }
     fn pause(&mut self) {
@@ -812,7 +813,8 @@ impl Editor {
     pub fn add_entity(&mut self, primitive: Option<Primitive>, name: &str) {
         let mut entity = Entity::new(name, primitive);
         if self.tab == Tab::Studio {
-            entity.parent = self.selected.clone();
+            // New pieces join the isolated object: under the selection, else its root.
+            entity.parent = self.selected.clone().or_else(|| self.studio.focus.clone());
         }
         let id = entity.id.clone();
         self.scene_mut().entities.push(entity);
@@ -1206,8 +1208,11 @@ impl eframe::App for Editor {
                     self.begin_rename();
                 }
                 if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
-                    self.selection.ids =
-                        self.scene().entities.iter().map(|e| e.id.clone()).collect();
+                    self.selection.ids = if self.tab == Tab::Studio {
+                        self.studio_subtree()
+                    } else {
+                        self.scene().entities.iter().map(|e| e.id.clone()).collect()
+                    };
                     self.selected = self.selection.ids.last().cloned();
                 }
             }

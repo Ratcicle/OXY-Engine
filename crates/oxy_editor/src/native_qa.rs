@@ -230,6 +230,7 @@ impl NativeQa {
             Action::Check("scene_3d"),
             Action::SelectEntity("Tronco · textura pintável"),
             Action::Click("Estúdio"),
+            Action::Check("studio_isolated"),
             Action::Click("Pintura"),
             Action::OptionalClick("Ferramentas"),
             Action::OptionalClick("Pintar"),
@@ -268,7 +269,9 @@ impl NativeQa {
             Action::Check("texture_unlink_undo"),
             Action::Click("Modelagem"),
             Action::Screenshot("studio-3d.png"),
+            Action::Click("Voltar à cena"),
             Action::SelectEntity("Boneco · modelo por peças"),
+            Action::Click("Estúdio"),
             Action::Click("Animação"),
             Action::Check("animation_baseline"),
             Action::Click("▶ Reproduzir"),
@@ -413,9 +416,12 @@ impl NativeQa {
             Action::Check("group_draft"),
             Action::Key(Key::S, true),
             Action::Check("draft_save_refused"),
+            // The scene picker lives in the Scene's Hierarchy, outside the isolated Studio.
+            Action::Click("Voltar à cena"),
             Action::Click("Nova cena"),
             Action::Click("A · Sala de plataforma 2D"),
             Action::Check("draft_scene_refused"),
+            Action::Click("Estúdio"),
             Action::Click("+ Quadro-chave"),
             Action::Check("group_key"),
             Action::Screenshot("group-animation.png"),
@@ -1352,6 +1358,36 @@ impl NativeQa {
                 self.base.as_ref() == Some(&self.editor.state),
                 "Undo deve restaurar o arrasto inteiro de transformação",
             ),
+            "studio_isolated" => {
+                let focus = self
+                    .editor
+                    .studio
+                    .focus
+                    .clone()
+                    .ok_or("Estúdio sem objeto em foco")?;
+                ensure(
+                    self.editor.selected.as_ref() == Some(&focus),
+                    "O Estúdio deve isolar o objeto selecionado",
+                )?;
+                let shown = self.editor.view_scene();
+                let subtree = self.editor.studio_subtree();
+                ensure(
+                    shown
+                        .entities
+                        .iter()
+                        .filter(|e| e.has_geometry())
+                        .all(|e| subtree.contains(&e.id)),
+                    "O Estúdio mostra objetos fora da peça isolada",
+                )?;
+                ensure(
+                    shown.entities.len() < self.editor.scene().entities.len(),
+                    "O Estúdio deve esconder o resto da cena",
+                )?;
+                ensure(
+                    self.editor.studio.parked_camera.is_some(),
+                    "A câmera da cena deve ficar guardada fora do Estúdio",
+                )
+            }
             "playing" => ensure(
                 self.editor.showing_game()
                     && self.editor.play.capture

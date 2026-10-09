@@ -106,7 +106,12 @@ impl Editor {
                 if ui.button("Colocar na cena").clicked() {
                     let scene_id = self.scene_id.clone();
                     match self.state.project.instantiate_model(&asset.id, &scene_id) {
-                        Ok(id) => self.select(Some(id)),
+                        Ok(id) => {
+                            if self.tab == Tab::Studio {
+                                self.studio.focus = Some(id.clone());
+                            }
+                            self.select(Some(id));
+                        }
                         Err(e) => self.log(e),
                     }
                 }

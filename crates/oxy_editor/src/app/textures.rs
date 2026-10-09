@@ -82,7 +82,7 @@ impl Editor {
         let mut next = Some(id.clone());
         ui.horizontal_wrapped(|ui| {
             if ui.button("Editar no Estúdio").on_hover_text("Abra os pixels desta textura para pintar. Alterar uma textura compartilhada afeta seus vínculos.").clicked() {
-                self.tab=Tab::Studio;self.studio.tab=StudioTab::Paint;
+                self.set_tab(Tab::Studio);self.studio.tab=StudioTab::Paint;
             }
             if ui.button("Substituir").on_hover_text("Importe uma cópia de outro PNG e aplique somente a este objeto.").clicked()
                 && let Some(updated)=self.import_selected(AssetKind::Texture) {

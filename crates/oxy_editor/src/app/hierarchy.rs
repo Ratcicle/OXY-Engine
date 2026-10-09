@@ -145,20 +145,35 @@ impl Editor {
                 }
                 crate::widgets::panel_header(ui, "Hierarquia", |ui| self.creation_menu(ui));
                 ui.add_space(8.);
-                self.scene_bar(ui);
-                ui.add_space(4.);
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.hierarchy_ui.search)
-                        .hint_text("Buscar objeto")
-                        .desired_width(ui.available_width()),
-                );
+                let studio = self.tab == Tab::Studio;
+                if studio {
+                    self.studio_hierarchy_header(ui);
+                } else {
+                    self.scene_bar(ui);
+                    ui.add_space(4.);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.hierarchy_ui.search)
+                            .hint_text("Buscar objeto")
+                            .desired_width(ui.available_width()),
+                    );
+                }
                 ui.add_space(6.);
                 let snapshot = self.scene().clone();
                 let scene = oxy_core::scene_view::SceneView::new(&snapshot);
                 let search = self.hierarchy_ui.search.trim().to_lowercase();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 1.;
-                    if search.is_empty() {
+                    if studio {
+                        // The Studio lists only the isolated object.
+                        if let Some(focus) = self.studio.focus.clone() {
+                            self.hierarchy_item(ui, &scene, &focus, 0);
+                        } else {
+                            crate::widgets::hint(
+                                ui,
+                                "Nenhum objeto em edição. Escolha um na Cena ou crie uma peça em +.",
+                            );
+                        }
+                    } else if search.is_empty() {
                         for entity in scene.scene.entities.iter().filter(|e| e.parent.is_none()) {
                             self.hierarchy_item(ui, &scene, &entity.id, 0);
                         }
@@ -173,14 +188,50 @@ impl Editor {
                             self.hierarchy_row(ui, &scene, &entity.id, 0, false);
                         }
                     }
-                    self.root_drop_zone(ui);
+                    self.root_drop_zone(ui, !studio);
                 });
             });
     }
+    /// Path to the isolated object and the way back to the full scene.
+    fn studio_hierarchy_header(&mut self, ui: &mut egui::Ui) {
+        let scene_name = self.scene().name.clone();
+        let focus = self
+            .studio
+            .focus
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+            .map(|e| e.name.clone());
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{scene_name} ›"))
+                    .size(12.)
+                    .color(theme::TEXT_MUTED),
+            );
+            if let Some(name) = focus {
+                ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
+            }
+        });
+        if ui
+            .add_sized(
+                [ui.available_width(), theme::CONTROL_HEIGHT],
+                egui::Button::new("Voltar à cena"),
+            )
+            .on_hover_text("Volta à cena completa, mantendo a seleção.")
+            .clicked()
+        {
+            self.switch_tab(Tab::Scene);
+        }
+    }
     /// Empty space below the tree: clicking deselects, dropping moves objects to the root.
-    fn root_drop_zone(&mut self, ui: &mut egui::Ui) {
+    fn root_drop_zone(&mut self, ui: &mut egui::Ui, droppable: bool) {
         let height = ui.available_height().max(60.);
         let blank = ui.allocate_response(Vec2::new(ui.available_width(), height), Sense::click());
+        if blank.clicked() {
+            self.select(None);
+        }
+        if !droppable {
+            return;
+        }
         icons::register_qa(ui, "Raiz da cena", blank.rect);
         if egui::DragAndDrop::has_payload_of_type::<Vec<Id>>(ui.ctx()) {
             let zone = Rect::from_min_size(blank.rect.min, Vec2::new(blank.rect.width(), 44.));
@@ -197,9 +248,6 @@ impl Editor {
                 egui::FontId::proportional(12.),
                 theme::TEXT_MUTED,
             );
-        }
-        if blank.clicked() {
-            self.select(None);
         }
         self.hierarchy_drop(ui, &blank, None);
     }
@@ -405,7 +453,10 @@ impl Editor {
         ] {
             if ui.button(label).clicked() {
                 self.select(Some(id.into()));
-                self.tab = tab;
+                if tab == Tab::Studio {
+                    self.studio.focus = Some(id.into());
+                }
+                self.set_tab(tab);
                 self.studio.tab = sub;
                 self.studio.owner = Some(id.into());
                 if sub == StudioTab::Animation {

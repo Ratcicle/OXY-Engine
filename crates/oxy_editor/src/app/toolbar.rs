@@ -27,7 +27,7 @@ impl Editor {
         if self.playing() && tab == Tab::Logic {
             self.pause();
         }
-        self.tab = tab;
+        self.set_tab(tab);
         self.cancel_camera_drag();
         self.set_spatial_tool(Tool::Object);
         self.spatial.fit = None;
@@ -186,11 +186,9 @@ impl Editor {
         };
         if widgets::icon_text_button(ui, icon, label, false, compact).clicked() {
             if paused {
-                self.tab = if self.tab == Tab::Logic {
-                    Tab::Scene
-                } else {
-                    self.tab
-                };
+                if self.tab == Tab::Logic {
+                    self.set_tab(Tab::Scene);
+                }
                 self.play.capture = true;
                 if let Some(rt) = &mut self.play.runtime {
                     rt.set_paused(false);

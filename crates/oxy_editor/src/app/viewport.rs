@@ -1,6 +1,11 @@
 use super::*;
 
-fn frame_camera(camera: &mut CameraState, scene: &Scene, selection: &[Id], size: [u32; 2]) {
+pub(crate) fn frame_camera(
+    camera: &mut CameraState,
+    scene: &Scene,
+    selection: &[Id],
+    size: [u32; 2],
+) {
     if selection.is_empty() {
         *camera = CameraState::for_scene(scene);
         return;
@@ -53,12 +58,22 @@ fn frame_camera(camera: &mut CameraState, scene: &Scene, selection: &[Id], size:
 }
 
 impl Editor {
-    pub(crate) fn frame_selection(&mut self) {
+    /// Scene shown in the viewport: the document, the animation preview, and in the
+    /// Studio only the focused object (see `studio::isolate`).
+    pub(crate) fn view_scene(&self) -> Scene {
         let scene = if self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation {
             self.animation_preview()
         } else {
             self.scene().clone()
         };
+        if self.tab == Tab::Studio {
+            crate::studio::isolate(scene, self.studio.focus.as_deref())
+        } else {
+            scene
+        }
+    }
+    pub(crate) fn frame_selection(&mut self) {
+        let scene = self.view_scene();
         frame_camera(
             &mut self.camera,
             &scene,
@@ -83,11 +98,7 @@ impl Editor {
         if !painting {
             self.viewport_tools_row(ui);
         }
-        let scene = if self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation {
-            self.animation_preview()
-        } else {
-            self.scene().clone()
-        };
+        let scene = self.view_scene();
         let (rect, response) = ui.allocate_exact_size(
             ui.available_size().max(Vec2::splat(1.)),
             Sense::click_and_drag(),
@@ -144,6 +155,15 @@ impl Editor {
             Color32::WHITE,
         );
         self.navigation_notice(ui, rect);
+        if self.tab == Tab::Studio && self.studio.focus.is_none() {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Escolha um objeto na Cena ou crie uma peça em + Objeto.",
+                egui::FontId::proportional(14.),
+                crate::theme::TEXT_MUTED,
+            );
+        }
         if blocked {
             return;
         }
@@ -272,11 +292,7 @@ impl Editor {
         let Some(id) = self.selected.clone() else {
             return;
         };
-        let displayed = if self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation {
-            self.animation_preview()
-        } else {
-            self.scene().clone()
-        };
+        let displayed = self.view_scene();
         let Some(entity) = displayed.entity(&id).cloned() else {
             return;
         };
