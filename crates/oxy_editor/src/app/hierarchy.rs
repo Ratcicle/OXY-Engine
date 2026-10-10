@@ -479,9 +479,13 @@ impl Editor {
                 .entity(id)
                 .map(|e| e.name.clone())
                 .unwrap_or_default();
-            match self.state.project.save_model(&scene_id,id,&name) {
-                Ok(_)=>self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco."),
-                Err(e)=>self.warn(e),
+            match self.state.project.save_model(&scene_id, id, &name) {
+                Ok(asset) => {
+                    self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco.");
+                    // Reveal the new model, even where the Library starts collapsed.
+                    self.asset_ui.locate = Some(asset);
+                }
+                Err(e) => self.warn(e),
             }
             ui.close();
         }

@@ -2,6 +2,7 @@ mod body_tools;
 mod camera_tools;
 mod diagnostics;
 mod hierarchy;
+pub(crate) use hierarchy::entity_icon;
 mod home;
 mod library;
 mod logic;
@@ -62,7 +63,9 @@ pub(crate) enum DockTab {
 }
 /// Bottom dock shared by the Library, the Console and the notice history.
 pub(crate) struct Dock {
-    pub(crate) open: bool,
+    /// Open state per work mode (Cena, Estúdio, Lógica). The Scene keeps the Library at
+    /// hand; the Studio and Logic start collapsed to give their work area the room.
+    open: [bool; 3],
     pub(crate) tab: DockTab,
 }
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -259,11 +262,41 @@ impl Editor {
         self.console_visible()
     }
     pub(crate) fn console_visible(&self) -> bool {
-        self.dock.open && self.dock.tab == DockTab::Console
+        if self.animating() {
+            return self.studio.animation.bottom == Some(DockTab::Console);
+        }
+        self.dock_open() && self.dock.tab == DockTab::Console
     }
     pub(crate) fn show_dock(&mut self, tab: DockTab) {
-        self.dock.open = true;
+        // In the Animation the timeline's own tabs hold the Console and the notices.
+        if self.animating() && tab != DockTab::Library {
+            self.studio.animation.bottom = Some(tab);
+            return;
+        }
+        self.set_dock_open(true);
         self.dock.tab = tab;
+    }
+    fn animating(&self) -> bool {
+        self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation
+    }
+    fn dock_mode(&self) -> usize {
+        match self.tab {
+            Tab::Scene => 0,
+            Tab::Studio => 1,
+            Tab::Logic => 2,
+        }
+    }
+    /// Whether the bottom dock is expanded in the current work mode.
+    pub(crate) fn dock_open(&self) -> bool {
+        self.dock.open[self.dock_mode()]
+    }
+    pub(crate) fn set_dock_open(&mut self, open: bool) {
+        if self.animating() && !open {
+            self.studio.animation.bottom = None;
+            return;
+        }
+        let mode = self.dock_mode();
+        self.dock.open[mode] = open;
     }
     /// A play test exists (running or paused).
     pub(crate) fn playing(&self) -> bool {
@@ -323,7 +356,7 @@ impl Editor {
                 messages: vec!["OXY Engine · editor nativo · documentos locais".into()],
             },
             dock: Dock {
-                open: true,
+                open: [true, false, false],
                 tab: DockTab::Library,
             },
             frame: FrameStats {
@@ -871,7 +904,7 @@ impl Editor {
     pub fn import(&mut self, kind: AssetKind) {
         let _ = self.import_selected(kind);
     }
-    pub(super) fn import_selected(&mut self, kind: AssetKind) -> Option<Id> {
+    pub(crate) fn import_selected(&mut self, kind: AssetKind) -> Option<Id> {
         self.pause();
         if self.path.is_none() && !self.save() {
             return None;
@@ -1036,13 +1069,13 @@ impl Editor {
             .height_range(80.0..=400.0)
             .show(ctx, |ui| self.console_body(ui));
     }
-    pub(super) fn clear_console(&mut self) {
+    pub(crate) fn clear_console(&mut self) {
         self.console.messages.clear();
         if let Some(rt) = &mut self.play.runtime {
             rt.logs.clear();
         }
     }
-    pub(super) fn console_body(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn console_body(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .show(ui, |ui| {
@@ -1270,8 +1303,12 @@ impl eframe::App for Editor {
                 if !compact || (panel == CompactPanel::Hierarchy && !animation) {
                     self.hierarchy(ctx);
                 }
-                if !animation && (!compact || panel == CompactPanel::Properties) {
-                    self.properties(ctx);
+                if !compact || panel == CompactPanel::Properties {
+                    if animation {
+                        self.animation_properties_panel(ctx);
+                    } else {
+                        self.properties(ctx);
+                    }
                 }
                 // Side panels first: the dock then spans only the central column.
                 if dock {

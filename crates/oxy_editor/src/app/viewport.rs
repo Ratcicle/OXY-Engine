@@ -156,13 +156,21 @@ impl Editor {
         );
         self.navigation_notice(ui, rect);
         if self.tab == Tab::Studio && self.studio.focus.is_none() {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
+            crate::widgets::empty_state(
+                ui,
+                rect,
+                crate::icons::Icon::Cube,
+                "Nenhum objeto no Estúdio",
                 "Escolha um objeto na Cena ou crie uma peça em + Objeto.",
-                egui::FontId::proportional(14.),
-                crate::theme::TEXT_MUTED,
+                |_| {},
             );
+        } else if self.tab == Tab::Studio {
+            let (dot, title, hint) = match self.studio.tab {
+                StudioTab::Model => self.model_status(),
+                StudioTab::Paint => self.paint_status(),
+                StudioTab::Animation => self.animation_status(),
+            };
+            crate::widgets::viewport_chip(ui, rect, dot, &title, hint);
         }
         if blocked {
             return;
@@ -198,7 +206,12 @@ impl Editor {
         }
         if painting {
             self.draw_paint_faces(ui, rect, &scene);
+            // A press that closes an open menu must not paint under it.
+            if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
+                self.studio.stroke_blocked = egui::Popup::is_any_open(ui.ctx());
+            }
             if (response.dragged_by(egui::PointerButton::Primary) || response.clicked())
+                && !self.studio.stroke_blocked
                 && let Some(hit) = pick.as_ref()
             {
                 if self.selected.as_ref() == Some(&hit.entity) {

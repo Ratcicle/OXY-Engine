@@ -1,54 +1,77 @@
 use super::*;
+use crate::icons::Icon;
 use oxy_core::{
     geometry::{atlas, bevel, cuts, inset, operations},
     painting::PaintImage,
 };
+
+/// Mesh operations in toolbar and menu order: icon, label, shortcut, description.
+const TOPOLOGY: [(Icon, &str, &str, &str, Operation); 7] = [
+    (
+        Icon::Extrude,
+        "Extrudir",
+        "Shift+E",
+        "prolonga a região, borda ou pontos selecionados; tamanho interno menor que 100% deixa uma moldura.",
+        Operation::Extrude,
+    ),
+    (
+        Icon::Inset,
+        "Borda interna",
+        "Shift+U",
+        "cria uma moldura no plano original e seleciona a região interna.",
+        Operation::Inset,
+    ),
+    (
+        Icon::Bevel,
+        "Arredondar",
+        "Shift+B",
+        "chanfra ou arredonda quinas convexas; arraste a largura e solte para aplicar.",
+        Operation::Bevel,
+    ),
+    (
+        Icon::Loop,
+        "Corte em loop",
+        "Shift+R",
+        "divide uma faixa de quads a partir da aresta apontada.",
+        Operation::Loop,
+    ),
+    (
+        Icon::Knife,
+        "Bisturi",
+        "Shift+K",
+        "trace entre bordas de faces visíveis; duplo clique ou Enter conclui.",
+        Operation::Knife,
+    ),
+    (
+        Icon::Create,
+        "Criar face/aresta",
+        "Shift+F",
+        "une pontos ordenados ou fecha uma borda plana.",
+        Operation::Create,
+    ),
+    (
+        Icon::Flip,
+        "Inverter",
+        "Shift+N",
+        "inverte o lado da face sem trocar seus pixels.",
+        Operation::Flip,
+    ),
+];
 impl Editor {
     pub(super) fn topology_menu(&mut self, ui: &mut egui::Ui) {
         let available = !self.mesh_operation_active();
         let active = !self.modeling.selection.ids.is_empty();
-        for (label, tip, op) in [
-            (
-                "Corte em loop (Shift+R)",
-                "Divide uma faixa de quads a partir da aresta apontada.",
-                Operation::Loop,
-            ),
-            (
-                "Bisturi (Shift+K)",
-                "Trace entre bordas de faces visíveis e adjacentes.",
-                Operation::Knife,
-            ),
-            (
-                "Arredondar (Shift+B)",
-                "Chanfre ou arredonde quinas convexas com largura e segmentos.",
-                Operation::Bevel,
-            ),
-            (
-                "Extrudir (Shift+E)",
-                "Prolonga a região, borda ou pontos selecionados.",
-                Operation::Extrude,
-            ),
-            (
-                "Criar borda interna (Shift+U)",
-                "Cria uma moldura no plano original e seleciona a região interna.",
-                Operation::Inset,
-            ),
-            (
-                "Criar face ou aresta (Shift+F)",
-                "Use pontos ordenados ou as bordas de uma abertura fechada.",
-                Operation::Create,
-            ),
-            (
-                "Inverter orientação (Shift+N)",
-                "Inverte o lado da face sem trocar seus pixels.",
-                Operation::Flip,
-            ),
-        ] {
+        for (_, label, shortcut, tip, op) in TOPOLOGY {
+            let label = if op == Operation::Flip {
+                "Inverter orientação"
+            } else {
+                label
+            };
             let enabled = available
                 && self.operation_available(op)
                 && (active || matches!(op, Operation::Loop | Operation::Knife));
             if ui
-                .add_enabled(enabled, egui::Button::new(label))
+                .add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut))
                 .on_hover_text(tip)
                 .on_disabled_hover_text(
                     "Escolha componentes no modo compatível; termine ou cancele o arrasto atual.",
@@ -60,69 +83,53 @@ impl Editor {
             }
         }
     }
-    /// Inline tools: caller owns the single row and the always-accessible overflow menu.
+    /// Width the operation buttons of the current mode take with their names.
+    pub(in crate::app) fn topology_width(&self, ui: &mut egui::Ui) -> f32 {
+        let spacing = ui.spacing().item_spacing.x;
+        if self.components_active() {
+            TOPOLOGY
+                .into_iter()
+                .filter(|(.., op)| self.operation_available(*op))
+                .map(|(_, label, ..)| crate::icons::width(ui, label, true) + spacing)
+                .sum()
+        } else {
+            crate::icons::width(ui, "Encaixar vértices", true) + spacing
+        }
+    }
+    /// Operations of the current selection mode, always in the same order. Names give way
+    /// to icons when the row is narrow; every operation also stays in the Malha menu.
     pub(super) fn topology_toolbar(&mut self, ui: &mut egui::Ui) {
         use crate::icons::{Icon, button, width};
-        let names = self.preferences.tool_names;
-        let reserve = width(ui, "Malha", names) + ui.spacing().item_spacing.x;
         let available = !self.mesh_operation_active();
+        let spacing = ui.spacing().item_spacing.x;
         if self.components_active() {
-            for (icon, label, tip, op) in [
-                (
-                    Icon::Loop,
-                    "Corte em loop",
-                    "Corte em loop (Shift+R): clique na faixa de quads para cortar.",
-                    Operation::Loop,
-                ),
-                (
-                    Icon::Bevel,
-                    "Arredondar",
-                    "Arredondar (Shift+B): arraste a largura e solte para aplicar.",
-                    Operation::Bevel,
-                ),
-                (
-                    Icon::Extrude,
-                    "Extrudir",
-                    "Extrudir (Shift+E): arraste a distância; tamanho interno menor que 100% deixa uma moldura.",
-                    Operation::Extrude,
-                ),
-                (
-                    Icon::Inset,
-                    "Criar borda interna",
-                    "Criar borda interna (Shift+U): reduz o contorno interno no plano original.",
-                    Operation::Inset,
-                ),
-                (
-                    Icon::Create,
-                    "Criar face/aresta",
-                    "Criar (Shift+F): une pontos ordenados ou fecha uma borda plana.",
-                    Operation::Create,
-                ),
-                (
-                    Icon::Flip,
-                    "Inverter orientação",
-                    "Inverter orientação (Shift+N): troca o lado da face mantendo os pixels.",
-                    Operation::Flip,
-                ),
-                (
-                    Icon::Knife,
-                    "Bisturi",
-                    "Bisturi (Shift+K): trace o caminho; duplo clique ou Enter conclui.",
-                    Operation::Knife,
-                ),
-            ] {
-                if !self.operation_available(op) {
-                    continue;
-                }
-                if ui.available_width() < width(ui, label, names) + reserve {
-                    continue;
-                }
+            let tools: Vec<_> = TOPOLOGY
+                .into_iter()
+                .filter(|(.., op)| self.operation_available(*op))
+                .collect();
+            let named: f32 = tools
+                .iter()
+                .map(|(_, label, ..)| width(ui, label, true) + spacing)
+                .sum();
+            let icons_only = tools.len() as f32 * (width(ui, "", false) + spacing);
+            let names = ui.available_width() >= named;
+            if !names && ui.available_width() < icons_only {
+                return;
+            }
+            for (icon, label, shortcut, tip, op) in tools {
                 let enabled = available
                     && (!self.modeling.selection.ids.is_empty()
                         || matches!(op, Operation::Loop | Operation::Knife));
-                let selected = self.modeling.preview.as_ref().is_some_and(|p| p.operation == op);
+                let selected = self
+                    .modeling
+                    .preview
+                    .as_ref()
+                    .is_some_and(|p| p.operation == op);
+                let tooltip = format!("{label} ({shortcut}): {tip}");
                 let response = ui
-                    .add_enabled_ui(enabled, |ui| button(ui, icon, label, tip, selected, names))
+                    .add_enabled_ui(enabled, |ui| {
+                        button(ui, icon, label, &tooltip, selected, names)
+                    })
                     .inner;
                 if response
                     .on_disabled_hover_text(
@@ -133,9 +140,12 @@ impl Editor {
                     self.begin_mesh_operation(op);
                 }
             }
-        } else if ui.available_width() >= width(ui, "Encaixar vértices", names) + reserve
-            && ui.add_enabled_ui(available&&!self.selection.ids.is_empty(),|ui|button(ui,Icon::Snap,"Encaixar vértices","Encaixar vértices (Shift+V): selecione origem e destino para mover a peça ou escalar pelo eixo.",false,names)).inner.clicked() {
-            self.begin_snap();
+        } else {
+            let names = ui.available_width() >= width(ui, "Encaixar vértices", true) + spacing;
+            if (names || ui.available_width() >= width(ui, "", false))
+                && ui.add_enabled_ui(available&&!self.selection.ids.is_empty(),|ui|button(ui,Icon::Snap,"Encaixar vértices","Encaixar vértices (Shift+V): selecione origem e destino para mover a peça ou escalar pelo eixo.",false,names)).inner.clicked() {
+                self.begin_snap();
+            }
         }
     }
     pub(super) fn operation_available(&self, op: Operation) -> bool {

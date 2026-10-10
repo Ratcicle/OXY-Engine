@@ -1,7 +1,9 @@
 //! Animation authoring. Poses under construction never enter the project document.
 use crate::{
-    app::{Editor, vector3},
+    app::{DockTab, Editor},
     graph_ui::text_input_active,
+    icons::{self, Icon},
+    theme, widgets,
 };
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
 use oxy_core::{
@@ -75,7 +77,8 @@ pub struct AnimationState {
     event_name: Option<(Id, usize, String)>,
     message: String,
     references: Vec<String>,
-    properties_open: bool,
+    /// Bottom area of the Animation: `None` shows the timeline, otherwise a dock tab.
+    pub bottom: Option<DockTab>,
 }
 impl Default for AnimationState {
     fn default() -> Self {
@@ -95,7 +98,7 @@ impl Default for AnimationState {
             event_name: None,
             message: String::new(),
             references: Vec::new(),
-            properties_open: false,
+            bottom: None,
         }
     }
 }
@@ -356,10 +359,36 @@ impl Editor {
         self.studio.playing = false;
         self.studio.animation.selection = TimelineSelection::None;
     }
-    fn animation_list(&mut self, ui: &mut egui::Ui) {
-        ui.strong("ANIMAÇÕES");
+    /// Creates an animation for the current model and opens its name for editing.
+    fn new_animation(&mut self) {
         let Some(model) = self.studio.owner.clone() else {
-            ui.label("Selecione uma raiz, grupo ou peça para começar.");
+            return;
+        };
+        if !self.studio.animation.drafts.is_empty() {
+            self.studio.animation.message =
+                "Grave ou descarte a pose provisória antes de criar outra animação.".into();
+            return;
+        }
+        let clips = self
+            .scene()
+            .entity(&model)
+            .map(|entity| entity.clips.clone())
+            .unwrap_or_default();
+        let clip = Clip::new(unique_name(&clips, "Nova animação"));
+        let id = clip.id.clone();
+        let name = clip.name.clone();
+        if let Some(entity) = self.scene_mut().entity_mut(&model) {
+            entity.clips.push(clip);
+        }
+        self.choose_animation(&id);
+        self.studio.animation.rename = Some(Rename {
+            id,
+            text: name,
+            focus: true,
+        });
+    }
+    fn duplicate_chosen_animation(&mut self, id: &str) {
+        let Some(model) = self.studio.owner.clone() else {
             return;
         };
         let clips = self
@@ -367,150 +396,153 @@ impl Editor {
             .entity(&model)
             .map(|entity| entity.clips.clone())
             .unwrap_or_default();
-        if ui
-            .add_enabled(
-                self.studio.animation.drafts.is_empty(),
-                egui::Button::new("+ Nova animação"),
-            )
-            .clicked()
-        {
-            let clip = Clip::new(unique_name(&clips, "Nova animação"));
-            let id = clip.id.clone();
-            let name = clip.name.clone();
-            if let Some(entity) = self.scene_mut().entity_mut(&model) {
-                entity.clips.push(clip);
-            }
-            self.choose_animation(&id);
-            self.studio.animation.rename = Some(Rename {
-                id,
-                text: name,
-                focus: true,
-            });
-        }
-        ui.add_space(6.0);
-        let mut delete = None;
-        let mut duplicate = None;
-        let mut rename = None;
-        let mut rename_commit = None;
-        let mut rename_cancel = false;
-        egui::ScrollArea::vertical()
-            .id_salt("animation_names")
-            .show(ui, |ui| {
-                for clip in &clips {
-                    ui.push_id(&clip.id, |ui| {
-                        if self
-                            .studio
-                            .animation
-                            .rename
-                            .as_ref()
-                            .is_some_and(|rename| rename.id == clip.id)
-                        {
-                            let edit = self.studio.animation.rename.as_mut().unwrap();
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut edit.text)
-                                    .desired_width(ui.available_width()),
-                            );
-                            if edit.focus {
-                                response.request_focus();
-                                edit.focus = false;
-                            }
-                            if ui.input(|input| input.key_pressed(egui::Key::Enter))
-                                && !edit.text.trim().is_empty()
-                            {
-                                rename_commit =
-                                    Some((clip.id.clone(), edit.text.trim().to_owned()));
-                            }
-                            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-                                rename_cancel = true;
-                            }
-                            ui.small("Enter confirma · Escape cancela");
-                        } else {
-                            let response = ui.add_sized(
-                                [ui.available_width(), crate::theme::CONTROL_HEIGHT],
-                                egui::Button::selectable(
-                                    self.studio.animation.selected.as_ref() == Some(&clip.id),
-                                    &clip.name,
-                                ),
-                            );
-                            if response.clicked() {
-                                self.choose_animation(&clip.id);
-                            }
-                            if response.double_clicked() {
-                                rename = Some((clip.id.clone(), clip.name.clone()));
-                            }
-                            response.context_menu(|ui| {
-                                if ui.button("Renomear · F2").clicked() {
-                                    rename = Some((clip.id.clone(), clip.name.clone()));
-                                    ui.close();
-                                }
-                                if ui
-                                    .add_enabled(
-                                        self.studio.animation.drafts.is_empty(),
-                                        egui::Button::new("Duplicar animação"),
-                                    )
-                                    .on_hover_text(
-                                        "Grave ou descarte a pose provisória antes de duplicar.",
-                                    )
-                                    .clicked()
-                                {
-                                    duplicate = Some(clip.id.clone());
-                                    ui.close();
-                                }
-                                if ui.button("Excluir animação").clicked() {
-                                    delete = Some(clip.id.clone());
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
-                }
-                if clips.is_empty() {
-                    ui.small("Crie uma animação e grave a primeira pose com + Quadro-chave.");
-                }
-            });
-        if let Some((id, name)) = rename_commit {
-            if let Some(clip) = self
-                .scene_mut()
-                .entity_mut(&model)
-                .and_then(|entity| entity.clips.iter_mut().find(|clip| clip.id == id))
-            {
-                clip.name = name;
-            }
-            self.studio.animation.rename = None;
-        }
-        if rename_cancel {
-            self.studio.animation.rename = None;
-        }
-        if let Some((id, text)) = rename {
-            self.studio.animation.rename = Some(Rename {
-                id,
-                text,
-                focus: true,
-            });
-        }
-        if let Some(id) = duplicate
-            && let Some(copy) = duplicate_animation(&clips, &id)
-        {
+        if let Some(copy) = duplicate_animation(&clips, id) {
             let id = copy.id.clone();
             if let Some(entity) = self.scene_mut().entity_mut(&model) {
                 entity.clips.push(copy);
             }
             self.choose_animation(&id);
         }
-        if let Some(id) = delete {
-            self.delete_selected_animation(&id);
+    }
+    /// Rename, duplicate and delete, shared by the selector menu and its context menu.
+    fn animation_actions(&mut self, ui: &mut egui::Ui, id: &str, name: &str) {
+        if widgets::menu_item(ui, "Renomear", "F2").clicked() {
+            self.studio.animation.rename = Some(Rename {
+                id: id.into(),
+                text: name.into(),
+                focus: true,
+            });
+            ui.close();
         }
-        if !self.hierarchy_ui.focus
+        if ui
+            .add_enabled(
+                self.studio.animation.drafts.is_empty(),
+                egui::Button::new("Duplicar animação"),
+            )
+            .on_disabled_hover_text("Grave ou descarte a pose provisória antes de duplicar.")
+            .clicked()
+        {
+            self.duplicate_chosen_animation(id);
+            ui.close();
+        }
+        if ui
+            .button(egui::RichText::new("Excluir animação").color(theme::ERROR))
+            .clicked()
+        {
+            self.delete_selected_animation(id);
+            ui.close();
+        }
+    }
+    /// Animation being edited: choose another one or create, rename, duplicate or delete.
+    fn animation_clip_selector(&mut self, ui: &mut egui::Ui, width: f32) {
+        let Some(model) = self.studio.owner.clone() else {
+            return;
+        };
+        let clips = self
+            .scene()
+            .entity(&model)
+            .map(|entity| entity.clips.clone())
+            .unwrap_or_default();
+        let current = self
+            .chosen_animation()
+            .map(|clip| (clip.id.clone(), clip.name.clone()));
+        let label = current
+            .as_ref()
+            .map_or("Sem animação", |(_, name)| name.as_str())
+            .to_owned();
+        let mut chosen = None;
+        let mut create = false;
+        let response = egui::ComboBox::from_id_salt("animation_clip")
+            .width(widgets::combo_inner_width(ui, width))
+            // Room for the clips and every action, without a scroll bar in the list.
+            .height(480.)
+            .selected_text(egui::RichText::new(&label).font(theme::medium(13.)))
+            .truncate()
+            .show_ui(ui, |ui| {
+                widgets::menu_label(ui, "Animações do modelo");
+                for clip in &clips {
+                    let selected = current.as_ref().is_some_and(|(id, _)| id == &clip.id);
+                    let item = egui::Button::selectable(selected, clip.name.as_str())
+                        .shortcut_text(format!("{:.2} s", clip.duration));
+                    if ui.add(item).clicked() {
+                        chosen = Some(clip.id.clone());
+                    }
+                }
+                ui.separator();
+                if ui.button("+ Nova animação").clicked() {
+                    create = true;
+                }
+                if let Some((id, name)) = &current {
+                    self.animation_actions(ui, id, name);
+                }
+            })
+            .response
+            .on_hover_text("Animação em edição: troque, crie, renomeie, duplique ou exclua.");
+        icons::register_qa(ui, "Animação em edição", response.rect);
+        if let Some((id, name)) = &current {
+            // `Response::context_menu` shares the combo's popup id and would close the
+            // list on every left click: the right-click menu needs an id of its own.
+            egui::Popup::context_menu(&response)
+                .id(response.id.with("clip_actions"))
+                .show(|ui| self.animation_actions(ui, id, name));
+        }
+        if let Some(id) = chosen {
+            self.choose_animation(&id);
+        }
+        if icons::small(ui, Icon::Plus, "+ Nova animação", 26.)
+            .on_hover_text("Nova animação deste modelo.")
+            .clicked()
+            || create
+        {
+            self.new_animation();
+        }
+        if let Some((id, name)) = current
+            && !self.hierarchy_ui.focus
             && !text_input_active(ui.ctx())
             && ui.input(|input| input.key_pressed(egui::Key::F2))
-            && let Some(clip) = self.chosen_animation()
         {
             self.studio.animation.rename = Some(Rename {
-                id: clip.id.clone(),
-                text: clip.name.clone(),
+                id,
+                text: name,
                 focus: true,
             });
         }
+    }
+    /// Shown in the timeline area while the model has no animation yet.
+    fn animation_empty(&mut self, ui: &mut egui::Ui) {
+        let area = ui.available_rect_before_wrap();
+        if self.studio.owner.is_none() {
+            widgets::empty_state(
+                ui,
+                area,
+                Icon::Clip,
+                "Nenhum modelo escolhido",
+                "Selecione uma raiz, grupo ou peça para começar.",
+                |_| {},
+            );
+            return;
+        }
+        widgets::empty_state(
+            ui,
+            area,
+            Icon::Clip,
+            "Este modelo ainda não tem animações",
+            "Crie uma animação e grave a primeira pose com + Quadro-chave.",
+            |ui| {
+                if ui
+                    .add_sized(
+                        [180., 28.],
+                        egui::Button::new(
+                            egui::RichText::new("+ Nova animação").color(Color32::WHITE),
+                        )
+                        .fill(theme::ACCENT),
+                    )
+                    .clicked()
+                {
+                    self.new_animation();
+                }
+            },
+        );
     }
     fn delete_selected_animation(&mut self, id: &str) {
         if !self.studio.animation.drafts.is_empty() {
@@ -534,89 +566,143 @@ impl Editor {
             }
         }
     }
-    /// Model context lives in the first Studio row; timeline and clip data stay unchanged.
-    pub(super) fn animation_context_controls(&mut self, ui: &mut egui::Ui, compact: bool) {
+    /// State of the animation preview for the viewport status line.
+    pub(crate) fn animation_status(&self) -> (egui::Color32, String, &'static str) {
+        use crate::theme;
+        if self.chosen_animation().is_none() {
+            return (
+                theme::TEXT_MUTED,
+                "Sem animação".into(),
+                "crie uma animação na linha do tempo",
+            );
+        }
+        if !self.studio.animation.preview {
+            return (
+                theme::TEXT_MUTED,
+                "Mostrando a pose-base".into(),
+                "a animação fica oculta até desligar Pose-base",
+            );
+        }
+        if !self.studio.animation.drafts.is_empty() {
+            let time = self
+                .studio
+                .animation
+                .draft_time
+                .map_or_else(String::new, |t| format!(" em {t:.2} s"));
+            return (
+                theme::HIGHLIGHT,
+                format!("Pose provisória{time}"),
+                "grave ou descarte na linha do tempo",
+            );
+        }
+        if self.studio.playing {
+            return (
+                theme::SUCCESS,
+                "Reproduzindo".into(),
+                "clique na linha do tempo para pausar",
+            );
+        }
+        match self
+            .selected
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+        {
+            Some(entity) => (
+                theme::ACCENT_BRIGHT,
+                format!("{} pronta para posar", entity.name),
+                "mova ou gire a peça para criar uma pose provisória",
+            ),
+            None => (
+                theme::TEXT_MUTED,
+                "Nenhuma peça selecionada".into(),
+                "escolha uma peça na hierarquia ou na linha do tempo",
+            ),
+        }
+    }
+    /// Switches the view between the animated pose and the model's original pose.
+    pub(crate) fn pose_base_toggle(&mut self, ui: &mut egui::Ui) {
+        let available = self.chosen_animation().is_some();
+        let showing = available && !self.studio.animation.preview;
+        let response = ui
+            .add_enabled_ui(available && self.studio.animation.drafts.is_empty(), |ui| {
+                crate::icons::button(
+                    ui,
+                    crate::icons::Icon::Person,
+                    "Pose-base",
+                    "Mostra a pose original do modelo, sem a animação. Grave ou descarte a pose provisória primeiro.",
+                    showing,
+                    true,
+                )
+            })
+            .inner;
+        if response.clicked() {
+            self.studio.animation.preview = showing;
+            self.studio.playing = false;
+        }
+    }
+    /// Model context lives in the first Studio row: whose animations are edited.
+    pub(super) fn animation_context_controls(&mut self, ui: &mut egui::Ui, _compact: bool) {
         if !self.spatial.base_pose {
             self.sync_animation_model();
         }
-        crate::icons::menu_button(
-            ui,
-            crate::icons::Icon::Object,
-            "Modelo",
-            "Modelo animável, pose-base e propriedades da animação.",
-            true,
-            |ui| {
-                ui.label(egui::RichText::new("Modelo:").small().weak());
-                let current = self
-                    .studio
-                    .owner
-                    .as_deref()
-                    .and_then(|id| self.scene().entity(id))
-                    .map(|entity| entity.name.clone())
-                    .unwrap_or_else(|| "Selecione uma peça".into());
-                let mut selected = self.studio.animation.manual_model.clone();
-                egui::ComboBox::from_id_salt("animation_model")
-                    .selected_text(current)
-                    .width(210.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut selected, None, "Automático pela seleção");
-                        for entity in &self.scene().entities {
-                            ui.selectable_value(
-                                &mut selected,
-                                Some(entity.id.clone()),
-                                &entity.name,
-                            );
-                        }
-                    });
-                if selected != self.studio.animation.manual_model {
-                    if self.studio.animation.drafts.is_empty() {
-                        self.studio.animation.manual_model = selected;
-                        self.sync_animation_model();
-                    } else {
-                        self.studio.animation.message =
-                            "Grave ou descarte a pose provisória antes de trocar o modelo.".into();
-                    }
-                }
-                if ui
-                    .add_enabled(
-                        self.studio.animation.drafts.is_empty(),
-                        egui::Button::new("Pose-base"),
-                    )
-                    .on_hover_text(
-                        "Mostra a pose original. Grave ou descarte a pose provisória primeiro.",
-                    )
-                    .clicked()
-                {
-                    self.studio.animation.preview = false;
-                    self.studio.playing = false;
-                }
-                if compact
-                    && ui
-                        .add_enabled(
-                            self.chosen_animation().is_some(),
-                            egui::Button::new("Propriedades"),
-                        )
-                        .on_hover_text("Editar a pose provisória ou o quadro/evento selecionado.")
-                        .clicked()
-                {
-                    self.studio.animation.properties_open = true;
-                }
-                if !self.studio.animation.drafts.is_empty() {
-                    ui.colored_label(
-                        crate::theme::HIGHLIGHT,
-                        format!(
-                            "{} pose(s) provisória(s)",
-                            self.studio.animation.drafts.len()
-                        ),
-                    );
-                    if ui.button("Descartar pose provisória").clicked() {
-                        self.studio.animation.drafts.clear();
-                        self.studio.animation.draft_time = None;
-                        self.studio.animation.message.clear();
-                    }
-                }
-            },
-        );
+        if ui.available_width() >= 160. {
+            ui.label(
+                egui::RichText::new("Modelo")
+                    .size(12.5)
+                    .color(theme::TEXT_MUTED),
+            );
+        }
+        let current = self
+            .studio
+            .owner
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+            .map(|entity| entity.name.clone())
+            .unwrap_or_else(|| "Selecione uma peça".into());
+        // Only the isolated object and its parts can own the animations edited here.
+        let candidates: Vec<_> = self
+            .studio_subtree()
+            .iter()
+            .filter_map(|id| self.scene().entity(id))
+            .map(|entity| (entity.id.clone(), entity.name.clone()))
+            .collect();
+        let mut selected = self.studio.animation.manual_model.clone();
+        let options = |ui: &mut egui::Ui, selected: &mut Option<Id>| {
+            ui.selectable_value(selected, None, "Automático pela seleção");
+            ui.separator();
+            for (id, name) in &candidates {
+                ui.selectable_value(selected, Some(id.clone()), name);
+            }
+        };
+        if ui.available_width() >= 100. {
+            let width = (ui.available_width() - 8.).clamp(90., 220.);
+            let response = egui::ComboBox::from_id_salt("animation_model")
+                .width(widgets::combo_inner_width(ui, width))
+                .selected_text(&current)
+                .truncate()
+                .show_ui(ui, |ui| options(ui, &mut selected))
+                .response
+                .on_hover_text("Modelo animável: a raiz, grupo ou peça dona das animações.");
+            icons::register_qa(ui, "Modelo", response.rect);
+        } else {
+            icons::menu_button(
+                ui,
+                Icon::Person,
+                "Modelo",
+                &format!("Modelo animável: {current}."),
+                false,
+                |ui| options(ui, &mut selected),
+            );
+        }
+        if selected != self.studio.animation.manual_model {
+            if self.studio.animation.drafts.is_empty() {
+                self.studio.animation.manual_model = selected;
+                self.sync_animation_model();
+            } else {
+                self.studio.animation.message =
+                    "Grave ou descarte a pose provisória antes de trocar o modelo.".into();
+            }
+        }
     }
     pub(super) fn animation_ui(&mut self, ui: &mut egui::Ui, dt: f32, compact: bool) {
         if self.spatial.base_pose {
@@ -636,26 +722,12 @@ impl Editor {
                 self.warn(warning);
             }
         }
-        egui::SidePanel::left(if compact {
-            "animation_list_compact"
-        } else {
-            "animation_list"
-        })
-        .resizable(!compact)
-        .default_width(if compact { 160.0 } else { 210.0 })
-        .width_range(160.0..=if compact { 160.0 } else { 320.0 })
-        .show_inside(ui, |ui| self.animation_list(ui));
-        let Some(mut clip) = self.chosen_animation().cloned() else {
-            egui::CentralPanel::default()
-                .frame(egui::Frame::NONE)
-                .show_inside(ui, |ui| {
-                    self.viewport(ui, false);
-                });
-            self.animation_reference_dialog(ui.ctx());
-            return;
-        };
+        let mut clip = self.chosen_animation().cloned();
         let old_clip = clip.clone();
-        if self.studio.playing && self.studio.animation.drafts.is_empty() {
+        if let Some(clip) = &clip
+            && self.studio.playing
+            && self.studio.animation.drafts.is_empty()
+        {
             self.studio.animation.time += dt.clamp(0.0, 0.1);
             if self.studio.animation.time >= clip.duration {
                 if clip.looping {
@@ -666,13 +738,13 @@ impl Editor {
                 }
             }
         }
-        // Keep space for the shared viewport toolbar and a useful drawing area.
+        // Keep space for the viewport tools and a useful drawing area.
         let timeline_max = if Self::compact_layout(ui.ctx()) {
-            (ui.available_height() * 0.35).clamp(80., 120.)
+            (ui.available_height() * 0.5).clamp(120., 200.)
         } else if compact {
-            (ui.available_height() * 0.45)
+            (ui.available_height() * 0.5)
                 .max(180.0)
-                .min((ui.available_height() - 155.0).max(120.0))
+                .min((ui.available_height() - 155.0).max(140.0))
         } else {
             600.0
         };
@@ -681,34 +753,36 @@ impl Editor {
         } else {
             "animation_timeline"
         })
+        .frame(
+            egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin {
+                left: 8,
+                right: 8,
+                top: 0,
+                bottom: 4,
+            }),
+        )
         .resizable(true)
-        .default_height(if compact { timeline_max } else { 285.0 })
-        .height_range(180.0_f32.min(timeline_max)..=timeline_max)
+        .default_height(if compact { timeline_max } else { 300.0 })
+        .height_range(150.0_f32.min(timeline_max)..=timeline_max)
         .show_inside(ui, |ui| {
-            self.animation_toolbar(ui, &mut clip, compact);
-            self.animation_timeline(ui, &mut clip, compact);
+            // egui keeps the height of the panel's content: fill the panel so a short
+            // tab, such as the empty state, never shrinks the timeline for later.
+            ui.set_min_height(ui.available_height());
+            self.animation_bottom_tabs(ui);
+            match (self.studio.animation.bottom, clip.as_mut()) {
+                (Some(DockTab::Console), _) => self.console_body(ui),
+                (Some(DockTab::Notices), _) => self.notices_body(ui),
+                (_, Some(clip)) => {
+                    self.animation_toolbar(ui, clip);
+                    self.animation_draft_banner(ui, clip);
+                    self.animation_timeline(ui, clip);
+                }
+                (_, None) => self.animation_empty(ui),
+            }
         });
-        if compact {
-            let mut open = self.studio.animation.properties_open;
-            egui::Window::new("Propriedades da animação")
-                .open(&mut open)
-                .default_width(285.0)
-                .max_width((ui.ctx().content_rect().width() - 40.0).max(210.0))
-                .max_height((ui.ctx().content_rect().height() - 90.0).max(180.0))
-                .vscroll(true)
-                .show(ui.ctx(), |ui| self.animation_properties(ui, &mut clip));
-            self.studio.animation.properties_open = open;
-        } else {
-            egui::SidePanel::right("animation_selection_properties")
-                .resizable(true)
-                .default_width(255.0)
-                .width_range(210.0..=370.0)
-                .show_inside(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .show(ui, |ui| self.animation_properties(ui, &mut clip));
-                });
-        }
-        if !ui.input(|input| input.pointer.primary_down()) {
+        if let Some(clip) = &mut clip
+            && !ui.input(|input| input.pointer.primary_down())
+        {
             for track in &mut clip.tracks {
                 track.keyframes.sort_by(|a, b| a.time.total_cmp(&b.time));
             }
@@ -721,8 +795,19 @@ impl Editor {
             self.studio.animation.message =
                 "Grave ou descarte as poses alteradas antes de mudar o cursor.".into();
         }
-        if clip != old_clip
-            && let Some(owner) = self.studio.owner.clone()
+        if let Some(clip) = clip
+            && Some(&clip) != old_clip.as_ref()
+        {
+            self.store_animation(clip);
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show_inside(ui, |ui| self.viewport(ui, false));
+        self.animation_reference_dialog(ui.ctx());
+    }
+    /// Writes an edited copy of the chosen animation back to its model.
+    fn store_animation(&mut self, clip: Clip) {
+        if let Some(owner) = self.studio.owner.clone()
             && let Some(existing) = self.scene_mut().entity_mut(&owner).and_then(|entity| {
                 entity
                     .clips
@@ -732,12 +817,32 @@ impl Editor {
         {
             *existing = clip;
         }
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show_inside(ui, |ui| self.viewport(ui, false));
-        self.animation_reference_dialog(ui.ctx());
     }
-    fn animation_toolbar(&mut self, ui: &mut egui::Ui, clip: &mut Clip, compact: bool) {
+    /// Timeline, Console and notices share the bottom of the Animation.
+    fn animation_bottom_tabs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.set_height(theme::PANEL_HEADER_HEIGHT);
+            let items = [
+                (None, "Linha do tempo", None),
+                (Some(DockTab::Console), "Console", None),
+                (
+                    Some(DockTab::Notices),
+                    "Avisos",
+                    Some(self.unread_notices()),
+                ),
+            ];
+            if let Some(tab) = widgets::tabs(ui, Some(self.studio.animation.bottom), &items) {
+                self.studio.animation.bottom = tab;
+            }
+        });
+        ui.painter().hline(
+            ui.max_rect().x_range(),
+            ui.min_rect().bottom(),
+            egui::Stroke::new(1., theme::BORDER),
+        );
+        ui.add_space(2.);
+    }
+    fn animation_toolbar(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
         let scope = self
             .studio
             .owner
@@ -745,120 +850,125 @@ impl Editor {
             .map(|id| self.scene().descendants(id))
             .unwrap_or_default();
         let selected = self.selected.clone().filter(|id| scope.contains(id));
-        if Self::compact_layout(ui.ctx()) {
-            // Keep a full, scrollable strip of tracks below this one-line toolbar.
-            // The menu retains every action without making the viewport progressively smaller.
-            ui.horizontal(|ui| {
-                ui.menu_button("Controles", |ui| {
-                    ui.set_width(300.0_f32.min(ui.ctx().content_rect().width() - 40.0));
-                    egui::ScrollArea::vertical()
-                        .max_height((ui.ctx().content_rect().height() * 0.7).max(120.0))
-                        .show(ui, |ui| {
-                            ui.strong("LINHA DO TEMPO");
-                            ui.label(&clip.name);
-                            ui.horizontal_wrapped(|ui| self.animation_duration_controls(ui, clip));
-                            ui.horizontal_wrapped(|ui| {
-                                self.animation_playback_controls(ui, clip, false)
-                            });
-                            ui.separator();
-                            ui.horizontal_wrapped(|ui| {
-                                self.animation_record_all_button(ui, clip, &scope);
-                                self.animation_paste_key_button(ui, clip, selected.as_deref());
-                            });
-                            ui.separator();
-                            ui.horizontal_wrapped(|ui| self.animation_event_controls(ui, clip));
-                        });
-                })
-                .response
-                .on_hover_text("Reprodução, duração, repetição, poses alteradas e eventos.");
-                self.animation_cursor_control(ui, clip);
-                self.animation_record_key_button(ui, clip, selected.as_deref());
-            });
+        // One row needs room for the clip, playback, the cursor and the key actions.
+        let two_rows = ui.available_width() < 700.;
+        let (rect, mut right) = widgets::toolbar_right(ui, crate::studio::ROW_HEIGHT + 6.);
+        icons::menu_button(
+            &mut right,
+            Icon::More,
+            "Mais ações da linha do tempo",
+            "Colar quadros e eventos.",
+            false,
+            |ui| {
+                self.animation_paste_key_button(ui, clip, selected.as_deref());
+                ui.separator();
+                if ui.button("+ Evento no cursor").clicked() {
+                    self.add_animation_event(clip);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        self.studio.animation.copied_event.is_some(),
+                        egui::Button::new("Colar evento"),
+                    )
+                    .clicked()
+                    && let Some(mut event) = self.studio.animation.copied_event.clone()
+                {
+                    event.time = self.studio.animation.time;
+                    clip.events.push(event);
+                    self.studio.animation.selection =
+                        TimelineSelection::Event(clip.events.len() - 1);
+                    ui.close();
+                }
+            },
+        );
+        self.animation_record_key_button(&mut right, clip, selected.as_deref());
+        let mut left = widgets::toolbar_left(ui, rect, &right);
+        if !two_rows {
+            let width = (left.available_width() * 0.28).clamp(72., 180.);
+            self.animation_clip_selector(&mut left, width);
+            widgets::divider(&mut left);
+            self.animation_playback_controls(&mut left, clip);
+            widgets::divider(&mut left);
+            self.animation_cursor_control(&mut left, clip);
             return;
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("LINHA DO TEMPO");
-            ui.separator();
-            if !compact {
-                ui.label(&clip.name);
-            }
-            self.animation_duration_controls(ui, clip);
-        });
-        ui.horizontal_wrapped(|ui| {
-            self.animation_playback_controls(ui, clip, compact);
-            self.animation_cursor_control(ui, clip);
-            self.animation_record_all_button(ui, clip, &scope);
-            self.animation_record_key_button(ui, clip, selected.as_deref());
-            self.animation_paste_key_button(ui, clip, selected.as_deref());
-        });
-    }
-    fn animation_duration_controls(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
-        let end = clip
-            .tracks
-            .iter()
-            .flat_map(|track| track.keyframes.iter().map(|key| key.time))
-            .chain(clip.events.iter().map(|event| event.time))
-            .fold(
-                self.studio.animation.draft_time.unwrap_or(0.1).max(0.1),
-                f32::max,
-            );
-        ui.label("Duração");
-        ui.add(
-            egui::DragValue::new(&mut clip.duration)
-                .range(end..=3600.0)
-                .speed(0.05)
-                .suffix(" s"),
-        )
-        .on_hover_text(
-            "A duração inclui o último quadro e evento. Mova-os antes de encurtar a animação.",
+        // Narrow timelines keep the clip and its actions on the first row, and move
+        // playback and the cursor to a second one instead of letting them overlap.
+        let width = (left.available_width() - 34.).clamp(72., 220.);
+        self.animation_clip_selector(&mut left, width);
+        let (row, _) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), crate::studio::ROW_HEIGHT),
+            Sense::hover(),
         );
-        ui.checkbox(&mut clip.looping, "Repetir").on_hover_text(
-            "Ao chegar ao fim, volta ao início e emite novamente os eventos atravessados.",
+        let mut second = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(row)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
+        self.animation_playback_controls(&mut second, clip);
+        widgets::divider(&mut second);
+        self.animation_cursor_control(&mut second, clip);
     }
-    fn animation_playback_controls(&mut self, ui: &mut egui::Ui, clip: &mut Clip, compact: bool) {
-        if ui
-            .add_enabled(
-                self.studio.animation.drafts.is_empty(),
-                egui::Button::new(if self.studio.playing {
-                    "Ⅱ Pausar"
-                } else {
-                    "▶ Reproduzir"
-                }),
-            )
-            .on_hover_text("Grave ou descarte poses provisórias antes de reproduzir.")
-            .clicked()
-        {
+    fn add_animation_event(&mut self, clip: &mut Clip) {
+        if !self.studio.animation.drafts.is_empty() {
+            return;
+        }
+        let name = self.studio.animation.marker_name.trim();
+        clip.events.push(AnimationEvent {
+            time: self.studio.animation.time,
+            name: if name.is_empty() { "Impacto" } else { name }.into(),
+        });
+        self.studio.animation.selection = TimelineSelection::Event(clip.events.len() - 1);
+    }
+    fn animation_playback_controls(&mut self, ui: &mut egui::Ui, clip: &Clip) {
+        let free = self.studio.animation.drafts.is_empty();
+        let blocked = "Grave ou descarte a pose provisória antes de reproduzir ou mover o cursor.";
+        let start = ui
+            .add_enabled_ui(free, |ui| icons::small(ui, Icon::SkipStart, "Início", 26.))
+            .inner;
+        if start.on_disabled_hover_text(blocked).clicked() {
+            self.studio.playing = false;
+            self.studio.animation.time = 0.0;
+            self.studio.animation.preview = true;
+        }
+        let (icon, label, name) = if self.studio.playing {
+            (Icon::Pause, "Pausar", "Ⅱ Pausar")
+        } else {
+            (Icon::Play, "Reproduzir", "▶ Reproduzir")
+        };
+        let compact = ui.available_width() < 300.;
+        let response = ui
+            .add_enabled_ui(free, |ui| {
+                widgets::icon_text_button(ui, icon, label, false, compact)
+            })
+            .inner;
+        icons::register_qa(ui, name, response.rect);
+        if response.on_disabled_hover_text(blocked).clicked() {
             self.studio.playing = !self.studio.playing;
             self.studio.animation.preview = true;
             if self.studio.animation.time >= clip.duration {
                 self.studio.animation.time = 0.0;
             }
         }
-        if ui
-            .add_enabled(
-                self.studio.animation.drafts.is_empty(),
-                egui::Button::new(if compact { "■" } else { "■ Início" }),
-            )
-            .on_hover_text("Grave ou descarte as poses alteradas antes de mudar o cursor.")
-            .clicked()
-        {
-            self.studio.playing = false;
-            self.studio.animation.time = 0.0;
-            self.studio.animation.preview = true;
-        }
     }
     fn animation_cursor_control(&mut self, ui: &mut egui::Ui, clip: &Clip) {
-        ui.label("Cursor");
+        ui.label(
+            egui::RichText::new("Cursor")
+                .size(12.5)
+                .color(theme::TEXT_MUTED),
+        );
         if ui
             .add_enabled(
                 self.studio.animation.drafts.is_empty(),
                 egui::DragValue::new(&mut self.studio.animation.time)
                     .range(0.0..=clip.duration)
                     .speed(1.0 / 60.0)
+                    .max_decimals(2)
                     .suffix(" s"),
             )
-            .on_hover_text(
+            .on_hover_text("Instante da linha do tempo.")
+            .on_disabled_hover_text(
                 "O cursor fica preso ao tempo da pose provisória até gravar ou descartar.",
             )
             .changed()
@@ -866,9 +976,67 @@ impl Editor {
             self.studio.playing = false;
             self.studio.animation.preview = true;
         }
+        if ui.available_width() > 64. {
+            ui.label(
+                egui::RichText::new(format!("de {:.2} s", clip.duration))
+                    .size(12.)
+                    .color(theme::TEXT_MUTED),
+            );
+        }
     }
-    fn animation_record_all_button(&mut self, ui: &mut egui::Ui, clip: &mut Clip, scope: &[Id]) {
-        if ui.add_enabled(!self.studio.animation.drafts.is_empty(),egui::Button::new("Gravar poses alteradas")).on_hover_text("Grava todas as peças e grupos alterados no tempo da pose provisória, em uma operação de desfazer.").clicked() && let Err(e)=record_drafts(&mut self.studio.animation,clip,scope){self.studio.animation.message=e;}
+    /// Pending poses are visible, with their two ways out.
+    fn animation_draft_banner(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
+        if self.studio.animation.drafts.is_empty() {
+            return;
+        }
+        let scope = self
+            .studio
+            .owner
+            .as_deref()
+            .map(|id| self.scene().descendants(id))
+            .unwrap_or_default();
+        let names: Vec<_> = self
+            .studio
+            .animation
+            .drafts
+            .keys()
+            .filter_map(|id| self.scene().entity(id).map(|entity| entity.name.clone()))
+            .collect();
+        let who = match names.as_slice() {
+            [one] => one.clone(),
+            many => format!("{} peças", many.len()),
+        };
+        let time = self
+            .studio
+            .animation
+            .draft_time
+            .unwrap_or(self.studio.animation.time);
+        let text = format!(
+            "Pose provisória em {who}, {time:.2} s. Grave para guardar ou descarte para voltar."
+        );
+        ui.add_space(4.);
+        widgets::banner(ui, &text, |ui| {
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("Gravar poses alteradas")
+                            .color(Color32::from_rgb(240, 212, 154)),
+                    )
+                    .fill(Color32::from_rgb(58, 46, 26)),
+                )
+                .on_hover_text("Grava todas as peças e grupos alterados no tempo da pose provisória, em uma operação de desfazer.")
+                .clicked()
+                && let Err(e) = record_drafts(&mut self.studio.animation, clip, &scope)
+            {
+                self.studio.animation.message = e;
+            }
+            if ui.button("Descartar").clicked() {
+                self.studio.animation.drafts.clear();
+                self.studio.animation.draft_time = None;
+                self.studio.animation.message.clear();
+            }
+        });
+        ui.add_space(2.);
     }
     fn animation_record_key_button(
         &mut self,
@@ -876,7 +1044,9 @@ impl Editor {
         clip: &mut Clip,
         selected: Option<&str>,
     ) {
-        if ui.add_enabled(selected.is_some(), egui::Button::new("+ Quadro-chave")).on_hover_text("Grava posição, rotação e escala da peça selecionada no cursor, incluindo a pose provisória.").clicked()
+        let button = egui::Button::new(egui::RichText::new("+ Quadro-chave").color(Color32::WHITE))
+            .fill(theme::ACCENT);
+        if ui.add_enabled(selected.is_some(), button).on_hover_text("Grava posição, rotação e escala da peça selecionada no cursor, incluindo a pose provisória.").on_disabled_hover_text("Selecione uma peça do modelo na hierarquia ou na linha do tempo.").clicked()
                 && let Some(target) = selected && let Some(transform) = self.animation_draft_transform(target) {
                 clip.insert_key(target, Keyframe { time: self.studio.animation.time, transform, interpolation: Interpolation::Linear });
                 self.studio.animation.drafts.remove(target); self.studio.animation.selection = TimelineSelection::Key { target: target.to_owned(), time: self.studio.animation.time };
@@ -894,6 +1064,7 @@ impl Editor {
                 selected.is_some() && self.studio.animation.copied_key.is_some(),
                 egui::Button::new("Colar quadro"),
             )
+            .on_hover_text("Cola o quadro copiado no cursor, na peça selecionada.")
             .clicked()
             && let (Some(target), Some(mut key)) =
                 (selected, self.studio.animation.copied_key.clone())
@@ -905,51 +1076,14 @@ impl Editor {
                 time: self.studio.animation.time,
             };
             self.studio.animation.preview = true;
+            ui.close();
         }
     }
-    fn animation_event_controls(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
-        ui.label("EVENTOS").on_hover_text("Grupos também podem ser articulações. Cada quadro reúne posição, rotação e escala; expandir mostra os três canais.");
-        ui.add(
-            egui::TextEdit::singleline(&mut self.studio.animation.marker_name)
-                .desired_width(110.0)
-                .hint_text("Nome do evento"),
-        );
-        if ui
-            .add_enabled(
-                !self.studio.animation.marker_name.trim().is_empty(),
-                egui::Button::new("+ Evento no cursor"),
-            )
-            .clicked()
-        {
-            clip.events.push(AnimationEvent {
-                time: self.studio.animation.time,
-                name: self.studio.animation.marker_name.trim().into(),
-            });
-            self.studio.animation.selection = TimelineSelection::Event(clip.events.len() - 1);
-        }
-        if ui
-            .add_enabled(
-                self.studio.animation.copied_event.is_some(),
-                egui::Button::new("Colar evento"),
-            )
-            .clicked()
-            && let Some(mut event) = self.studio.animation.copied_event.clone()
-        {
-            event.time = self.studio.animation.time;
-            clip.events.push(event);
-            self.studio.animation.selection = TimelineSelection::Event(clip.events.len() - 1);
-        }
-    }
-    fn animation_timeline(&mut self, ui: &mut egui::Ui, clip: &mut Clip, compact: bool) {
-        if !Self::compact_layout(ui.ctx()) {
-            ui.horizontal_wrapped(|ui| self.animation_event_controls(ui, clip));
-        }
-        if !compact {
-            ui.small("Grupos também podem ser articulações. Cada quadro reúne posição, rotação e escala; expandir mostra os três canais.");
-        }
+    fn animation_timeline(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
         let Some(owner) = self.studio.owner.clone() else {
             return;
         };
+        let name_width = (ui.available_width() * 0.32).clamp(120.0, 196.0);
         let scope = self.scene().descendants(&owner);
         let ids: Vec<_> = oxy_core::editing::hierarchy_order(self.scene())
             .into_iter()
@@ -959,6 +1093,7 @@ impl Editor {
             .iter()
             .filter_map(|id| self.scene().entity(id).cloned())
             .collect();
+        let free = self.studio.animation.drafts.is_empty();
         egui::ScrollArea::vertical()
             .id_salt("animation_tracks")
             // The default 64-point minimum can exceed the remaining compact timeline.
@@ -966,52 +1101,121 @@ impl Editor {
             .min_scrolled_height(0.0)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_sized([160.0, 24.0], egui::Label::new("Tempo (s)"));
-                    let (rect, _) = ui.allocate_exact_size(
-                        Vec2::new(ui.available_width().max(10.0), 24.0),
-                        Sense::hover(),
-                    );
-                    for tick in 0..=10 {
-                        let time = clip.duration * tick as f32 / 10.0;
-                        let x = rect.left() + rect.width() * tick as f32 / 10.0;
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
+                // Ruler: click or drag to move the cursor.
+                let ruler = ui
+                    .horizontal(|ui| {
+                        let (name, _) =
+                            ui.allocate_exact_size(Vec2::new(name_width, 26.0), Sense::hover());
                         ui.painter().text(
-                            Pos2::new(x, rect.center().y),
-                            egui::Align2::CENTER_CENTER,
-                            format!("{time:.2}"),
-                            egui::FontId::proportional(11.0),
-                            Color32::GRAY,
+                            Pos2::new(name.left() + 10.0, name.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            "Tempo (s)",
+                            egui::FontId::proportional(11.5),
+                            theme::TEXT_MUTED,
                         );
-                    }
-                });
+                        let (rect, response) = ui.allocate_exact_size(
+                            Vec2::new((ui.available_width() - 12.0).max(10.0), 26.0),
+                            Sense::click_and_drag(),
+                        );
+                        let painter = ui.painter();
+                        // Label every major tick that leaves room for "0.00"; 10 major
+                        // intervals divide evenly by 1, 2, 5 and 10.
+                        let spacing = rect.width() / 10.0;
+                        let every = [1, 2, 5, 10]
+                            .into_iter()
+                            .find(|step| spacing * *step as f32 >= 40.0)
+                            .unwrap_or(10);
+                        for tick in 0..=20 {
+                            let x = rect.left() + rect.width() * tick as f32 / 20.0;
+                            let major = tick % 2 == 0;
+                            painter.line_segment(
+                                [
+                                    Pos2::new(x, rect.bottom() - if major { 7.0 } else { 4.0 }),
+                                    Pos2::new(x, rect.bottom()),
+                                ],
+                                egui::Stroke::new(
+                                    1.0,
+                                    Color32::from_gray(if major { 92 } else { 66 }),
+                                ),
+                            );
+                            if major && (tick / 2) % every == 0 {
+                                let time = clip.duration * tick as f32 / 20.0;
+                                painter.text(
+                                    Pos2::new(x, rect.top() + 8.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    format!("{time:.2}"),
+                                    egui::FontId::monospace(10.5),
+                                    Color32::from_gray(150),
+                                );
+                            }
+                        }
+                        painter.hline(
+                            rect.x_range(),
+                            rect.bottom(),
+                            egui::Stroke::new(1.0, theme::BORDER),
+                        );
+                        if free
+                            && (response.clicked() || response.dragged())
+                            && let Some(pointer) = response.interact_pointer_pos()
+                        {
+                            self.studio.animation.time =
+                                timeline_time(pointer.x, rect, clip.duration);
+                            self.studio.animation.preview = true;
+                            self.studio.playing = false;
+                        }
+                        rect
+                    })
+                    .inner;
+                // Events lane.
                 ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [160.0, 28.0],
-                        egui::Label::new(
-                            egui::RichText::new("EVENTOS").color(crate::theme::HIGHLIGHT),
+                    let (name, _) =
+                        ui.allocate_exact_size(Vec2::new(name_width, 28.0), Sense::hover());
+                    icons::paint(
+                        ui,
+                        Rect::from_center_size(
+                            Pos2::new(name.left() + 16.0, name.center().y),
+                            Vec2::splat(13.0),
                         ),
+                        Icon::Flag,
+                        theme::HIGHLIGHT,
                     );
-                    let rect = self.timeline_lane(ui, clip.duration, 30.0);
+                    ui.painter().text(
+                        Pos2::new(name.left() + 30.0, name.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        "Eventos",
+                        egui::FontId::proportional(12.5),
+                        Color32::from_rgb(232, 210, 160),
+                    );
+                    let add = Rect::from_center_size(
+                        Pos2::new(name.right() - 16.0, name.center().y),
+                        Vec2::splat(22.0),
+                    );
+                    let response = ui
+                        .interact(add, ui.id().with("animation_event_add"), Sense::click())
+                        .on_hover_text("Adiciona um evento no cursor.");
+                    icons::register_qa(ui, "+ Evento no cursor", add);
+                    if response.hovered() {
+                        ui.painter().rect_filled(add, 4.0, theme::BG_HEADER);
+                    }
+                    icons::paint(ui, add.shrink(5.0), Icon::Plus, theme::TEXT_MUTED);
+                    if response.clicked() {
+                        self.add_animation_event(clip);
+                    }
+                    let rect = self.timeline_lane(ui, clip.duration, 28.0);
                     for (index, event) in clip.events.iter_mut().enumerate() {
                         let x = rect.left() + rect.width() * event.time / clip.duration;
-                        let center = Pos2::new(x, rect.center().y);
                         let selected =
                             self.studio.animation.selection == TimelineSelection::Event(index);
-                        draw_diamond(
-                            ui.painter(),
-                            center,
-                            if selected { 7.0 } else { 5.0 },
-                            if selected {
-                                Color32::WHITE
-                            } else {
-                                crate::theme::HIGHLIGHT
-                            },
-                        );
+                        draw_flag(ui, Pos2::new(x, rect.center().y), &event.name, selected);
                         let response = ui
                             .interact(
-                                Rect::from_center_size(center, Vec2::splat(17.0)),
+                                Rect::from_center_size(
+                                    Pos2::new(x + 4.0, rect.center().y),
+                                    Vec2::new(18.0, 22.0),
+                                ),
                                 ui.id().with(("animation_event", index)),
-                                if self.studio.animation.drafts.is_empty() {
+                                if free {
                                     Sense::click_and_drag()
                                 } else {
                                     Sense::hover()
@@ -1032,68 +1236,84 @@ impl Editor {
                         }
                     }
                 });
+                // One track per part of the model.
+                let mut last = ruler.bottom();
                 for entity in &entities {
                     let expanded = self.studio.animation.expanded.contains(&entity.id);
-                    ui.horizontal(|ui| {
-                        let depth = hierarchy_depth(self.scene(), &owner, &entity.id);
-                        ui.allocate_ui_with_layout(
-                            Vec2::new(160.0, 28.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.add_space((depth as f32 * 10.0).min(40.0));
-                                if ui.small_button(if expanded { "▾" } else { "▸" }).clicked() {
-                                    if expanded {
-                                        self.studio.animation.expanded.remove(&entity.id);
-                                    } else {
-                                        self.studio.animation.expanded.insert(entity.id.clone());
-                                    }
-                                }
-                                let label = if !entity.has_geometry() {
-                                    format!("▧ {}", entity.name)
-                                } else {
-                                    entity.name.clone()
-                                };
-                                if ui
-                                    .add_sized(
-                                        [ui.available_width(), 22.0],
-                                        egui::Button::selectable(
-                                            self.selected.as_ref() == Some(&entity.id),
-                                            label,
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(&entity.name)
-                                    .clicked()
-                                {
-                                    self.select(Some(entity.id.clone()));
-                                    self.hierarchy_ui.focus = false;
-                                    self.studio.animation.selection = TimelineSelection::None;
-                                }
-                            },
-                        );
-                        let rect = self.timeline_lane(ui, clip.duration, 28.0);
-                        self.key_lane(ui, clip, &entity.id, rect, "pose");
-                    });
+                    let depth = hierarchy_depth(self.scene(), &owner, &entity.id);
+                    let row = ui
+                        .horizontal(|ui| {
+                            self.track_name(ui, entity, depth, expanded, name_width);
+                            let rect = self.timeline_lane(ui, clip.duration, 28.0);
+                            if self.selected.as_ref() == Some(&entity.id) {
+                                ui.painter().rect_filled(rect, 0.0, theme::ACCENT_FILL);
+                            }
+                            self.key_lane(ui, clip, &entity.id, rect, "pose");
+                            if let Some(time) = self.studio.animation.draft_time
+                                && self.studio.animation.drafts.contains_key(&entity.id)
+                            {
+                                let x = rect.left() + rect.width() * time / clip.duration;
+                                draw_diamond_outline(ui.painter(), Pos2::new(x, rect.center().y));
+                            }
+                            rect
+                        })
+                        .inner;
+                    last = row.bottom();
                     if expanded {
                         for (channel, color) in [
                             ("Posição", Color32::from_rgb(135, 203, 223)),
                             ("Rotação", Color32::from_rgb(203, 158, 222)),
                             ("Escala", Color32::from_rgb(154, 207, 150)),
                         ] {
-                            ui.horizontal(|ui| {
-                                ui.add_sized(
-                                    [160.0, 22.0],
-                                    egui::Label::new(
-                                        egui::RichText::new(format!("       {channel}"))
-                                            .color(color),
-                                    ),
-                                );
-                                let rect = self.timeline_lane(ui, clip.duration, 22.0);
-                                self.key_lane(ui, clip, &entity.id, rect, channel);
-                            });
+                            let row = ui
+                                .horizontal(|ui| {
+                                    let (name, _) = ui.allocate_exact_size(
+                                        Vec2::new(name_width, 22.0),
+                                        Sense::hover(),
+                                    );
+                                    let x = name.left() + 30.0 + track_indent(depth, name_width);
+                                    ui.painter().rect_filled(
+                                        Rect::from_center_size(
+                                            Pos2::new(x, name.center().y),
+                                            Vec2::splat(7.0),
+                                        ),
+                                        2.0,
+                                        color,
+                                    );
+                                    ui.painter().text(
+                                        Pos2::new(x + 10.0, name.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        channel,
+                                        egui::FontId::proportional(12.0),
+                                        theme::TEXT_MUTED,
+                                    );
+                                    let rect = self.timeline_lane(ui, clip.duration, 22.0);
+                                    self.key_lane(ui, clip, &entity.id, rect, channel);
+                                    rect
+                                })
+                                .inner;
+                            last = row.bottom();
                         }
                     }
                 }
+                // Cursor across the ruler and every lane, with its time on the ruler.
+                let x = ruler.left() + ruler.width() * self.studio.animation.time / clip.duration;
+                let painter = ui.painter();
+                painter.vline(
+                    x,
+                    ruler.top()..=last,
+                    egui::Stroke::new(1.5, theme::ACCENT_BRIGHT),
+                );
+                let label =
+                    Rect::from_center_size(Pos2::new(x, ruler.top() + 9.0), Vec2::new(40.0, 16.0));
+                painter.rect_filled(label, 4.0, theme::ACCENT);
+                painter.text(
+                    label.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{:.2}", self.studio.animation.time),
+                    egui::FontId::monospace(10.5),
+                    Color32::WHITE,
+                );
             });
         if !ui.input(|input| input.pointer.primary_down()) {
             for track in &mut clip.tracks {
@@ -1101,24 +1321,118 @@ impl Editor {
             }
         }
     }
-    fn timeline_lane(&mut self, ui: &mut egui::Ui, duration: f32, height: f32) -> Rect {
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width().max(10.0), height),
+    /// Name cell of a track: expand, kind icon, name and a dot for a pending pose.
+    fn track_name(
+        &mut self,
+        ui: &mut egui::Ui,
+        entity: &Entity,
+        depth: usize,
+        expanded: bool,
+        width: f32,
+    ) {
+        // The Hierarchy owns "Objeto: X" and "Expandir X": a track row reuses neither label.
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
+        let selected = self.selected.as_ref() == Some(&entity.id);
+        let row = rect.shrink2(Vec2::new(2.0, 2.0));
+        if selected {
+            ui.painter().rect_filled(row, 4.0, theme::ACCENT_SOFT);
+        } else if response.hovered() {
+            ui.painter().rect_filled(row, 4.0, theme::BG_RAISED);
+        }
+        let x = rect.left() + 6.0 + track_indent(depth, width);
+        let chevron = Rect::from_min_size(Pos2::new(x, rect.center().y - 9.0), Vec2::splat(18.0));
+        let toggle = ui.interact(
+            chevron,
+            ui.id().with(("animation_track_expand", &entity.id)),
             Sense::click(),
         );
-        ui.painter().rect_filled(rect, 2.0, crate::theme::BG_BASE);
-        for tick in 0..=10 {
-            let x = rect.left() + rect.width() * tick as f32 / 10.0;
-            ui.painter().line_segment(
-                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                egui::Stroke::new(1.0, crate::theme::GRID),
+        let label = if expanded {
+            format!("Recolher trilha {}", entity.name)
+        } else {
+            format!("Expandir trilha {}", entity.name)
+        };
+        icons::register_qa(ui, &label, chevron);
+        icons::paint(
+            ui,
+            chevron.shrink(4.0),
+            if expanded {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            },
+            if toggle.hovered() {
+                theme::TEXT
+            } else {
+                theme::TEXT_MUTED
+            },
+        );
+        if toggle
+            .on_hover_text("Mostra os canais de posição, rotação e escala.")
+            .clicked()
+        {
+            if expanded {
+                self.studio.animation.expanded.remove(&entity.id);
+            } else {
+                self.studio.animation.expanded.insert(entity.id.clone());
+            }
+        }
+        icons::paint(
+            ui,
+            Rect::from_center_size(Pos2::new(x + 27.0, rect.center().y), Vec2::splat(14.0)),
+            crate::app::entity_icon(entity),
+            if selected {
+                theme::ACCENT_BRIGHT
+            } else {
+                theme::TEXT_MUTED
+            },
+        );
+        let pending = self.studio.animation.drafts.contains_key(&entity.id);
+        let text_right = rect.right() - if pending { 18.0 } else { 6.0 };
+        let text_rect = Rect::from_min_max(
+            Pos2::new(x + 40.0, rect.top()),
+            Pos2::new(text_right.max(x + 41.0), rect.bottom()),
+        );
+        ui.painter_at(text_rect).text(
+            Pos2::new(text_rect.left(), rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &entity.name,
+            egui::FontId::proportional(12.5),
+            if selected {
+                Color32::WHITE
+            } else {
+                theme::TEXT
+            },
+        );
+        if pending {
+            ui.painter().circle_filled(
+                Pos2::new(rect.right() - 10.0, rect.center().y),
+                3.5,
+                theme::HIGHLIGHT,
             );
         }
-        let x = rect.left() + rect.width() * self.studio.animation.time / duration;
-        ui.painter().line_segment(
-            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-            egui::Stroke::new(1.5, crate::theme::ACCENT_BRIGHT),
+        if response.on_hover_text(&entity.name).clicked() {
+            self.select(Some(entity.id.clone()));
+            self.hierarchy_ui.focus = false;
+            self.studio.animation.selection = TimelineSelection::None;
+        }
+    }
+    fn timeline_lane(&mut self, ui: &mut egui::Ui, duration: f32, height: f32) -> Rect {
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new((ui.available_width() - 12.0).max(10.0), height),
+            Sense::click(),
         );
+        let painter = ui.painter();
+        painter.rect_filled(rect.shrink2(Vec2::new(0.0, 1.0)), 0.0, theme::BG_BASE);
+        for tick in 0..=10 {
+            let x = rect.left() + rect.width() * tick as f32 / 10.0;
+            painter.line_segment(
+                [
+                    Pos2::new(x, rect.top() + 1.0),
+                    Pos2::new(x, rect.bottom() - 1.0),
+                ],
+                egui::Stroke::new(1.0, Color32::from_rgb(46, 46, 50)),
+            );
+        }
         if response.clicked()
             && self.studio.animation.drafts.is_empty()
             && let Some(pointer) = response.interact_pointer_pos()
@@ -1140,6 +1454,7 @@ impl Editor {
         let Some(track) = clip.tracks.iter_mut().find(|track| track.target == target) else {
             return;
         };
+        let channel_row = channel != "pose";
         let times: Vec<_> = track.keyframes.iter().map(|key| key.time).collect();
         for (index, key) in track.keyframes.iter_mut().enumerate() {
             let center = Pos2::new(
@@ -1147,16 +1462,7 @@ impl Editor {
                 rect.center().y,
             );
             let selected = matches!(&self.studio.animation.selection, TimelineSelection::Key { target: selected, time } if selected == target && (*time - key.time).abs() < EPSILON);
-            draw_diamond(
-                ui.painter(),
-                center,
-                if selected { 6.0 } else { 4.5 },
-                if selected {
-                    crate::theme::HIGHLIGHT
-                } else {
-                    crate::theme::ACCENT_BRIGHT
-                },
-            );
+            draw_key(ui.painter(), center, selected, channel_row);
             let response = ui
                 .interact(
                     Rect::from_center_size(center, Vec2::splat(16.0)),
@@ -1167,7 +1473,7 @@ impl Editor {
                         Sense::hover()
                     },
                 )
-                .on_hover_text(format!("Quadro completo · {:.3} s", key.time));
+                .on_hover_text(format!("Quadro-chave · {:.3} s", key.time));
             if response.clicked() || response.drag_started() {
                 self.hierarchy_ui.focus = false;
                 self.studio.animation.selection = TimelineSelection::Key {
@@ -1200,19 +1506,90 @@ impl Editor {
             }
         }
     }
+    /// The inspector while animating: the selected piece, its pose or key, and the clip.
+    pub(crate) fn animation_properties_panel(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::right("properties")
+            .default_width((ctx.content_rect().width() * 0.23).clamp(140., 290.))
+            .width_range(130.0..=(ctx.content_rect().width() * 0.32).clamp(140., 460.))
+            .resizable(true)
+            .show(ctx, |ui| {
+                widgets::panel_header(ui, "Propriedades", |_| {});
+                ui.add_space(8.);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.;
+                    self.animation_piece_header(ui);
+                    let Some(mut clip) = self.chosen_animation().cloned() else {
+                        widgets::hint(
+                            ui,
+                            if self.studio.owner.is_some() {
+                                "Este modelo ainda não tem animações. Crie uma na linha do tempo."
+                            } else {
+                                "Selecione uma raiz, grupo ou peça para começar."
+                            },
+                        );
+                        return;
+                    };
+                    let old = clip.clone();
+                    self.animation_properties(ui, &mut clip);
+                    self.animation_clip_card(ui, &mut clip);
+                    if clip != old {
+                        self.store_animation(clip);
+                    }
+                });
+            });
+    }
+    fn animation_piece_header(&mut self, ui: &mut egui::Ui) {
+        let Some(entity) = self
+            .selected
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+            .cloned()
+        else {
+            widgets::hint(ui, "Nenhuma peça selecionada.");
+            return;
+        };
+        ui.horizontal(|ui| {
+            let (tile, _) = ui.allocate_exact_size(Vec2::splat(26.), Sense::hover());
+            ui.painter().rect_filled(tile, 6., theme::ACCENT_SOFT);
+            icons::paint(
+                ui,
+                Rect::from_center_size(tile.center(), Vec2::splat(15.)),
+                crate::app::entity_icon(&entity),
+                theme::ACCENT_BRIGHT,
+            );
+            ui.add(
+                egui::Label::new(egui::RichText::new(&entity.name).font(theme::medium(13.5)))
+                    .truncate(),
+            );
+        });
+        let owner = self
+            .studio
+            .owner
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+            .map(|owner| owner.name.clone());
+        let clip = self.chosen_animation().map(|clip| clip.name.clone());
+        let line = match (owner, clip) {
+            (Some(owner), Some(clip)) => format!("Modelo {owner} · animação {clip}"),
+            (Some(owner), None) => format!("Modelo {owner}"),
+            _ => String::new(),
+        };
+        if !line.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(34.);
+                ui.add(
+                    egui::Label::new(egui::RichText::new(line).size(12.).color(theme::TEXT_MUTED))
+                        .truncate(),
+                );
+            });
+        }
+        ui.add_space(4.);
+    }
     fn animation_properties(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
         let selection = self.studio.animation.selection.clone();
         let mut delete = false;
         match selection {
             TimelineSelection::Key { target, time } => {
-                ui.strong("QUADRO-CHAVE");
-                let name = self
-                    .scene()
-                    .entity(&target)
-                    .map(|entity| entity.name.as_str())
-                    .unwrap_or("Peça ausente");
-                ui.label(name);
-                ui.separator();
                 let other_times: Vec<_> = clip
                     .tracks
                     .iter()
@@ -1222,7 +1599,8 @@ impl Editor {
                     .filter(|key| (key.time - time).abs() >= EPSILON)
                     .map(|key| key.time)
                     .collect();
-                if let Some(key) = clip
+                let duration = clip.duration;
+                let key = clip
                     .tracks
                     .iter_mut()
                     .find(|track| track.target == target)
@@ -1231,63 +1609,107 @@ impl Editor {
                             .keyframes
                             .iter_mut()
                             .find(|key| (key.time - time).abs() < EPSILON)
-                    })
-                {
-                    ui.label("Instante");
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut key.time)
-                                .range(0.0..=clip.duration)
-                                .speed(1.0 / 60.0)
-                                .suffix(" s"),
-                        )
-                        .changed()
-                    {
-                        if other_times
-                            .iter()
-                            .any(|other| (*other - key.time).abs() < EPSILON)
-                        {
-                            key.time = time;
-                            self.studio.animation.message = "Já existe um quadro neste instante. O quadro anterior foi preservado.".into();
-                        }
-                        self.studio.animation.selection = TimelineSelection::Key {
-                            target: target.clone(),
-                            time: key.time,
+                    });
+                widgets::panel_card(
+                    ui,
+                    Icon::Keyframe,
+                    "Quadro-chave",
+                    &format!("{time:.2} s"),
+                    true,
+                    |ui| {
+                        let Some(key) = key else {
+                            widgets::hint(ui, "Quadro ausente.");
+                            return;
                         };
-                        self.studio.animation.time = key.time;
-                    }
-                    edit_pose(ui, &mut key.transform);
-                    ui.label("Até o próximo quadro");
-                    ui.selectable_value(
-                        &mut key.interpolation,
-                        Interpolation::Linear,
-                        "Transição linear",
-                    )
-                    .on_hover_text(
-                        "Rotações seguem o menor arco espacial, sem torções artificiais.",
-                    );
-                    ui.selectable_value(
-                        &mut key.interpolation,
-                        Interpolation::Hold,
-                        "Manter esta pose",
-                    );
-                    if ui.button("Copiar quadro").clicked() {
-                        self.studio.animation.copied_key = Some(key.clone());
-                    }
-                    if ui.button("Excluir quadro").clicked() {
-                        delete = true;
-                    }
-                    if ui.button("Voltar à pose provisória").clicked() {
-                        self.studio.animation.selection = TimelineSelection::None;
-                    }
-                    if !text_input_active(ui.ctx())
-                        && ui.input_mut(|input| {
-                            input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
-                        })
-                    {
-                        delete = true;
-                    }
-                }
+                        let changed = widgets::property_row(
+                            ui,
+                            "Instante",
+                            "Momento do quadro na animação.",
+                            |ui| {
+                                ui.add_sized(
+                                    [ui.available_width(), theme::CONTROL_HEIGHT],
+                                    egui::DragValue::new(&mut key.time)
+                                        .range(0.0..=duration)
+                                        .speed(1.0 / 60.0)
+                                        .max_decimals(3)
+                                        .suffix(" s"),
+                                )
+                                .changed()
+                            },
+                        );
+                        if changed {
+                            if other_times
+                                .iter()
+                                .any(|other| (*other - key.time).abs() < EPSILON)
+                            {
+                                key.time = time;
+                                self.studio.animation.message = "Já existe um quadro neste instante. O quadro anterior foi preservado.".into();
+                            }
+                            self.studio.animation.selection = TimelineSelection::Key {
+                                target: target.clone(),
+                                time: key.time,
+                            };
+                            self.studio.animation.time = key.time;
+                        }
+                        edit_pose(ui, &mut key.transform);
+                        widgets::property_row(
+                            ui,
+                            "Até o próximo",
+                            "Linear interpola até o quadro seguinte; Manter segura esta pose até ele.",
+                            |ui| {
+                                widgets::segmented(
+                                    ui,
+                                    &mut key.interpolation,
+                                    &[
+                                        (Interpolation::Linear, "Linear"),
+                                        (Interpolation::Hold, "Manter"),
+                                    ],
+                                );
+                            },
+                        );
+                        ui.add_space(2.);
+                        ui.horizontal(|ui| {
+                            let width = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.)
+                                .max(40.);
+                            if ui
+                                .add_sized([width, 26.], egui::Button::new("Copiar quadro"))
+                                .clicked()
+                            {
+                                self.studio.animation.copied_key = Some(key.clone());
+                            }
+                            if ui
+                                .add_sized(
+                                    [width, 26.],
+                                    egui::Button::new(
+                                        egui::RichText::new("Excluir quadro").color(theme::ERROR),
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                delete = true;
+                            }
+                        });
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Voltar à pose provisória")
+                                        .color(theme::ACCENT_BRIGHT),
+                                )
+                                .frame(false),
+                            )
+                            .clicked()
+                        {
+                            self.studio.animation.selection = TimelineSelection::None;
+                        }
+                        if !text_input_active(ui.ctx())
+                            && ui.input_mut(|input| {
+                                input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                            })
+                        {
+                            delete = true;
+                        }
+                    },
+                );
                 if delete {
                     if let Some(track) = clip.tracks.iter_mut().find(|track| track.target == target)
                     {
@@ -1299,46 +1721,90 @@ impl Editor {
                 }
             }
             TimelineSelection::Event(index) => {
-                ui.strong("EVENTO DE ANIMAÇÃO");
-                ui.separator();
-                if let Some(event) = clip.events.get_mut(index) {
-                    ui.label("Nome");
+                let duration = clip.duration;
+                let clip_id = clip.id.clone();
+                let event = clip.events.get_mut(index);
+                widgets::panel_card(ui, Icon::Flag, "Evento de animação", "", false, |ui| {
+                    let Some(event) = event else {
+                        widgets::hint(ui, "Evento ausente.");
+                        return;
+                    };
                     if self
                         .studio
                         .animation
                         .event_name
                         .as_ref()
-                        .is_none_or(|(id, selected, _)| id != &clip.id || *selected != index)
+                        .is_none_or(|(id, selected, _)| id != &clip_id || *selected != index)
                     {
                         self.studio.animation.event_name =
-                            Some((clip.id.clone(), index, event.name.clone()));
+                            Some((clip_id.clone(), index, event.name.clone()));
                     }
-                    let (_, _, name) = self.studio.animation.event_name.as_mut().unwrap();
-                    ui.text_edit_singleline(name);
-                    if !name.trim().is_empty() {
-                        event.name = name.trim().to_owned();
-                    } else {
-                        ui.small("Informe um nome; o nome anterior fica preservado até lá.");
+                    widgets::property_row(
+                        ui,
+                        "Nome",
+                        "Nome lido pelo nó Marcador de animação.",
+                        |ui| {
+                            let (_, _, name) = self.studio.animation.event_name.as_mut().unwrap();
+                            ui.add(
+                                egui::TextEdit::singleline(name)
+                                    .desired_width(ui.available_width()),
+                            );
+                            if !name.trim().is_empty() {
+                                event.name = name.trim().to_owned();
+                            }
+                        },
+                    );
+                    if self
+                        .studio
+                        .animation
+                        .event_name
+                        .as_ref()
+                        .is_some_and(|(_, _, name)| name.trim().is_empty())
+                    {
+                        widgets::hint(
+                            ui,
+                            "Informe um nome; o nome anterior fica preservado até lá.",
+                        );
                     }
-                    ui.label("Instante");
-                    if ui
-                        .add(
+                    let moved = widgets::property_row(ui, "Instante", "", |ui| {
+                        ui.add_sized(
+                            [ui.available_width(), theme::CONTROL_HEIGHT],
                             egui::DragValue::new(&mut event.time)
-                                .range(0.0..=clip.duration)
+                                .range(0.0..=duration)
                                 .speed(1.0 / 60.0)
+                                .max_decimals(3)
                                 .suffix(" s"),
                         )
                         .changed()
-                    {
+                    });
+                    if moved {
                         self.studio.animation.time = event.time;
                     }
-                    ui.small("O jogo emite este evento ao atravessar o instante. Em repetição, ele volta a ocorrer em cada passagem.");
-                    if ui.button("Copiar evento").clicked() {
-                        self.studio.animation.copied_event = Some(event.clone());
-                    }
-                    if ui.button("Excluir evento").clicked() {
-                        delete = true;
-                    }
+                    widgets::hint(
+                        ui,
+                        "O jogo emite este evento ao passar pelo instante. Use Marcador de animação na Lógica para reagir a ele.",
+                    );
+                    ui.horizontal(|ui| {
+                        let width =
+                            ((ui.available_width() - ui.spacing().item_spacing.x) / 2.).max(40.);
+                        if ui
+                            .add_sized([width, 26.], egui::Button::new("Copiar evento"))
+                            .clicked()
+                        {
+                            self.studio.animation.copied_event = Some(event.clone());
+                        }
+                        if ui
+                            .add_sized(
+                                [width, 26.],
+                                egui::Button::new(
+                                    egui::RichText::new("Excluir evento").color(theme::ERROR),
+                                ),
+                            )
+                            .clicked()
+                        {
+                            delete = true;
+                        }
+                    });
                     if !text_input_active(ui.ctx())
                         && ui.input_mut(|input| {
                             input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
@@ -1346,35 +1812,126 @@ impl Editor {
                     {
                         delete = true;
                     }
-                }
+                });
                 if delete && index < clip.events.len() {
                     clip.events.remove(index);
                     self.studio.animation.selection = TimelineSelection::None;
                 }
             }
             TimelineSelection::None => {
-                ui.strong("POSE PROVISÓRIA");
-                ui.small("Ajuste a peça e grave com + Quadro-chave. A pose-base do modelo permanece preservada.");
-                ui.separator();
-                if let Some(id) = self.selected.clone()
-                    && let Some(mut transform) = self.animation_draft_transform(&id)
-                {
-                    let name = self
-                        .scene()
-                        .entity(&id)
-                        .map(|entity| entity.name.as_str())
-                        .unwrap_or("Peça");
-                    ui.label(name);
-                    let before = transform.clone();
-                    edit_pose(ui, &mut transform);
-                    if transform != before {
-                        self.set_animation_draft_transform(&id, transform);
-                    }
-                } else {
-                    ui.label("Selecione uma peça, raiz ou grupo.");
-                }
+                let pending = !self.studio.animation.drafts.is_empty();
+                let trailing = format!("{:.2} s", self.studio.animation.time);
+                widgets::panel_card(
+                    ui,
+                    Icon::Person,
+                    "Pose provisória",
+                    &trailing,
+                    pending,
+                    |ui| {
+                        widgets::hint(
+                            ui,
+                            "Ajuste a peça na cena ou aqui e grave com + Quadro-chave. A pose-base do modelo fica preservada.",
+                        );
+                        if let Some(id) = self.selected.clone()
+                            && let Some(mut transform) = self.animation_draft_transform(&id)
+                        {
+                            let before = transform.clone();
+                            edit_pose(ui, &mut transform);
+                            if transform != before {
+                                self.set_animation_draft_transform(&id, transform);
+                            }
+                            if self.studio.animation.copied_key.is_some() {
+                                self.animation_paste_key_button(ui, clip, Some(&id));
+                            }
+                        } else {
+                            widgets::hint(ui, "Selecione uma peça, raiz ou grupo.");
+                        }
+                    },
+                );
             }
         }
+    }
+    /// Name, length and repetition of the chosen animation.
+    fn animation_clip_card(&mut self, ui: &mut egui::Ui, clip: &mut Clip) {
+        let end = clip
+            .tracks
+            .iter()
+            .flat_map(|track| track.keyframes.iter().map(|key| key.time))
+            .chain(clip.events.iter().map(|event| event.time))
+            .fold(
+                self.studio.animation.draft_time.unwrap_or(0.1).max(0.1),
+                f32::max,
+            );
+        widgets::open_card(ui, "animation_clip", "Animação", |ui| {
+            widgets::property_row(ui, "Nome", "Enter confirma · Escape cancela.", |ui| {
+                let editing = self
+                    .studio
+                    .animation
+                    .rename
+                    .as_ref()
+                    .filter(|rename| rename.id == clip.id)
+                    .map(|rename| (rename.text.clone(), rename.focus));
+                let (mut text, focus) = editing.unwrap_or_else(|| (clip.name.clone(), false));
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .id_salt("animation_name")
+                        .desired_width(ui.available_width()),
+                );
+                if focus {
+                    response.request_focus();
+                }
+                if response.changed() || focus {
+                    self.studio.animation.rename = Some(Rename {
+                        id: clip.id.clone(),
+                        text: text.clone(),
+                        focus: false,
+                    });
+                }
+                if ui.input(|input| input.key_pressed(egui::Key::Escape)) && response.lost_focus() {
+                    self.studio.animation.rename = None;
+                } else if response.lost_focus()
+                    && let Some(rename) = self.studio.animation.rename.take()
+                {
+                    let name = rename.text.trim();
+                    if rename.id == clip.id && !name.is_empty() {
+                        clip.name = name.to_owned();
+                    } else if rename.id == clip.id {
+                        self.studio.animation.message =
+                            "Informe o nome da animação ou pressione Escape para cancelar a renomeação."
+                                .into();
+                    }
+                }
+            });
+            widgets::property_row(
+                ui,
+                "Duração",
+                "A duração inclui o último quadro e evento. Mova-os antes de encurtar a animação.",
+                |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), theme::CONTROL_HEIGHT],
+                        egui::DragValue::new(&mut clip.duration)
+                            .range(end..=3600.0)
+                            .speed(0.05)
+                            .max_decimals(2)
+                            .suffix(" s"),
+                    );
+                },
+            );
+            widgets::toggle_row(
+                ui,
+                "Repetir",
+                "Ao chegar ao fim, volta ao início e emite novamente os eventos atravessados.",
+                &mut clip.looping,
+            );
+            widgets::hint(
+                ui,
+                if clip.looping {
+                    "Volta ao início e repete os eventos."
+                } else {
+                    "Para no último instante."
+                },
+            );
+        });
     }
     fn animation_reference_dialog(&mut self, ctx: &egui::Context) {
         if self.studio.animation.references.is_empty() {
@@ -1389,14 +1946,35 @@ impl Editor {
 }
 
 fn edit_pose(ui: &mut egui::Ui, transform: &mut Transform) {
-    vector3(ui, "Posição", &mut transform.position, 0.02, false);
+    widgets::vec3_row(
+        ui,
+        "Posição",
+        "Distância da origem nos eixos X, Y e Z.",
+        &mut transform.position,
+        0.02,
+        false,
+    );
     let mut degrees = transform.rotation.map(f32::to_degrees);
     let previous = degrees;
-    vector3(ui, "Rotação °", &mut degrees, 0.5, false);
+    widgets::vec3_row(
+        ui,
+        "Rotação",
+        "Giro em graus nos eixos da peça.",
+        &mut degrees,
+        0.5,
+        false,
+    );
     if degrees != previous {
         transform.rotation = degrees.map(f32::to_radians);
     }
-    vector3(ui, "Escala", &mut transform.scale, 0.02, true);
+    widgets::vec3_row(
+        ui,
+        "Escala",
+        "Multiplica o tamanho sem alterar a forma original.",
+        &mut transform.scale,
+        0.02,
+        true,
+    );
 }
 fn hierarchy_depth(scene: &Scene, root: &str, target: &str) -> usize {
     let mut depth = 0;
@@ -1413,21 +1991,75 @@ fn hierarchy_depth(scene: &Scene, root: &str, target: &str) -> usize {
     }
     depth
 }
+/// Indent of a track by depth, bounded so the name keeps room in a narrow column.
+fn track_indent(depth: usize, width: f32) -> f32 {
+    (depth as f32 * 14.0).min((width - 100.0).clamp(14.0, 56.0))
+}
 fn timeline_time(x: f32, rect: Rect, duration: f32) -> f32 {
     (((x - rect.left()) / rect.width().max(1.0) * duration * 60.0).round() / 60.0)
         .clamp(0.0, duration)
 }
-fn draw_diamond(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
+fn diamond(center: Pos2, radius: f32) -> Vec<Pos2> {
+    vec![
+        center + Vec2::new(0.0, -radius),
+        center + Vec2::new(radius, 0.0),
+        center + Vec2::new(0.0, radius),
+        center + Vec2::new(-radius, 0.0),
+    ]
+}
+/// Keyframe marker; the selected one is white with an accent ring.
+fn draw_key(painter: &egui::Painter, center: Pos2, selected: bool, channel: bool) {
+    let (radius, fill, stroke) = match (selected, channel) {
+        (true, _) => (6.0, Color32::WHITE, egui::Stroke::new(2.0, theme::ACCENT)),
+        (false, false) => (5.0, theme::ACCENT_BRIGHT, egui::Stroke::NONE),
+        (false, true) => (3.5, Color32::from_rgb(94, 127, 166), egui::Stroke::NONE),
+    };
+    painter.add(egui::Shape::convex_polygon(
+        diamond(center, radius),
+        fill,
+        stroke,
+    ));
+}
+/// Pose waiting to be recorded: an outlined key at the pending time.
+fn draw_diamond_outline(painter: &egui::Painter, center: Pos2) {
+    painter.add(egui::Shape::convex_polygon(
+        diamond(center, 6.0),
+        theme::HIGHLIGHT.gamma_multiply(0.18),
+        egui::Stroke::new(1.5, theme::HIGHLIGHT),
+    ));
+}
+/// Event marker: a pennant on a pole with its name beside it.
+fn draw_flag(ui: &egui::Ui, at: Pos2, name: &str, selected: bool) {
+    let color = if selected {
+        Color32::WHITE
+    } else {
+        theme::HIGHLIGHT
+    };
+    let painter = ui.painter();
+    painter.line_segment(
+        [at + Vec2::new(0.0, -10.0), at + Vec2::new(0.0, 10.0)],
+        egui::Stroke::new(1.4, color),
+    );
     painter.add(egui::Shape::convex_polygon(
         vec![
-            center + Vec2::new(0.0, -radius),
-            center + Vec2::new(radius, 0.0),
-            center + Vec2::new(0.0, radius),
-            center + Vec2::new(-radius, 0.0),
+            at + Vec2::new(0.0, -10.0),
+            at + Vec2::new(10.0, -5.5),
+            at + Vec2::new(0.0, -1.0),
         ],
         color,
         egui::Stroke::NONE,
     ));
+    painter.text(
+        at + Vec2::new(13.0, -5.5),
+        egui::Align2::LEFT_CENTER,
+        name,
+        egui::FontId::proportional(11.5),
+        if selected {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(232, 210, 160)
+        },
+    );
 }
 
 #[cfg(test)]

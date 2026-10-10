@@ -328,6 +328,7 @@ impl Editor {
                             Ok(()) => {
                                 self.state.project = project;
                                 *entity = next;
+                                crate::widgets::request_card_open(ui.ctx(), component.label());
                             }
                             Err(error) => self.warn(error),
                         }

@@ -295,7 +295,7 @@ impl NativeQa {
             Action::Key(Key::Escape, false),
             Action::Click("+ Quadro-chave"),
             Action::Check("key_created"),
-            Action::Scroll("QUADRO-CHAVE", -460.),
+            Action::Scroll("Quadro-chave", -460.),
             Action::Click("Copiar quadro"),
             Action::SelectEntity("Cabeça"),
             Action::Click("Colar quadro"),
@@ -425,7 +425,7 @@ impl NativeQa {
             Action::Click("+ Quadro-chave"),
             Action::Check("group_key"),
             Action::Screenshot("group-animation.png"),
-            Action::Context("Ataque"),
+            Action::Click("Animação em edição"),
             Action::Click("Duplicar animação"),
             Action::Check("clip_duplicated"),
             Action::Key(Key::S, true),
@@ -437,7 +437,7 @@ impl NativeQa {
             Action::Click("Estúdio"),
             Action::Click("Animação"),
             Action::Check("clip_reference_baseline"),
-            Action::Context("Ataque"),
+            Action::Context("Animação em edição"),
             Action::Click("Excluir animação"),
             Action::Check("clip_reference_blocked"),
             Action::Screenshot("animation-reference.png"),
@@ -750,7 +750,7 @@ impl NativeQa {
                     ),
                 )?;
                 ensure(
-                    self.find("LINHA DO TEMPO", false).is_some()
+                    self.find("Linha do tempo", false).is_some()
                         && self.find("+ Quadro-chave", false).is_some()
                         && self.find("Cursor", false).is_some(),
                     "Linha do tempo, cursor e criação de quadro devem permanecer acessíveis em 920×600",
@@ -1776,7 +1776,12 @@ impl NativeQa {
                 }
                 self.click_candidate = None;
                 self.click(position);
-                description = format!("Clique: {label} em {position:?}");
+                let menu = if egui::Popup::is_any_open(ctx) {
+                    " com menu aberto"
+                } else {
+                    ""
+                };
+                description = format!("Clique: {label} em {position:?}{menu}");
             }
             Action::Text(text) => {
                 self.events.push_back(vec![Event::Text(text.into())]);

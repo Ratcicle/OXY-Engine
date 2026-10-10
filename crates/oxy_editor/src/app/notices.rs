@@ -50,12 +50,16 @@ impl Editor {
                 .push(text.clone(), persistent, self.context.input(|i| i.time));
         }
     }
+    /// Notices not yet seen in the Avisos tab.
+    pub(crate) fn unread_notices(&self) -> usize {
+        self.notices.unread()
+    }
     pub(crate) fn warn(&mut self, text: impl Into<String>) {
         self.log(text);
         self.notice_last(false);
     }
     /// Notice history, shown in the dock's Avisos tab. Viewing it marks entries as read.
-    pub(super) fn notices_body(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn notices_body(&mut self, ui: &mut egui::Ui) {
         if self.notices.entries.is_empty() {
             crate::widgets::hint(
                 ui,
@@ -98,37 +102,80 @@ impl Editor {
                 ));
             }
             {
+                use crate::theme;
                 // Keep the buttons registered on both press and release. Omitting the area
                 // while a pointer is down prevents Dismiss/Details from receiving a click.
                 egui::Area::new("operation_notice".into())
                     // Above the scene, below modal dialogs and their input-blocking backdrop.
-                    // A long notice must never cover Cancel/Apply in a small scaled window.
+                    // A long notice must never cover Cancel/Apply in a small scaled window,
+                    // nor the status bar: it sits just above it.
                     .order(egui::Order::Middle)
-                    .anchor(egui::Align2::RIGHT_BOTTOM, [-12., -12.])
+                    .anchor(
+                        egui::Align2::RIGHT_BOTTOM,
+                        [-12., -(theme::STATUS_HEIGHT + 10.)],
+                    )
                     .show(ctx, |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.set_max_width((ctx.content_rect().width() - 40.).clamp(100., 360.));
-                            ui.colored_label(
-                                if entry.persistent {
-                                    crate::theme::ERROR
-                                } else {
-                                    crate::theme::WARNING
-                                },
-                                &entry.text,
-                            );
-                            ui.horizontal(|ui| {
-                                if entry.count > 1 {
-                                    ui.weak(format!("{} ocorrências", entry.count));
-                                }
-                                if ui.button("Ver detalhes").clicked() {
-                                    self.show_dock(DockTab::Notices);
-                                    self.notices.entries[index].unread = false;
-                                }
-                                if ui.small_button("Dispensar").clicked() {
-                                    self.notices.entries[index].unread = false;
-                                }
+                        egui::Frame::new()
+                            .fill(theme::BG_RAISED)
+                            .stroke(egui::Stroke::new(1., theme::BORDER))
+                            .corner_radius(8)
+                            .inner_margin(egui::Margin::same(10))
+                            .shadow(egui::epaint::Shadow {
+                                offset: [0, 6],
+                                blur: 20,
+                                spread: 0,
+                                color: egui::Color32::from_black_alpha(110),
+                            })
+                            .show(ui, |ui| {
+                                let width = (ctx.content_rect().width() - 40.).clamp(100., 340.);
+                                ui.set_max_width(width);
+                                ui.horizontal_top(|ui| {
+                                    let (icon, _) =
+                                        ui.allocate_exact_size(Vec2::splat(16.), Sense::hover());
+                                    let color = if entry.persistent {
+                                        theme::ERROR
+                                    } else {
+                                        theme::WARNING
+                                    };
+                                    crate::widgets::warning_icon(ui, icon, color);
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&entry.text)
+                                                .size(12.5)
+                                                .color(theme::TEXT),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                                ui.add_space(4.);
+                                ui.horizontal(|ui| {
+                                    if entry.count > 1 {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} ocorrências",
+                                                entry.count
+                                            ))
+                                            .size(11.5)
+                                            .color(theme::TEXT_MUTED),
+                                        );
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.button("Ver detalhes").clicked() {
+                                                self.show_dock(DockTab::Notices);
+                                                self.notices.entries[index].unread = false;
+                                            }
+                                            if ui
+                                                .add(egui::Button::new("Dispensar").frame(false))
+                                                .clicked()
+                                            {
+                                                self.notices.entries[index].unread = false;
+                                            }
+                                        },
+                                    );
+                                });
                             });
-                        });
                     });
             }
         }

@@ -135,6 +135,9 @@ impl Editor {
             || self.modeling.creation.is_some()
             || self.modeling.snap.is_some()
     }
+    pub(crate) fn open_model_help(&mut self) {
+        self.modeling.help = true;
+    }
     pub(super) fn modeling_active(&self) -> bool {
         self.tab == Tab::Studio && self.studio.tab == StudioTab::Model
     }
@@ -192,67 +195,63 @@ impl Editor {
         }
         self.set_spatial_tool(Tool::Object);
     }
-    /// First Studio row: modes and coordinate space, with overflow instead of wrapping.
+    /// First Studio row in Modelagem: selection mode and coordinate space. Names give way
+    /// to icons before anything moves into a menu.
     pub(super) fn model_toolbar(&mut self, ui: &mut egui::Ui) {
-        use crate::icons::{Icon, button, menu_button, width};
+        use crate::icons::{Icon, menu_button};
+        use crate::widgets::{segmented, segmented_icons, segmented_icons_width, segmented_width};
         let modes = [
-            (Mode::Object, Icon::Object, "Objeto (1)"),
-            (Mode::Face, Icon::Face, "Face (2)"),
-            (Mode::Edge, Icon::Edge, "Aresta (3)"),
-            (Mode::Vertex, Icon::Vertex, "Vértice (4)"),
+            (
+                Mode::Object,
+                Icon::Object,
+                "Objeto",
+                "Objeto (1): mova, gire e escale a peça inteira.",
+            ),
+            (
+                Mode::Face,
+                Icon::Face,
+                "Face",
+                "Face (2): selecione faces da malha.",
+            ),
+            (
+                Mode::Edge,
+                Icon::Edge,
+                "Aresta",
+                "Aresta (3): selecione arestas da malha.",
+            ),
+            (
+                Mode::Vertex,
+                Icon::Vertex,
+                "Vértice",
+                "Vértice (4): selecione pontos da malha.",
+            ),
         ];
-        let names = self.preferences.tool_names;
-        let required = modes
-            .iter()
-            .map(|(_, _, label)| width(ui, label, names) + ui.spacing().item_spacing.x)
-            .sum::<f32>()
-            + 76.;
+        let labels = modes.map(|(_, _, label, _)| label);
+        let spaces = [(false, "Local"), (true, "Global")];
+        let space_width = segmented_width(ui, &["Local", "Global"]) + ui.spacing().item_spacing.x;
+        let available = ui.available_width() - space_width;
+        let names = available >= segmented_icons_width(ui, &labels, true);
+        let inline = names || available >= segmented_icons_width(ui, &labels, false);
         ui.add_enabled_ui(!self.mesh_operation_active(), |ui| {
-            if ui.available_width() >= required {
-                for (mode, icon, label) in modes {
-                    if button(
-                        ui,
-                        icon,
-                        label,
-                        label,
-                        self.modeling.selection.mode == mode,
-                        names,
-                    )
-                    .clicked()
-                    {
-                        self.model_mode(mode);
-                    }
+            if inline {
+                let mut mode = self.modeling.selection.mode;
+                if segmented_icons(ui, &mut mode, &modes, names) {
+                    self.model_mode(mode);
                 }
-                egui::ComboBox::from_id_salt("component_space")
-                    .width(62.)
-                    .selected_text(if self.modeling.global {
-                        "Global"
-                    } else {
-                        "Local"
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.modeling.global, false, "Local");
-                        ui.selectable_value(&mut self.modeling.global, true, "Global");
-                    })
-                    .response
-                    .on_hover_text(
-                        "Local acompanha os eixos da peça; Global usa os eixos da cena.",
-                    );
+                segmented(ui, &mut self.modeling.global, &spaces);
             } else {
-                let (_, icon, label) = modes
+                let (_, icon, label, _) = modes
                     .into_iter()
-                    .find(|(mode, _, _)| *mode == self.modeling.selection.mode)
+                    .find(|(mode, ..)| *mode == self.modeling.selection.mode)
                     .unwrap();
-                // Names remain available in the popup when the full label cannot fit.
-                let names = names && ui.available_width() >= width(ui, label, true);
                 menu_button(
                     ui,
                     icon,
                     label,
                     "Modo de seleção (1/2/3/4) e espaço de transformação.",
-                    names,
+                    false,
                     |ui| {
-                        for (mode, _, label) in modes {
+                        for (mode, _, label, _) in modes {
                             if ui
                                 .selectable_label(self.modeling.selection.mode == mode, label)
                                 .clicked()
@@ -261,8 +260,7 @@ impl Editor {
                                 ui.close();
                             }
                         }
-                        ui.separator();
-                        ui.label("Espaço da transformação");
+                        crate::widgets::menu_label(ui, "Espaço da transformação");
                         ui.selectable_value(&mut self.modeling.global, false, "Local");
                         ui.selectable_value(&mut self.modeling.global, true, "Global");
                     },
@@ -277,20 +275,21 @@ impl Editor {
         self.topology_toolbar(ui);
     }
     pub(super) fn model_secondary_menu(&mut self, ui: &mut egui::Ui) {
+        use crate::widgets::{menu_item, menu_label};
+        ui.set_min_width(250.);
         if self.selected.as_deref().and_then(|id|self.scene().entity(id)).is_some_and(|e|e.primitive.is_some())
             && ui.button("Converter em malha editável").on_hover_text("A primeira edição também converte a forma automaticamente, junto de seu comando de desfazer.").clicked() {
             self.convert_selected_mesh();ui.close();
         }
-        self.topology_menu(ui);
         if self.components_active() {
-            ui.separator();
-            if ui.button("Inverter seleção (Shift+I)").clicked()
+            menu_label(ui, "Seleção");
+            if menu_item(ui, "Inverter seleção", "Shift+I").clicked()
                 && let Ok(mesh) = self.model_source()
             {
                 self.modeling.selection.invert(&mesh);
                 ui.close();
             }
-            if ui.button("Excluir componentes (Delete)").clicked() {
+            if menu_item(ui, "Excluir componentes", "Delete").clicked() {
                 self.begin_mesh_operation(Operation::Delete);
                 ui.close();
             }
@@ -298,38 +297,151 @@ impl Editor {
                 self.begin_mesh_operation(Operation::Triangulate);
                 ui.close();
             }
-        } else if ui.button("Encaixar vértices (Shift+V)").clicked() {
+        } else if menu_item(ui, "Encaixar vértices", "Shift+V").clicked() {
             self.begin_snap();
             ui.close();
         }
+        menu_label(ui, "Todas as operações");
+        self.topology_menu(ui);
         ui.separator();
-        ui.collapsing("Informações da malha", |ui| {
-            if let Ok(mesh) = self.model_source() {
-                ui.label(format!(
-                    "{} vértices · {} arestas · {} faces · {} triângulos",
-                    mesh.data().vertices.len(),
-                    mesh.data().edges.len(),
-                    mesh.data().faces.len(),
-                    mesh.prepared().triangles.len()
-                ));
-                ui.label(format!(
-                    "{} componentes selecionados",
-                    self.modeling.selection.ids.len()
-                ));
-            }
-        });
-        if crate::icons::button(
-            ui,
-            crate::icons::Icon::Help,
-            "Ajuda (F1)",
-            "Ajuda das ferramentas de modelagem e atalhos.",
-            false,
-            true,
-        )
-        .clicked()
-        {
+        if menu_item(ui, "Ajuda da modelagem", "F1").clicked() {
             self.modeling.help = true;
             ui.close();
+        }
+    }
+    /// Counts of the edited mesh and of the current selection, shown in the inspector.
+    pub(super) fn mesh_info_card(&mut self, ui: &mut egui::Ui) {
+        let Ok(mesh) = self.model_source() else {
+            return;
+        };
+        let parametric = self
+            .selected
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+            .is_some_and(|e| e.primitive.is_some());
+        let selected = match self.modeling.selection.mode {
+            Mode::Object => "Peça inteira".to_owned(),
+            mode => {
+                let n = self.modeling.selection.ids.len();
+                let (one, many) = match mode {
+                    Mode::Face => ("face", "faces"),
+                    Mode::Edge => ("aresta", "arestas"),
+                    _ => ("vértice", "vértices"),
+                };
+                format!("{n} {}", if n == 1 { one } else { many })
+            }
+        };
+        let data = mesh.data();
+        let components = format!(
+            "{} vértices · {} arestas · {} faces",
+            data.vertices.len(),
+            data.edges.len(),
+            data.faces.len()
+        );
+        let triangles = mesh.prepared().triangles.len().to_string();
+        crate::widgets::open_card(ui, "mesh_info", "Malha", |ui| {
+            let muted = |text: &str| egui::RichText::new(text).size(12.5);
+            crate::widgets::property_row(ui, "Tipo", "", |ui| {
+                ui.label(muted(if parametric {
+                    "Forma paramétrica"
+                } else {
+                    "Malha editável"
+                }))
+                .on_hover_text(if parametric {
+                    "A primeira edição converte a forma em malha editável."
+                } else {
+                    "Vértices, arestas e faces podem ser editados diretamente."
+                });
+            });
+            crate::widgets::property_row(ui, "Componentes", "", |ui| {
+                ui.add(egui::Label::new(muted(&components)).truncate());
+            });
+            crate::widgets::property_row(ui, "Triângulos", "", |ui| {
+                ui.label(muted(&triangles));
+            });
+            crate::widgets::property_row(ui, "Selecionado", "", |ui| {
+                ui.label(muted(&selected).color(crate::theme::HIGHLIGHT));
+            });
+        });
+    }
+    /// Short description of the Modelagem state for the viewport status line.
+    pub(super) fn model_status(&self) -> (egui::Color32, String, &'static str) {
+        use crate::theme;
+        if let Some(p) = &self.modeling.preview {
+            let hint = match p.operation {
+                Operation::Knife => {
+                    "clique nas bordas · duplo clique ou Enter conclui · Esc cancela"
+                }
+                Operation::Loop => {
+                    "clique na aresta apontada · arraste para deslizar · Esc cancela"
+                }
+                _ => "arraste a alça ou digite um valor · Enter aplica · Esc cancela",
+            };
+            return (
+                theme::ACCENT_BRIGHT,
+                format!("{} em prévia", p.title()),
+                hint,
+            );
+        }
+        let name = self
+            .selected
+            .as_deref()
+            .and_then(|id| self.scene().entity(id))
+            .map(|e| e.name.clone());
+        match self.modeling.selection.mode {
+            Mode::Object => match name {
+                Some(name) => (
+                    theme::ACCENT_BRIGHT,
+                    format!("{name} selecionado"),
+                    "W mover · E girar · R escalar · duplo clique enquadra",
+                ),
+                None => (
+                    theme::TEXT_MUTED,
+                    "Nenhuma peça selecionada".into(),
+                    "clique numa peça para editar",
+                ),
+            },
+            mode => {
+                let n = self.modeling.selection.ids.len();
+                let (one, many, female, hint) = match mode {
+                    Mode::Face => (
+                        "face",
+                        "faces",
+                        true,
+                        "Shift+E extrudir · Shift+U borda interna",
+                    ),
+                    Mode::Edge => (
+                        "aresta",
+                        "arestas",
+                        true,
+                        "Shift+R corte em loop · Shift+B arredondar",
+                    ),
+                    _ => (
+                        "vértice",
+                        "vértices",
+                        false,
+                        "Shift+B arredondar · Shift+F criar face",
+                    ),
+                };
+                if n == 0 {
+                    let none = if female { "Nenhuma" } else { "Nenhum" };
+                    let chosen = if female { "selecionada" } else { "selecionado" };
+                    (
+                        theme::TEXT_MUTED,
+                        format!("{none} {one} {chosen}"),
+                        "clique ou arraste um retângulo para selecionar",
+                    )
+                } else {
+                    let word = if n == 1 { one } else { many };
+                    let chosen = match (female, n == 1) {
+                        (true, true) => "selecionada",
+                        (true, false) => "selecionadas",
+                        (false, true) => "selecionado",
+                        (false, false) => "selecionados",
+                    };
+                    (theme::HIGHLIGHT, format!("{n} {word} {chosen}"), hint)
+                }
+            }
         }
     }
     fn convert_selected_mesh(&mut self) {

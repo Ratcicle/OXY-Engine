@@ -166,8 +166,7 @@ impl Editor {
         serde_json::json!({"size":self.editor_size,"ui_scale":self.scale,"adapter":format!("{:?}",self.render_state.adapter.get_info())})
     }
     pub(super) fn camera_display_menu(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.label("Câmeras");
+        crate::widgets::menu_label(ui, "Câmeras");
         for (value, label) in [
             (&mut self.camera_tools.icons, "Mostrar ícones de câmera"),
             (&mut self.camera_tools.frustum, "Mostrar frustum"),

@@ -54,7 +54,13 @@ pub enum Icon {
     EyeOff,
     ChevronRight,
     ChevronDown,
+    ChevronUp,
     Plus,
+    // Animation.
+    SkipStart,
+    Keyframe,
+    Flag,
+    Clip,
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
@@ -92,13 +98,26 @@ pub fn menu_button(
         return;
     }
     let response = button(ui, icon, label, tooltip, false, names);
-    egui::Popup::menu(&response).show(|ui| {
-        ui.set_max_width(330.);
-        egui::ScrollArea::vertical()
-            .id_salt(("tool_menu", label))
-            .max_height((ui.ctx().content_rect().height() - 40.).max(120.))
-            .show(ui, contents);
-    });
+    // A fixed side keeps the menu from jumping between alignments near the window edge:
+    // buttons on the right half open towards the left.
+    let align = if response.rect.center().x > ui.ctx().content_rect().center().x {
+        egui::RectAlign::BOTTOM_END
+    } else {
+        egui::RectAlign::BOTTOM_START
+    };
+    // The menu scrolls within the space below its button, so it never has to be pushed
+    // back inside the window and stays where it first opened.
+    let below = ui.ctx().content_rect().bottom() - response.rect.bottom() - 28.;
+    egui::Popup::menu(&response)
+        .align(align)
+        .align_alternatives(&[])
+        .show(|ui| {
+            ui.set_max_width(330.);
+            egui::ScrollArea::vertical()
+                .id_salt(("tool_menu", label))
+                .max_height(below.max(120.))
+                .show(ui, contents);
+        });
 }
 pub fn button(
     ui: &mut Ui,
@@ -685,6 +704,48 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
             p.add(egui::Shape::line(
                 vec![at(0.2, 0.36), at(0.5, 0.66), at(0.8, 0.36)],
                 Stroke::new(1.5, color),
+            ));
+        }
+        Icon::ChevronUp => {
+            p.add(egui::Shape::line(
+                vec![at(0.2, 0.64), at(0.5, 0.34), at(0.8, 0.64)],
+                Stroke::new(1.5, color),
+            ));
+        }
+        Icon::SkipStart => {
+            p.line_segment([at(0.2, 0.15), at(0.2, 0.85)], Stroke::new(1.6, color));
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.86, 0.15), at(0.86, 0.85), at(0.3, 0.5)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Keyframe => {
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.5, 0.1), at(0.9, 0.5), at(0.5, 0.9), at(0.1, 0.5)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Flag => {
+            p.line_segment([at(0.22, 0.08), at(0.22, 0.95)], Stroke::new(1.4, color));
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.22, 0.1), at(0.88, 0.32), at(0.22, 0.54)],
+                color.gamma_multiply(0.45),
+                Stroke::new(1.2, color),
+            ));
+        }
+        Icon::Clip => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.06, 0.18), at(0.94, 0.82)),
+                2.,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.4, 0.34), at(0.66, 0.5), at(0.4, 0.66)],
+                color,
+                Stroke::NONE,
             ));
         }
         Icon::Plus => {

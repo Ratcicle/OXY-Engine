@@ -463,7 +463,6 @@ fn native_final_creation_workflow() {
                 Action::Scroll("PROPRIEDADES", 900.),
                 Action::Click("+ Adicionar componente"),
                 Action::Click("Colisor 3D"),
-                Action::Click("Colisor 3D"),
                 Action::Click("Caixa"),
                 Action::Click("Convexo da peça"),
                 Action::Check("f7_spatial_base"),

@@ -1,7 +1,8 @@
 //! Editor and player appearance: neutral greys, one desaturated blue accent and compact controls.
 //! UI code uses these semantic tokens instead of literal colours. Viewport overlays keep
 //! pure white/black where they only need contrast against an arbitrary scene.
-use egui::{Color32, CornerRadius, FontId, Stroke, TextStyle, Vec2};
+use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Vec2};
+use std::sync::Arc;
 
 // Surfaces, from the deepest (inputs, canvases) to the most raised (node titles).
 pub const BG_BASE: Color32 = Color32::from_rgb(24, 24, 26);
@@ -50,7 +51,63 @@ pub const CONTROL_HEIGHT: f32 = 24.;
 pub const ICON_SIZE: f32 = 16.;
 pub const LABEL_SIZE: f32 = 12.5;
 
+/// Font family of the Medium weight, for titles, active choices and primary actions.
+pub const MEDIUM: &str = "medium";
+
+/// IBM Plex Sans at `size` in the Medium weight.
+pub fn medium(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(MEDIUM.into()))
+}
+
+/// IBM Plex Sans for the interface and IBM Plex Mono for code and logs (SIL OFL 1.1, see
+/// `licenses/`). egui's bundled fonts stay behind them for symbols and emoji.
+fn fonts() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    for (name, bytes) in [
+        (
+            "IBMPlexSans-Regular",
+            &include_bytes!("../fonts/IBMPlexSans-Regular.ttf")[..],
+        ),
+        (
+            "IBMPlexSans-Medium",
+            &include_bytes!("../fonts/IBMPlexSans-Medium.ttf")[..],
+        ),
+        (
+            "IBMPlexMono-Regular",
+            &include_bytes!("../fonts/IBMPlexMono-Regular.ttf")[..],
+        ),
+    ] {
+        fonts
+            .font_data
+            .insert(name.into(), Arc::new(egui::FontData::from_static(bytes)));
+    }
+    let fallback = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    for (family, font) in [
+        (FontFamily::Proportional, "IBMPlexSans-Regular"),
+        (FontFamily::Monospace, "IBMPlexMono-Regular"),
+    ] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .insert(0, font.into());
+    }
+    let medium = std::iter::once("IBMPlexSans-Medium".to_owned())
+        .chain(std::iter::once("IBMPlexSans-Regular".to_owned()))
+        .chain(fallback)
+        .collect();
+    fonts
+        .families
+        .insert(FontFamily::Name(MEDIUM.into()), medium);
+    fonts
+}
+
 pub fn apply(ctx: &egui::Context) {
+    ctx.set_fonts(fonts());
     let mut style = (*ctx.style()).clone();
     let v = &mut style.visuals;
     *v = egui::Visuals::dark();
@@ -110,5 +167,12 @@ pub fn apply(ctx: &egui::Context) {
     style
         .text_styles
         .insert(TextStyle::Button, FontId::proportional(13.));
+    style.text_styles.insert(TextStyle::Heading, medium(16.));
+    style
+        .text_styles
+        .insert(TextStyle::Small, FontId::proportional(11.));
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, FontId::monospace(12.));
     ctx.set_style(style);
 }

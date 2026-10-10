@@ -86,8 +86,8 @@ fn native_physics_v030_authoring() {
                 Action::Click("+ Adicionar componente"),
                 Action::Click("Colisor 3D"),
                 Action::Check("phys_box"),
-                Action::Click("Colisor 3D"),
-                // Generating from the piece is a choice of the shape selector.
+                // The new component's block opens by itself. Generating from the piece
+                // is a choice of the shape selector.
                 Action::Click("Caixa"),
                 Action::Click("Malha estática da peça"),
                 Action::Check("phys_triangles"),
