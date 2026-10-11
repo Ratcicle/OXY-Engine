@@ -4,7 +4,7 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 
 ![Editor da OXY Engine com o Laboratório 3D aberto](assets/screenshots/editor.png)
 
-**Versão atual: 0.4.2.** Veja as novidades no [CHANGELOG](CHANGELOG.md) e o uso detalhado no [guia do editor](docs/guia-do-editor.md).
+**Versão atual: 0.4.2.** Veja as novidades no [CHANGELOG](CHANGELOG.md), o uso detalhado no [guia do editor](docs/guia-do-editor.md) e os próximos passos no [roadmap](docs/roadmap.md).
 
 ## O que ela faz
 
