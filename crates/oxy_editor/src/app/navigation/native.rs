@@ -55,6 +55,10 @@ struct Qa {
     text: Option<String>,
     menu: bool,
     idle: Option<(Instant, bool, usize)>,
+    /// Repaint causes of the first spontaneous frame, for a readable failure.
+    causes: String,
+    /// Physical size requested by Step::Resize, and when to give up waiting for it.
+    resize: Option<(Vec2, Instant)>,
     uploads: Option<u64>,
 }
 fn key(k: Key, pressed: bool) -> Event {
@@ -361,7 +365,11 @@ impl Qa {
             Step::Resize => {
                 let size = Vec2::new(920., 600.) / ctx.pixels_per_point();
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-                self.wait = 12;
+                self.resize = Some((
+                    Vec2::new(920., 600.),
+                    Instant::now() + Duration::from_secs(10),
+                ));
+                self.wait = 3;
             }
             Step::Scale => {
                 self.editor.scale = 1.2;
@@ -460,8 +468,13 @@ impl App for Qa {
         }
         if let Some((deadline, measuring, count)) = &mut self.idle {
             if Instant::now() < *deadline {
-                if *measuring {
+                // Real input (the pointer over the window, focus changes) is not a repaint
+                // the editor asked for.
+                if *measuring && ctx.input(|i| i.raw.events.is_empty()) {
                     *count += 1;
+                    if *count == 1 {
+                        self.causes = format!("{:?}", ctx.repaint_causes());
+                    }
                 }
                 return;
             }
@@ -480,7 +493,24 @@ impl App for Qa {
                 .measurements
                 .push(serde_json::json!({"idle_spontaneous_updates_in_500ms":count}));
             if count > 10 {
-                self.fail(ctx, "Repaint contínuo após soltar RMB".into());
+                let causes = std::mem::take(&mut self.causes);
+                self.fail(ctx, format!("Repaint contínuo após soltar RMB: {causes}"));
+                return;
+            }
+        }
+        if let Some((target, deadline)) = self.resize {
+            let size = ctx.content_rect().size() * ctx.pixels_per_point();
+            if (size - target).abs().max_elem() <= 1.5 {
+                self.resize = None;
+                self.wait = self.wait.max(10);
+            } else if Instant::now() > deadline {
+                self.fail(
+                    ctx,
+                    format!("A janela não chegou a 920 × 600 (está em {size:?})"),
+                );
+                return;
+            } else {
+                ctx.request_repaint();
                 return;
             }
         }
@@ -619,6 +649,8 @@ fn native_navigation_v033() {
                 text: None,
                 menu: false,
                 idle: None,
+                causes: String::new(),
+                resize: None,
                 uploads: None,
             }))
         }),
