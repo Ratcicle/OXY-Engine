@@ -500,7 +500,7 @@ fn native_final_creation_workflow() {
                 Action::Key(Key::Escape, false),
                 Action::Click("Lógica"),
                 Action::Click("Ao iniciar cena"),
-                Action::Click("Pesquisar ação…"),
+                Action::Click("Buscar nó…"),
                 Action::Text("animação"),
                 Action::Click("Reproduzir animação"),
                 Action::DragNode("Reproduzir animação"),

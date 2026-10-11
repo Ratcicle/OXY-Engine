@@ -15,7 +15,7 @@ pub fn value_editor(
             ui.add(egui::DragValue::new(v).speed(0.1));
         }
         Value::Text(v) => {
-            ui.add(egui::TextEdit::singleline(v).desired_width(155.));
+            ui.add(egui::TextEdit::singleline(v).desired_width(ui.available_width()));
         }
         Value::Bool(v) => {
             ui.checkbox(v, "Verdadeiro");
@@ -80,7 +80,8 @@ pub fn object_picker(
         .unwrap_or("Próprio / nenhum");
     egui::ComboBox::from_id_salt(salt)
         .selected_text(label)
-        .width(150.)
+        .width(ui.available_width().clamp(80., 220.))
+        .truncate()
         .show_ui(ui, |ui| {
             ui.selectable_value(value, None, "Próprio / nenhum");
             for (id, name) in objects {
@@ -115,8 +116,9 @@ fn named_choice(
             "Referência ausente / inválida"
         });
     egui::ComboBox::from_id_salt(salt)
-        .width(190.0)
+        .width(ui.available_width().clamp(80., 240.))
         .selected_text(label)
+        .truncate()
         .show_ui(ui, |ui| {
             if choices.is_empty() {
                 ui.label("Nenhuma opção disponível nesta cena/projeto.");
@@ -139,6 +141,147 @@ fn enum_choice(
         .map(|(id, label)| ((*id).to_owned(), (*label).to_owned()))
         .collect();
     named_choice(ui, value, &owned, salt);
+}
+
+const INPUT_MODES: [(&str, &str); 3] = [
+    ("pressed", "Pressionar"),
+    ("held", "Manter"),
+    ("released", "Soltar"),
+];
+const COMPONENTS: [(&str, &str); 5] = [
+    ("collider", "Colisão / área"),
+    ("controller", "Controlador de movimento"),
+    ("visible", "Visibilidade"),
+    ("behavior", "Comportamento visual"),
+    ("animation", "Reprodução da animação"),
+];
+const ARITHMETIC: [(&str, &str); 4] = [
+    ("+", "Somar · A + B"),
+    ("-", "Subtrair · A − B"),
+    ("*", "Multiplicar · A × B"),
+    ("/", "Dividir · A ÷ B"),
+];
+const COMPARISONS: [(&str, &str); 6] = [
+    ("==", "Igual · A = B"),
+    ("!=", "Diferente · A ≠ B"),
+    (">", "Maior · A > B"),
+    (">=", "Maior ou igual · A ≥ B"),
+    ("<", "Menor · A < B"),
+    ("<=", "Menor ou igual · A ≤ B"),
+];
+
+/// Text parameters that store one of a few fixed values, with their labels.
+fn fixed_options(operation: &str, param: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    oxy_core::graph::movement_choices(operation, param).or(match (operation, param) {
+        ("event.input", "mode") => Some(&INPUT_MODES),
+        ("action.component", "component") => Some(&COMPONENTS),
+        ("math.binary", "operator") => Some(&ARITHMETIC),
+        ("condition.compare", "operator") => Some(&COMPARISONS),
+        _ => None,
+    })
+}
+
+/// Name of a parameter in the inspector and in the node, without the option list that
+/// some definitions carry in their label.
+pub(super) fn param_label(operation: &str, param: &ParamDef) -> &'static str {
+    match (operation, param.id) {
+        ("action.animation", "clip") => "Animação",
+        ("action.sound", "asset") => "Áudio",
+        ("action.scene", "scene") => "Cena de destino",
+        ("action.component", "component") => "Componente",
+        ("math.binary", "operator") => "Operação",
+        ("condition.compare", "operator") => "Comparação",
+        _ => param.label,
+    }
+}
+
+fn number_text(value: f64) -> String {
+    let text = format!("{value:.3}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// Short text of a parameter value for the node body: names instead of identifiers.
+/// `None` when there is nothing useful to show, such as an empty object reference.
+pub(super) fn param_summary(
+    node: &Node,
+    param: &ParamDef,
+    context: &ParameterContext<'_>,
+) -> Option<String> {
+    let value = node.params.get(param.id).unwrap_or(&param.default);
+    Some(match value {
+        Value::Number(number) => number_text(*number),
+        Value::Bool(on) => if *on { "Sim" } else { "Não" }.into(),
+        Value::Object(None) => return None,
+        Value::Object(Some(id)) => context
+            .objects
+            .iter()
+            .find(|(key, _)| key == id)
+            .map_or_else(|| "objeto removido".into(), |(_, name)| name.clone()),
+        Value::Vector2(v) => format!(
+            "{} · {}",
+            number_text(v[0].into()),
+            number_text(v[1].into())
+        ),
+        Value::Vector3(v) => format!(
+            "{} · {} · {}",
+            number_text(v[0].into()),
+            number_text(v[1].into()),
+            number_text(v[2].into())
+        ),
+        Value::Surface(None) => "nenhuma".into(),
+        Value::Surface(Some(id)) => context
+            .project
+            .surfaces
+            .iter()
+            .find(|surface| &surface.id == id)
+            .map_or_else(|| "superfície removida".into(), |s| s.name.clone()),
+        Value::Text(text) if text.is_empty() => "—".into(),
+        Value::Text(text) => {
+            if let Some(options) = fixed_options(&node.operation, param.id) {
+                return Some(
+                    options
+                        .iter()
+                        .find(|(id, _)| id == text)
+                        .map_or(text.as_str(), |(_, label)| label)
+                        .to_owned(),
+                );
+            }
+            match (node.operation.as_str(), param.id) {
+                ("action.animation", "clip") => context
+                    .scene
+                    .entities
+                    .iter()
+                    .flat_map(|entity| entity.clips.iter())
+                    .find(|clip| &clip.id == text)
+                    .map_or_else(|| "animação removida".into(), |clip| clip.name.clone()),
+                ("action.sound", "asset") => context
+                    .project
+                    .assets
+                    .iter()
+                    .find(|asset| &asset.id == text)
+                    .map_or_else(|| "áudio removido".into(), |asset| asset.name.clone()),
+                ("action.scene", "scene") => context
+                    .project
+                    .scenes
+                    .iter()
+                    .find(|scene| &scene.id == text)
+                    .map_or_else(|| "cena removida".into(), |scene| scene.name.clone()),
+                // The key goes in parentheses: the action name alone stays the name of
+                // its field in Ações de entrada.
+                ("event.input" | "input.read", "action") => {
+                    match context.project.input_bindings.get(text) {
+                        Some(key) => format!(
+                            "{} ({})",
+                            oxy_core::input_actions::label(context.project, text),
+                            crate::labels::key(key)
+                        ),
+                        None => "ação removida".into(),
+                    }
+                }
+                _ => text.clone(),
+            }
+        }
+    })
 }
 
 pub(super) fn parameter_editor(
@@ -262,62 +405,12 @@ pub(super) fn parameter_editor(
                 named_choice(ui, selected, &choices, salt.clone());
                 specialized = true;
             }
-            ("event.input", "mode") => {
-                enum_choice(
-                    ui,
-                    selected,
-                    &[
-                        ("pressed", "Pressionar"),
-                        ("held", "Manter"),
-                        ("released", "Soltar"),
-                    ],
-                    salt.clone(),
-                );
-                specialized = true;
-            }
-            ("action.component", "component") => {
-                enum_choice(
-                    ui,
-                    selected,
-                    &[
-                        ("collider", "Colisão / área"),
-                        ("controller", "Controlador de movimento"),
-                        ("visible", "Visibilidade"),
-                        ("behavior", "Comportamento visual"),
-                        ("animation", "Reprodução da animação"),
-                    ],
-                    salt.clone(),
-                );
-                specialized = true;
-            }
-            ("math.binary", "operator") => {
-                enum_choice(
-                    ui,
-                    selected,
-                    &[
-                        ("+", "Somar · A + B"),
-                        ("-", "Subtrair · A − B"),
-                        ("*", "Multiplicar · A × B"),
-                        ("/", "Dividir · A ÷ B"),
-                    ],
-                    salt.clone(),
-                );
-                specialized = true;
-            }
-            ("condition.compare", "operator") => {
-                enum_choice(
-                    ui,
-                    selected,
-                    &[
-                        ("==", "Igual · A = B"),
-                        ("!=", "Diferente · A ≠ B"),
-                        (">", "Maior · A > B"),
-                        (">=", "Maior ou igual · A ≥ B"),
-                        ("<", "Menor · A < B"),
-                        ("<=", "Menor ou igual · A ≤ B"),
-                    ],
-                    salt.clone(),
-                );
+            ("event.input", "mode")
+            | ("action.component", "component")
+            | ("math.binary", "operator")
+            | ("condition.compare", "operator") => {
+                let choices = fixed_options(&node.operation, param.id).unwrap_or_default();
+                enum_choice(ui, selected, choices, salt.clone());
                 specialized = true;
             }
             ("event.animation", "marker") => {
@@ -343,7 +436,7 @@ pub(super) fn parameter_editor(
                 ui.add(
                     egui::TextEdit::singleline(selected)
                         .hint_text("Nome do marcador")
-                        .desired_width(180.0),
+                        .desired_width(ui.available_width()),
                 );
                 specialized = true;
             }
@@ -380,7 +473,7 @@ pub(super) fn parameter_editor(
                 ui.add(
                     egui::TextEdit::singleline(selected)
                         .hint_text("Nome do atributo")
-                        .desired_width(180.0),
+                        .desired_width(ui.available_width()),
                 );
                 if context.target_connected {
                     ui.small("Lista da cena; o objeto recebido deve possuir o atributo escolhido.");

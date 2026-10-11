@@ -199,6 +199,8 @@ fn native_layout_matrix_workflow() {
                     } else {
                         paint
                     };
+                    let logic: &'static str =
+                        Box::leak(paint.replace("-paint", "-logic").into_boxed_str());
                     let interface = if applied == 0.8 {
                         "Interface: 80%"
                     } else if applied == 1.6 {
@@ -259,6 +261,7 @@ fn native_layout_matrix_workflow() {
                         Action::Click("Animação"),
                         Action::Check("l7_viewport"),
                         Action::Click("Lógica"),
+                        Action::Screenshot(logic),
                         Action::Click("Guia de lógica visual"),
                         Action::Check("l7_guide"),
                         Action::Click("Fechar guia"),

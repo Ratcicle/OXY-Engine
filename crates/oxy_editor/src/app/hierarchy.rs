@@ -390,9 +390,40 @@ impl Editor {
                         theme::TEXT_MUTED
                     },
                 );
+                // In Lógica, objects with a graph show how many nodes it has.
+                let nodes = if self.tab == Tab::Logic {
+                    e.graph.nodes.len()
+                } else {
+                    0
+                };
+                let badge = if nodes > 0 { 34. } else { 0. };
+                if nodes > 0 {
+                    let color = if selected {
+                        theme::ACCENT_BRIGHT
+                    } else {
+                        theme::TEXT_MUTED
+                    };
+                    let left = rect.right() - badge;
+                    icons::paint(
+                        ui,
+                        Rect::from_center_size(
+                            egui::pos2(left + 9., rect.center().y),
+                            Vec2::splat(12.),
+                        ),
+                        Icon::Logic,
+                        color,
+                    );
+                    ui.painter().text(
+                        egui::pos2(left + 18., rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        nodes.to_string(),
+                        egui::FontId::proportional(11.),
+                        color,
+                    );
+                }
                 let name_rect = Rect::from_min_max(
                     egui::pos2(rect.left() + 22., rect.top()),
-                    rect.right_bottom(),
+                    egui::pos2(rect.right() - badge, rect.bottom()),
                 );
                 let mut name = ui.new_child(
                     UiBuilder::new()

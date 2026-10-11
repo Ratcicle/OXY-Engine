@@ -115,6 +115,8 @@ struct Surface {
     png: Option<Rect>,
     native_viewport: Option<Rect>,
     ports: Vec<Pos2>,
+    /// Content of the open modal dialog: egui sends clicks only there and to its popups.
+    modal: Option<Rect>,
     gizmo_x: Option<Pos2>,
     gizmo_uniform: Option<Pos2>,
     gizmo_z: Option<Pos2>,
@@ -193,13 +195,15 @@ impl NativeQa {
             Action::Key(Key::Z, true),
             Action::Check("gizmo_undo"),
             Action::Click("Lógica"),
+            Action::Screenshot("graph-empty.png"),
             Action::Click("Ao iniciar cena"),
-            Action::Click("Pesquisar ação…"),
+            Action::Click("Buscar nó…"),
             Action::Text("Mensagem"),
             Action::Click("Mensagem de diagnóstico"),
             Action::DragNode("Mensagem de diagnóstico"),
             Action::ConnectPorts,
             Action::Check("graph_connected"),
+            Action::Click("Validar"),
             Action::Screenshot("graph.png"),
             Action::Key(Key::Delete, false),
             Action::Check("node_deleted"),
@@ -494,6 +498,21 @@ impl NativeQa {
     }
 
     fn find(&self, label: &str, canvas: bool) -> Option<Pos2> {
+        // An open modal receives the clicks, so its controls win over the same text
+        // behind it. Logic nodes repeat parameter values that the inspector edits: a
+        // control outside the graph wins over the same text drawn on the canvas.
+        let behind_modal = |target: &TextTarget| {
+            self.surface
+                .modal
+                .is_some_and(|modal| !modal.contains(target.rect.center()))
+        };
+        let on_canvas = |target: &TextTarget| {
+            self.editor.tab == crate::app::Tab::Logic
+                && self
+                    .surface
+                    .canvas
+                    .is_some_and(|canvas| canvas.contains(target.rect.center()))
+        };
         self.surface
             .texts
             .iter()
@@ -513,7 +532,11 @@ impl NativeQa {
                         .canvas
                         .is_some_and(|canvas| canvas.contains(target.rect.center()))
             })
-            .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+            .min_by(|a, b| {
+                (behind_modal(a), !canvas && on_canvas(a))
+                    .cmp(&(behind_modal(b), !canvas && on_canvas(b)))
+                    .then(a.rect.top().total_cmp(&b.rect.top()))
+            })
             .map(|target| target.rect.center())
             .or_else(|| {
                 (!canvas)
@@ -1935,7 +1958,7 @@ impl NativeQa {
                 let from = self
                     .find(label, true)
                     .ok_or("Título do nó não está visível no canvas")?;
-                self.drag(from, from + Vec2::new(290., 120.));
+                self.drag(from, from + Vec2::new(200., 140.));
                 description = "Arrastar nó pelo título".into();
             }
             Action::ConnectPorts => {
@@ -2317,7 +2340,10 @@ impl eframe::App for NativeQa {
 
 fn capture_surface(ctx: &egui::Context) -> Surface {
     let shapes = ctx.graphics(|graphics| graphics.clone().drain(&[], &Default::default()));
-    let mut surface = Surface::default();
+    let mut surface = Surface {
+        modal: ctx.memory(|m| m.top_modal_layer().and_then(|layer| m.area_rect(layer.id))),
+        ..Default::default()
+    };
     fn inspect(shape: &egui::Shape, clip: Rect, surface: &mut Surface) {
         match shape {
             egui::Shape::Text(text) => {
@@ -2354,12 +2380,17 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                 surface.direct_handle = Some(circle.center);
             }
             egui::Shape::Circle(circle)
-                if circle.fill == Color32::WHITE && circle.radius > 2. && circle.radius < 10. =>
+                if circle.fill == Color32::WHITE && (circle.radius - 6.).abs() < 0.1 =>
             {
-                surface.ports.push(circle.center);
-                if (circle.radius - 6.).abs() < 0.1 {
-                    surface.gizmo_uniform = Some(circle.center);
-                }
+                surface.gizmo_uniform = Some(circle.center);
+            }
+            // Execution ports of logic nodes are white arrows.
+            egui::Shape::Path(path) if path.fill == Color32::WHITE && path.points.len() == 3 => {
+                let sum = path
+                    .points
+                    .iter()
+                    .fold(Vec2::ZERO, |sum, p| sum + p.to_vec2());
+                surface.ports.push((sum / 3.).to_pos2());
             }
             egui::Shape::Circle(circle)
                 if circle.fill == crate::theme::AXIS_Z && (circle.radius - 6.).abs() < 0.1 =>
@@ -2473,5 +2504,5 @@ fn native_editor_workflow() {
             .as_deref()
             .unwrap_or("Janela fechada antes do fim")
     );
-    assert_eq!(report.screenshots.len(), 13);
+    assert_eq!(report.screenshots.len(), 14);
 }

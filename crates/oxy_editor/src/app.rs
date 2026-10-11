@@ -1328,54 +1328,13 @@ impl eframe::App for Editor {
                 if !compact || panel == CompactPanel::Hierarchy {
                     self.hierarchy(ctx);
                 }
+                if !compact || panel == CompactPanel::Properties {
+                    self.logic_properties_panel(ctx);
+                }
                 if dock {
                     self.dock(ctx);
                 }
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    self.logic_toolbar(ui);
-                    let objects: Vec<_> = self
-                        .scene()
-                        .entities
-                        .iter()
-                        .map(|e| (e.id.clone(), e.name.clone()))
-                        .collect();
-                    if let Some(id) = self.selected.clone() {
-                        let trace: Vec<_> = self
-                            .play
-                            .runtime
-                            .as_ref()
-                            .map(|rt| {
-                                rt.traces
-                                    .iter()
-                                    .filter(|t| t.object == id)
-                                    .map(|t| t.node.clone())
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let scene_id = self.scene_id.clone();
-                        let project = self.state.project.clone();
-                        let scene = self.scene().clone();
-                        if let Some(e) = self
-                            .state
-                            .project
-                            .scene_mut(&scene_id)
-                            .and_then(|s| s.entity_mut(&id))
-                        {
-                            self.graph
-                                .show(ui, &mut e.graph, &objects, &project, &scene, &trace);
-                            if std::mem::take(&mut self.graph.configure_inputs) {
-                                self.logic_ui.inputs = true;
-                            }
-                            if let Some(topic) = self.graph.guide_requested.take() {
-                                self.open_guide(&topic);
-                            }
-                        }
-                    } else {
-                        ui.centered_and_justified(|ui| {
-                            ui.label("Selecione um objeto para criar seu comportamento.");
-                        });
-                    }
-                });
+                egui::CentralPanel::default().show(ctx, |ui| self.logic_view(ui));
             }
         }
         self.camera_preview_window(ctx);
