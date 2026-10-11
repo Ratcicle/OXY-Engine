@@ -459,32 +459,10 @@ fn kind_row(
 
 /// One logic node that points at a scene, from "scope → object → action".
 fn reference_row(ui: &mut egui::Ui, reference: &str) {
-    use crate::theme;
     let parts: Vec<_> = reference.split(" → ").collect();
     let (object, detail) = match parts.as_slice() {
         [scope, object, action] => (*object, format!("{scope} · {action}")),
         _ => (reference, String::new()),
     };
-    egui::Frame::new()
-        .fill(theme::BG_PANEL)
-        .corner_radius(5)
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let (icon, _) = ui.allocate_exact_size(Vec2::splat(14.), Sense::hover());
-                crate::icons::paint(ui, icon, Icon::Logic, theme::ACCENT_BRIGHT);
-                ui.label(egui::RichText::new(object).size(12.5).color(theme::TEXT));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(detail)
-                                .size(12.)
-                                .color(theme::TEXT_MUTED),
-                        )
-                        .truncate(),
-                    );
-                });
-            });
-        });
+    widgets::reference_row(ui, Icon::Logic, object, &detail);
 }

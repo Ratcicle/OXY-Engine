@@ -1128,32 +1128,74 @@ impl Editor {
             rt.logs.clear();
         }
     }
+    /// Editor messages, game logs and the last logic actions, each marked by its source.
+    /// Messages that also became notices are shown as warnings.
     pub(crate) fn console_body(&mut self, ui: &mut egui::Ui) {
+        use crate::theme;
+        let warnings: std::collections::HashSet<&str> = self.notices.texts().collect();
+        let mut lines: Vec<(&str, String, bool)> = self
+            .console
+            .messages
+            .iter()
+            .map(|line| ("Editor", line.clone(), warnings.contains(line.as_str())))
+            .collect();
+        if let Some(rt) = &self.play.runtime {
+            lines.extend(rt.logs.iter().map(|line| ("Jogo", line.clone(), false)));
+            let operations = oxy_core::graph::registry();
+            for trace in rt.traces.iter().rev().take(5).rev() {
+                let operation = operations
+                    .iter()
+                    .find(|op| op.id == trace.operation)
+                    .map_or("Ação não reconhecida", |op| op.label);
+                let object = rt
+                    .scene()
+                    .entity(&trace.object)
+                    .map_or(trace.object.as_str(), |e| e.name.as_str());
+                lines.push((
+                    "Lógica",
+                    format!("{:.3} s · {object} · {operation}", trace.time),
+                    false,
+                ));
+            }
+        }
+        if lines.is_empty() {
+            crate::widgets::hint(
+                ui,
+                "Nada no console. Mensagens do editor e do jogo aparecem aqui.",
+            );
+            return;
+        }
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
+            .auto_shrink([false; 2])
             .show(ui, |ui| {
-                for line in &self.console.messages {
-                    ui.monospace(line);
-                }
-                if let Some(rt) = &self.play.runtime {
-                    for line in &rt.logs {
-                        ui.monospace(line);
-                    }
-                    let operations = oxy_core::graph::registry();
-                    for trace in rt.traces.iter().rev().take(5).rev() {
-                        let operation = operations
-                            .iter()
-                            .find(|op| op.id == trace.operation)
-                            .map_or("Ação não reconhecida", |op| op.label);
-                        let object = rt
-                            .scene()
-                            .entity(&trace.object)
-                            .map_or(trace.object.as_str(), |e| e.name.as_str());
-                        ui.small(format!(
-                            "{:.3}s · objeto {} · nó {} · {}",
-                            trace.time, object, trace.node, operation
-                        ));
-                    }
+                ui.spacing_mut().item_spacing.y = 2.;
+                for (source, text, warning) in &lines {
+                    ui.horizontal_top(|ui| {
+                        let (tag, color) = match (*source, *warning) {
+                            (_, true) => ("Aviso", theme::WARNING),
+                            ("Jogo", _) => ("Jogo", theme::SUCCESS),
+                            ("Lógica", _) => ("Lógica", theme::ACCENT_BRIGHT),
+                            _ => ("Editor", theme::TEXT_MUTED),
+                        };
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(52., 18.), Sense::hover());
+                        ui.painter().text(
+                            rect.left_center(),
+                            egui::Align2::LEFT_CENTER,
+                            tag,
+                            theme::medium(11.),
+                            color,
+                        );
+                        let text = egui::RichText::new(text).monospace().size(12.);
+                        ui.add(
+                            egui::Label::new(if *warning {
+                                text.color(Color32::from_rgb(232, 210, 160))
+                            } else {
+                                text
+                            })
+                            .wrap(),
+                        );
+                    });
                 }
             });
     }

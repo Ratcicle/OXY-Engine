@@ -15,6 +15,10 @@ pub(super) struct Notices {
     entries: Vec<Notice>,
 }
 impl Notices {
+    /// Texts of the notices still in the history.
+    pub(super) fn texts(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().map(|e| e.text.as_str())
+    }
     pub(super) fn unread(&self) -> usize {
         self.entries.iter().filter(|e| e.unread).count()
     }

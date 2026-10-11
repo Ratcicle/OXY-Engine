@@ -133,8 +133,8 @@ fn animation_references(project: &Project, animation: &str) -> Vec<String> {
             for node in &entity.graph.nodes {
                 if node.operation == "action.animation" && node.text("clip") == animation {
                     references.push(format!(
-                        "Cena {} › {} › Reproduzir animação (nó {})",
-                        scene.name, entity.name, node.id
+                        "Cena {} › {} › Reproduzir animação",
+                        scene.name, entity.name
                     ));
                 }
             }
@@ -146,8 +146,8 @@ fn animation_references(project: &Project, animation: &str) -> Vec<String> {
                 for node in &entity.graph.nodes {
                     if node.operation == "action.animation" && node.text("clip") == animation {
                         references.push(format!(
-                            "Modelo {} › {} › Reproduzir animação (nó {})",
-                            asset.name, entity.name, node.id
+                            "Modelo {} › {} › Reproduzir animação",
+                            asset.name, entity.name
                         ));
                     }
                 }
@@ -1937,11 +1937,36 @@ impl Editor {
         if self.studio.animation.references.is_empty() {
             return;
         }
-        egui::Window::new("Animação em uso").collapsible(false).resizable(true).default_width(560.0).show(ctx, |ui| {
-            ui.label("A exclusão foi bloqueada para preservar os comportamentos abaixo. Selecione outra animação nesses nós antes de excluir.");
-            egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| { for reference in &self.studio.animation.references { ui.label(reference); } });
-            if ui.button("Entendi").clicked() { self.studio.animation.references.clear(); }
+        let mut close = false;
+        let response = egui::Modal::new("animation_references".into()).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 520.));
+            close = widgets::dialog_header(ui, "Animação em uso");
+            widgets::hint(
+                ui,
+                "A exclusão foi bloqueada para preservar os comportamentos abaixo. Escolha \
+                 outra animação nesses nós antes de excluir.",
+            );
+            ui.add_space(4.);
+            egui::ScrollArea::vertical()
+                .max_height(280.)
+                .show(ui, |ui| {
+                    for reference in &self.studio.animation.references {
+                        // "Cena X › Objeto › Ação", as listed by animation_references.
+                        let parts: Vec<_> = reference.split(" › ").collect();
+                        let (object, detail) = match parts.as_slice() {
+                            [scope, object, action] => (*object, format!("{scope} · {action}")),
+                            _ => (reference.as_str(), String::new()),
+                        };
+                        widgets::reference_row(ui, crate::icons::Icon::Logic, object, &detail);
+                    }
+                });
+            widgets::dialog_footer(ui, |ui| {
+                close |= widgets::primary_button(ui, "Entendi", true).clicked();
+            });
         });
+        if close || response.should_close() {
+            self.studio.animation.references.clear();
+        }
     }
 }
 

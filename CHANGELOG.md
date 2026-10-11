@@ -2,6 +2,14 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
+## Não lançado
+
+- **Janelas restantes no visual novo:** Excluir recurso e Animação em uso viraram diálogos no padrão dos demais, com a lista de usos pelo nome do objeto (sem IDs de nó). Desempenho mostra quadro, cena, memória e lógica em tabelas; Prévia da câmera e Ajustar caixa usam os mesmos controles e botões do editor.
+- **Console:** cada linha indica a origem (Editor, Jogo, Lógica) e os avisos ficam destacados. Os traços de Lógica citam objeto e ação, sem o ID do nó.
+- **QA nativa mais estável:** o redimensionamento espera o tamanho real da janela, e a medição de repouso ignora eventos reais do sistema (ponteiro, foco).
+- **Guia do editor:** tela inicial, Propriedades sem seleção e com vários objetos, Preferências do editor, Console e Desempenho atualizados.
+- **Roadmap:** [`docs/roadmap.md`](docs/roadmap.md) registra os jogos-alvo, a ordem das próximas versões, o servidor MCP e o terreno do Shadow Duel.
+
 ## 0.4.2 — 2026-10-11
 
 - **Tela inicial no visual novo:** barra superior e barra de status iguais às do editor, cartões para **Novo projeto** e **Abrir projeto**, um bloco **Exemplos** com a explicação de cada exemplo, e **Projetos recentes** num bloco com busca, há quanto tempo cada projeto foi salvo, aviso de arquivo não encontrado e as ações (Abrir, Remover da lista) no "⋯". Em janelas estreitas as colunas se empilham.

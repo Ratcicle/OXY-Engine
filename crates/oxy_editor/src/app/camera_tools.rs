@@ -530,44 +530,64 @@ impl Editor {
             .open(&mut open)
             .resizable(false)
             .default_pos(Pos2::new(380., 130.))
+            .collapsible(false)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(crate::theme::BG_WINDOW)
+                    .inner_margin(12),
+            )
             .show(ctx, |ui| {
+                use crate::{theme, widgets};
                 let Some(id) = id.as_deref().filter(|id| scene.entity(id).is_some()) else {
-                    ui.label("Selecione uma câmera na Hierarquia.");
+                    widgets::hint(ui, "Selecione uma câmera na Hierarquia.");
                     if self.camera_tools.pinned.is_some()
-                        && ui.button("Desafixar câmera ausente").clicked()
+                        && widgets::secondary_button(ui, "Desafixar câmera ausente").clicked()
                     {
                         self.camera_tools.pinned = None;
                     }
                     return;
                 };
                 ui.horizontal(|ui| {
-                    ui.label(&scene.entity(id).unwrap().name);
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.), Sense::hover());
+                    crate::icons::paint(ui, rect, crate::icons::Icon::Camera, theme::ACCENT_BRIGHT);
+                    ui.label(
+                        egui::RichText::new(&scene.entity(id).unwrap().name)
+                            .font(theme::medium(13.)),
+                    );
+                });
+                ui.add_space(4.);
+                ui.horizontal_wrapped(|ui| {
                     let mut pinned = self.camera_tools.pinned.is_some();
-                    if ui.checkbox(&mut pinned, "Fixar").changed() {
+                    if ui
+                        .toggle_value(&mut pinned, "Fixar")
+                        .on_hover_text(
+                            "Mantém esta câmera na prévia mesmo ao selecionar outro objeto.",
+                        )
+                        .changed()
+                    {
                         self.camera_tools.pinned = pinned.then(|| id.to_owned());
                     }
-                    ui.checkbox(&mut self.camera_tools.medium, "Média");
-                });
-                ui.horizontal(|ui| {
+                    ui.toggle_value(&mut self.camera_tools.medium, "Média")
+                        .on_hover_text("Prévia maior.");
                     if ui
-                        .checkbox(&mut self.camera_tools.crouched, "Prévia agachada")
+                        .toggle_value(&mut self.camera_tools.crouched, "Prévia agachada")
                         .changed()
                     {
                         self.camera_tools.evaluated.clear();
                         self.camera_tools.image_key = None;
                     }
+                    ui.add_space(6.);
                     let before = self.camera_tools.aspect;
-                    egui::ComboBox::from_id_salt("camera_preview_aspect")
-                        .selected_text(if before > 1.5 { "16:9" } else { "4:3" })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.camera_tools.aspect, 16. / 9., "16:9");
-                            ui.selectable_value(&mut self.camera_tools.aspect, 4. / 3., "4:3");
-                        });
+                    let mut wide = before > 1.5;
+                    if widgets::segmented(ui, &mut wide, &[(true, "16:9"), (false, "4:3")]) {
+                        self.camera_tools.aspect = if wide { 16. / 9. } else { 4. / 3. };
+                    }
                     if before != self.camera_tools.aspect {
                         self.camera_tools.evaluated.clear();
                         self.camera_tools.image_key = None;
                     }
                 });
+                ui.add_space(6.);
                 match self.camera_tools.evaluate(&scene, id) {
                     Ok(evaluated) => {
                         let width = (if self.camera_tools.medium {
@@ -598,13 +618,12 @@ impl Editor {
                             self.camera_tools.image_key = Some(key);
                         }
                         if let Some(texture) = self.camera_tools.image {
-                            ui.image((texture, size));
+                            ui.add(egui::Image::new((texture, size)).corner_radius(4));
                         }
-                        ui.small("Prévia da cena em edição · não inicia a simulação.");
+                        ui.add_space(4.);
+                        widgets::hint(ui, "Prévia da cena em edição · não inicia a simulação.");
                     }
-                    Err(error) => {
-                        ui.colored_label(crate::theme::WARNING, error);
-                    }
+                    Err(error) => widgets::callout(ui, true, &error),
                 }
             });
         self.camera_tools.preview = open;
