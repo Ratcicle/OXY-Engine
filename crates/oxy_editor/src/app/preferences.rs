@@ -6,6 +6,8 @@ pub(super) struct Preferences {
     pub tool_names: bool,
     pub navigation_speed: f32,
     pub navigation_sensitivity: f32,
+    /// Lets AI agents connect to this editor through the local channel. Off by default.
+    pub allow_agents: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -14,6 +16,7 @@ impl Default for Preferences {
             tool_names: false,
             navigation_speed: 8.,
             navigation_sensitivity: 0.003,
+            allow_agents: false,
         }
     }
 }
@@ -52,6 +55,11 @@ impl Preferences {
                 navigation::MIN_SENSITIVITY,
                 navigation::MAX_SENSITIVITY,
             )?,
+            allow_agents: json
+                .get("allow_agents")
+                .map(|v| v.as_bool().ok_or("Preferência de agentes inválida"))
+                .transpose()?
+                .unwrap_or(false),
         };
         if !(80..=160).contains(&value.scale_percent) {
             return Err("A escala deve ficar entre 80% e 160%.".into());
@@ -85,7 +93,8 @@ impl Preferences {
         let bytes =
             serde_json::to_vec_pretty(&serde_json::json!({"scale_percent":self.scale_percent,
             "tool_names":self.tool_names,"navigation_speed":self.navigation_speed,
-            "navigation_sensitivity":self.navigation_sensitivity}))
+            "navigation_sensitivity":self.navigation_sensitivity,
+            "allow_agents":self.allow_agents}))
             .map_err(|e| e.to_string())?;
         Ok(persistence::safe_write(path, &bytes)?)
     }
@@ -213,6 +222,26 @@ impl Editor {
                 "Na vista, segure o botão direito e use a roda para mudar a velocidade \
                  (Shift ×4, Ctrl ×0,25).",
             );
+            ui.add_space(6.);
+            ui.separator();
+            section(ui, "AGENTES DE IA");
+            widgets::property_row_with(ui, column, "Permitir agentes", "", |ui| {
+                widgets::toggle(ui, &mut pending.allow_agents, "Permitir agentes de IA");
+                ui.label(
+                    egui::RichText::new(if pending.allow_agents {
+                        "ligado"
+                    } else {
+                        "desligado"
+                    })
+                    .size(12.)
+                    .color(crate::theme::TEXT_MUTED),
+                );
+            });
+            widgets::hint(
+                ui,
+                "Agentes conectados pelo servidor MCP da OXY (oxy-mcp) leem e editam o \
+                 projeto aberto. Eles não salvam, e cada mudança pode ser desfeita com Ctrl+Z.",
+            );
             widgets::dialog_footer(ui, |ui| {
                 apply = widgets::primary_button(ui, "Aplicar", true).clicked();
                 cancel |= widgets::secondary_button(ui, "Cancelar").clicked();
@@ -253,7 +282,12 @@ mod tests {
         let old = Preferences::decode(br#"{"scale_percent":120,"tool_names":true}"#).unwrap();
         assert_eq!(old.navigation_speed, 8.);
         assert_eq!(old.navigation_sensitivity, 0.003);
+        assert!(
+            !old.allow_agents,
+            "agents stay off unless the person turns them on"
+        );
         let mut changed = old;
+        changed.allow_agents = true;
         changed.navigation_speed = 9.6;
         changed.navigation_sensitivity = 0.006;
         let folder = std::env::temp_dir().join(format!("oxy-preferences-{}", new_id()));
@@ -266,6 +300,7 @@ mod tests {
         assert_eq!(loaded.navigation_sensitivity, 0.006);
         assert_eq!(loaded.scale_percent, 120);
         assert!(loaded.tool_names);
+        assert!(loaded.allow_agents);
         let bounded = Preferences::decode(
             br#"{"scale_percent":100,"navigation_speed":100000,"navigation_sensitivity":-9}"#,
         )

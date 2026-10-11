@@ -9,6 +9,7 @@ pub mod input;
 pub mod labels;
 pub mod mesh;
 pub mod mesh_selection;
+pub mod offscreen;
 pub mod theme;
 pub use camera::CameraState;
 pub use game_ui::GameUi;

@@ -188,3 +188,48 @@ fn queries_describe_the_project_for_agents() {
             .all(|n| !n["description"].as_str().unwrap().is_empty())
     );
 }
+
+#[test]
+fn headless_simulation_reports_logs_actions_and_watched_objects() {
+    use oxy_core::headless::{self, SimulationRequest};
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Caixa",
+         "position": [1.0, 2.0, 3.0]},
+        {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+        {"op": "add_node", "entity": "$0", "operation": "debug.message",
+         "params": {"message": {"Text": "Olá do teste"}}},
+        {"op": "connect", "entity": "$0", "from_node": "$1", "from_port": "exec",
+         "to_node": "$2", "to_port": "exec"},
+    ]));
+    let cube = command::apply(&mut project, &scene, &commands).unwrap()[0].created[0].clone();
+    let before = project.clone();
+    let request: SimulationRequest = serde_json::from_value(json!({
+        "seconds": 1.0, "watch": [cube], "samples": 4,
+        "inputs": [{"type": "press", "at": 0.2, "action": "pular"},
+                   {"type": "release", "at": 0.4, "action": "pular"}],
+    }))
+    .unwrap();
+    let report = headless::simulate(&project, &request).unwrap();
+    assert_eq!(project, before, "the simulation runs on a copy");
+    assert!(
+        report.logs.iter().any(|l| l.text.contains("Olá do teste")),
+        "{:?}",
+        report.logs
+    );
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|a| a.text.starts_with("Caixa · "))
+    );
+    let samples = &report.watched[0].samples;
+    assert_eq!(samples.len(), 4);
+    assert_eq!(samples.last().unwrap().position, Some([1., 2., 3.]));
+    assert_eq!(report.final_scene, scene);
+    let too_long = SimulationRequest {
+        seconds: 9999.,
+        ..request
+    };
+    assert!(headless::simulate(&project, &too_long).is_err());
+}
