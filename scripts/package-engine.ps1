@@ -35,7 +35,7 @@ Jogador e Câmera principal são objetos separados, ligados pelo Alvo da câmera
 Personagem 3D > Corpo de movimento: escolha cápsula, caixa, esfera ou convexo.
 Deslocamento local alinha a colisão sem mover a raiz ou a aparência.
 Editar posição do corpo oferece alças X/Y/Z; Esc cancela, Ctrl+Z desfaz.
-Selecione uma câmera e arraste olhos/distância/ombro. Exibir > Câmeras oferece
+Selecione uma câmera e arraste olhos/distância/ombro. Visualização > Câmeras oferece
 guias e prévia nativa, com Fixar, tamanho, enquadramento e postura agachada.
 Na vista de edição 3D, segure RMB: mouse olha, WASD move, E sobe, C desce, Shift acelera,
 Ctrl reduz a velocidade e a roda ajusta a base. Solte RMB para voltar a W/E/R.
@@ -43,12 +43,14 @@ Interface guarda velocidade e sensibilidade locais; a câmera de jogo não muda.
 Propriedades mostra os componentes presentes; + Adicionar componente oferece
 as opções compatíveis. Na Hierarquia, arraste para definir parentesco e use
 o botão direito para duplicar, agrupar, excluir ou salvar hierarquia como modelo.
-Ajuda > Guia de lógica visual: consulte os nós e abra cópias de doze receitas
-editáveis, disponíveis offline dentro do executável.
-Estúdio > Modelagem: crie formas, edite faces/arestas/vértices, pinte e anime
-peças rígidas. Soltar a alça aplica a edição; Esc cancela o gesto inteiro.
-Última operação ajusta o mesmo comando. Shift+U cria borda interna; Shift+E
-extruda. Ctrl+caixa soma componentes, inclusive ocultos. F1 abre ajuda contextual.
+Lógica: selecione um objeto, adicione nós pelo catálogo e ligue saídas a entradas.
+Guia (ou Ajuda > Guia de lógica visual): consulte os nós e abra cópias de doze
+receitas editáveis, disponíveis offline dentro do executável.
+Estúdio: em Modelagem, crie formas e edite faces/arestas/vértices; em Pintura e
+Animação, pinte e anime peças rígidas. Soltar a alça aplica a edição; Esc
+cancela o gesto inteiro. Última operação ajusta o mesmo comando. Shift+U cria
+borda interna; Shift+E extruda. Ctrl+caixa soma componentes, inclusive ocultos.
+F1 abre ajuda contextual.
 Interface: ajuste a escala pendente e clique Aplicar; Cancelar mantém a atual.
 Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
 

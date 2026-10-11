@@ -2,13 +2,13 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
-## Não lançado
+## 0.4.1 — 2026-10-10
 
 - **Estúdio no visual novo:** Modelagem, Pintura e Animação usam as duas linhas de cabeçalho, o chip de status no viewport e blocos em Propriedades (Malha, Textura, operação em prévia com Cancelar/Aplicar). A Animação ganhou a linha do tempo no painel inferior, com trilhas por peça, régua adaptável, barra em duas linhas em janelas estreitas e as ações da animação no próprio seletor.
 - **Lógica redesenhada:** barra com o objeto e a contagem do grafo, catálogo **Adicionar nó** por categorias (ou menu, em janelas estreitas), nós com setas de execução e resumo dos parâmetros, legenda de portas, resultado de **Validar** sobre o canvas e sugestões de início para objetos sem lógica. O nó selecionado é editado em Propriedades, com Parâmetros e Conexões. **Ações de entrada** virou uma tabela com "Usada por" e exclusão confirmada na linha; o **Guia** tem navegação lateral com receitas e nós por categoria.
 - **Mensagens sem identificadores:** validação, conexões recusadas e referências de ações citam nós e objetos pelo nome, e todo nó registrado tem descrição.
 - **Hierarquia:** na Lógica, objetos com nós mostram a quantidade de nós.
-- **Propriedades:** um componente recém-adicionado abre o próprio bloco.
+- **Propriedades:** componentes em linhas alinhadas, com o rótulo à esquerda e o campo à direita. No Colisor 3D, uma única escolha de **Forma** (Caixa, Cápsula, Esfera, Convexo da peça, Malha estática da peça) substitui os botões de gerar, **Tipo** Sólido | Área substitui a caixa de seleção e os grupos de colisão ficam numa subseção recolhida; Personagem 3D, Corpo de movimento, Controle da câmera, Plataforma e os componentes 2D seguem o mesmo padrão. O painel não cresce mais sozinho, e um componente recém-adicionado abre o próprio bloco.
 - **Fonte:** IBM Plex Sans e IBM Plex Mono embutidas no editor e no player, sob a licença OFL 1.1 (em `licenses/`).
 
 ## 0.4.0 — 2026-10-09
