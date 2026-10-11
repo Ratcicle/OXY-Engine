@@ -106,10 +106,12 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
                 if matches!(node.operation.as_str(), "event.input" | "input.read")
                     && node.text("action") == id
                 {
-                    found.push(format!(
-                        "{scope} → {} → ação de entrada ({})",
-                        entity.name, node.id
-                    ));
+                    let node = if node.operation == "input.read" {
+                        "Ler ação de entrada"
+                    } else {
+                        "Ação de entrada"
+                    };
+                    found.push(format!("{scope} → {} → nó {node}", entity.name));
                 }
             }
             if entity

@@ -165,7 +165,7 @@ impl Editor {
                         }
                         if ui.button("Console").clicked() {
                             if self.console_visible() {
-                                self.dock.open = false;
+                                self.set_dock_open(false);
                             } else {
                                 self.show_dock(DockTab::Console);
                             }

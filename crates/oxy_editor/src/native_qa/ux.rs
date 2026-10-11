@@ -6,8 +6,20 @@ impl NativeQa {
                 self.base = Some(self.editor.state.clone());
             }
             "ux_unchanged" => {
-                if self.editor.state != *self.base.as_ref().ok_or("Sem referência")? {
-                    return Err("Modal alterou o documento sem confirmação".into());
+                let base = self.base.as_ref().ok_or("Sem referência")?;
+                if self.editor.state != *base {
+                    let detail = if self.editor.state.project != base.project {
+                        let before = serde_json::to_value(&base.project).unwrap_or_default();
+                        let after =
+                            serde_json::to_value(&self.editor.state.project).unwrap_or_default();
+                        first_difference(&before, &after, String::from("projeto"))
+                            .unwrap_or_else(|| "projeto".into())
+                    } else {
+                        "pixels das texturas".into()
+                    };
+                    return Err(format!(
+                        "Modal alterou o documento sem confirmação: {detail}"
+                    ));
                 }
             }
             "ux_new_3d" => {
@@ -164,4 +176,34 @@ fn native_ux_m1_workflow() {
     );
     std::fs::write(output.join("native-ux.txt"), &text).unwrap();
     assert!(report.done && report.error.is_none(), "{text}");
+}
+/// Path of the first value that differs between two documents, for readable QA failures.
+fn first_difference(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    path: String,
+) -> Option<String> {
+    use serde_json::Value;
+    match (before, after) {
+        (Value::Object(a), Value::Object(b)) => {
+            a.keys()
+                .chain(b.keys())
+                .find_map(|key| match (a.get(key), b.get(key)) {
+                    (Some(x), Some(y)) => first_difference(x, y, format!("{path}.{key}")),
+                    _ => Some(format!("{path}.{key}")),
+                })
+        }
+        (Value::Array(a), Value::Array(b)) if a.len() == b.len() => a
+            .iter()
+            .zip(b)
+            .enumerate()
+            .find_map(|(i, (x, y))| first_difference(x, y, format!("{path}[{i}]"))),
+        _ if before != after => Some(
+            format!("{path}: {before} → {after}")
+                .chars()
+                .take(400)
+                .collect(),
+        ),
+        _ => None,
+    }
 }

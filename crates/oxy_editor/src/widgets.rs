@@ -16,8 +16,7 @@ pub fn panel_header(ui: &mut Ui, title: &str, actions: impl FnOnce(&mut Ui)) {
     );
     row.label(
         RichText::new(title.to_uppercase())
-            .size(11.)
-            .strong()
+            .font(theme::medium(11.))
             .color(theme::TEXT_MUTED),
     );
     row.with_layout(Layout::right_to_left(Align::Center), actions);
@@ -73,6 +72,432 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, items: &[(T,
             });
         });
     changed
+}
+
+/// Segmented choice whose items carry an icon. Without `names` only icons are shown; the
+/// label stays the accessible name and the tooltip carries the full description.
+pub fn segmented_icons<T: PartialEq + Copy>(
+    ui: &mut Ui,
+    current: &mut T,
+    items: &[(T, Icon, &str, &str)],
+    names: bool,
+) -> bool {
+    let mut changed = false;
+    egui::Frame::new()
+        .fill(theme::BG_BASE)
+        .stroke(Stroke::new(1., theme::BORDER))
+        .corner_radius(7)
+        .inner_margin(2)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.;
+            ui.horizontal(|ui| {
+                for (value, icon, label, tooltip) in items {
+                    let active = *current == *value;
+                    let font = egui::FontId::proportional(theme::LABEL_SIZE);
+                    let text_width = if names {
+                        ui.painter()
+                            .layout_no_wrap((*label).into(), font.clone(), Color32::WHITE)
+                            .size()
+                            .x
+                    } else {
+                        0.
+                    };
+                    let width = if names {
+                        8. + 14. + 6. + text_width + 10.
+                    } else {
+                        theme::CONTROL_HEIGHT + 2.
+                    };
+                    let (rect, response) = ui.allocate_exact_size(
+                        Vec2::new(width, theme::CONTROL_HEIGHT),
+                        Sense::click(),
+                    );
+                    icons::register_qa(ui, label, rect);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            ui.is_enabled(),
+                            active,
+                            *label,
+                        )
+                    });
+                    let color = if active {
+                        Color32::WHITE
+                    } else if response.hovered() && ui.is_enabled() {
+                        theme::TEXT
+                    } else {
+                        theme::TEXT_MUTED
+                    };
+                    if active {
+                        ui.painter().rect_filled(rect, 5., theme::BG_HEADER);
+                    } else if response.hovered() && ui.is_enabled() {
+                        ui.painter().rect_filled(rect, 5., theme::BG_RAISED);
+                    }
+                    let icon_center = if names {
+                        egui::pos2(rect.left() + 15., rect.center().y)
+                    } else {
+                        rect.center()
+                    };
+                    icons::paint(
+                        ui,
+                        Rect::from_center_size(icon_center, Vec2::splat(14.)),
+                        *icon,
+                        color,
+                    );
+                    if names {
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 28., rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            *label,
+                            font,
+                            color,
+                        );
+                    }
+                    if response.on_hover_text(*tooltip).clicked() && !active {
+                        *current = *value;
+                        changed = true;
+                    }
+                }
+            });
+        });
+    changed
+}
+
+/// Width of a `segmented_icons` control, to decide between names and icons before drawing.
+pub fn segmented_icons_width(ui: &Ui, labels: &[&str], names: bool) -> f32 {
+    let items: f32 = labels
+        .iter()
+        .map(|label| {
+            if names {
+                8. + 14.
+                    + 6.
+                    + ui.painter()
+                        .layout_no_wrap(
+                            (*label).into(),
+                            egui::FontId::proportional(theme::LABEL_SIZE),
+                            Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                    + 10.
+            } else {
+                theme::CONTROL_HEIGHT + 2.
+            }
+        })
+        .sum();
+    items + 2. * (labels.len().max(1) as f32 - 1.) + 6.
+}
+
+/// Width of a text `segmented` control.
+pub fn segmented_width(ui: &Ui, labels: &[&str]) -> f32 {
+    let padding = 2. * ui.spacing().button_padding.x;
+    let items: f32 = labels
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    (*label).into(),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    Color32::WHITE,
+                )
+                .size()
+                .x
+                + padding
+        })
+        .sum();
+    items + 2. * (labels.len().max(1) as f32 - 1.) + 6.
+}
+
+/// Fixed-height toolbar row. Draw the right-aligned controls into the returned `Ui`
+/// first, then call `toolbar_left` for the width that remains.
+pub fn toolbar_right(ui: &mut Ui, height: f32) -> (Rect, Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
+    let right = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    (rect, right)
+}
+
+/// Left part of a `toolbar_right` row, ending before the controls already on the right.
+pub fn toolbar_left(ui: &mut Ui, rect: Rect, right: &Ui) -> Ui {
+    let used = right.min_rect().width();
+    let max_x = if used > 0. {
+        rect.max.x - used - 8.
+    } else {
+        rect.max.x
+    };
+    ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.with_max_x(max_x.max(rect.min.x)))
+            .layout(Layout::left_to_right(Align::Center)),
+    )
+}
+
+/// Warning strip across a work area, with its actions at the right.
+pub fn banner(ui: &mut Ui, text: &str, actions: impl FnOnce(&mut Ui)) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(46, 39, 24))
+        .stroke(Stroke::new(1., Color32::from_rgb(74, 61, 34)))
+        .inner_margin(egui::Margin::symmetric(10, 5))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::containers::Sides::new()
+                .height(theme::CONTROL_HEIGHT + 2.)
+                .shrink_left()
+                .truncate()
+                .show(
+                    ui,
+                    |ui| {
+                        let (icon, _) = ui.allocate_exact_size(Vec2::splat(16.), Sense::hover());
+                        warning_icon(ui, icon, theme::WARNING);
+                        ui.label(
+                            RichText::new(text)
+                                .size(12.5)
+                                .color(Color32::from_rgb(232, 210, 160)),
+                        );
+                    },
+                    actions,
+                );
+        });
+}
+
+/// Triangle with an exclamation mark, for warnings painted beside text.
+pub fn warning_icon(ui: &Ui, rect: Rect, color: Color32) {
+    let p = ui.painter();
+    let at = |x: f32, y: f32| rect.min + Vec2::new(x, y) * rect.size();
+    p.add(egui::Shape::closed_line(
+        vec![at(0.5, 0.08), at(0.96, 0.9), at(0.04, 0.9)],
+        Stroke::new(1.4, color),
+    ));
+    p.line_segment([at(0.5, 0.38), at(0.5, 0.62)], Stroke::new(1.5, color));
+    p.circle_filled(at(0.5, 0.76), 1., color);
+}
+
+/// Centered card over an empty work area: what is missing and how to start.
+pub fn empty_state(
+    ui: &mut Ui,
+    area: Rect,
+    icon: Icon,
+    title: &str,
+    text: &str,
+    actions: impl FnOnce(&mut Ui),
+) {
+    let width = (area.width() - 32.).min(360.);
+    if width < 200. || area.height() < 160. {
+        // Short areas get one centered line with the same title and actions.
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(area.shrink2(Vec2::new(12., 8.)))
+                .layout(Layout::top_down(Align::Center)),
+        );
+        row.add_space(((area.height() - 70.) / 2.).max(0.));
+        row.label(
+            RichText::new(title)
+                .font(theme::medium(13.))
+                .color(theme::TEXT),
+        );
+        row.add_space(4.);
+        actions(&mut row);
+        return;
+    }
+    let rect = Rect::from_center_size(area.center(), Vec2::new(width, 10.));
+    let mut card = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_size(
+                rect.min - Vec2::new(0., 80.),
+                Vec2::new(width, area.height()),
+            ))
+            .layout(Layout::top_down(Align::Center)),
+    );
+    egui::Frame::new()
+        .fill(theme::BG_PANEL)
+        .stroke(Stroke::new(1., theme::BORDER))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(20, 18))
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 8],
+            blur: 24,
+            spread: 0,
+            color: Color32::from_black_alpha(90),
+        })
+        .show(&mut card, |ui| {
+            ui.set_width(width - 40.);
+            ui.vertical_centered(|ui| {
+                let (tile, _) = ui.allocate_exact_size(Vec2::splat(38.), Sense::hover());
+                ui.painter().rect_filled(tile, 9., theme::ACCENT_SOFT);
+                icons::paint(
+                    ui,
+                    Rect::from_center_size(tile.center(), Vec2::splat(20.)),
+                    icon,
+                    theme::ACCENT_BRIGHT,
+                );
+                ui.add_space(6.);
+                ui.label(
+                    RichText::new(title)
+                        .font(theme::medium(14.))
+                        .color(theme::TEXT),
+                );
+                ui.add_space(2.);
+                ui.label(
+                    RichText::new(text)
+                        .size(12.5)
+                        .color(Color32::from_rgb(168, 168, 174)),
+                );
+                ui.add_space(8.);
+                actions(ui);
+            });
+        });
+}
+
+/// Thin vertical line between toolbar groups.
+pub fn divider(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(9., 18.), Sense::hover());
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range(),
+        Stroke::new(1., theme::BORDER),
+    );
+}
+
+/// Uppercase caption that separates groups inside a menu.
+pub fn menu_label(ui: &mut Ui, text: &str) {
+    ui.add_space(2.);
+    ui.label(
+        RichText::new(text.to_uppercase())
+            .font(theme::medium(10.5))
+            .color(theme::TEXT_MUTED),
+    );
+}
+
+/// Menu entry with its keyboard shortcut aligned to the right.
+pub fn menu_item(ui: &mut Ui, label: &str, shortcut: &str) -> Response {
+    ui.add(egui::Button::new(label).shortcut_text(shortcut))
+}
+
+/// Status line over a viewport's lower-left corner: what is selected and the next step.
+/// Painted only; it never takes input from the view below.
+pub fn viewport_chip(ui: &Ui, area: Rect, dot: Color32, title: &str, hint: &str) {
+    let painter = ui.painter_at(area);
+    let font = egui::FontId::proportional(12.);
+    let title = painter.layout_no_wrap(title.to_owned(), font.clone(), theme::TEXT);
+    let hint = painter.layout_no_wrap(hint.to_owned(), font, theme::TEXT_MUTED);
+    let base = 10. + 7. + 8. + title.size().x + 10.;
+    let room = area.width() - 24.;
+    let show_hint = !hint.is_empty() && base + 14. + hint.size().x <= room;
+    let width = if show_hint {
+        base + 14. + hint.size().x
+    } else {
+        base
+    };
+    if width > room || area.height() < 60. {
+        return;
+    }
+    let rect = Rect::from_min_size(
+        egui::pos2(area.left() + 12., area.bottom() - 12. - 26.),
+        Vec2::new(width, 26.),
+    );
+    painter.rect(
+        rect,
+        6.,
+        theme::BG_PANEL.gamma_multiply(0.94),
+        Stroke::new(1., theme::BORDER),
+        egui::StrokeKind::Inside,
+    );
+    let y = rect.center().y;
+    painter.circle_filled(egui::pos2(rect.left() + 13.5, y), 3.5, dot);
+    let x = rect.left() + 25.;
+    painter.galley(
+        egui::pos2(x, y - title.size().y / 2.),
+        title.clone(),
+        theme::TEXT,
+    );
+    if show_hint {
+        let x = x + title.size().x + 7.;
+        painter.circle_filled(egui::pos2(x, y), 1.2, theme::TEXT_MUTED);
+        painter.galley(
+            egui::pos2(x + 7., y - hint.size().y / 2.),
+            hint,
+            theme::TEXT_MUTED,
+        );
+    }
+}
+
+/// Always-open block with an icon tile, a title and optional trailing text. `accent`
+/// marks an operation in progress.
+pub fn panel_card<R>(
+    ui: &mut Ui,
+    icon: Icon,
+    title: &str,
+    trailing: &str,
+    accent: bool,
+    body: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let stroke = if accent {
+        Stroke::new(1., theme::ACCENT)
+    } else {
+        Stroke::new(1., theme::CARD_BORDER)
+    };
+    egui::Frame::new()
+        .fill(theme::CARD_FILL)
+        .stroke(stroke)
+        .corner_radius(theme::CARD_RADIUS)
+        .inner_margin(egui::Margin {
+            left: 8,
+            right: 8,
+            top: 6,
+            bottom: 8,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.set_min_height(26.);
+                let (tile, _) = ui.allocate_exact_size(Vec2::splat(22.), Sense::hover());
+                let (fill, color) = if accent {
+                    (theme::ACCENT_SOFT, theme::ACCENT_BRIGHT)
+                } else {
+                    (theme::BG_HEADER, theme::TEXT_MUTED)
+                };
+                ui.painter().rect_filled(tile, 5., fill);
+                icons::paint(
+                    ui,
+                    Rect::from_center_size(tile.center(), Vec2::splat(13.)),
+                    icon,
+                    color,
+                );
+                ui.add(egui::Label::new(RichText::new(title).font(theme::medium(13.))).truncate());
+                if !trailing.is_empty() {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(RichText::new(trailing).size(11.5).color(if accent {
+                            theme::ACCENT_BRIGHT
+                        } else {
+                            theme::TEXT_MUTED
+                        }));
+                    });
+                }
+            });
+            ui.add_space(2.);
+            body(ui)
+        })
+        .inner
+}
+
+/// Label column wide enough for every label in a block, never narrower than the default.
+pub fn label_column(ui: &Ui, labels: &[&str]) -> f32 {
+    labels
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    (*label).into(),
+                    egui::FontId::proportional(12.),
+                    Color32::WHITE,
+                )
+                .size()
+                .x
+                + 8.
+        })
+        .fold(theme::LABEL_COLUMN, f32::max)
 }
 
 /// Underlined tabs with an optional count badge. Returns the tab clicked this frame,
@@ -246,9 +671,58 @@ pub fn card<R>(
     menu: Option<&mut dyn FnMut(&mut Ui)>,
     body: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
+    card_with(ui, id_salt, title, false, enabled, menu, body)
+}
+
+/// `card` that starts open the first time it is shown.
+pub fn open_card<R>(
+    ui: &mut Ui,
+    id_salt: impl Hash,
+    title: &str,
+    body: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    card_with(ui, id_salt, title, true, None, None, body)
+}
+
+/// Opens the card titled `title` when it is next shown, e.g. a component just added.
+/// A request that no card answers within two frames is dropped.
+pub fn request_card_open(ctx: &egui::Context, title: &str) {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| d.insert_temp(card_open_request(), (title.to_owned(), frame)));
+}
+
+fn card_open_request() -> egui::Id {
+    egui::Id::new("card_open_request")
+}
+
+fn card_with<R>(
+    ui: &mut Ui,
+    id_salt: impl Hash,
+    title: &str,
+    default_open: bool,
+    enabled: Option<&mut bool>,
+    menu: Option<&mut dyn FnMut(&mut Ui)>,
+    body: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
     let id = ui.make_persistent_id(id_salt);
-    let mut state =
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        default_open,
+    );
+    let request = ui
+        .ctx()
+        .data(|d| d.get_temp::<(String, u64)>(card_open_request()));
+    if let Some((requested, frame)) = request {
+        if ui.ctx().cumulative_frame_nr() > frame + 2 {
+            ui.ctx()
+                .data_mut(|d| d.remove::<(String, u64)>(card_open_request()));
+        } else if requested == title {
+            state.set_open(true);
+            ui.ctx()
+                .data_mut(|d| d.remove::<(String, u64)>(card_open_request()));
+        }
+    }
     let mut output = None;
     egui::Frame::new()
         .fill(theme::CARD_FILL)
@@ -277,7 +751,15 @@ pub fn card<R>(
                 };
                 let mut clicked = icons::small(ui, chevron, &toggle_label, 20.).clicked();
                 clicked |= ui
-                    .add(egui::Label::new(RichText::new(title).strong()).sense(Sense::click()))
+                    .add(
+                        egui::Label::new(
+                            RichText::new(title)
+                                .font(theme::medium(13.))
+                                .color(theme::TEXT),
+                        )
+                        .selectable(false)
+                        .sense(Sense::click()),
+                    )
                     .clicked();
                 if clicked {
                     state.set_open(!open);
@@ -307,12 +789,23 @@ pub fn card<R>(
 
 /// Two-column row: a fixed label column and the field filling the rest.
 pub fn property_row<R>(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    property_row_with(ui, theme::LABEL_COLUMN, label, hint, add)
+}
+
+/// `property_row` with a label column of `column` points, shared by every row of a block.
+pub fn property_row_with<R>(
+    ui: &mut Ui,
+    column: f32,
+    label: &str,
+    hint: &str,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
     ui.horizontal(|ui| {
         ui.set_min_height(theme::CONTROL_HEIGHT);
-        let label_size = Vec2::new(theme::LABEL_COLUMN, theme::CONTROL_HEIGHT);
+        let label_size = Vec2::new(column, theme::CONTROL_HEIGHT);
         let response = ui
             .allocate_ui_with_layout(label_size, Layout::left_to_right(Align::Center), |ui| {
-                ui.set_width(theme::LABEL_COLUMN);
+                ui.set_width(column);
                 ui.add(
                     egui::Label::new(RichText::new(label).size(12.).color(theme::TEXT_MUTED))
                         .truncate(),
@@ -327,21 +820,21 @@ pub fn property_row<R>(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&m
     .inner
 }
 
-/// X/Y/Z fields in one row, each marked with its axis colour.
-pub fn vec3_row(
+/// X/Y/Z fields in one row, each marked with its axis colour. Returns the field responses.
+pub fn vec3_fields(
     ui: &mut Ui,
     label: &str,
     hint: &str,
     values: &mut [f32; 3],
     speed: f64,
     nonzero: bool,
-) -> bool {
+) -> [Response; 3] {
     property_row(ui, label, hint, |ui| {
         let gap = 4.;
         ui.spacing_mut().item_spacing.x = gap;
-        let width = ((ui.available_width() - 2. * gap) / 3.).max(36.);
-        let mut changed = false;
-        for (axis, value) in values.iter_mut().enumerate() {
+        // Never wider than the column: a wider row would grow the side panel.
+        let width = ((ui.available_width() - 2. * gap) / 3.).max(12.);
+        let mut field = |axis: usize, value: &mut f32| {
             let response = ui.add_sized(
                 [width, theme::CONTROL_HEIGHT],
                 egui::DragValue::new(value)
@@ -354,13 +847,144 @@ pub fn vec3_row(
                 Vec2::new(2., response.rect.height()),
             );
             ui.painter().rect_filled(strip, 1., theme::AXES[axis]);
-            changed |= response.changed();
             if nonzero && value.abs() < 0.0001 {
                 *value = 0.0001;
             }
-        }
-        changed
+            response
+        };
+        let [x, y, z] = values;
+        [field(0, x), field(1, y), field(2, z)]
     })
+}
+
+/// X/Y/Z fields in one row. Returns whether any value changed.
+pub fn vec3_row(
+    ui: &mut Ui,
+    label: &str,
+    hint: &str,
+    values: &mut [f32; 3],
+    speed: f64,
+    nonzero: bool,
+) -> bool {
+    vec3_fields(ui, label, hint, values, speed, nonzero)
+        .iter()
+        .any(Response::changed)
+}
+
+/// Number field filling the field column, with the unit after the value.
+pub fn number_row<N: egui::emath::Numeric>(
+    ui: &mut Ui,
+    label: &str,
+    hint: &str,
+    value: &mut N,
+    range: std::ops::RangeInclusive<N>,
+    speed: f64,
+    unit: &str,
+) -> Response {
+    property_row(ui, label, hint, |ui| {
+        ui.add_sized(
+            [ui.available_width(), theme::CONTROL_HEIGHT],
+            egui::DragValue::new(value)
+                .range(range)
+                .speed(speed)
+                .suffix(unit),
+        )
+    })
+}
+
+/// On/off setting with its switch in the field column.
+pub fn toggle_row(ui: &mut Ui, label: &str, hint: &str, value: &mut bool) -> Response {
+    property_row(ui, label, hint, |ui| toggle(ui, value, label))
+}
+
+/// Drop-down filling the field column.
+pub fn combo_row<R>(
+    ui: &mut Ui,
+    label: &str,
+    hint: &str,
+    id_salt: impl Hash,
+    selected: &str,
+    options: impl FnOnce(&mut Ui) -> R,
+) {
+    property_row(ui, label, hint, |ui| {
+        combo(ui, id_salt, selected, ui.available_width(), options)
+    });
+}
+
+/// Drop-down whose whole button, arrow included, is `width` wide.
+pub fn combo<R>(
+    ui: &mut Ui,
+    id_salt: impl Hash,
+    selected: &str,
+    width: f32,
+    options: impl FnOnce(&mut Ui) -> R,
+) {
+    egui::ComboBox::from_id_salt(id_salt)
+        .width(combo_inner_width(ui, width))
+        .selected_text(selected)
+        .truncate()
+        .show_ui(ui, options);
+}
+
+/// Inner width for a ComboBox whose button, arrow included, spans `outer` points.
+pub fn combo_inner_width(ui: &Ui, outer: f32) -> f32 {
+    let padding = 2. * ui.spacing().button_padding.x + ui.spacing().icon_width + 4.;
+    (outer - padding).max(24.)
+}
+
+/// Collapsible group inside a card, closed until opened; remembered per `id_salt`.
+pub fn sub_section(ui: &mut Ui, id_salt: impl Hash, title: &str, body: impl FnOnce(&mut Ui)) {
+    let id = ui.make_persistent_id(id_salt);
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let open = state.is_open();
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title)
+    });
+    let color = if response.hovered() {
+        theme::TEXT
+    } else {
+        theme::TEXT_MUTED
+    };
+    icons::paint(
+        ui,
+        Rect::from_center_size(
+            egui::pos2(rect.left() + 8., rect.center().y),
+            Vec2::splat(12.),
+        ),
+        if open {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        },
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 20., rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        egui::FontId::proportional(12.5),
+        color,
+    );
+    if response.clicked() {
+        state.set_open(!open);
+    }
+    if state.is_open() {
+        egui::Frame::new()
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 0,
+                top: 0,
+                bottom: 4,
+            })
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                body(ui)
+            });
+    }
+    state.store(ui.ctx());
 }
 
 /// Muted explanatory text for empty states and short hints.

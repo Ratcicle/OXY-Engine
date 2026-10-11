@@ -62,7 +62,11 @@ impl NativeQa {
             "spatial_drafts" => require(
                 self.editor.studio.animation.drafts.len() == 2
                     && (self.editor.studio.animation.time - 0.5).abs() < 0.0001,
-                "Poses provisórias perderam seu instante ou peça",
+                &format!(
+                    "Poses provisórias perderam seu instante ou peça: {} poses em {:.3} s",
+                    self.editor.studio.animation.drafts.len(),
+                    self.editor.studio.animation.time
+                ),
             ),
             "spatial_draft_structure_blocked" => require(
                 self.editor.spatial.mode == crate::app::Tool::Object

@@ -200,14 +200,27 @@ impl Editor {
         }
         self.visualization_button(ui, true);
         if !compact {
+            // Painted at the buttons' exact height; a Frame would stretch to the bar.
             let text = if paused { "Pausado" } else { "Jogando" };
-            egui::Frame::new()
-                .fill(Color32::from_rgb(58, 46, 26))
-                .corner_radius(6)
-                .inner_margin(egui::Margin::symmetric(8, 4))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(text).size(12.).color(theme::WARNING));
-                });
+            let font = egui::FontId::proportional(12.);
+            let width = ui
+                .painter()
+                .layout_no_wrap(text.into(), font.clone(), theme::WARNING)
+                .size()
+                .x;
+            let (rect, _) = ui.allocate_exact_size(
+                Vec2::new(width + 20., theme::CONTROL_HEIGHT + 4.),
+                Sense::hover(),
+            );
+            ui.painter()
+                .rect_filled(rect, 6., Color32::from_rgb(58, 46, 26));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                font,
+                theme::WARNING,
+            );
         }
     }
     pub(super) fn toolbar(&mut self, ctx: &egui::Context) {
@@ -313,7 +326,7 @@ impl Editor {
                         ));
                         if console.clicked() {
                             if self.console_visible() {
-                                self.dock.open = false;
+                                self.set_dock_open(false);
                             } else {
                                 self.show_dock(DockTab::Console);
                             }

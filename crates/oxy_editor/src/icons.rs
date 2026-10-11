@@ -54,7 +54,26 @@ pub enum Icon {
     EyeOff,
     ChevronRight,
     ChevronDown,
+    ChevronUp,
     Plus,
+    // Animation.
+    SkipStart,
+    Keyframe,
+    Flag,
+    Clip,
+    // Logic: node categories and the Lógica toolbar.
+    Bolt,
+    Data,
+    Branch,
+    Action,
+    Flow,
+    Keyboard,
+    Book,
+    Check,
+    Minus,
+    Logic,
+    Close,
+    Trash,
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
@@ -92,13 +111,26 @@ pub fn menu_button(
         return;
     }
     let response = button(ui, icon, label, tooltip, false, names);
-    egui::Popup::menu(&response).show(|ui| {
-        ui.set_max_width(330.);
-        egui::ScrollArea::vertical()
-            .id_salt(("tool_menu", label))
-            .max_height((ui.ctx().content_rect().height() - 40.).max(120.))
-            .show(ui, contents);
-    });
+    // A fixed side keeps the menu from jumping between alignments near the window edge:
+    // buttons on the right half open towards the left.
+    let align = if response.rect.center().x > ui.ctx().content_rect().center().x {
+        egui::RectAlign::BOTTOM_END
+    } else {
+        egui::RectAlign::BOTTOM_START
+    };
+    // The menu scrolls within the space below its button, so it never has to be pushed
+    // back inside the window and stays where it first opened.
+    let below = ui.ctx().content_rect().bottom() - response.rect.bottom() - 28.;
+    egui::Popup::menu(&response)
+        .align(align)
+        .align_alternatives(&[])
+        .show(|ui| {
+            ui.set_max_width(330.);
+            egui::ScrollArea::vertical()
+                .id_salt(("tool_menu", label))
+                .max_height(below.max(120.))
+                .show(ui, contents);
+        });
 }
 pub fn button(
     ui: &mut Ui,
@@ -687,9 +719,181 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 Stroke::new(1.5, color),
             ));
         }
+        Icon::ChevronUp => {
+            p.add(egui::Shape::line(
+                vec![at(0.2, 0.64), at(0.5, 0.34), at(0.8, 0.64)],
+                Stroke::new(1.5, color),
+            ));
+        }
+        Icon::SkipStart => {
+            p.line_segment([at(0.2, 0.15), at(0.2, 0.85)], Stroke::new(1.6, color));
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.86, 0.15), at(0.86, 0.85), at(0.3, 0.5)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Keyframe => {
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.5, 0.1), at(0.9, 0.5), at(0.5, 0.9), at(0.1, 0.5)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Flag => {
+            p.line_segment([at(0.22, 0.08), at(0.22, 0.95)], Stroke::new(1.4, color));
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.22, 0.1), at(0.88, 0.32), at(0.22, 0.54)],
+                color.gamma_multiply(0.45),
+                Stroke::new(1.2, color),
+            ));
+        }
+        Icon::Clip => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.06, 0.18), at(0.94, 0.82)),
+                2.,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            p.add(egui::Shape::convex_polygon(
+                vec![at(0.4, 0.34), at(0.66, 0.5), at(0.4, 0.66)],
+                color,
+                Stroke::NONE,
+            ));
+        }
         Icon::Plus => {
             p.line_segment([at(0.5, 0.14), at(0.5, 0.86)], Stroke::new(1.5, color));
             p.line_segment([at(0.14, 0.5), at(0.86, 0.5)], Stroke::new(1.5, color));
+        }
+        Icon::Minus => {
+            p.line_segment([at(0.14, 0.5), at(0.86, 0.5)], Stroke::new(1.5, color));
+        }
+        Icon::Close => {
+            p.line_segment([at(0.2, 0.2), at(0.8, 0.8)], Stroke::new(1.5, color));
+            p.line_segment([at(0.8, 0.2), at(0.2, 0.8)], Stroke::new(1.5, color));
+        }
+        Icon::Check => {
+            p.add(egui::Shape::line(
+                vec![at(0.12, 0.52), at(0.4, 0.8), at(0.9, 0.2)],
+                Stroke::new(1.6, color),
+            ));
+        }
+        Icon::Bolt => {
+            p.add(egui::Shape::closed_line(
+                vec![
+                    at(0.6, 0.04),
+                    at(0.16, 0.56),
+                    at(0.46, 0.56),
+                    at(0.38, 0.96),
+                    at(0.84, 0.42),
+                    at(0.54, 0.42),
+                ],
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Data => {
+            use std::f32::consts::{PI, TAU};
+            let ellipse = |y: f32, from: f32, to: f32| -> Vec<Pos2> {
+                (0..=16)
+                    .map(|i| {
+                        let a = from + (to - from) * i as f32 / 16.;
+                        at(0.5 + 0.38 * a.cos(), y + 0.13 * a.sin())
+                    })
+                    .collect()
+            };
+            p.add(egui::Shape::closed_line(
+                ellipse(0.22, 0., TAU),
+                Stroke::new(1.3, color),
+            ));
+            for y in [0.5, 0.78] {
+                p.add(egui::Shape::line(
+                    ellipse(y, 0., PI),
+                    Stroke::new(1.3, color),
+                ));
+            }
+            line(at(0.12, 0.22), at(0.12, 0.78));
+            line(at(0.88, 0.22), at(0.88, 0.78));
+        }
+        Icon::Branch => {
+            line(at(0.5, 0.95), at(0.5, 0.55));
+            for x in [0.14, 0.86] {
+                p.arrow(
+                    at(0.5, 0.55),
+                    at(x, 0.1) - at(0.5, 0.55),
+                    Stroke::new(1.3, color),
+                );
+            }
+        }
+        Icon::Action => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.08, 0.08), at(0.92, 0.92)),
+                3.,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            p.add(egui::Shape::closed_line(
+                vec![at(0.4, 0.3), at(0.7, 0.5), at(0.4, 0.7)],
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Flow => {
+            line(at(0.14, 0.1), at(0.14, 0.9));
+            for y in [0.2, 0.5, 0.8] {
+                p.arrow(
+                    at(0.14, y),
+                    at(0.92, y) - at(0.14, y),
+                    Stroke::new(1.3, color),
+                );
+            }
+        }
+        Icon::Keyboard => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.04, 0.22), at(0.96, 0.8)),
+                2.,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            for x in [0.24, 0.41, 0.58, 0.75] {
+                p.circle_filled(at(x, 0.42), 0.9, color);
+            }
+            line(at(0.3, 0.62), at(0.7, 0.62));
+        }
+        Icon::Book => {
+            p.add(egui::Shape::closed_line(
+                vec![at(0.5, 0.22), at(0.5, 0.9), at(0.06, 0.8), at(0.06, 0.12)],
+                Stroke::new(1.3, color),
+            ));
+            p.add(egui::Shape::closed_line(
+                vec![at(0.5, 0.22), at(0.94, 0.12), at(0.94, 0.8), at(0.5, 0.9)],
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Logic => {
+            for rect in [
+                Rect::from_min_max(at(0.04, 0.12), at(0.4, 0.42)),
+                Rect::from_min_max(at(0.6, 0.58), at(0.96, 0.88)),
+            ] {
+                p.rect_stroke(rect, 1.5, Stroke::new(1.3, color), egui::StrokeKind::Inside);
+            }
+            p.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                [at(0.4, 0.27), at(0.62, 0.27), at(0.38, 0.73), at(0.6, 0.73)],
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Trash => {
+            line(at(0.1, 0.22), at(0.9, 0.22));
+            p.add(egui::Shape::line(
+                vec![at(0.36, 0.22), at(0.4, 0.08), at(0.6, 0.08), at(0.64, 0.22)],
+                Stroke::new(1.3, color),
+            ));
+            p.add(egui::Shape::line(
+                vec![at(0.2, 0.22), at(0.26, 0.94), at(0.74, 0.94), at(0.8, 0.22)],
+                Stroke::new(1.3, color),
+            ));
+            line(at(0.42, 0.4), at(0.42, 0.78));
+            line(at(0.58, 0.4), at(0.58, 0.78));
         }
         Icon::Move => {
             for end in [at(0.5, 0.), at(1., 0.5), at(0.5, 1.), at(0., 0.5)] {

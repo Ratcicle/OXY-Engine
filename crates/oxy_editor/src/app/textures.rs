@@ -12,6 +12,9 @@ impl Editor {
         }
     }
     pub(crate) fn texture_thumbnail(&mut self, ui: &mut egui::Ui, id: &str) {
+        self.texture_thumbnail_sized(ui, id, 72.);
+    }
+    pub(crate) fn texture_thumbnail_sized(&mut self, ui: &mut egui::Ui, id: &str, size: f32) {
         if !self.ensure_texture(id) {
             ui.colored_label(crate::theme::ERROR, "Não foi possível abrir a textura.");
             return;
@@ -33,7 +36,11 @@ impl Editor {
             self.asset_ui.thumbnail = Some((id.into(), texture));
         }
         if let Some((_, texture)) = &self.asset_ui.thumbnail {
-            ui.add(egui::Image::from_texture(texture).max_size(Vec2::splat(72.)));
+            ui.add(
+                egui::Image::from_texture(texture)
+                    .max_size(Vec2::splat(size))
+                    .corner_radius(4),
+            );
         }
     }
     pub(crate) fn copy_texture_asset(&mut self, id: &str) -> Result<Id, String> {
@@ -97,6 +104,7 @@ impl Editor {
                 // Filtering by name keeps the card in view without depending on scrolling.
                 self.asset_ui.search=self.state.project.asset(&id).map(|a|a.name.clone()).unwrap_or_default();
                 self.asset_ui.locate=Some(id.clone()); self.compact_panel=CompactPanel::Library;
+                self.show_dock(DockTab::Library);
             }
         });
         if interface {

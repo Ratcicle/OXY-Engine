@@ -133,18 +133,28 @@ impl Editor {
             let mut active = c.active;
             crate::widgets::card(ui, "camera", "Câmera", Some(&mut active), None, |ui| {
                 if kind == SceneKind::TwoD {
-                    ui.add(
-                        egui::DragValue::new(&mut c.orthographic_size)
-                            .range(0.1..=500.)
-                            .prefix("Meia altura visível (m) "),
+                    crate::widgets::number_row(
+                        ui,
+                        "Meia altura",
+                        "Meia altura visível.",
+                        &mut c.orthographic_size,
+                        0.1..=500.,
+                        0.05,
+                        " m",
                     );
                 } else {
-                    ui.add(
-                        egui::Slider::new(&mut c.fov, 10. ..=150.)
-                            .text("Campo de visão vertical (°)"),
+                    crate::widgets::number_row(
+                        ui,
+                        "Campo de visão",
+                        "Campo de visão vertical.",
+                        &mut c.fov,
+                        10. ..=150.,
+                        0.5,
+                        "°",
                     );
                 }
-                ui.small(
+                crate::widgets::hint(
+                    ui,
                     "Ative apenas a câmera desejada. O alvo é configurado no Controle da câmera.",
                 );
             });
@@ -178,16 +188,37 @@ impl Editor {
                     Some(&mut menu),
                     |ui| {
                         let c = entity.collider.as_mut().unwrap();
-                        ui.add_enabled(
-                            entity.controller.is_none(),
-                            egui::Checkbox::new(&mut c.is_trigger, "Área de detecção"),
-                        )
-                        .on_hover_text(
-                            "Uma área detecta entradas. Um colisor sólido bloqueia movimento.",
+                        ui.add_enabled_ui(!has_controller, |ui| {
+                            crate::widgets::property_row(
+                                ui,
+                                "Tipo",
+                                "Sólido bloqueia o movimento. Área apenas detecta entradas.",
+                                |ui| {
+                                    crate::widgets::segmented(
+                                        ui,
+                                        &mut c.is_trigger,
+                                        &[(false, "Sólido"), (true, "Área")],
+                                    );
+                                },
+                            );
+                        });
+                        crate::widgets::vec3_row(
+                            ui,
+                            "Tamanho",
+                            "Tamanho da caixa em metros.",
+                            &mut c.size,
+                            0.05,
+                            true,
                         );
-                        vector3(ui, "Tamanho da caixa", &mut c.size, 0.05, true);
                         c.size = c.size.map(|v| v.max(0.0001));
-                        vector3(ui, "Deslocamento", &mut c.offset, 0.05, false);
+                        crate::widgets::vec3_row(
+                            ui,
+                            "Deslocamento",
+                            "Posição da caixa em relação ao objeto.",
+                            &mut c.offset,
+                            0.05,
+                            false,
+                        );
                         if ui.button("Editar colisor (C)").clicked() {
                             *tool = Some(Tool::Collider);
                         }
@@ -229,13 +260,33 @@ impl Editor {
                     Some(&mut menu),
                     |ui| {
                         let c = entity.controller.as_mut().unwrap();
-                        for (value, label, max) in [
-                            (&mut c.speed, "Velocidade ", 100.),
-                            (&mut c.jump, "Pulo ", 100.),
-                            (&mut c.gravity, "Gravidade ", 200.),
-                        ] {
-                            ui.add(egui::DragValue::new(value).range(0. ..=max).prefix(label));
-                        }
+                        crate::widgets::number_row(
+                            ui,
+                            "Velocidade",
+                            "",
+                            &mut c.speed,
+                            0. ..=100.,
+                            0.1,
+                            " m/s",
+                        );
+                        crate::widgets::number_row(
+                            ui,
+                            "Pulo",
+                            "Impulso do pulo.",
+                            &mut c.jump,
+                            0. ..=100.,
+                            0.1,
+                            " m/s",
+                        );
+                        crate::widgets::number_row(
+                            ui,
+                            "Gravidade",
+                            "",
+                            &mut c.gravity,
+                            0. ..=200.,
+                            0.1,
+                            " m/s²",
+                        );
                     },
                 );
                 if let Some(c) = &mut entity.controller {
@@ -277,6 +328,7 @@ impl Editor {
                             Ok(()) => {
                                 self.state.project = project;
                                 *entity = next;
+                                crate::widgets::request_card_open(ui.ctx(), component.label());
                             }
                             Err(error) => self.warn(error),
                         }

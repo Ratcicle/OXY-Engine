@@ -8,6 +8,11 @@ Fontes das licenças, fixadas nas mesmas versões do Cargo.lock:
 https://github.com/dimforge/rapier/blob/v0.35.3/LICENSE
 https://github.com/dimforge/parry/blob/v0.30.2/LICENSE
 
+Fontes embutidas na interface do editor e do player: IBM Plex Sans (Regular e Medium) e
+IBM Plex Mono (Regular), IBM Corp. Licença SIL Open Font License 1.1; o texto
+original, sem alterações, está em ibm-plex-ofl-1.1.txt. Arquivos sem modificação,
+obtidos de https://github.com/IBM/plex (packages/plex-sans e packages/plex-mono).
+
 Demais dependências e versões: Cargo.lock no código-fonte da OXY Engine.
 Esta relação documenta a adição da 0.3.0; não é uma auditoria jurídica de
 todas as bibliotecas do workspace.

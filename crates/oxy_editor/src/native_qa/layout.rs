@@ -69,17 +69,34 @@ impl NativeQa {
                 }
             }
             "l7_refusal" => {
-                if self.editor.qa_console_open()
-                    || self.editor.state != *self.base.as_ref().ok_or("Sem referência")?
-                    || self.ux_viewport != self.surface.native_viewport
-                    || self
-                        .editor
-                        .console
-                        .messages
-                        .last()
-                        .is_none_or(|m| !m.contains("não está disponível neste modo"))
+                let base = self.base.as_ref().ok_or("Sem referência")?;
+                let problem = if self.editor.qa_console_open() {
+                    Some("abriu o Console".to_owned())
+                } else if self.editor.state != *base {
+                    Some("alterou o documento".to_owned())
+                } else if self.ux_viewport != self.surface.native_viewport {
+                    Some(format!(
+                        "moveu o viewport de {:?} para {:?}",
+                        self.ux_viewport, self.surface.native_viewport
+                    ))
+                } else if self
+                    .editor
+                    .console
+                    .messages
+                    .last()
+                    .is_none_or(|m| !m.contains("não está disponível neste modo"))
                 {
-                    return Err("Recusa não preservou documento, viewport ou aviso".into());
+                    Some(format!(
+                        "aviso ausente; última mensagem: {:?}",
+                        self.editor.console.messages.last()
+                    ))
+                } else {
+                    None
+                };
+                if let Some(problem) = problem {
+                    return Err(format!(
+                        "Recusa não preservou documento, viewport ou aviso: {problem}"
+                    ));
                 }
             }
             _ => return Err(format!("Check desconhecido {label}")),
@@ -182,6 +199,8 @@ fn native_layout_matrix_workflow() {
                     } else {
                         paint
                     };
+                    let logic: &'static str =
+                        Box::leak(paint.replace("-paint", "-logic").into_boxed_str());
                     let interface = if applied == 0.8 {
                         "Interface: 80%"
                     } else if applied == 1.6 {
@@ -242,6 +261,7 @@ fn native_layout_matrix_workflow() {
                         Action::Click("Animação"),
                         Action::Check("l7_viewport"),
                         Action::Click("Lógica"),
+                        Action::Screenshot(logic),
                         Action::Click("Guia de lógica visual"),
                         Action::Check("l7_guide"),
                         Action::Click("Fechar guia"),

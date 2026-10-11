@@ -17,7 +17,23 @@ pub(super) struct LastOperation {
     pub(super) source: Preview,
 }
 impl Preview {
-    fn title(&self) -> &'static str {
+    pub(super) fn icon(&self) -> crate::icons::Icon {
+        use crate::icons::Icon;
+        match self.operation {
+            Operation::Transform(Gizmo::Move) => Icon::Move,
+            Operation::Transform(Gizmo::Rotate) => Icon::Rotate,
+            Operation::Transform(Gizmo::Scale) => Icon::Scale,
+            Operation::Delete | Operation::Triangulate => Icon::Face,
+            Operation::Extrude => Icon::Extrude,
+            Operation::Inset => Icon::Inset,
+            Operation::Create => Icon::Create,
+            Operation::Flip => Icon::Flip,
+            Operation::Loop => Icon::Loop,
+            Operation::Knife => Icon::Knife,
+            Operation::Bevel => Icon::Bevel,
+        }
+    }
+    pub(super) fn title(&self) -> &'static str {
         match self.operation {
             Operation::Transform(Gizmo::Move) => "Mover componentes",
             Operation::Transform(Gizmo::Rotate) => "Girar componentes",
@@ -275,29 +291,88 @@ impl Editor {
         // original entity/graph and selected component IDs remain borrowed.
         let mut controls = Controls::from(candidate);
         let mut edit = Edit::default();
-        let title = if armed {
-            "Ferramenta"
+        let (title, trailing) = if armed {
+            (candidate.title().to_owned(), "Em prévia")
         } else {
-            "Última operação"
+            (format!("Última operação · {}", candidate.title()), "")
         };
-        egui::CollapsingHeader::new(title).id_salt("direct_mesh_parameters").default_open(true).show(ui, |ui| {
-            ui.strong(candidate.title());
+        let mut action = None;
+        crate::widgets::panel_card(ui, candidate.icon(), &title, trailing, armed, |ui| {
             if armed && !candidate.started {
-                ui.small("Arraste a alça na cena ou informe um valor.")
-                    .on_hover_text("Soltar a alça aplica. Enter ou sair de um campo válido conclui sua edição. Esc cancela o gesto; a peça só é convertida quando houver alteração.");
+                crate::widgets::hint(ui, "Arraste a alça na cena ou informe um valor.");
             } else if !armed {
-                ui.small("Ajusta o mesmo comando de desfazer.")
-                    .on_hover_text("Recalculado a partir da peça anterior à operação. Outra edição encerra este ajuste; mover a câmera não o encerra.");
+                crate::widgets::hint(
+                    ui,
+                    "Ajusta a mesma operação. Ctrl+Z desfaz tudo de uma vez.",
+                );
             }
             parameters(ui, candidate, &mut controls, &mut edit, !armed);
-            for note in &candidate.notes { ui.small(note); }
-            if candidate.needs_space || candidate.allow_expansion {
-                ui.label("A ampliação preserva a pintura e cria uma textura independente para esta peça.");
-                let response = ui.checkbox(&mut controls.allow_expansion, "Criar cópia ampliada (2×)");
-                if response.changed() { edit.changed = true; edit.ended = true; }
+            for note in &candidate.notes {
+                crate::widgets::hint(ui, note);
             }
-            if let Some(error) = &candidate.error { ui.colored_label(crate::theme::WARNING, error); }
+            if candidate.needs_space || candidate.allow_expansion {
+                crate::widgets::hint(
+                    ui,
+                    "A ampliação preserva a pintura e cria uma textura independente para esta peça.",
+                );
+                let response =
+                    ui.checkbox(&mut controls.allow_expansion, "Criar cópia ampliada (2×)");
+                if response.changed() {
+                    edit.changed = true;
+                    edit.ended = true;
+                }
+            }
+            if let Some(error) = &candidate.error {
+                ui.colored_label(crate::theme::WARNING, error);
+            }
+            if armed {
+                ui.add_space(4.);
+                ui.separator();
+                let row = egui::vec2(ui.available_width(), crate::theme::CONTROL_HEIGHT + 4.);
+                ui.allocate_ui_with_layout(
+                    row,
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if ui
+                            .add_enabled(
+                                candidate.started,
+                                egui::Button::new(
+                                    egui::RichText::new("Aplicar").color(egui::Color32::WHITE),
+                                )
+                                .fill(crate::theme::ACCENT)
+                                .shortcut_text(
+                                    egui::RichText::new("Enter")
+                                        .color(egui::Color32::from_rgb(214, 228, 245)),
+                                ),
+                            )
+                            .on_hover_text("Aplica a operação com os valores atuais.")
+                            .on_disabled_hover_text("Arraste a alça ou informe um valor primeiro.")
+                            .clicked()
+                        {
+                            action = Some(true);
+                        }
+                        if ui
+                            .add(egui::Button::new("Cancelar").shortcut_text("Esc"))
+                            .on_hover_text("Descarta a prévia; a peça volta ao estado anterior.")
+                            .clicked()
+                        {
+                            action = Some(false);
+                        }
+                    },
+                );
+            }
         });
+        match action {
+            Some(true) => {
+                self.confirm_mesh_operation();
+                return;
+            }
+            Some(false) => {
+                self.cancel_mesh_operation();
+                return;
+            }
+            None => {}
+        }
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         if edit.invalid {
             if armed {
@@ -584,136 +659,246 @@ fn parameters(
     edit: &mut Edit,
     adjusting: bool,
 ) {
+    use crate::widgets::{hint, label_column, property_row_with, toggle};
     let applied = p.started || p.amendment.is_some() || adjusting;
     let mut invalid = false;
+    // One label column per block, wide enough that no label is cut.
+    let column = label_column(
+        ui,
+        &[
+            "Tamanho interno",
+            "Distância",
+            "Direção",
+            "Cada face",
+            "Largura",
+            "Segmentos",
+            "Quantidade de cortes",
+            "Deslizamento",
+        ],
+    );
+    // Numeric fields fill the field column, as in the other inspector rows.
+    let fill = |ui: &mut egui::Ui, parts: f32| {
+        let gap = ui.spacing().item_spacing.x;
+        ui.spacing_mut().interact_size.x =
+            ((ui.available_width() - gap * (parts - 1.)) / parts).max(24.);
+    };
     match p.operation {
         Operation::Transform(tool) => {
-            ui.horizontal_wrapped(|ui| {
-                for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
-                    edit.numeric(super::numeric::float(
-                        ui,
-                        label,
-                        &mut controls.values[axis],
-                        if tool == Gizmo::Rotate { 1. } else { 0.02 },
-                        None,
-                        &mut invalid,
-                    ));
-                }
-            });
-        }
-        Operation::Extrude | Operation::Inset => {
-            if p.selection.mode == Mode::Face {
-                ui.horizontal(|ui|{
-                    ui.label("Tamanho interno").on_hover_text("Proporção linear: 50% reduz cada dimensão pela metade. A moldura permanece no plano original. Use maior que 0% até 100%.");
-                    edit.numeric(super::numeric::float(ui,"",&mut controls.inner_size,0.5,Some(0.001..=100.),&mut invalid)); ui.label("%");
-                });
-                edit.option(
-                    ui.checkbox(&mut controls.per_face, "Cada face independente"),
-                    applied,
-                );
-            }
-            if p.operation == Operation::Extrude {
-                if controls.direction != Direction::Vector {
-                    ui.horizontal(|ui| {
-                        ui.label("Distância");
-                        edit.numeric(super::numeric::float(
-                            ui,
-                            "",
-                            &mut controls.values[0],
-                            0.02,
-                            None,
-                            &mut invalid,
-                        ));
-                    });
-                }
-                egui::ComboBox::from_id_salt("extrude_direction")
-                    .selected_text(match controls.direction {
-                        Direction::Normal => "Normal da face",
-                        Direction::X => "Eixo X",
-                        Direction::Y => "Eixo Y",
-                        Direction::Z => "Eixo Z",
-                        Direction::Vector => "Vetor (avançado)",
-                    })
-                    .show_ui(ui, |ui| {
-                        for (value, label) in [
-                            (Direction::Normal, "Normal da face"),
-                            (Direction::X, "Eixo X"),
-                            (Direction::Y, "Eixo Y"),
-                            (Direction::Z, "Eixo Z"),
-                            (Direction::Vector, "Vetor (avançado)"),
-                        ] {
-                            edit.option(
-                                ui.selectable_value(&mut controls.direction, value, label),
-                                applied,
-                            );
-                        }
-                    });
-                if controls.direction == Direction::Vector {
+            let label = match tool {
+                Gizmo::Move => "Deslocamento",
+                Gizmo::Rotate => "Rotação",
+                Gizmo::Scale => "Escala",
+            };
+            property_row_with(
+                ui,
+                column,
+                label,
+                "Valores aplicados aos componentes selecionados.",
+                |ui| {
+                    fill(ui, 3.);
                     for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                         edit.numeric(super::numeric::float(
                             ui,
                             label,
                             &mut controls.values[axis],
-                            0.02,
+                            if tool == Gizmo::Rotate { 1. } else { 0.02 },
                             None,
                             &mut invalid,
                         ));
                     }
+                },
+            );
+        }
+        Operation::Extrude | Operation::Inset => {
+            if p.operation == Operation::Extrude {
+                if controls.direction != Direction::Vector {
+                    property_row_with(
+                        ui,
+                        column,
+                        "Distância",
+                        "Quanto a região avança na direção escolhida.",
+                        |ui| {
+                            fill(ui, 1.);
+                            edit.numeric(super::numeric::float(
+                                ui,
+                                "",
+                                &mut controls.values[0],
+                                0.02,
+                                None,
+                                &mut invalid,
+                            ));
+                        },
+                    );
                 }
-                ui.small(if p.global {
-                    "Coordenadas globais"
-                } else {
-                    "Coordenadas locais"
-                });
+                property_row_with(
+                    ui,
+                    column,
+                    "Direção",
+                    if p.global {
+                        "Coordenadas globais."
+                    } else {
+                        "Coordenadas locais."
+                    },
+                    |ui| {
+                        let width = crate::widgets::combo_inner_width(ui, ui.available_width());
+                        egui::ComboBox::from_id_salt("extrude_direction")
+                            .width(width)
+                            .selected_text(match controls.direction {
+                                Direction::Normal => "Normal da face",
+                                Direction::X => "Eixo X",
+                                Direction::Y => "Eixo Y",
+                                Direction::Z => "Eixo Z",
+                                Direction::Vector => "Vetor (avançado)",
+                            })
+                            .show_ui(ui, |ui| {
+                                for (value, label) in [
+                                    (Direction::Normal, "Normal da face"),
+                                    (Direction::X, "Eixo X"),
+                                    (Direction::Y, "Eixo Y"),
+                                    (Direction::Z, "Eixo Z"),
+                                    (Direction::Vector, "Vetor (avançado)"),
+                                ] {
+                                    edit.option(
+                                        ui.selectable_value(&mut controls.direction, value, label),
+                                        applied,
+                                    );
+                                }
+                            });
+                    },
+                );
+                if controls.direction == Direction::Vector {
+                    property_row_with(ui, column, "Vetor", "Deslocamento em X, Y e Z.", |ui| {
+                        fill(ui, 3.);
+                        for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+                            edit.numeric(super::numeric::float(
+                                ui,
+                                label,
+                                &mut controls.values[axis],
+                                0.02,
+                                None,
+                                &mut invalid,
+                            ));
+                        }
+                    });
+                }
+            }
+            if p.selection.mode == Mode::Face {
+                property_row_with(
+                    ui,
+                    column,
+                    "Tamanho interno",
+                    "Proporção linear: 50% reduz cada dimensão pela metade. A moldura permanece no plano original. Use maior que 0% até 100%.",
+                    |ui| {
+                        let gap = ui.spacing().item_spacing.x;
+                        ui.spacing_mut().interact_size.x =
+                            (ui.available_width() - gap - 14.).max(24.);
+                        edit.numeric(super::numeric::float(
+                            ui,
+                            "",
+                            &mut controls.inner_size,
+                            0.5,
+                            Some(0.001..=100.),
+                            &mut invalid,
+                        ));
+                        ui.label("%");
+                    },
+                );
+                property_row_with(
+                    ui,
+                    column,
+                    "Cada face",
+                    "Cada face selecionada vira uma região independente.",
+                    |ui| {
+                        let response = toggle(ui, &mut controls.per_face, "Cada face independente");
+                        edit.option(response, applied);
+                        ui.label(
+                            egui::RichText::new("independente")
+                                .size(12.)
+                                .color(crate::theme::TEXT_MUTED),
+                        );
+                    },
+                );
             }
         }
         Operation::Bevel => {
-            ui.horizontal(|ui| {
-                ui.label("Largura");
-                edit.numeric(super::numeric::float(
-                    ui,
-                    "",
-                    &mut controls.values[0],
-                    0.01,
-                    Some(0. ..=100.),
-                    &mut invalid,
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Segmentos");
-                let r = super::numeric::integer(ui, "", &mut controls.count, 1..=16, &mut invalid);
-                if applied {
-                    edit.numeric(r);
-                }
-            });
-        }
-        Operation::Loop => {
-            ui.horizontal(|ui| {
-                ui.label("Quantidade de cortes");
-                let r = super::numeric::integer(ui, "", &mut controls.count, 1..=64, &mut invalid);
-                if applied {
-                    edit.numeric(r);
-                }
-            });
-            if applied {
-                ui.horizontal(|ui| {
-                    ui.label("Deslizamento");
+            property_row_with(
+                ui,
+                column,
+                "Largura",
+                "Distância da quina até o novo contorno.",
+                |ui| {
+                    fill(ui, 1.);
                     edit.numeric(super::numeric::float(
                         ui,
                         "",
-                        &mut controls.values[1],
+                        &mut controls.values[0],
                         0.01,
-                        Some(-1. ..=1.),
+                        Some(0. ..=100.),
                         &mut invalid,
                     ));
-                });
+                },
+            );
+            property_row_with(
+                ui,
+                column,
+                "Segmentos",
+                "Mais segmentos deixam a curva mais suave.",
+                |ui| {
+                    fill(ui, 1.);
+                    let r =
+                        super::numeric::integer(ui, "", &mut controls.count, 1..=16, &mut invalid);
+                    if applied {
+                        edit.numeric(r);
+                    }
+                },
+            );
+        }
+        Operation::Loop => {
+            property_row_with(
+                ui,
+                column,
+                "Quantidade de cortes",
+                "Cortes paralelos inseridos de uma vez.",
+                |ui| {
+                    fill(ui, 1.);
+                    let r =
+                        super::numeric::integer(ui, "", &mut controls.count, 1..=64, &mut invalid);
+                    if applied {
+                        edit.numeric(r);
+                    }
+                },
+            );
+            if applied {
+                property_row_with(
+                    ui,
+                    column,
+                    "Deslizamento",
+                    "Move o corte entre as arestas vizinhas, de -1 a 1.",
+                    |ui| {
+                        fill(ui, 1.);
+                        edit.numeric(super::numeric::float(
+                            ui,
+                            "",
+                            &mut controls.values[1],
+                            0.01,
+                            Some(-1. ..=1.),
+                            &mut invalid,
+                        ));
+                    },
+                );
             }
             if !p.started {
-                ui.small("Clique na aresta apontada para inserir; arraste para deslizar.");
+                hint(
+                    ui,
+                    "Clique na aresta apontada para inserir; arraste para deslizar.",
+                );
             }
         }
         Operation::Knife => {
-            ui.small("Clique nas bordas para traçar. Duplo clique ou Enter aplica o percurso uma única vez.");
+            hint(
+                ui,
+                "Clique nas bordas para traçar. Duplo clique ou Enter aplica o percurso uma única vez.",
+            );
         }
         _ => (),
     }

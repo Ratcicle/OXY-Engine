@@ -160,7 +160,7 @@ impl Editor {
         if self.asset_ui.locate.is_some() {
             self.show_dock(DockTab::Library);
         }
-        let open = self.dock.open;
+        let open = self.dock_open();
         let panel = egui::TopBottomPanel::bottom("dock").frame(
             egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(8, 0)),
         );
@@ -191,7 +191,7 @@ impl Editor {
                 ];
                 if let Some(tab) = crate::widgets::tabs(ui, open.then_some(self.dock.tab), &items) {
                     if open && self.dock.tab == tab {
-                        self.dock.open = false;
+                        self.set_dock_open(false);
                     } else {
                         self.show_dock(tab);
                     }
@@ -200,10 +200,10 @@ impl Editor {
                     let (icon, label) = if open {
                         (Icon::ChevronDown, "Recolher painel")
                     } else {
-                        (Icon::ChevronRight, "Expandir painel")
+                        (Icon::ChevronUp, "Expandir painel")
                     };
                     if icons::small(ui, icon, label, 26.).clicked() {
-                        self.dock.open = !open;
+                        self.set_dock_open(!open);
                     }
                     if !open {
                         return;

@@ -169,18 +169,30 @@ impl Editor {
     }
     fn properties_body(&mut self, ui: &mut egui::Ui) {
         use crate::widgets::{card, property_row, vec3_row};
-        if self.modeling_active() || self.modeling.preview.is_some() {
-            self.mesh_preview_panel(ui);
-            if self.modeling.preview.is_some() {
-                return;
+        let modeling = self.modeling_active() || self.modeling.preview.is_some();
+        if self.modeling.preview.is_some() {
+            // An operation in progress owns the inspector until it is applied or cancelled.
+            if let Some(mut entity) = self
+                .selected
+                .as_deref()
+                .and_then(|id| self.scene().entity(id))
+                .cloned()
+            {
+                ui.add_enabled_ui(false, |ui| self.object_header(ui, &mut entity));
+                ui.add_space(8.);
             }
+            self.mesh_preview_panel(ui);
+            return;
         }
         if self.mesh_operation_active() {
             ui.disable();
         }
         let Some(id) = self.selected.clone() else {
             ui.heading("Projeto");
-            ui.text_edit_singleline(&mut self.state.project.name);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.state.project.name)
+                    .desired_width(ui.available_width()),
+            );
             return;
         };
         if self.selection.ids.len() > 1 {
@@ -210,6 +222,26 @@ impl Editor {
         self.object_header(ui, &mut entity);
         ui.add_space(8.);
         ui.spacing_mut().item_spacing.y = 6.;
+        // Studio blocks come first: what the current Studio tool works on. They edit the
+        // document directly, so header edits are stored before them and the remaining
+        // blocks continue from their result.
+        let painting = self.tab == Tab::Studio && self.studio.tab == StudioTab::Paint;
+        if modeling || painting {
+            if let Some(original) = self.scene_mut().entity_mut(&id) {
+                *original = entity;
+            }
+            if modeling {
+                self.mesh_preview_panel(ui);
+                self.mesh_info_card(ui);
+            }
+            if painting {
+                self.paint_texture_card(ui);
+            }
+            let Some(current) = self.scene().entity(&id).cloned() else {
+                return;
+            };
+            entity = current;
+        }
         card(ui, ("transform", &id), "Transformação", None, None, |ui| {
             let mut global = self.view.view_global;
             crate::widgets::segmented(ui, &mut global, &[(false, "Local"), (true, "Global")]);
@@ -330,6 +362,7 @@ impl Editor {
                         "Sombreamento da iluminação. Suave não arredonda a silhueta nem altera os polígonos.",
                         |ui| {
                             egui::ComboBox::from_id_salt("mesh_shading")
+                                .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                                 .selected_text(match shading {
                                     Shading::Flat => "Plano",
                                     Shading::Smooth => "Suave",
@@ -363,6 +396,7 @@ impl Editor {
                     .unwrap_or("Sem textura");
                 property_row(ui, "Textura PNG", "", |ui| {
                     egui::ComboBox::from_id_salt("material_texture")
+                        .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut entity.material.texture, None, "Sem textura");
@@ -396,6 +430,7 @@ impl Editor {
                     let element = entity.ui.as_mut().unwrap();
                     property_row(ui, "Tipo", "", |ui| {
                         egui::ComboBox::from_id_salt("ui_kind")
+                            .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(crate::labels::ui_kind(element.kind))
                             .show_ui(ui, |ui| {
                                 for kind in
@@ -411,6 +446,7 @@ impl Editor {
                     });
                     property_row(ui, "Âncora", "", |ui| {
                         egui::ComboBox::from_id_salt("ui_anchor")
+                            .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(crate::labels::anchor(element.anchor))
                             .show_ui(ui, |ui| {
                                 for anchor in [
@@ -439,13 +475,19 @@ impl Editor {
                         }
                     });
                     ui.label("Texto ({valor} mostra o vínculo)");
-                    ui.text_edit_multiline(&mut element.text);
+                    ui.add(
+                        egui::TextEdit::multiline(&mut element.text)
+                            .desired_width(ui.available_width()),
+                    );
                     property_row(ui, "Cor", "", |ui| color_editor(ui, &mut element.color));
                     ui.label("Objeto que possui o atributo").on_hover_text(
                     "A interface lê o valor deste objeto, por exemplo Vida do personagem. Sem escolha, usa o próprio objeto.",
                 );
                     object_picker(ui, &mut element.binding_object, &objects, "ui_binding");
-                    ui.text_edit_singleline(&mut element.binding_attribute);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut element.binding_attribute)
+                            .desired_width(ui.available_width()),
+                    );
                     ui.add(
                         egui::DragValue::new(&mut element.max_value)
                             .range(0.01..=1000000.)
@@ -463,6 +505,7 @@ impl Editor {
                         .unwrap_or("Sem imagem");
                     property_row(ui, "Imagem", "", |ui| {
                         egui::ComboBox::from_id_salt("ui_image")
+                            .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(label)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut element.texture, None, "Sem imagem");
@@ -505,7 +548,9 @@ impl Editor {
             }
             ui.separator();
             ui.add(
-                egui::TextEdit::singleline(&mut self.attribute_name).hint_text("Nome do atributo"),
+                egui::TextEdit::singleline(&mut self.attribute_name)
+                    .hint_text("Nome do atributo")
+                    .desired_width(ui.available_width()),
             );
             const TYPES: [&str; 7] = [
                 "Número",

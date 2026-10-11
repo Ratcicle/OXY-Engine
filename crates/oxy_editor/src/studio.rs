@@ -41,6 +41,10 @@ pub struct Studio {
     color: [u8; 4],
     radius: f32,
     tool: PaintTool,
+    /// Draws the UV islands over the texture pixels.
+    show_uv: bool,
+    /// The current pointer gesture began while a menu was open, so it does not paint.
+    pub(crate) stroke_blocked: bool,
     pub shared_edit: Option<Id>,
     pub hover_uv: Option<[f32; 2]>,
     last_pixel: Option<[f32; 2]>,
@@ -66,6 +70,8 @@ impl Default for Studio {
             color: [198, 82, 63, 255],
             radius: 7.,
             tool: PaintTool::Brush,
+            show_uv: true,
+            stroke_blocked: false,
             shared_edit: None,
             hover_uv: None,
             last_pixel: None,
@@ -181,38 +187,10 @@ impl Editor {
         let previous = self.studio.tab;
         // Decide once from the whole Studio area, before its tabs consume horizontal space.
         // The same decision drives the context menu and the animation properties panel.
-        let context_row_height = crate::theme::CONTROL_HEIGHT.max(ui.spacing().interact_size.y)
-            + ui.spacing().item_spacing.y;
+        let context_row_height = ROW_HEIGHT + ui.spacing().item_spacing.y;
         let compact_animation =
             ui.available_width() < 850. || ui.available_height() - context_row_height < 450.;
-        ui.horizontal(|ui| {
-            ui.set_min_height(crate::theme::CONTROL_HEIGHT);
-            ui.add_enabled_ui(!self.mesh_operation_active(),|ui| {
-                if ui.available_width()<310. {
-                    let label=match self.studio.tab {StudioTab::Model=>"Modelagem",StudioTab::Paint=>"Pintura",StudioTab::Animation=>"Animação"};
-                    ui.menu_button(label,|ui| {
-                        for (tab,label) in [(StudioTab::Model,"Modelagem"),(StudioTab::Paint,"Pintura"),(StudioTab::Animation,"Animação")] {
-                            if ui.selectable_value(&mut self.studio.tab,tab,label).clicked(){ui.close();}
-                        }
-                    }).response.on_hover_text("Ferramentas do Estúdio: modelagem, pintura e animação.");
-                } else {
-                    ui.selectable_value(&mut self.studio.tab,StudioTab::Model,"Modelagem").on_hover_text("Crie e edite a geometria. Arraste peças na hierarquia para definir articulações.");
-                    ui.selectable_value(&mut self.studio.tab,StudioTab::Paint,"Pintura").on_hover_text("Edite pixels na imagem ou na peça. Ctrl+Z desfaz o traço inteiro.");
-                    ui.selectable_value(&mut self.studio.tab,StudioTab::Animation,"Animação").on_hover_text("Grave poses por peça ou grupo na linha do tempo.");
-                }
-            });
-            if self.studio.tab==StudioTab::Model {
-                ui.separator();
-                self.model_context_controls(ui);
-            } else if self.studio.tab==StudioTab::Animation {
-                self.animation_context_controls(ui,compact_animation);
-            }
-            if ui.available_width()>72.
-                && let Some(id)=if self.studio.tab==StudioTab::Animation {self.studio.owner.as_ref().or(self.selected.as_ref())} else {self.selected.as_ref().or(self.studio.focus.as_ref())}
-                && let Some(entity)=self.scene().entity(id) {
-                ui.add_sized([ui.available_width(),crate::theme::CONTROL_HEIGHT],egui::Label::new(&entity.name).truncate()).on_hover_text(format!("Peça em edição: {}",entity.name));
-            }
-        });
+        self.studio_context_row(ui, compact_animation);
         if previous != self.studio.tab {
             self.set_spatial_tool(crate::app::Tool::Object);
         }
@@ -222,7 +200,78 @@ impl Editor {
             StudioTab::Animation => self.animation_ui(ui, dt, compact_animation),
         }
     }
+    /// First Studio row: the sub-mode, what it works on, and the view options at the right.
+    fn studio_context_row(&mut self, ui: &mut egui::Ui, compact_animation: bool) {
+        use crate::icons::{self, Icon};
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), ROW_HEIGHT),
+            egui::Sense::hover(),
+        );
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        if self.studio.tab == StudioTab::Model
+            && icons::small(&mut right, Icon::Help, "Ajuda da modelagem (F1)", 26.).clicked()
+        {
+            self.open_model_help();
+        }
+        self.visualization_button(&mut right, false);
+        let used = right.min_rect().width();
+        let mut left = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.with_max_x(rect.max.x - used - 8.))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        left.add_enabled_ui(!self.mesh_operation_active(), |ui| self.studio_tabs(ui));
+        match self.studio.tab {
+            StudioTab::Model => {
+                crate::widgets::divider(&mut left);
+                self.model_context_controls(&mut left);
+            }
+            StudioTab::Paint => {
+                crate::widgets::divider(&mut left);
+                self.paint_tool_choice(&mut left);
+            }
+            StudioTab::Animation => {
+                crate::widgets::divider(&mut left);
+                self.animation_context_controls(&mut left, compact_animation);
+            }
+        }
+    }
+    fn studio_tabs(&mut self, ui: &mut egui::Ui) {
+        const TABS: [(StudioTab, &str); 3] = [
+            (StudioTab::Model, "Modelagem"),
+            (StudioTab::Paint, "Pintura"),
+            (StudioTab::Animation, "Animação"),
+        ];
+        let width = crate::widgets::segmented_width(ui, &TABS.map(|(_, label)| label));
+        if ui.available_width() < width + 60. {
+            let label = TABS
+                .iter()
+                .find(|(tab, _)| *tab == self.studio.tab)
+                .map_or("Modelagem", |(_, label)| label);
+            ui.menu_button(label, |ui| {
+                for (tab, label) in TABS {
+                    if ui
+                        .selectable_value(&mut self.studio.tab, tab, label)
+                        .clicked()
+                    {
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Ferramentas do Estúdio: modelagem, pintura e animação.");
+        } else {
+            crate::widgets::segmented(ui, &mut self.studio.tab, &TABS);
+        }
+    }
 }
+
+/// Height of each Studio toolbar row, in points before interface scale.
+pub(crate) const ROW_HEIGHT: f32 = crate::theme::CONTROL_HEIGHT + 6.;
 
 #[cfg(test)]
 mod tests {
