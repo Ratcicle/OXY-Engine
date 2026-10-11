@@ -1112,3 +1112,26 @@ pub fn preview_footer(
     });
     action
 }
+
+/// One place that still uses something being deleted: an icon, the object's name and,
+/// at the right, where it is and how it uses it.
+pub fn reference_row(ui: &mut Ui, icon: Icon, object: &str, detail: &str) {
+    egui::Frame::new()
+        .fill(theme::BG_PANEL)
+        .corner_radius(5)
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.), Sense::hover());
+                icons::paint(ui, rect, icon, theme::ACCENT_BRIGHT);
+                ui.label(RichText::new(object).size(12.5).color(theme::TEXT));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(detail).size(12.).color(theme::TEXT_MUTED))
+                            .truncate(),
+                    );
+                });
+            });
+        });
+}

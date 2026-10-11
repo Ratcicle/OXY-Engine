@@ -160,6 +160,8 @@ struct NativeQa {
     hierarchy_base: Option<Snapshot>,
     camera_before: Option<oxy_render::CameraState>,
     idle: Option<IdleProbe>,
+    /// Physical size requested by ResizePhysical, and when to give up waiting for it.
+    resize: Option<(Vec2, Instant)>,
     texture_original: Option<(Id, usize, oxy_core::painting::PaintImage)>,
     texture_base: Option<Snapshot>,
     saved_before_draft: Option<Vec<u8>>,
@@ -460,6 +462,7 @@ impl NativeQa {
             output,
             start: Instant::now(),
             wait: 15,
+            resize: None,
             missing: 0,
             pending_shot: None,
             shot_wait: None,
@@ -1887,7 +1890,9 @@ impl NativeQa {
                 ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(logical_size));
                 ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(logical_size));
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(logical_size));
-                self.wait = 20;
+                // The OS applies the size asynchronously: wait for it, not for a frame count.
+                self.resize = Some((size, Instant::now() + Duration::from_secs(10)));
+                self.wait = 3;
                 description = format!("Janela: {} × {} pixels físicos", size.x, size.y);
             }
             Action::Check(label) => {
@@ -2281,7 +2286,9 @@ impl eframe::App for NativeQa {
         }
         if let Some(idle) = &mut self.idle {
             if Instant::now() < idle.deadline {
-                if idle.measuring {
+                // Real input (the pointer over the window, focus changes) is not a repaint
+                // the editor asked for.
+                if idle.measuring && ctx.input(|i| i.raw.events.is_empty()) {
                     idle.frames += 1;
                     if idle.frames < 4 {
                         self.report
@@ -2316,6 +2323,25 @@ impl eframe::App for NativeQa {
         if !self.events.is_empty() || self.pending_shot.is_some() {
             ctx.request_repaint();
             return;
+        }
+        if let Some((target, deadline)) = self.resize {
+            let size = ctx.content_rect().size() * ctx.pixels_per_point();
+            if (size - target).abs().max_elem() <= 1.5 {
+                self.resize = None;
+                self.wait = self.wait.max(10);
+            } else if Instant::now() > deadline {
+                self.fail(
+                    ctx,
+                    format!(
+                        "A janela não chegou a {} × {} (está em {:.0} × {:.0})",
+                        target.x, target.y, size.x, size.y
+                    ),
+                );
+                return;
+            } else {
+                ctx.request_repaint();
+                return;
+            }
         }
         if self.wait > 0 {
             self.wait -= 1;

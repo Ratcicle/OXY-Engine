@@ -124,21 +124,67 @@ impl Editor {
             return;
         };
         let references = editing::asset_references(&self.state.project, &id);
-        egui::Window::new("Excluir recurso do projeto").collapsible(false).resizable(true).show(ctx,|ui| {
-            ui.strong(&asset.name);
-            if !references.is_empty() {
-                ui.colored_label(crate::theme::ERROR,"Este recurso ainda está em uso. Remova os vínculos antes de excluí-lo.");
-                egui::ScrollArea::vertical().max_height(240.).show(ui,|ui| { for reference in &references { ui.label(reference); } });
+        use crate::widgets;
+        let mut close = false;
+        let mut delete = false;
+        let response = egui::Modal::new("asset_delete".into()).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 460.));
+            let title = if references.is_empty() {
+                format!("Excluir “{}”?", asset.name)
             } else {
-                ui.label("O recurso será retirado da biblioteca. O arquivo original no disco é preservado para permitir desfazer com segurança.");
-                if ui.button("Excluir recurso").clicked() {
-                    match editing::remove_asset(&mut self.state.project,&id) {
-                        Ok(())=>{self.state.images.remove(&id);self.renderer.clear_texture_override(&id);self.play.game_ui.clear_texture_override(&id);self.asset_ui.thumbnail=None;self.asset_ui.delete=None;},
-                        Err(error)=>self.log(error),
-                    }
-                }
+                format!("Não é possível excluir “{}”", asset.name)
+            };
+            close = widgets::dialog_header(ui, &title);
+            if references.is_empty() {
+                widgets::hint(
+                    ui,
+                    "O recurso será retirado da biblioteca. O arquivo original no disco é \
+                     preservado para permitir desfazer com segurança.",
+                );
+            } else {
+                widgets::hint(
+                    ui,
+                    "Este recurso ainda está em uso. Remova os vínculos antes de excluí-lo.",
+                );
+                ui.add_space(4.);
+                egui::ScrollArea::vertical()
+                    .max_height(240.)
+                    .show(ui, |ui| {
+                        for reference in &references {
+                            // "Scope → Object: use", as listed by editing::asset_references.
+                            let (place, usage) = reference
+                                .split_once(": ")
+                                .unwrap_or((reference.as_str(), ""));
+                            let (scope, object) = place.split_once(" → ").unwrap_or(("", place));
+                            let detail = [scope, usage]
+                                .into_iter()
+                                .filter(|s| !s.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(" · ");
+                            widgets::reference_row(ui, crate::icons::Icon::Object, object, &detail);
+                        }
+                    });
             }
-            if ui.button("Cancelar").clicked() { self.asset_ui.delete=None; }
+            widgets::dialog_footer(ui, |ui| {
+                if references.is_empty() {
+                    delete = widgets::danger_button(ui, "Excluir recurso", true).clicked();
+                }
+                close |= widgets::secondary_button(ui, "Cancelar").clicked();
+            });
         });
+        if delete {
+            match editing::remove_asset(&mut self.state.project, &id) {
+                Ok(()) => {
+                    self.state.images.remove(&id);
+                    self.renderer.clear_texture_override(&id);
+                    self.play.game_ui.clear_texture_override(&id);
+                    self.asset_ui.thumbnail = None;
+                    self.asset_ui.delete = None;
+                }
+                Err(error) => self.log(error),
+            }
+        } else if close || response.should_close() {
+            self.asset_ui.delete = None;
+        }
     }
 }

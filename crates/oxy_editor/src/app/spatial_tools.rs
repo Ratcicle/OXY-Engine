@@ -208,34 +208,60 @@ impl Editor {
         };
         let mut keep = true;
         egui::Window::new("Ajustar caixa · prévia na cena")
-            .default_width(310.)
-            .resizable(true)
+            .default_width(320.)
+            .collapsible(false)
+            .resizable(false)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(crate::theme::BG_WINDOW)
+                    .inner_margin(12),
+            )
             .show(ctx, |ui| {
-                ui.label("Uma caixa na pose-base. Sprites usam seu retângulo completo.");
-                ui.add(
-                    egui::DragValue::new(&mut fit.margin)
-                        .range(0.0..=100.)
-                        .speed(0.01)
-                        .prefix("Margem "),
+                use crate::{theme, widgets};
+                widgets::hint(
+                    ui,
+                    "Uma caixa na pose-base. Sprites usam seu retângulo completo.",
                 );
-                egui::ScrollArea::vertical()
-                    .max_height(190.)
+                ui.add_space(6.);
+                widgets::number_row(
+                    ui,
+                    "Margem",
+                    "Folga somada em todos os lados da caixa.",
+                    &mut fit.margin,
+                    0.0..=100.,
+                    0.01,
+                    "",
+                );
+                ui.add_space(4.);
+                ui.label(
+                    egui::RichText::new("PEÇAS INCLUÍDAS")
+                        .font(theme::medium(11.))
+                        .color(theme::TEXT_MUTED),
+                );
+                egui::Frame::new()
+                    .fill(theme::BG_PANEL)
+                    .stroke(egui::Stroke::new(1., theme::CARD_BORDER))
+                    .corner_radius(6)
+                    .inner_margin(6)
                     .show(ui, |ui| {
-                        for (id, included) in &mut fit.pieces {
-                            if let Some(e) = self.scene().entity(id) {
-                                ui.checkbox(included, &e.name);
-                            }
-                        }
+                        ui.set_width(ui.available_width());
+                        egui::ScrollArea::vertical()
+                            .max_height(190.)
+                            .show(ui, |ui| {
+                                for (id, included) in &mut fit.pieces {
+                                    if let Some(e) = self.scene().entity(id) {
+                                        ui.checkbox(included, &e.name);
+                                    }
+                                }
+                            });
                     });
                 let proposal = self.fit_bounds(&fit);
                 if let Err(error) = &proposal {
-                    ui.label(error);
+                    ui.add_space(4.);
+                    widgets::callout(ui, true, error);
                 }
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(proposal.is_ok(), egui::Button::new("Confirmar ajuste"))
-                        .clicked()
-                    {
+                widgets::dialog_footer(ui, |ui| {
+                    if widgets::primary_button(ui, "Confirmar ajuste", proposal.is_ok()).clicked() {
                         if let Err(e) = proposal.and_then(|b| {
                             spatial::set_collider_bounds(self.scene_mut(), &fit.id, b)
                         }) {
@@ -244,7 +270,7 @@ impl Editor {
                             keep = false;
                         }
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if widgets::secondary_button(ui, "Cancelar").clicked() {
                         keep = false;
                     }
                 });
