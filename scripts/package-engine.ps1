@@ -15,6 +15,15 @@ if ($metadata.ProductName -ne 'OXY Engine' -or $metadata.ProductVersion -ne $ver
     throw "Executável incorreto ou antigo: $($metadata.ProductName) $($metadata.ProductVersion); esperado OXY Engine $version."
 }
 Copy-Item -LiteralPath (Join-Path $workspace 'LICENSE') -Destination $destinationPath
+# MCP server for AI agents, next to the editor.
+if (!$SkipBuild) {
+    & (Join-Path $PSScriptRoot 'cargo.ps1') build -p oxy_mcp --release --locked
+    if ($LASTEXITCODE -ne 0) { throw 'Build do oxy-mcp falhou.' }
+}
+$binaryRoot = if ($BinaryDirectory) { [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($BinaryDirectory)) { $BinaryDirectory } else { Join-Path $workspace $BinaryDirectory })) } else { Join-Path $workspace 'target/release' }
+$mcp = Join-Path $binaryRoot 'oxy-mcp.exe'
+if (!(Test-Path -LiteralPath $mcp -PathType Leaf)) { throw "Servidor MCP não encontrado: $mcp" }
+Copy-Item -LiteralPath $mcp -Destination (Join-Path $destinationPath 'oxy-mcp.exe') -Force
 $lab = Join-Path $destinationPath 'laboratorio-3d'
 New-Item -ItemType Directory -Path $lab -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $workspace 'examples/laboratorio-3d/project.oxy.json') -Destination $lab
@@ -53,6 +62,15 @@ borda interna; Shift+E extruda. Ctrl+caixa soma componentes, inclusive ocultos.
 F1 abre ajuda contextual.
 Interface: ajuste a escala pendente e clique Aplicar; Cancelar mantém a atual.
 Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
+
+Agentes de IA (MCP): oxy-mcp.exe é um servidor MCP que deixa agentes como o Claude
+ler, editar, testar e capturar projetos da OXY. No Claude Code, registre com
+  claude mcp add oxy -- "<pasta da OXY>\oxy-mcp.exe"
+No editor, ligue Permitir agentes de IA em Preferências do editor (Interface: 100%,
+na barra de status). Com o projeto aberto, as mudanças do agente aparecem na hora,
+entram no histórico como "Agente: ..." e podem ser desfeitas com Ctrl+Z; quem salva
+é você. Sem o editor aberto, o agente edita os arquivos do projeto e guarda a versão
+anterior em project.oxy.json.agente.bak.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.

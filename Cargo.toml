@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/oxy_core", "crates/oxy_render", "crates/oxy_editor", "crates/oxy_player"]
+members = ["crates/oxy_core", "crates/oxy_render", "crates/oxy_editor", "crates/oxy_player", "crates/oxy_mcp"]
 resolver = "2"
 
 [workspace.package]

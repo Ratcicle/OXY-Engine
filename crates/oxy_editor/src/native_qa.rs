@@ -1,6 +1,7 @@
 //! Opt-in native integration test. Inputs enter only this eframe application's RawInput.
 //! It never sends OS keyboard/mouse input and does not require foreground ownership.
 use crate::app::{Editor, Snapshot};
+mod agents;
 mod body_offset;
 mod camera_authoring;
 mod cameras;
@@ -662,6 +663,9 @@ impl NativeQa {
         }
         if label.starts_with("ux_") {
             return self.check_ux(label);
+        }
+        if label.starts_with("agent_") {
+            return self.check_agents(label);
         }
         let ensure = |condition: bool, message: &str| {
             if condition {

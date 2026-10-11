@@ -141,6 +141,16 @@ impl Editor {
 }
 
 #[cfg(test)]
+impl Editor {
+    pub(crate) fn qa_allow_agents(&mut self, on: bool) {
+        self.preferences.allow_agents = on;
+    }
+    pub(crate) fn qa_undo_label(&self) -> Option<&str> {
+        self.history.undo_label()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::AGENT_PREFIX;
     #[test]

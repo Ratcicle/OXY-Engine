@@ -81,6 +81,10 @@ Selecionar uma peça **ou grupo vazio** com colisor mostra a caixa real da físi
 
 **Editar pivô** compensa a transformação para manter peça, filhos e colisores no lugar; campos numéricos e Centralizar usam a mesma operação. Mudanças de pivô/parentesco que afetariam animações existentes são recusadas com os clips envolvidos. Não há retargeting aproximado. No player, Esc pausa e F3 mostra diagnóstico.
 
+## Agentes de IA
+
+Em **Preferências do editor**, **Permitir agentes de IA** (desligado por padrão) abre um canal local para o servidor MCP da OXY (`oxy-mcp.exe`). Com o projeto aberto, as mudanças do agente aparecem na hora, entram no histórico como **Agente: …**, aparecem no Console com a origem **Agente** e podem ser desfeitas com Ctrl+Z; o agente não salva. A barra de status mostra **Agentes ligados** ou **Agente conectado**. Configuração e ferramentas: [Agentes de IA (MCP)](agentes-mcp.md).
+
 ## Compatibilidade e domínio suportado
 
 O formato atual é **schema_version 4**. Documentos schema 1, 2 e 3 são migrados em memória sem mudar IDs nem sobrescrever ao abrir. Ao salvar convertido, há backup identificado dos bytes originais e escrita segura. Versões futuras/inválidas são recusadas; leitores antigos não devem abrir o novo formato. As três demonstrações continuam em `examples/validacao`; doze receitas em `examples/guia` e a pista em `examples/laboratorio-3d` são projetos comuns.

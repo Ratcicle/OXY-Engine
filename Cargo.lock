@@ -2317,6 +2317,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxy_mcp"
+version = "0.4.2"
+dependencies = [
+ "oxy_core",
+ "oxy_render",
+ "serde_json",
+]
+
+[[package]]
 name = "oxy_player"
 version = "0.4.2"
 dependencies = [

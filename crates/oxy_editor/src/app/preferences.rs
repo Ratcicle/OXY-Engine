@@ -150,98 +150,103 @@ impl Editor {
                         .color(crate::theme::TEXT_MUTED),
                 );
             };
-            section(ui, "INTERFACE");
-            widgets::property_row_with(ui, column, "Escala", "", |ui| {
-                widgets::segmented(
+            // Sections scroll so the footer stays visible in small windows at large scales.
+            egui::ScrollArea::vertical()
+                .max_height((ctx.content_rect().height() - 150.).max(120.))
+                .show(ui, |ui| {
+                section(ui, "INTERFACE");
+                widgets::property_row_with(ui, column, "Escala", "", |ui| {
+                    widgets::segmented(
+                        ui,
+                        &mut pending.scale_percent,
+                        &[
+                            (80, "80%"),
+                            (100, "100%"),
+                            (125, "125%"),
+                            (150, "150%"),
+                            (160, "160%"),
+                        ],
+                    );
+                });
+                widgets::property_row_with(ui, column, "", "", |ui| {
+                    ui.spacing_mut().slider_width = (ui.available_width() - 60.).max(80.);
+                    ui.add(egui::Slider::new(&mut pending.scale_percent, 80..=160).suffix("%"));
+                });
+                widgets::property_row_with(ui, column, "Nomes das ferramentas", "", |ui| {
+                    widgets::toggle(ui, &mut pending.tool_names, "Mostrar nomes das ferramentas");
+                    ui.label(
+                        egui::RichText::new(if pending.tool_names {
+                            "visíveis"
+                        } else {
+                            "só ícones"
+                        })
+                        .size(12.)
+                        .color(crate::theme::TEXT_MUTED),
+                    );
+                });
+                if u16::try_from((self.scale * 100.).round() as i32).ok() != Some(pending.scale_percent)
+                {
+                    widgets::hint(ui, "A nova escala é aplicada ao confirmar.");
+                }
+                ui.add_space(6.);
+                ui.separator();
+                section(ui, "NAVEGAÇÃO 3D");
+                widgets::property_row_with(
                     ui,
-                    &mut pending.scale_percent,
-                    &[
-                        (80, "80%"),
-                        (100, "100%"),
-                        (125, "125%"),
-                        (150, "150%"),
-                        (160, "160%"),
-                    ],
+                    column,
+                    "Velocidade",
+                    "Velocidade local da vista. RMB + roda ajusta em passos de ×1,2; Shift ×4, \
+                     Ctrl ×0,25; juntos usam a base.",
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut pending.navigation_speed)
+                                .range(navigation::MIN_SPEED..=navigation::MAX_SPEED)
+                                .speed(0.1)
+                                .suffix(" m/s"),
+                        );
+                    },
                 );
-            });
-            widgets::property_row_with(ui, column, "", "", |ui| {
-                ui.spacing_mut().slider_width = (ui.available_width() - 60.).max(80.);
-                ui.add(egui::Slider::new(&mut pending.scale_percent, 80..=160).suffix("%"));
-            });
-            widgets::property_row_with(ui, column, "Nomes das ferramentas", "", |ui| {
-                widgets::toggle(ui, &mut pending.tool_names, "Mostrar nomes das ferramentas");
-                ui.label(
-                    egui::RichText::new(if pending.tool_names {
-                        "visíveis"
-                    } else {
-                        "só ícones"
-                    })
-                    .size(12.)
-                    .color(crate::theme::TEXT_MUTED),
+                widgets::property_row_with(
+                    ui,
+                    column,
+                    "Sensibilidade do olhar",
+                    "Sensibilidade local do mouse na vista de edição. Não altera a câmera de jogo \
+                     nem depende da escala da interface.",
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut pending.navigation_sensitivity)
+                                .range(navigation::MIN_SENSITIVITY..=navigation::MAX_SENSITIVITY)
+                                .speed(0.0001)
+                                .max_decimals(4),
+                        );
+                    },
                 );
-            });
-            if u16::try_from((self.scale * 100.).round() as i32).ok() != Some(pending.scale_percent)
-            {
-                widgets::hint(ui, "A nova escala é aplicada ao confirmar.");
-            }
-            ui.add_space(6.);
-            ui.separator();
-            section(ui, "NAVEGAÇÃO 3D");
-            widgets::property_row_with(
-                ui,
-                column,
-                "Velocidade",
-                "Velocidade local da vista. RMB + roda ajusta em passos de ×1,2; Shift ×4, \
-                 Ctrl ×0,25; juntos usam a base.",
-                |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut pending.navigation_speed)
-                            .range(navigation::MIN_SPEED..=navigation::MAX_SPEED)
-                            .speed(0.1)
-                            .suffix(" m/s"),
+                widgets::hint(
+                    ui,
+                    "Na vista, segure o botão direito e use a roda para mudar a velocidade \
+                     (Shift ×4, Ctrl ×0,25).",
+                );
+                ui.add_space(6.);
+                ui.separator();
+                section(ui, "AGENTES DE IA");
+                widgets::property_row_with(ui, column, "Permitir agentes", "", |ui| {
+                    widgets::toggle(ui, &mut pending.allow_agents, "Permitir agentes de IA");
+                    ui.label(
+                        egui::RichText::new(if pending.allow_agents {
+                            "ligado"
+                        } else {
+                            "desligado"
+                        })
+                        .size(12.)
+                        .color(crate::theme::TEXT_MUTED),
                     );
-                },
-            );
-            widgets::property_row_with(
-                ui,
-                column,
-                "Sensibilidade do olhar",
-                "Sensibilidade local do mouse na vista de edição. Não altera a câmera de jogo \
-                 nem depende da escala da interface.",
-                |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut pending.navigation_sensitivity)
-                            .range(navigation::MIN_SENSITIVITY..=navigation::MAX_SENSITIVITY)
-                            .speed(0.0001)
-                            .max_decimals(4),
-                    );
-                },
-            );
-            widgets::hint(
-                ui,
-                "Na vista, segure o botão direito e use a roda para mudar a velocidade \
-                 (Shift ×4, Ctrl ×0,25).",
-            );
-            ui.add_space(6.);
-            ui.separator();
-            section(ui, "AGENTES DE IA");
-            widgets::property_row_with(ui, column, "Permitir agentes", "", |ui| {
-                widgets::toggle(ui, &mut pending.allow_agents, "Permitir agentes de IA");
-                ui.label(
-                    egui::RichText::new(if pending.allow_agents {
-                        "ligado"
-                    } else {
-                        "desligado"
-                    })
-                    .size(12.)
-                    .color(crate::theme::TEXT_MUTED),
+                });
+                widgets::hint(
+                    ui,
+                    "Agentes conectados pelo servidor MCP da OXY (oxy-mcp) leem e editam o \
+                     projeto aberto. Eles não salvam, e cada mudança pode ser desfeita com Ctrl+Z.",
                 );
-            });
-            widgets::hint(
-                ui,
-                "Agentes conectados pelo servidor MCP da OXY (oxy-mcp) leem e editam o \
-                 projeto aberto. Eles não salvam, e cada mudança pode ser desfeita com Ctrl+Z.",
-            );
+                });
             widgets::dialog_footer(ui, |ui| {
                 apply = widgets::primary_button(ui, "Aplicar", true).clicked();
                 cancel |= widgets::secondary_button(ui, "Cancelar").clicked();

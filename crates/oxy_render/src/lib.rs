@@ -18,7 +18,8 @@ pub use game_ui::pick_ui;
 mod gpu_test;
 
 use cache::{DynamicBuffer, GeometryCache, GpuMesh, InstanceData, MeshVertex};
-use egui_wgpu::{RenderState, wgpu};
+pub use egui_wgpu::RenderState;
+use egui_wgpu::wgpu;
 use glam::{Mat4, Vec2, Vec3};
 #[cfg(test)]
 use oxy_core::document::Primitive;
