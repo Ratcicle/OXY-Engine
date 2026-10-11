@@ -50,20 +50,22 @@ impl Editor {
                 );
             });
             widgets::property_row(ui, "Arquivo", "", |ui| {
-                let text = self
-                    .path
-                    .as_ref()
-                    .map_or_else(|| "Ainda não salvo".to_owned(), |p| p.display().to_string());
-                ui.add(
+                let (short, full) = self.path.as_deref().map_or_else(
+                    || ("Ainda não salvo".to_owned(), String::new()),
+                    |p| (short_project_path(p), p.display().to_string()),
+                );
+                let response = ui.add(
                     egui::Label::new(
-                        egui::RichText::new(&text)
+                        egui::RichText::new(short)
                             .monospace()
                             .size(11.5)
                             .color(theme::TEXT_MUTED),
                     )
                     .truncate(),
-                )
-                .on_hover_text(text);
+                );
+                if !full.is_empty() {
+                    response.on_hover_text(full);
+                }
             });
             let start = self
                 .state
@@ -824,5 +826,32 @@ impl Editor {
         if let Some(children) = requested_fit {
             self.start_fit(children);
         }
+    }
+}
+
+/// End of a project path, from its folder: the part that tells projects apart.
+fn short_project_path(path: &Path) -> String {
+    let file = path.file_name().unwrap_or_default().to_string_lossy();
+    match path.parent().and_then(Path::file_name) {
+        Some(folder) => format!(
+            "…{}{}{}{file}",
+            std::path::MAIN_SEPARATOR,
+            folder.to_string_lossy(),
+            std::path::MAIN_SEPARATOR
+        ),
+        None => file.into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn project_path_shows_only_its_folder_and_file() {
+        let path = std::path::Path::new("C:/Users/nome/Documents/Jogo/project.oxy.json");
+        let separator = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            super::short_project_path(path),
+            format!("…{separator}Jogo{separator}project.oxy.json")
+        );
     }
 }
