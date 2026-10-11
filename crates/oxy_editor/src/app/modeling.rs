@@ -5,6 +5,7 @@ mod atlas_tests;
 mod creation;
 mod cutting;
 mod direct;
+mod help;
 #[cfg(test)]
 mod measure;
 mod numeric;
@@ -795,22 +796,5 @@ impl Editor {
             return true;
         }
         false
-    }
-    pub(super) fn mesh_help(&mut self, ctx: &egui::Context) {
-        if !self.modeling.help {
-            return;
-        }
-        egui::Modal::new(egui::Id::new("mesh_help")).show(ctx,|ui|{
-            ui.set_max_width(530.);ui.heading("Modelagem por componentes");
-            egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-130.).max(100.)).show(ui, |ui| {
-            ui.label("1: Objeto · 2: Face · 3: Aresta · 4: Vértice. Clique seleciona; Ctrl+clique alterna. Caixa comum substitui os componentes visíveis. Ctrl+caixa soma todos os componentes tocados, inclusive ocultos; a tecla é considerada ao iniciar o gesto. Shift+X mantém seleção através e Shift+I inverte.");
-            ui.label("Selecionar um modo preserva a forma paramétrica. Converter em malha editável mantém aparência, pivô, filhos, colisor e animações. A primeira edição também faz essa conversão; cancelar restaura os parâmetros.");
-            ui.label("W/E/R escolhem Mover/Girar/Escalar. Armar uma ferramenta não altera a peça. Arraste uma alça e solte para aplicar; valores numéricos aplicam ao soltar, Enter ou sair do campo. Esc cancela o gesto inteiro, inclusive com Alt/Shift. Ctrl+Z durante o gesto apenas cancela. Faces não planas exigem triangulação antes de deformar.");
-            ui.label("Shift+E: Extrudir; Shift+U: Criar borda interna. Tamanho interno reduz as dimensões em torno do centro: 50% é metade do tamanho. A moldura mantém o plano original. A distância pode ser positiva ou negativa; Normal da face acompanha sua orientação. Região convexa plana ou cada face independente; buracos, regiões côncavas e interseções sem suporte são recusados.");
-            ui.label("Última operação, em Propriedades, recalcula a partir da origem e substitui o mesmo comando. Desfazer retorna ao estado anterior à operação. Outra edição ou troca de peça encerra esse ajuste. UVs antigos mantêm a pintura; se faltar espaço para as faces novas, escolha explicitamente Criar cópia ampliada (2×) ou cancele.");
-            ui.label("Corte em loop: clique numa aresta, arraste para posicionar e solte. Bisturi: trace entre bordas; duplo clique ou Enter termina. Inverter orientação, triangular, criar face/aresta e excluir aplicam imediatamente. Visualização reúne grade, encaixe, seleção através e enquadramento; esconder a grade não desliga o encaixe.");
-            });
-            if ui.button("Fechar ajuda").clicked() || ui.input(|i|i.key_pressed(egui::Key::Escape)){self.modeling.help=false;}
-        });
     }
 }

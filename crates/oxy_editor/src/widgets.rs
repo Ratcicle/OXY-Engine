@@ -991,3 +991,124 @@ pub fn sub_section(ui: &mut Ui, id_salt: impl Hash, title: &str, body: impl FnOn
 pub fn hint(ui: &mut Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).size(12.).color(theme::TEXT_MUTED)).wrap());
 }
+
+/// Title row of a dialog with its close button; true when the button was clicked.
+pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(title)
+                .font(theme::medium(15.))
+                .color(theme::TEXT),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            close = icons::small(ui, Icon::Close, "Fechar", 26.).clicked();
+        });
+    });
+    ui.add_space(8.);
+    close
+}
+
+/// Small muted caption above a dialog field.
+pub fn field_label(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).size(12.).color(theme::TEXT_MUTED));
+}
+
+/// Bottom row of a dialog: `add` lays out the buttons from the right edge, so the main
+/// action goes first.
+pub fn dialog_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.add_space(12.);
+    let row = Vec2::new(ui.available_width(), 30.);
+    ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), add)
+        .inner
+}
+
+/// Accent button for the main action of a dialog or block.
+pub fn primary_button(ui: &mut Ui, text: &str, enabled: bool) -> Response {
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(RichText::new(text).color(Color32::WHITE))
+            .fill(theme::ACCENT)
+            .min_size(Vec2::new(0., 28.)),
+    )
+}
+
+/// Framed neutral button, such as Cancelar.
+pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
+    ui.add(
+        egui::Button::new(text)
+            .fill(theme::BG_RAISED)
+            .stroke(Stroke::new(1., theme::BORDER))
+            .min_size(Vec2::new(0., 28.)),
+    )
+}
+
+/// Destructive action. `filled` paints it red; otherwise only the text is red, for a
+/// button that sits away from the main action.
+pub fn danger_button(ui: &mut Ui, text: &str, filled: bool) -> Response {
+    let button = if filled {
+        egui::Button::new(RichText::new(text).color(Color32::WHITE))
+            .fill(Color32::from_rgb(182, 75, 75))
+    } else {
+        egui::Button::new(RichText::new(text).color(theme::ERROR)).frame(false)
+    };
+    ui.add(button.min_size(Vec2::new(0., 28.)))
+}
+
+/// Tinted box with a short message inside a dialog or block.
+pub fn callout(ui: &mut Ui, warning: bool, text: &str) {
+    let (fill, stroke, color) = if warning {
+        (
+            Color32::from_rgb(46, 39, 24),
+            Color32::from_rgb(74, 61, 34),
+            Color32::from_rgb(232, 210, 160),
+        )
+    } else {
+        (theme::BG_PANEL, theme::CARD_BORDER, theme::TEXT_MUTED)
+    };
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1., stroke))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(RichText::new(text).size(12.).color(color)).wrap());
+        });
+}
+
+/// Cancelar/Aplicar row that closes a block with an operation in preview.
+/// Returns Some(true) to apply and Some(false) to cancel.
+pub fn preview_footer(
+    ui: &mut Ui,
+    can_apply: bool,
+    disabled_hint: &str,
+    extra: impl FnOnce(&mut Ui),
+) -> Option<bool> {
+    let mut action = None;
+    ui.add_space(4.);
+    ui.separator();
+    let row = Vec2::new(ui.available_width(), theme::CONTROL_HEIGHT + 4.);
+    ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+        if ui
+            .add_enabled(
+                can_apply,
+                egui::Button::new(RichText::new("Aplicar").color(Color32::WHITE))
+                    .fill(theme::ACCENT)
+                    .shortcut_text(RichText::new("Enter").color(Color32::from_rgb(214, 228, 245))),
+            )
+            .on_disabled_hover_text(disabled_hint)
+            .clicked()
+        {
+            action = Some(true);
+        }
+        if ui
+            .add(egui::Button::new("Cancelar").shortcut_text("Esc"))
+            .clicked()
+        {
+            action = Some(false);
+        }
+        ui.with_layout(Layout::left_to_right(Align::Center), extra);
+    });
+    action
+}

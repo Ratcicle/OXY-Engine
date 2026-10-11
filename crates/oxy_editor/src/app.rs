@@ -477,6 +477,59 @@ impl Editor {
             }
         }
     }
+    /// Asks what to do with unsaved changes before a pending transition.
+    fn unsaved_dialog(&mut self, ctx: &egui::Context) {
+        use crate::widgets;
+        let mut choice = None;
+        let response = egui::Modal::new("unsaved_changes".into()).show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 440.));
+            let title = format!("Salvar as alterações em “{}”?", self.state.project.name);
+            if widgets::dialog_header(ui, &title) {
+                choice = Some(false);
+            }
+            widgets::hint(
+                ui,
+                "Há mudanças no projeto ou nas texturas que ainda não foram salvas. Se \
+                 descartar, elas serão perdidas.",
+            );
+            if !self.studio.animation.drafts.is_empty() {
+                ui.add_space(6.);
+                widgets::callout(
+                    ui,
+                    true,
+                    "Há uma pose provisória na Animação. Grave-a com + Quadro-chave antes de \
+                     salvar, ou cancele para voltar à edição.",
+                );
+            }
+            widgets::dialog_footer(ui, |ui| {
+                if widgets::primary_button(ui, "Salvar e continuar", true).clicked() {
+                    choice = Some(true);
+                }
+                if widgets::secondary_button(ui, "Cancelar").clicked() {
+                    choice = Some(false);
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if widgets::danger_button(ui, "Descartar alterações", false).clicked()
+                        && let Some(t) = self.pending.take()
+                    {
+                        self.apply_transition(t);
+                    }
+                });
+            });
+        });
+        match choice {
+            Some(true) => {
+                if self.save()
+                    && let Some(t) = self.pending.take()
+                {
+                    self.apply_transition(t);
+                }
+            }
+            Some(false) => self.pending = None,
+            None if response.should_close() => self.pending = None,
+            None => {}
+        }
+    }
     pub fn save(&mut self) -> bool {
         if self.mesh_operation_active() {
             self.warn("Termine o gesto de modelagem ou pressione Esc antes de salvar.");
@@ -1349,13 +1402,7 @@ impl eframe::App for Editor {
         self.finish_navigation(ctx);
         if self.pending.is_some() {
             self.pause();
-            egui::Window::new("Alterações não salvas").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,Vec2::ZERO).show(ctx,|ui|{
-            ui.label("Há alterações no projeto, nas texturas ou uma pose provisória. Salve antes de continuar ou descarte explicitamente.");
-            if !self.studio.animation.drafts.is_empty() { ui.label("A pose provisória precisa ser gravada com + Quadro-chave na Animação antes de salvar. Cancele esta janela para voltar à edição."); }
-            ui.horizontal(|ui|{if ui.button("Salvar e continuar").clicked()&&self.save()&& let Some(t)=self.pending.take(){self.apply_transition(t)}
-if ui.button("Descartar alterações").clicked()&& let Some(t)=self.pending.take(){self.apply_transition(t)}
-if ui.button("Cancelar").clicked(){self.pending=None;}});
-        });
+            self.unsaved_dialog(ctx);
         }
         if self.save_requested {
             self.save_requested = false;

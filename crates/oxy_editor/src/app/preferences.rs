@@ -129,40 +129,102 @@ impl Editor {
         let mut apply = false;
         let mut cancel = false;
         let response = egui::Modal::new("interface_preferences".into()).show(ctx, |ui| {
-            ui.set_max_width((ctx.content_rect().width() - 48.).clamp(160., 400.));
-            ui.heading("Escala da interface");
-            ui.add(egui::Slider::new(&mut pending.scale_percent, 80..=160).suffix("%"));
-            ui.horizontal_wrapped(|ui| {
-                for value in [80, 100, 125, 150, 160] {
+            use crate::widgets;
+            ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 480.));
+            cancel = widgets::dialog_header(ui, "Preferências do editor");
+            let column =
+                widgets::label_column(ui, &["Sensibilidade do olhar", "Nomes das ferramentas"]);
+            let section = |ui: &mut egui::Ui, text: &str| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .font(crate::theme::medium(11.))
+                        .color(crate::theme::TEXT_MUTED),
+                );
+            };
+            section(ui, "INTERFACE");
+            widgets::property_row_with(ui, column, "Escala", "", |ui| {
+                widgets::segmented(
+                    ui,
+                    &mut pending.scale_percent,
+                    &[
+                        (80, "80%"),
+                        (100, "100%"),
+                        (125, "125%"),
+                        (150, "150%"),
+                        (160, "160%"),
+                    ],
+                );
+            });
+            widgets::property_row_with(ui, column, "", "", |ui| {
+                ui.spacing_mut().slider_width = (ui.available_width() - 60.).max(80.);
+                ui.add(egui::Slider::new(&mut pending.scale_percent, 80..=160).suffix("%"));
+            });
+            widgets::property_row_with(ui, column, "Nomes das ferramentas", "", |ui| {
+                widgets::toggle(ui, &mut pending.tool_names, "Mostrar nomes das ferramentas");
+                ui.label(
+                    egui::RichText::new(if pending.tool_names {
+                        "visíveis"
+                    } else {
+                        "só ícones"
+                    })
+                    .size(12.)
+                    .color(crate::theme::TEXT_MUTED),
+                );
+            });
+            if u16::try_from((self.scale * 100.).round() as i32).ok() != Some(pending.scale_percent)
+            {
+                widgets::hint(ui, "A nova escala é aplicada ao confirmar.");
+            }
+            ui.add_space(6.);
+            ui.separator();
+            section(ui, "NAVEGAÇÃO 3D");
+            widgets::property_row_with(
+                ui,
+                column,
+                "Velocidade",
+                "Velocidade local da vista. RMB + roda ajusta em passos de ×1,2; Shift ×4, \
+                 Ctrl ×0,25; juntos usam a base.",
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut pending.navigation_speed)
+                            .range(navigation::MIN_SPEED..=navigation::MAX_SPEED)
+                            .speed(0.1)
+                            .suffix(" m/s"),
+                    );
+                },
+            );
+            widgets::property_row_with(
+                ui,
+                column,
+                "Sensibilidade do olhar",
+                "Sensibilidade local do mouse na vista de edição. Não altera a câmera de jogo \
+                 nem depende da escala da interface.",
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut pending.navigation_sensitivity)
+                            .range(navigation::MIN_SENSITIVITY..=navigation::MAX_SENSITIVITY)
+                            .speed(0.0001)
+                            .max_decimals(4),
+                    );
+                },
+            );
+            widgets::hint(
+                ui,
+                "Na vista, segure o botão direito e use a roda para mudar a velocidade \
+                 (Shift ×4, Ctrl ×0,25).",
+            );
+            widgets::dialog_footer(ui, |ui| {
+                apply = widgets::primary_button(ui, "Aplicar", true).clicked();
+                cancel |= widgets::secondary_button(ui, "Cancelar").clicked();
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     if ui
-                        .selectable_label(pending.scale_percent == value, format!("{value}%"))
+                        .add(egui::Button::new("Restaurar 100%").frame(false))
+                        .on_hover_text("Prepare 100% e confirme em Aplicar.")
                         .clicked()
                     {
-                        pending.scale_percent = value;
+                        pending.scale_percent = 100;
                     }
-                }
-            });
-            ui.checkbox(&mut pending.tool_names, "Mostrar nomes das ferramentas");
-            ui.separator();
-            ui.label("Navegação 3D do editor");
-            ui.add(egui::DragValue::new(&mut pending.navigation_speed)
-                .range(navigation::MIN_SPEED..=navigation::MAX_SPEED).speed(0.1)
-                .prefix("Velocidade de navegação 3D: ").suffix(" m/s"))
-                .on_hover_text("Velocidade local da vista. RMB + roda ajusta em passos de ×1,2; Shift ×4, Ctrl ×0,25; juntos usam a base.");
-            ui.add(egui::DragValue::new(&mut pending.navigation_sensitivity)
-                .range(navigation::MIN_SENSITIVITY..=navigation::MAX_SENSITIVITY).speed(0.0001)
-                .max_decimals(4).prefix("Sensibilidade do olhar: "))
-                .on_hover_text("Sensibilidade local do mouse na vista de edição. Não altera a câmera de jogo nem depende da escala da interface.");
-            ui.horizontal_wrapped(|ui| {
-                apply = ui.button("Aplicar").clicked();
-                cancel = ui.button("Cancelar").clicked();
-                if ui
-                    .button("Restaurar 100%")
-                    .on_hover_text("Prepare 100% e confirme em Aplicar.")
-                    .clicked()
-                {
-                    pending.scale_percent = 100;
-                }
+                });
             });
         });
         cancel |= response.should_close() || ctx.input(|i| i.key_pressed(egui::Key::Escape));
