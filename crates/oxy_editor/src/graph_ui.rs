@@ -588,6 +588,14 @@ impl GraphView {
             (self.canvas.height() - 40.) * 0.5,
         );
         self.pan = center - bounds.center().to_vec2() * self.zoom;
+        // A graph larger than the view at the smallest zoom starts from its top left,
+        // where its events usually are, instead of being cut on every side.
+        if bounds.width() * self.zoom > room.x {
+            self.pan.x = 40. - bounds.min.x * self.zoom;
+        }
+        if bounds.height() * self.zoom > room.y {
+            self.pan.y = 40. - bounds.min.y * self.zoom;
+        }
     }
 
     /// Checks types, parameters and references. A failure selects the node it names.
@@ -2199,6 +2207,40 @@ mod tests {
             + (Vec2::from(node.position) + node_size(Some(op)) * 0.5) * view.zoom;
         assert!(center.distance(canvas.center()) < 1.0);
         assert_eq!(view.selected.as_ref(), Some(&node.id));
+    }
+
+    #[test]
+    fn framing_shows_small_graphs_whole_and_large_ones_from_their_top_left() {
+        let mut view = GraphView {
+            canvas: Rect::from_min_size(Pos2::new(300.0, 100.0), Vec2::new(800.0, 600.0)),
+            ..GraphView::default()
+        };
+        let small = Graph {
+            nodes: vec![
+                Node::new("event.click", [100.0, 50.0]),
+                Node::new("debug.message", [400.0, 120.0]),
+            ],
+            edges: Vec::new(),
+        };
+        view.fit(&small);
+        let bounds = graph_bounds(&small).unwrap();
+        let screen = |view: &GraphView, point: Pos2| {
+            view.canvas.min + view.pan + point.to_vec2() * view.zoom
+        };
+        assert_eq!(view.zoom, 1.0);
+        assert!(view.canvas.contains(screen(&view, bounds.min)));
+        assert!(view.canvas.contains(screen(&view, bounds.max)));
+        let large = Graph {
+            nodes: (0..60)
+                .map(|i| Node::new("debug.message", [i as f32 * 300.0, 20.0 + i as f32 * 120.0]))
+                .collect(),
+            edges: Vec::new(),
+        };
+        view.fit(&large);
+        let bounds = graph_bounds(&large).unwrap();
+        assert_eq!(view.zoom, MIN_ZOOM);
+        let corner = screen(&view, bounds.min);
+        assert!((corner - view.canvas.min - Vec2::splat(40.0)).length() < 0.01);
     }
 
     #[test]
