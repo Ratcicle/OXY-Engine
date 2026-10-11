@@ -2,7 +2,7 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
-## Não lançado
+## 0.4.2 — 2026-10-11
 
 - **Tela inicial no visual novo:** barra superior e barra de status iguais às do editor, cartões para **Novo projeto** e **Abrir projeto**, um bloco **Exemplos** com a explicação de cada exemplo, e **Projetos recentes** num bloco com busca, há quanto tempo cada projeto foi salvo, aviso de arquivo não encontrado e as ações (Abrir, Remover da lista) no "⋯". Em janelas estreitas as colunas se empilham.
 - **Novo projeto:** a primeira cena (2D ou 3D) é escolhida em dois cartões lado a lado, com ícone e marca de seleção.
