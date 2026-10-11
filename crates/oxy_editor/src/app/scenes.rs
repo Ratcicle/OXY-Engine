@@ -117,79 +117,93 @@ impl Editor {
             let mut create = false;
             let mut cancel = false;
             let response = egui::Modal::new("new_project".into()).show(ctx, |ui| {
-                ui.set_max_width((ctx.content_rect().width() - 48.).clamp(160., 420.));
-                ui.heading("Novo projeto");
-                ui.label("Nome do projeto");
-                ui.text_edit_singleline(&mut new.name);
-                for (kind, title, description) in [
+                use crate::theme;
+                use egui::{Align, Layout, RichText};
+                ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 460.));
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Novo projeto")
+                            .font(theme::medium(15.))
+                            .color(theme::TEXT),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        cancel = crate::icons::small(ui, crate::icons::Icon::Close, "Fechar", 26.)
+                            .clicked();
+                    });
+                });
+                ui.add_space(10.);
+                ui.label(
+                    RichText::new("Nome do projeto")
+                        .size(12.)
+                        .color(theme::TEXT_MUTED),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut new.name)
+                        .desired_width(f32::INFINITY)
+                        .margin(egui::Margin::symmetric(8, 6)),
+                );
+                ui.add_space(10.);
+                ui.label(
+                    RichText::new("Primeira cena")
+                        .size(12.)
+                        .color(theme::TEXT_MUTED),
+                );
+                let gap = 10.;
+                let width = (ui.available_width() - gap) / 2.;
+                let kinds = [
                     (
                         SceneKind::TwoD,
+                        crate::icons::Icon::Sprite,
                         "Cena 2D",
-                        "Comece com imagens, formas e uma câmera 2D.",
+                        "Imagens, formas e uma câmera 2D.",
                     ),
                     (
                         SceneKind::ThreeD,
+                        crate::icons::Icon::Cube,
                         "Cena 3D",
-                        "Comece com modelos, profundidade e uma câmera 3D.",
+                        "Modelos, profundidade e uma câmera 3D.",
                     ),
-                ] {
-                    ui.horizontal(|ui| {
-                        let (rect, icon) = ui.allocate_exact_size(Vec2::splat(28.), Sense::click());
-                        let p = |x, y| rect.min + Vec2::new(x, y);
-                        let stroke = egui::Stroke::new(1.5, ui.visuals().text_color());
-                        if kind == SceneKind::TwoD {
-                            ui.painter().rect_stroke(
-                                Rect::from_min_max(p(3., 6.), p(25., 23.)),
-                                1.,
-                                stroke,
-                                egui::StrokeKind::Inside,
-                            );
-                            ui.painter().line_segment([p(4., 22.), p(14., 13.)], stroke);
-                            ui.painter()
-                                .line_segment([p(14., 13.), p(24., 22.)], stroke);
-                        } else {
-                            for (a, b) in [
-                                ((3., 8.), (15., 3.)),
-                                ((15., 3.), (26., 9.)),
-                                ((26., 9.), (14., 14.)),
-                                ((14., 14.), (3., 8.)),
-                                ((3., 8.), (3., 22.)),
-                                ((3., 22.), (14., 27.)),
-                                ((14., 27.), (26., 22.)),
-                                ((26., 22.), (26., 9.)),
-                                ((14., 14.), (14., 27.)),
-                            ] {
-                                ui.painter()
-                                    .line_segment([p(a.0, a.1), p(b.0, b.1)], stroke);
-                            }
-                        }
-                        icon.widget_info(|| {
-                            egui::WidgetInfo::selected(
-                                egui::WidgetType::Button,
-                                true,
-                                new.kind == kind,
-                                title,
-                            )
-                        });
-                        let response = ui.add(
-                            egui::Button::new(format!("{title}\n{description}"))
-                                .selected(new.kind == kind)
-                                .wrap(),
-                        );
-                        if response.clicked() || icon.clicked() {
+                ];
+                let height = kinds
+                    .iter()
+                    .map(|(_, _, _, text)| kind_text(ui, width, text).size().y)
+                    .fold(0., f32::max)
+                    + 92.;
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for (kind, icon, title, text) in kinds {
+                        if kind_card(ui, icon, title, text, new.kind == kind, width, height)
+                            .clicked()
+                        {
                             new.kind = kind;
                         }
-                    });
-                }
-                ui.weak("Você poderá adicionar cenas 2D e 3D depois.");
-                ui.horizontal(|ui| {
+                    }
+                });
+                ui.label(
+                    RichText::new("Você poderá adicionar cenas 2D e 3D depois.")
+                        .size(12.)
+                        .color(theme::TEXT_MUTED),
+                );
+                ui.add_space(12.);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     create = ui
                         .add_enabled(
                             !new.name.trim().is_empty(),
-                            egui::Button::new("Criar projeto"),
+                            egui::Button::new(
+                                RichText::new("Criar projeto").color(egui::Color32::WHITE),
+                            )
+                            .fill(theme::ACCENT)
+                            .min_size(Vec2::new(0., 28.)),
                         )
                         .clicked();
-                    cancel = ui.button("Cancelar").clicked();
+                    cancel |= ui
+                        .add(
+                            egui::Button::new("Cancelar")
+                                .fill(theme::BG_RAISED)
+                                .stroke(egui::Stroke::new(1., theme::BORDER))
+                                .min_size(Vec2::new(0., 28.)),
+                        )
+                        .clicked();
                 });
             });
             cancel |= response.should_close();
@@ -284,4 +298,81 @@ impl Editor {
             }
         }
     }
+}
+
+fn kind_text(ui: &egui::Ui, width: f32, text: &str) -> std::sync::Arc<egui::Galley> {
+    ui.painter().layout(
+        text.into(),
+        egui::FontId::proportional(12.),
+        crate::theme::TEXT_MUTED,
+        width - 28.,
+    )
+}
+
+/// Selectable card for the first scene of a new project.
+fn kind_card(
+    ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
+    title: &str,
+    text: &str,
+    selected: bool,
+    width: f32,
+    height: f32,
+) -> egui::Response {
+    use crate::theme;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    crate::icons::register_qa(ui, title, rect);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, title)
+    });
+    let hovered = response.hovered();
+    let (fill, border) = match (selected, hovered) {
+        (true, false) => (Color32::from_rgb(38, 53, 72), theme::ACCENT),
+        (true, true) => (Color32::from_rgb(42, 59, 80), theme::ACCENT_BRIGHT),
+        (false, false) => (theme::BG_PANEL, theme::BORDER),
+        (false, true) => (theme::CARD_FILL, Color32::from_rgb(86, 86, 92)),
+    };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        8.,
+        fill,
+        egui::Stroke::new(1., border),
+        egui::StrokeKind::Inside,
+    );
+    let ink = if selected {
+        Color32::from_rgb(183, 210, 245)
+    } else {
+        Color32::from_rgb(196, 196, 202)
+    };
+    crate::icons::paint(
+        ui,
+        Rect::from_min_size(rect.min + Vec2::splat(14.), Vec2::splat(32.)),
+        icon,
+        ink,
+    );
+    if selected {
+        let center = egui::pos2(rect.right() - 19., rect.top() + 19.);
+        painter.circle_filled(center, 9., theme::ACCENT);
+        crate::icons::paint(
+            ui,
+            Rect::from_center_size(center, Vec2::splat(10.)),
+            crate::icons::Icon::Check,
+            Color32::WHITE,
+        );
+    }
+    let top = rect.top() + 56.;
+    painter.text(
+        egui::pos2(rect.left() + 14., top),
+        egui::Align2::LEFT_TOP,
+        title,
+        theme::medium(13.),
+        Color32::from_rgb(240, 240, 242),
+    );
+    painter.galley(
+        egui::pos2(rect.left() + 14., top + 20.),
+        kind_text(ui, width, text),
+        theme::TEXT_MUTED,
+    );
+    response
 }

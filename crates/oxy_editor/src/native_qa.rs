@@ -676,7 +676,7 @@ impl NativeQa {
                 for label in [
                     "Novo projeto",
                     "Abrir projeto",
-                    "Projetos recentes",
+                    "PROJETOS RECENTES",
                     "Projeto de exemplo",
                 ] {
                     ensure(

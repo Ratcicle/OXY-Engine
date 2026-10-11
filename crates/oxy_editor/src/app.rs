@@ -1059,7 +1059,7 @@ impl Editor {
         }
     }
     /// Console on the home screen, where the editor dock does not exist.
-    fn home_console(&mut self, ctx: &egui::Context) {
+    pub(super) fn home_console(&mut self, ctx: &egui::Context) {
         if !self.console_visible() {
             return;
         }
@@ -1124,7 +1124,6 @@ impl eframe::App for Editor {
         }
         if self.home.visible {
             self.stop_navigation(ctx);
-            self.home_console(ctx);
             self.home_ui(ctx);
             self.project_dialogs(ctx);
             self.preferences_ui(ctx);

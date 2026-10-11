@@ -74,6 +74,12 @@ pub enum Icon {
     Logic,
     Close,
     Trash,
+    // Home screen.
+    Folder,
+    Search,
+    Examples,
+    Track,
+    Console,
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
@@ -894,6 +900,60 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
             ));
             line(at(0.42, 0.4), at(0.42, 0.78));
             line(at(0.58, 0.4), at(0.58, 0.78));
+        }
+        Icon::Folder => {
+            p.add(egui::Shape::closed_line(
+                vec![
+                    at(0.06, 0.2),
+                    at(0.38, 0.2),
+                    at(0.48, 0.32),
+                    at(0.94, 0.32),
+                    at(0.94, 0.86),
+                    at(0.06, 0.86),
+                ],
+                Stroke::new(1.3, color),
+            ));
+        }
+        Icon::Search => {
+            p.circle_stroke(at(0.42, 0.42), r.width() * 0.3, Stroke::new(1.4, color));
+            p.line_segment([at(0.64, 0.64), at(0.92, 0.92)], Stroke::new(1.6, color));
+        }
+        Icon::Examples => {
+            for (x, y) in [(0.08, 0.08), (0.56, 0.08), (0.08, 0.56), (0.56, 0.56)] {
+                p.rect_stroke(
+                    Rect::from_min_max(at(x, y), at(x + 0.36, y + 0.36)),
+                    1.,
+                    Stroke::new(1.3, color),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+        Icon::Track => {
+            p.add(egui::Shape::line(
+                vec![
+                    at(0.06, 0.8),
+                    at(0.28, 0.8),
+                    at(0.5, 0.46),
+                    at(0.7, 0.46),
+                    at(0.94, 0.16),
+                ],
+                Stroke::new(1.3, color),
+            ));
+            p.circle_stroke(at(0.3, 0.58), r.width() * 0.09, Stroke::new(1.3, color));
+            line(at(0.66, 0.8), at(0.94, 0.8));
+        }
+        Icon::Console => {
+            p.rect_stroke(
+                Rect::from_min_max(at(0.06, 0.14), at(0.94, 0.86)),
+                1.5,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Inside,
+            );
+            p.add(egui::Shape::line(
+                vec![at(0.24, 0.36), at(0.4, 0.5), at(0.24, 0.64)],
+                Stroke::new(1.3, color),
+            ));
+            line(at(0.5, 0.66), at(0.74, 0.66));
         }
         Icon::Move => {
             for end in [at(0.5, 0.), at(1., 0.5), at(0.5, 1.), at(0., 0.5)] {
