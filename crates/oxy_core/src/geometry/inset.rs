@@ -1,5 +1,9 @@
-//! Linear, area-centroid inset of convex planar surfaces. The original triangulated UV
-//! mapping is partitioned (never globally reprojected); only extrusion walls need atlas space.
+//! Linear, area-centroid inset of convex planar surfaces. The region is divided into the
+//! scaled cap and one frame cell per boundary edge, split along the corner (miter) lines,
+//! so no point is added to the original edges. The original triangulated UV mapping is
+//! partitioned (never globally reprojected); where a face's UVs are linear in its plane,
+//! the parts of each cell are joined back into one face. Only extrusion walls need atlas
+//! space.
 use super::{
     ComponentId as Id, Corner, EditableMesh, Face, MeshData,
     operations::{self, Output},
@@ -119,7 +123,7 @@ pub fn apply_directions(
                 continue;
             }
             let face = mesh.face(triangle.face).unwrap();
-            let mut inside = triangle
+            let samples = triangle
                 .corners
                 .iter()
                 .map(|&i| Sample {
@@ -128,35 +132,27 @@ pub fn apply_directions(
                     normal: face.corners[i].normal.map(Vec3::from),
                 })
                 .collect::<Vec<_>>();
-            for plane in &surface.planes {
-                charge(&mut work, inside.len())?;
-                let (remain, outside) = split(&inside, *plane, surface.tolerance);
-                if has_area(&outside, surface.tolerance) {
+            // Cell 0 is the cap; the others are the frame, one per boundary edge.
+            for (cell, planes) in surface.cells.iter().enumerate() {
+                let mut part = samples.clone();
+                for plane in planes {
+                    charge(&mut work, part.len())?;
+                    part = split(&part, *plane, surface.tolerance).0;
+                    if part.len() < 3 {
+                        break;
+                    }
+                }
+                if has_area(&part, surface.tolerance) {
                     pieces.push(Piece::new(
                         &mut data,
                         &mut pool,
-                        outside,
+                        part,
                         triangle.face,
                         region,
-                        false,
+                        cell,
                         &mut work,
                     )?);
                 }
-                inside = remain;
-                if inside.len() < 3 {
-                    break;
-                }
-            }
-            if has_area(&inside, surface.tolerance) {
-                pieces.push(Piece::new(
-                    &mut data,
-                    &mut pool,
-                    inside,
-                    triangle.face,
-                    region,
-                    true,
-                    &mut work,
-                )?);
             }
         }
         if !pieces.iter().any(|p| p.cap) {
@@ -164,6 +160,19 @@ pub fn apply_directions(
                 "O tamanho interno colapsou a região abaixo da tolerância geométrica.".into(),
             );
         }
+        let linear: HashSet<_> = faces
+            .iter()
+            .filter(|&&fi| linear_uv(mesh, fi))
+            .map(|&fi| mesh.data().faces[fi].id)
+            .collect();
+        let mut pieces = join_cells(pieces, &linear, &pool, surface.normal, &mut work)?;
+        // Points left only by joined triangle diagonals must not come back as T-junctions.
+        let used: HashSet<_> = pieces
+            .iter()
+            .flat_map(|p| p.corners.iter().map(|c| c.vertex))
+            .collect();
+        pool.points
+            .retain(|(id, _)| source_ids.contains(id) || used.contains(id));
         // The complement is split sequentially by clipping planes. Insert all shared cut
         // points into its edges so an earlier strip cannot retain a T-junction.
         for piece in &mut pieces {
@@ -432,7 +441,9 @@ struct ClipPlane {
 }
 struct Surface {
     normal: Vec3,
-    planes: Vec<ClipPlane>,
+    /// Inward half-planes of each convex cell: the scaled cap first, then one frame
+    /// trapezoid per boundary edge.
+    cells: Vec<Vec<ClipPlane>>,
     tolerance: f32,
 }
 impl Surface {
@@ -531,21 +542,28 @@ impl Surface {
         {
             return Err("O tamanho interno está perto demais de 0% ou 100% para produzir uma borda não degenerada nesta face.".into());
         }
-        let planes = inner
-            .iter()
-            .zip(inner.iter().cycle().skip(1))
-            .take(inner.len())
-            .map(|(&a, &b)| {
-                let inward = precise_normal.cross(b - a).normalize();
-                ClipPlane {
-                    normal: inward,
+        let clip = |polygon: &[DVec3]| -> Vec<ClipPlane> {
+            polygon
+                .iter()
+                .zip(polygon.iter().cycle().skip(1))
+                .take(polygon.len())
+                .map(|(&a, &b)| ClipPlane {
+                    normal: precise_normal.cross(b - a).normalize(),
                     origin: a,
-                }
-            })
-            .collect();
+                })
+                .collect()
+        };
+        // The frame cells meet along the lines from each boundary corner to its scaled
+        // copy: rays from the interior centroid, which never cross.
+        let count = precise.len();
+        let mut cells = vec![clip(&inner)];
+        for i in 0..count {
+            let j = (i + 1) % count;
+            cells.push(clip(&[precise[i], precise[j], inner[j], inner[i]]));
+        }
         Ok(Self {
             normal,
-            planes,
+            cells,
             tolerance,
         })
     }
@@ -654,6 +672,8 @@ struct Piece {
     source: Id,
     region: usize,
     cap: bool,
+    /// Cell of the region this piece lies in: 0 is the cap.
+    cell: usize,
     corners: Vec<Corner>,
 }
 impl Piece {
@@ -663,7 +683,7 @@ impl Piece {
         polygon: Vec<Sample>,
         source: Id,
         region: usize,
-        cap: bool,
+        cell: usize,
         work: &mut usize,
     ) -> Result<Self, String> {
         let mut corners = Vec::new();
@@ -687,10 +707,142 @@ impl Piece {
         Ok(Self {
             source,
             region,
-            cap,
+            cap: cell == 0,
+            cell,
             corners,
         })
     }
+}
+
+/// Whether a face's UVs are one linear map of its plane, so parts of it can be joined
+/// without changing what the texture shows.
+fn linear_uv(mesh: &EditableMesh, face: usize) -> bool {
+    let corners = &mesh.data().faces[face].corners;
+    let normal = mesh.prepared().face_normals[face];
+    let points: Vec<_> = corners
+        .iter()
+        .map(|c| mesh.position(c.vertex).unwrap())
+        .collect();
+    let Some(axis) = (points[1] - points[0]).try_normalize() else {
+        return false;
+    };
+    let other = normal.cross(axis);
+    let local = |p: Vec3| Vec2::new((p - points[0]).dot(axis), (p - points[0]).dot(other));
+    // The corner farthest from the first edge gives a well-conditioned base triangle.
+    let Some(third) = (2..points.len()).max_by(|&a, &b| {
+        local(points[a])
+            .y
+            .abs()
+            .total_cmp(&local(points[b]).y.abs())
+    }) else {
+        return false;
+    };
+    let base = [0, 1, third];
+    let p = base.map(|i| local(points[i]));
+    let uv = base.map(|i| Vec2::from(corners[i].uv));
+    let determinant = (p[1] - p[0]).perp_dot(p[2] - p[0]);
+    if determinant.abs() <= f32::EPSILON {
+        return false;
+    }
+    let scale = uv
+        .iter()
+        .flat_map(|u| [u.x.abs(), u.y.abs()])
+        .fold(1f32, f32::max);
+    corners.iter().zip(&points).all(|(corner, &point)| {
+        let q = local(point) - p[0];
+        let a = q.perp_dot(p[2] - p[0]) / determinant;
+        let b = (p[1] - p[0]).perp_dot(q) / determinant;
+        let predicted = uv[0] + (uv[1] - uv[0]) * a + (uv[2] - uv[0]) * b;
+        predicted.distance(Vec2::from(corner.uv)) <= scale * 1e-4
+    })
+}
+
+/// Joins the parts of each cell that came from the triangles of one linearly mapped
+/// face. A face and a cell are both convex, so the join is the convex outline of the
+/// parts, without the points the triangle diagonals left on straight sides.
+fn join_cells(
+    pieces: Vec<Piece>,
+    linear: &HashSet<Id>,
+    pool: &Pool,
+    normal: Vec3,
+    work: &mut usize,
+) -> Result<Vec<Piece>, String> {
+    let mut groups = Vec::<(Id, usize, Vec<Piece>)>::new();
+    for piece in pieces {
+        match groups
+            .iter_mut()
+            .find(|(source, cell, _)| *source == piece.source && *cell == piece.cell)
+        {
+            Some((_, _, parts)) => parts.push(piece),
+            None => groups.push((piece.source, piece.cell, vec![piece])),
+        }
+    }
+    let normal = normal.as_dvec3();
+    let positions: HashMap<_, _> = pool.points.iter().copied().collect();
+    let mut result = Vec::new();
+    for (source, _, parts) in groups {
+        if parts.len() == 1 || !linear.contains(&source) {
+            result.extend(parts);
+            continue;
+        }
+        let mut corners = HashMap::<Id, Corner>::new();
+        for corner in parts.iter().flat_map(|p| &p.corners) {
+            corners
+                .entry(corner.vertex)
+                .or_insert_with(|| corner.clone());
+        }
+        charge(work, corners.len() * corners.len())?;
+        let origin = positions[&parts[0].corners[0].vertex];
+        let axis = (positions[&parts[0].corners[1].vertex] - origin).normalize();
+        let other = normal.cross(axis);
+        let mut points: Vec<_> = corners
+            .keys()
+            .map(|&id| {
+                let d = positions[&id] - origin;
+                (d.dot(axis), d.dot(other), id)
+            })
+            .collect();
+        points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let tolerance = f64::from(pool.tolerance);
+        // Monotone chain: counterclockwise around `normal`. A point within tolerance of
+        // the line through its neighbours is dropped as collinear.
+        let turn = |o: &(f64, f64, Id), a: &(f64, f64, Id), b: &(f64, f64, Id)| {
+            let span = (b.0 - o.0).hypot(b.1 - o.1).max(f64::MIN_POSITIVE);
+            ((a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)) / span
+        };
+        let mut hull: Vec<(f64, f64, Id)> = Vec::new();
+        for point in &points {
+            while hull.len() >= 2
+                && turn(&hull[hull.len() - 2], &hull[hull.len() - 1], point) <= tolerance
+            {
+                hull.pop();
+            }
+            hull.push(*point);
+        }
+        let lower = hull.len() + 1;
+        for point in points.iter().rev().skip(1) {
+            while hull.len() >= lower
+                && turn(&hull[hull.len() - 2], &hull[hull.len() - 1], point) <= tolerance
+            {
+                hull.pop();
+            }
+            hull.push(*point);
+        }
+        hull.pop();
+        if hull.len() < 3 {
+            result.extend(parts);
+            continue;
+        }
+        let first = &parts[0];
+        result.push(Piece {
+            source,
+            region: first.region,
+            cap: first.cap,
+            cell: first.cell,
+            corners: hull.iter().map(|(_, _, id)| corners[id].clone()).collect(),
+        });
+    }
+    Ok(result)
 }
 fn intermediate(
     points: &[(Id, DVec3)],

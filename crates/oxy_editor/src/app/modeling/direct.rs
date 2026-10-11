@@ -306,7 +306,9 @@ impl Editor {
                     "Ajusta a mesma operação. Ctrl+Z desfaz tudo de uma vez.",
                 );
             }
-            parameters(ui, candidate, &mut controls, &mut edit, !armed);
+            parameters_scope(ui, |ui| {
+                parameters(ui, candidate, &mut controls, &mut edit, !armed);
+            });
             for note in &candidate.notes {
                 crate::widgets::hint(ui, note);
             }
@@ -651,6 +653,16 @@ impl Edit {
             self.ended |= applied;
         }
     }
+}
+/// Field IDs independent of what comes before them. The hint above the fields disappears
+/// once a gesture starts; positional IDs would then hand an ongoing drag to the next field.
+fn parameters_scope(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("mesh_operation_parameters")
+            .global_scope(true),
+        add,
+    );
 }
 fn parameters(
     ui: &mut egui::Ui,
@@ -1022,6 +1034,90 @@ mod tests {
         p.global = true;
         assert_eq!(p.extrusion_axis(), Vec3::X);
     }
+    #[test]
+    fn dragging_width_stays_on_width_when_the_hint_above_disappears() {
+        fn text_center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+            fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+                match shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, label)),
+                    _ => None,
+                }
+            }
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| find(&shape.shape, label))
+                .unwrap_or_else(|| panic!("UI text not rendered: {label}"))
+        }
+        let mut p = preview();
+        p.operation = Operation::Bevel;
+        p.values = [0.05, 0., 0.];
+        p.count = 3;
+        let mut controls = Controls::from(&p);
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        // The panel's hint only shows before the gesture starts, as in mesh_preview_panel.
+        let frame = |controls: &mut Controls, hint: bool, events: Vec<egui::Event>| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400., 300.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        if hint {
+                            crate::widgets::hint(ui, "Arraste a alça na cena ou informe um valor.");
+                        }
+                        let mut edit = Edit::default();
+                        parameters_scope(ui, |ui| {
+                            parameters(ui, &p, controls, &mut edit, false);
+                        });
+                    });
+                },
+            )
+        };
+        let output = frame(&mut controls, true, vec![]);
+        let start = text_center(&output, "0.05");
+        let press = egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &mut controls,
+            true,
+            vec![egui::Event::PointerMoved(start), press],
+        );
+        for step in 1..=4 {
+            let position = start + egui::vec2(step as f32 * 15., 0.);
+            frame(
+                &mut controls,
+                false,
+                vec![egui::Event::PointerMoved(position)],
+            );
+        }
+        frame(
+            &mut controls,
+            false,
+            vec![egui::Event::PointerButton {
+                pos: start + egui::vec2(60., 0.),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(controls.values[0] > 0.05, "Largura did not follow the drag");
+        assert_eq!(controls.count, 3, "The drag moved to Segmentos");
+    }
+
     #[test]
     fn drawing_controls_does_not_copy_or_change_preview_payload() {
         fn copy_type<T: Copy>(_: &T) {}

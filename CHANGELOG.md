@@ -2,6 +2,11 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
+## Não lançado
+
+- **Borda interna sem fragmentar a face:** a face interna sai como uma face só, com um quad de moldura por aresta, e as faces vizinhas não ganham vértices. Antes, cada triângulo interno da face (por exemplo, a base de um cone) virava um pedaço próprio, o que também fazia o arredondamento recusar arestas próximas. Faces com UVs que não são lineares no plano continuam divididas para preservar a pintura.
+- **Arrastar valores das operações:** arrastar Largura em Arredondar (ou outro campo do painel da operação) não passa mais para o campo de baixo quando a dica do painel desaparece.
+
 ## 0.4.1 — 2026-10-10
 
 - **Estúdio no visual novo:** Modelagem, Pintura e Animação usam as duas linhas de cabeçalho, o chip de status no viewport e blocos em Propriedades (Malha, Textura, operação em prévia com Cancelar/Aplicar). A Animação ganhou a linha do tempo no painel inferior, com trilhas por peça, régua adaptável, barra em duas linhas em janelas estreitas e as ações da animação no próprio seletor.
