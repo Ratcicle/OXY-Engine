@@ -55,7 +55,7 @@ pub fn scene_references(project: &Project, id: &str) -> Vec<String> {
                 e.graph.nodes.iter().filter(move |n| {
                     n.operation == "action.scene"
                         && matches!(n.params.get("scene"), Some(Value::Text(target)) if target==id)
-                }).map(move |n| format!("{scope} → {} → Mudar de cena ({})", e.name, n.id))
+                }).map(move |_| format!("{scope} → {} → Mudar de cena", e.name))
             })
         })
         .collect()

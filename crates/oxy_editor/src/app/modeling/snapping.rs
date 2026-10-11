@@ -138,17 +138,89 @@ impl Editor {
         let mut cancel = false;
         let mut changed = false;
         let mut reset = false;
-        egui::ScrollArea::vertical().show(ui,|ui|{
-            ui.heading("Encaixar vértices");
-            ui.label(if state.source.is_none(){"Escolha o ponto de origem na seleção."}else if state.target.is_none(){"Escolha o ponto de destino em outra peça."}else{"Alinhamento em prévia"});
-            ui.horizontal_wrapped(|ui|{changed|=ui.selectable_value(&mut state.axis,None,"Mover").changed();for(i,label)in ["Escalar X","Escalar Y","Escalar Z"].iter().enumerate(){changed|=ui.selectable_value(&mut state.axis,Some(i),*label).changed();}});
-            ui.small("Escala usa o pivô da peça; seleções com várias raízes usam o centro do conjunto. Apenas o eixo escolhido muda.");
-            for(index,label)in [(state.source,"Origem"),(state.target,"Destino")]{if let Some(index)=index{let p=&state.points[index];ui.label(format!("{label}: {:.3}, {:.3}, {:.3}",p.position.x,p.position.y,p.position.z));}}
-            if let Some(error)=&state.error{ui.colored_label(crate::theme::WARNING,error);}
-            reset=ui.button("Escolher outros pontos").clicked();
-            confirm=ui.add_enabled(state.target.is_some()&&state.error.is_none(),egui::Button::new("Confirmar encaixe (Enter)")).clicked()||ui.input(|i|i.key_pressed(egui::Key::Enter))&&state.target.is_some()&&state.error.is_none();
-            cancel=ui.button("Cancelar (Esc)").clicked();
+        use crate::{theme, widgets};
+        let status = if state.source.is_none() {
+            "Escolha a origem"
+        } else if state.target.is_none() {
+            "Escolha o destino"
+        } else {
+            "Em prévia"
+        };
+        let ready = state.target.is_some() && state.error.is_none();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            widgets::panel_card(
+                ui,
+                crate::icons::Icon::Snap,
+                "Encaixar vértices",
+                status,
+                true,
+                |ui| {
+                    let steps = [
+                        (
+                            state.source,
+                            "Origem",
+                            "Clique num vértice da peça selecionada",
+                        ),
+                        (state.target, "Destino", "Clique num vértice de outra peça"),
+                    ];
+                    let active = usize::from(state.source.is_some());
+                    for (i, (point, title, wait)) in steps.into_iter().enumerate() {
+                        let detail = match point {
+                            Some(index) => {
+                                let p = state.points[index].position;
+                                format!("{:.3}, {:.3}, {:.3}", p.x, p.y, p.z)
+                            }
+                            None if i == active => wait.to_owned(),
+                            None => "—".to_owned(),
+                        };
+                        snap_step(ui, i + 1, title, &detail, point.is_some(), i == active);
+                    }
+                    ui.add_space(4.);
+                    widgets::property_row(ui, "Ajuste", "", |ui| {
+                        let mut axis = state.axis;
+                        changed |= widgets::segmented(
+                            ui,
+                            &mut axis,
+                            &[
+                                (None, "Mover"),
+                                (Some(0), "Escalar X"),
+                                (Some(1), "Escalar Y"),
+                                (Some(2), "Escalar Z"),
+                            ],
+                        );
+                        state.axis = axis;
+                    });
+                    widgets::hint(
+                        ui,
+                        if state.axis.is_none() {
+                            "Move a seleção até a origem coincidir com o destino."
+                        } else {
+                            "Escala só no eixo escolhido, a partir do pivô da peça (ou do \
+                             centro do conjunto)."
+                        },
+                    );
+                    if let Some(error) = &state.error {
+                        ui.colored_label(theme::WARNING, error);
+                    }
+                    match widgets::preview_footer(
+                        ui,
+                        ready,
+                        "Escolha a origem e o destino primeiro.",
+                        |ui| {
+                            reset = ui
+                                .add(egui::Button::new("Outros pontos").frame(false))
+                                .on_hover_text("Escolher outros pontos")
+                                .clicked();
+                        },
+                    ) {
+                        Some(true) => confirm = true,
+                        Some(false) => cancel = true,
+                        None => {}
+                    }
+                },
+            );
         });
+        confirm |= ready && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if reset {
             state.source = None;
             state.target = None;
@@ -241,4 +313,65 @@ impl Editor {
         }
         true
     }
+}
+
+/// Numbered step of the snap: done, waiting for a click, or still ahead.
+fn snap_step(
+    ui: &mut egui::Ui,
+    number: usize,
+    title: &str,
+    detail: &str,
+    done: bool,
+    active: bool,
+) {
+    use crate::theme;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.), Sense::hover());
+    if active && !done {
+        ui.painter()
+            .rect_filled(rect, 6., Color32::from_rgb(38, 53, 72));
+    }
+    let center = egui::pos2(rect.left() + 18., rect.center().y);
+    if done {
+        ui.painter().circle_filled(center, 10., theme::ACCENT);
+        crate::icons::paint(
+            ui,
+            Rect::from_center_size(center, Vec2::splat(10.)),
+            crate::icons::Icon::Check,
+            Color32::WHITE,
+        );
+    } else {
+        let color = if active {
+            theme::ACCENT_BRIGHT
+        } else {
+            theme::TEXT_MUTED
+        };
+        ui.painter()
+            .circle_stroke(center, 9.5, egui::Stroke::new(1.3, color));
+        ui.painter().text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            number.to_string(),
+            theme::medium(11.),
+            color,
+        );
+    }
+    let left = rect.left() + 38.;
+    ui.painter().text(
+        egui::pos2(left, rect.center().y - 1.),
+        egui::Align2::LEFT_BOTTOM,
+        title,
+        theme::medium(13.),
+        if done || active {
+            theme::TEXT
+        } else {
+            theme::TEXT_MUTED
+        },
+    );
+    ui.painter().text(
+        egui::pos2(left, rect.center().y + 1.),
+        egui::Align2::LEFT_TOP,
+        detail,
+        egui::FontId::monospace(11.5),
+        theme::TEXT_MUTED,
+    );
 }

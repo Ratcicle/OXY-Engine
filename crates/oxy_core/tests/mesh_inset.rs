@@ -118,10 +118,10 @@ fn hundred_percent_matches_existing_extrusion_and_zero_is_identical_storage() {
 }
 
 #[test]
-fn selected_uv_partitioned_caps_can_be_inset_and_extruded_again_as_one_region() {
+fn inset_caps_are_one_face_and_can_be_inset_and_extruded_again() {
     let mesh = shape(Primitive::Rectangle);
     let first = inset::apply(&mesh, &first(&mesh), 50., Vec3::Z * 0.1, false).unwrap();
-    assert!(first.selection.ids.len() > 1);
+    assert_eq!(first.selection.ids.len(), 1, "the cap is one face");
     let second = inset::apply(&first.mesh, &first.selection, 70., Vec3::Z * 0.1, false).unwrap();
     let (min, max) = cap_bounds(&second);
     assert!((max.x - min.x - 0.35).abs() < 1e-5);
@@ -132,6 +132,64 @@ fn selected_uv_partitioned_caps_can_be_inset_and_extruded_again_as_one_region() 
     let (min, max) = cap_bounds(&third);
     assert!((max.x - min.x - 0.245).abs() < 1e-5);
     assert!((min.z - 0.2).abs() < 1e-5);
+}
+
+#[test]
+fn flat_polygon_inset_is_one_cap_and_one_quad_per_edge_without_touching_neighbours() {
+    // The base of a cone is one polygon, triangulated as a fan for drawing and UVs.
+    let mesh = shape(Primitive::Cone);
+    let base = mesh
+        .data()
+        .faces
+        .iter()
+        .max_by_key(|f| f.corners.len())
+        .unwrap();
+    let sides = base.corners.len();
+    assert!(sides >= 8);
+    let neighbours: HashMap<_, _> = mesh
+        .data()
+        .faces
+        .iter()
+        .filter(|f| f.id != base.id)
+        .map(|f| (f.id, f.corners.len()))
+        .collect();
+    for (percentage, delta) in [(55., Vec3::ZERO), (50., Vec3::NEG_Y * 0.1)] {
+        let out = inset::apply(&mesh, &selected(vec![base.id]), percentage, delta, false).unwrap();
+        assert_eq!(
+            out.selection.ids,
+            vec![base.id],
+            "the cap keeps the face ID"
+        );
+        let cap = out.mesh.face(base.id).unwrap();
+        assert_eq!(
+            cap.corners.len(),
+            sides,
+            "the cap keeps one corner per side"
+        );
+        let frame: Vec<_> = out
+            .mesh
+            .data()
+            .faces
+            .iter()
+            .filter(|f| f.id != base.id && !neighbours.contains_key(&f.id))
+            .filter(|f| !out.new_faces.contains(&f.id))
+            .collect();
+        assert_eq!(frame.len(), sides, "one frame face per original edge");
+        assert!(frame.iter().all(|f| f.corners.len() == 4));
+        for (id, corners) in &neighbours {
+            assert_eq!(
+                out.mesh.face(*id).unwrap().corners.len(),
+                *corners,
+                "the sides of the cone gain no vertex"
+            );
+        }
+        let walls = if delta == Vec3::ZERO { 0 } else { sides };
+        assert_eq!(out.new_faces.len(), walls);
+        assert_eq!(
+            out.mesh.data().vertices.len(),
+            mesh.data().vertices.len() + sides + walls
+        );
+    }
 }
 
 #[test]

@@ -1,4 +1,6 @@
 use super::*;
+use crate::icons::Icon;
+use crate::widgets;
 
 pub(super) enum SceneDialog {
     Create { name: String, kind: SceneKind },
@@ -117,79 +119,39 @@ impl Editor {
             let mut create = false;
             let mut cancel = false;
             let response = egui::Modal::new("new_project".into()).show(ctx, |ui| {
-                ui.set_max_width((ctx.content_rect().width() - 48.).clamp(160., 420.));
-                ui.heading("Novo projeto");
-                ui.label("Nome do projeto");
-                ui.text_edit_singleline(&mut new.name);
-                for (kind, title, description) in [
-                    (
-                        SceneKind::TwoD,
-                        "Cena 2D",
-                        "Comece com imagens, formas e uma câmera 2D.",
-                    ),
-                    (
-                        SceneKind::ThreeD,
-                        "Cena 3D",
-                        "Comece com modelos, profundidade e uma câmera 3D.",
-                    ),
-                ] {
-                    ui.horizontal(|ui| {
-                        let (rect, icon) = ui.allocate_exact_size(Vec2::splat(28.), Sense::click());
-                        let p = |x, y| rect.min + Vec2::new(x, y);
-                        let stroke = egui::Stroke::new(1.5, ui.visuals().text_color());
-                        if kind == SceneKind::TwoD {
-                            ui.painter().rect_stroke(
-                                Rect::from_min_max(p(3., 6.), p(25., 23.)),
-                                1.,
-                                stroke,
-                                egui::StrokeKind::Inside,
-                            );
-                            ui.painter().line_segment([p(4., 22.), p(14., 13.)], stroke);
-                            ui.painter()
-                                .line_segment([p(14., 13.), p(24., 22.)], stroke);
-                        } else {
-                            for (a, b) in [
-                                ((3., 8.), (15., 3.)),
-                                ((15., 3.), (26., 9.)),
-                                ((26., 9.), (14., 14.)),
-                                ((14., 14.), (3., 8.)),
-                                ((3., 8.), (3., 22.)),
-                                ((3., 22.), (14., 27.)),
-                                ((14., 27.), (26., 22.)),
-                                ((26., 22.), (26., 9.)),
-                                ((14., 14.), (14., 27.)),
-                            ] {
-                                ui.painter()
-                                    .line_segment([p(a.0, a.1), p(b.0, b.1)], stroke);
-                            }
-                        }
-                        icon.widget_info(|| {
-                            egui::WidgetInfo::selected(
-                                egui::WidgetType::Button,
-                                true,
-                                new.kind == kind,
-                                title,
-                            )
-                        });
-                        let response = ui.add(
-                            egui::Button::new(format!("{title}\n{description}"))
-                                .selected(new.kind == kind)
-                                .wrap(),
-                        );
-                        if response.clicked() || icon.clicked() {
+                ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 460.));
+                cancel = widgets::dialog_header(ui, "Novo projeto");
+                widgets::field_label(ui, "Nome do projeto");
+                ui.add(
+                    egui::TextEdit::singleline(&mut new.name)
+                        .desired_width(f32::INFINITY)
+                        .margin(egui::Margin::symmetric(8, 6)),
+                );
+                ui.add_space(10.);
+                widgets::field_label(ui, "Primeira cena");
+                let gap = 10.;
+                let width = (ui.available_width() - gap) / 2.;
+                let height = KINDS
+                    .iter()
+                    .map(|(_, _, _, text)| kind_text(ui, width, text).size().y)
+                    .fold(0., f32::max)
+                    + 92.;
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for (kind, icon, title, text) in KINDS {
+                        if kind_card(ui, icon, title, text, new.kind == kind, width, height)
+                            .clicked()
+                        {
                             new.kind = kind;
                         }
-                    });
-                }
-                ui.weak("Você poderá adicionar cenas 2D e 3D depois.");
-                ui.horizontal(|ui| {
-                    create = ui
-                        .add_enabled(
-                            !new.name.trim().is_empty(),
-                            egui::Button::new("Criar projeto"),
-                        )
-                        .clicked();
-                    cancel = ui.button("Cancelar").clicked();
+                    }
+                });
+                widgets::hint(ui, "Você poderá adicionar cenas 2D e 3D depois.");
+                widgets::dialog_footer(ui, |ui| {
+                    create =
+                        widgets::primary_button(ui, "Criar projeto", !new.name.trim().is_empty())
+                            .clicked();
+                    cancel |= widgets::secondary_button(ui, "Cancelar").clicked();
                 });
             });
             cancel |= response.should_close();
@@ -208,50 +170,117 @@ impl Editor {
             let mut confirm = false;
             let mut cancel = false;
             let response = egui::Modal::new("scene_dialog".into()).show(ctx, |ui| {
-                ui.set_max_width((ctx.content_rect().width() - 48.).clamp(160., 420.));
+                ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 420.));
                 match &mut dialog {
                     SceneDialog::Create { name, kind } => {
-                        ui.heading("Nova cena");
-                        ui.text_edit_singleline(name);
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(kind, SceneKind::TwoD, "Cena 2D");
-                            ui.selectable_value(kind, SceneKind::ThreeD, "Cena 3D");
+                        cancel = widgets::dialog_header(ui, "Nova cena");
+                        widgets::field_label(ui, "Nome da cena");
+                        ui.add(
+                            egui::TextEdit::singleline(name)
+                                .desired_width(f32::INFINITY)
+                                .margin(egui::Margin::symmetric(8, 6)),
+                        );
+                        ui.add_space(10.);
+                        widgets::field_label(ui, "Tipo");
+                        let gap = 8.;
+                        let width = (ui.available_width() - gap) / 2.;
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = gap;
+                            for (value, icon, title, _) in KINDS {
+                                if kind_row(ui, icon, title, *kind == value, width).clicked() {
+                                    *kind = value;
+                                }
+                            }
                         });
-                        confirm = ui
-                            .add_enabled(!name.trim().is_empty(), egui::Button::new("Criar cena"))
-                            .clicked();
+                        let valid = !name.trim().is_empty();
+                        widgets::dialog_footer(ui, |ui| {
+                            confirm = widgets::primary_button(ui, "Criar cena", valid).clicked();
+                            cancel |= widgets::secondary_button(ui, "Cancelar").clicked();
+                        });
+                        confirm |= valid && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     }
-                    SceneDialog::Rename { name, .. } => {
-                        ui.heading("Renomear cena");
-                        ui.text_edit_singleline(name);
-                        confirm = ui
-                            .add_enabled(
-                                !name.trim().is_empty(),
-                                egui::Button::new("Confirmar nome"),
-                            )
-                            .clicked();
+                    SceneDialog::Rename { id, name } => {
+                        cancel = widgets::dialog_header(ui, "Renomear cena");
+                        widgets::field_label(ui, "Nome da cena");
+                        ui.add(
+                            egui::TextEdit::singleline(name)
+                                .desired_width(f32::INFINITY)
+                                .margin(egui::Margin::symmetric(8, 6)),
+                        );
+                        if let Some(scene) = self.state.project.scene(id) {
+                            let mut context = format!(
+                                "{} · {} objetos",
+                                kind_label(scene.kind),
+                                scene.entities.len()
+                            );
+                            if *id == self.state.project.start_scene {
+                                context.push_str(" · cena inicial do jogo");
+                            }
+                            widgets::hint(ui, &context);
+                        }
+                        let valid = !name.trim().is_empty();
+                        widgets::dialog_footer(ui, |ui| {
+                            confirm =
+                                widgets::primary_button(ui, "Confirmar nome", valid).clicked();
+                            cancel |= widgets::secondary_button(ui, "Cancelar").clicked();
+                        });
+                        confirm |= valid && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     }
                     SceneDialog::Delete(id) => {
-                        ui.heading("Excluir cena");
+                        let (name, objects) = self
+                            .state
+                            .project
+                            .scene(id)
+                            .map_or((String::new(), 0), |s| (s.name.clone(), s.entities.len()));
                         let references = editing::scene_references(&self.state.project, id);
-                        if id == &self.state.project.start_scene {
-                            ui.label("Escolha outra cena inicial antes de excluir esta cena.");
+                        let start = id == &self.state.project.start_scene;
+                        let free = !start && references.is_empty();
+                        let title = if free {
+                            format!("Excluir “{name}”?")
+                        } else {
+                            format!("Não é possível excluir “{name}”")
+                        };
+                        cancel = widgets::dialog_header(ui, &title);
+                        if start {
+                            widgets::hint(
+                                ui,
+                                "Esta é a cena inicial do jogo. Escolha outra cena inicial \
+                                 em Ações da cena antes de excluí-la.",
+                            );
                         } else if !references.is_empty() {
-                            ui.label("Altere os destinos destes nós antes de excluir:");
+                            widgets::hint(
+                                ui,
+                                "Estes nós levam para esta cena. Mude o destino deles antes \
+                                 de excluir:",
+                            );
+                            ui.add_space(4.);
                             egui::ScrollArea::vertical()
                                 .max_height(180.)
                                 .show(ui, |ui| {
                                     for reference in &references {
-                                        ui.label(reference);
+                                        reference_row(ui, reference);
                                     }
                                 });
                         } else {
-                            ui.label("Excluir esta cena e seus objetos? Você poderá desfazer.");
-                            confirm = ui.button("Excluir cena").clicked();
+                            widgets::hint(
+                                ui,
+                                &format!(
+                                    "A cena e seus {objects} objetos saem do projeto. Você \
+                                     poderá desfazer com Ctrl+Z."
+                                ),
+                            );
                         }
+                        widgets::dialog_footer(ui, |ui| {
+                            if free {
+                                confirm =
+                                    widgets::danger_button(ui, "Excluir cena", true).clicked();
+                                cancel |= widgets::secondary_button(ui, "Cancelar").clicked();
+                            } else {
+                                cancel |= widgets::secondary_button(ui, "Fechar").clicked();
+                            }
+                        });
                     }
                 }
-                cancel = ui.button("Cancelar").clicked();
             });
             if cancel || response.should_close() {
                 return;
@@ -284,4 +313,178 @@ impl Editor {
             }
         }
     }
+}
+
+fn kind_text(ui: &egui::Ui, width: f32, text: &str) -> std::sync::Arc<egui::Galley> {
+    ui.painter().layout(
+        text.into(),
+        egui::FontId::proportional(12.),
+        crate::theme::TEXT_MUTED,
+        width - 28.,
+    )
+}
+
+/// Selectable card for the first scene of a new project.
+fn kind_card(
+    ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
+    title: &str,
+    text: &str,
+    selected: bool,
+    width: f32,
+    height: f32,
+) -> egui::Response {
+    use crate::theme;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    crate::icons::register_qa(ui, title, rect);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, title)
+    });
+    let hovered = response.hovered();
+    let (fill, border) = match (selected, hovered) {
+        (true, false) => (Color32::from_rgb(38, 53, 72), theme::ACCENT),
+        (true, true) => (Color32::from_rgb(42, 59, 80), theme::ACCENT_BRIGHT),
+        (false, false) => (theme::BG_PANEL, theme::BORDER),
+        (false, true) => (theme::CARD_FILL, Color32::from_rgb(86, 86, 92)),
+    };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        8.,
+        fill,
+        egui::Stroke::new(1., border),
+        egui::StrokeKind::Inside,
+    );
+    let ink = if selected {
+        Color32::from_rgb(183, 210, 245)
+    } else {
+        Color32::from_rgb(196, 196, 202)
+    };
+    crate::icons::paint(
+        ui,
+        Rect::from_min_size(rect.min + Vec2::splat(14.), Vec2::splat(32.)),
+        icon,
+        ink,
+    );
+    if selected {
+        let center = egui::pos2(rect.right() - 19., rect.top() + 19.);
+        painter.circle_filled(center, 9., theme::ACCENT);
+        crate::icons::paint(
+            ui,
+            Rect::from_center_size(center, Vec2::splat(10.)),
+            crate::icons::Icon::Check,
+            Color32::WHITE,
+        );
+    }
+    let top = rect.top() + 56.;
+    painter.text(
+        egui::pos2(rect.left() + 14., top),
+        egui::Align2::LEFT_TOP,
+        title,
+        theme::medium(13.),
+        Color32::from_rgb(240, 240, 242),
+    );
+    painter.galley(
+        egui::pos2(rect.left() + 14., top + 20.),
+        kind_text(ui, width, text),
+        theme::TEXT_MUTED,
+    );
+    response
+}
+
+const KINDS: [(SceneKind, Icon, &str, &str); 2] = [
+    (
+        SceneKind::TwoD,
+        Icon::Sprite,
+        "Cena 2D",
+        "Imagens, formas e uma câmera 2D.",
+    ),
+    (
+        SceneKind::ThreeD,
+        Icon::Cube,
+        "Cena 3D",
+        "Modelos, profundidade e uma câmera 3D.",
+    ),
+];
+
+/// Compact selectable card for the kind of a new scene: icon at the left, then the title.
+fn kind_row(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    title: &str,
+    selected: bool,
+    width: f32,
+) -> egui::Response {
+    use crate::theme;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 44.), Sense::click());
+    crate::icons::register_qa(ui, title, rect);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, title)
+    });
+    let (fill, border) = match (selected, response.hovered()) {
+        (true, _) => (Color32::from_rgb(38, 53, 72), theme::ACCENT),
+        (false, false) => (theme::BG_PANEL, theme::BORDER),
+        (false, true) => (theme::CARD_FILL, Color32::from_rgb(86, 86, 92)),
+    };
+    ui.painter().rect(
+        rect,
+        8.,
+        fill,
+        egui::Stroke::new(1., border),
+        egui::StrokeKind::Inside,
+    );
+    let ink = if selected {
+        Color32::from_rgb(183, 210, 245)
+    } else {
+        Color32::from_rgb(196, 196, 202)
+    };
+    crate::icons::paint(
+        ui,
+        Rect::from_center_size(
+            egui::pos2(rect.left() + 24., rect.center().y),
+            Vec2::splat(20.),
+        ),
+        icon,
+        ink,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 44., rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        theme::medium(13.),
+        Color32::from_rgb(240, 240, 242),
+    );
+    response
+}
+
+/// One logic node that points at a scene, from "scope → object → action".
+fn reference_row(ui: &mut egui::Ui, reference: &str) {
+    use crate::theme;
+    let parts: Vec<_> = reference.split(" → ").collect();
+    let (object, detail) = match parts.as_slice() {
+        [scope, object, action] => (*object, format!("{scope} · {action}")),
+        _ => (reference, String::new()),
+    };
+    egui::Frame::new()
+        .fill(theme::BG_PANEL)
+        .corner_radius(5)
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (icon, _) = ui.allocate_exact_size(Vec2::splat(14.), Sense::hover());
+                crate::icons::paint(ui, icon, Icon::Logic, theme::ACCENT_BRIGHT);
+                ui.label(egui::RichText::new(object).size(12.5).color(theme::TEXT));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(detail)
+                                .size(12.)
+                                .color(theme::TEXT_MUTED),
+                        )
+                        .truncate(),
+                    );
+                });
+            });
+        });
 }

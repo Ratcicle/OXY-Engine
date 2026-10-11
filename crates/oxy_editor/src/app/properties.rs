@@ -2,77 +2,282 @@ use super::*;
 mod components;
 
 impl Editor {
+    /// Header with an icon tile, a title and a muted line under it.
+    fn panel_title(ui: &mut egui::Ui, icon: crate::icons::Icon, title: &str, detail: &str) {
+        use crate::theme;
+        ui.horizontal(|ui| {
+            let (badge, _) = ui.allocate_exact_size(Vec2::splat(28.), Sense::hover());
+            ui.painter().rect_filled(badge, 6., theme::ACCENT_SOFT);
+            crate::icons::paint(
+                ui,
+                Rect::from_center_size(badge.center(), Vec2::splat(16.)),
+                icon,
+                theme::ACCENT_BRIGHT,
+            );
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.;
+                ui.add(
+                    egui::Label::new(egui::RichText::new(title).font(theme::medium(13.)))
+                        .truncate(),
+                );
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(detail)
+                            .size(12.)
+                            .color(theme::TEXT_MUTED),
+                    )
+                    .truncate(),
+                );
+            });
+        });
+        ui.add_space(6.);
+    }
+    /// Nothing selected: the project itself, and how to start editing an object.
+    fn project_properties(&mut self, ui: &mut egui::Ui) {
+        use crate::{theme, widgets};
+        let name = self.state.project.name.clone();
+        Self::panel_title(
+            ui,
+            crate::icons::Icon::Folder,
+            &name,
+            "Projeto · nada selecionado",
+        );
+        widgets::open_card(ui, "project_properties", "Projeto", |ui| {
+            widgets::property_row(ui, "Nome", "", |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.state.project.name)
+                        .desired_width(ui.available_width()),
+                );
+            });
+            widgets::property_row(ui, "Arquivo", "", |ui| {
+                let text = self
+                    .path
+                    .as_ref()
+                    .map_or_else(|| "Ainda não salvo".to_owned(), |p| p.display().to_string());
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&text)
+                            .monospace()
+                            .size(11.5)
+                            .color(theme::TEXT_MUTED),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(text);
+            });
+            let start = self
+                .state
+                .project
+                .scene(&self.state.project.start_scene)
+                .map(|s| format!("{} · {}", s.name, scenes::kind_label(s.kind)))
+                .unwrap_or_default();
+            let options: Vec<_> = self
+                .state
+                .project
+                .scenes
+                .iter()
+                .map(|s| {
+                    (
+                        s.id.clone(),
+                        format!("{} · {}", s.name, scenes::kind_label(s.kind)),
+                    )
+                })
+                .collect();
+            let mut chosen = None;
+            widgets::combo_row(
+                ui,
+                "Cena inicial",
+                "Cena em que o jogo começa.",
+                "project_start_scene",
+                &start,
+                |ui| {
+                    for (id, label) in &options {
+                        if ui
+                            .selectable_label(*id == self.state.project.start_scene, label)
+                            .clicked()
+                        {
+                            chosen = Some(id.clone());
+                        }
+                    }
+                },
+            );
+            if let Some(id) = chosen {
+                self.state.project.start_scene = id;
+            }
+            widgets::property_row(ui, "Conteúdo", "", |ui| {
+                ui.label(
+                    egui::RichText::new({
+                        let count = |n: usize, one: &str, many: &str| {
+                            format!("{n} {}", if n == 1 { one } else { many })
+                        };
+                        format!(
+                            "{} · {}",
+                            count(self.state.project.scenes.len(), "cena", "cenas"),
+                            count(self.state.project.assets.len(), "recurso", "recursos")
+                        )
+                    })
+                    .size(12.5),
+                );
+            });
+        });
+        ui.add_space(8.);
+        egui::Frame::new()
+            .stroke(egui::Stroke::new(1., theme::BORDER))
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(16, 20))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.vertical_centered(|ui| {
+                    let (tile, _) = ui.allocate_exact_size(Vec2::splat(36.), Sense::hover());
+                    ui.painter().rect_filled(tile, 8., theme::BG_RAISED);
+                    crate::icons::paint(
+                        ui,
+                        Rect::from_center_size(tile.center(), Vec2::splat(18.)),
+                        crate::icons::Icon::Object,
+                        theme::TEXT_MUTED,
+                    );
+                    ui.add_space(4.);
+                    ui.label(egui::RichText::new("Nada selecionado").font(theme::medium(13.)));
+                    widgets::hint(
+                        ui,
+                        "Selecione um objeto na Hierarquia ou clique nele na cena para editar \
+                         posição, forma e componentes.",
+                    );
+                });
+            });
+    }
     fn multiple_properties(&mut self, ui: &mut egui::Ui) {
+        use crate::icons::{self, Icon};
+        use crate::widgets;
         let ids = self.selection.ids.clone();
-        ui.heading(format!("{} objetos selecionados", ids.len()));
-        ui.label("Use os eixos para transformar o conjunto.").on_hover_text("O centro dos objetos selecionados é usado como pivô temporário. Filhos de objetos também selecionados não são transformados duas vezes.");
-        let mut visible = ids
+        let names: Vec<_> = ids
+            .iter()
+            .filter_map(|id| self.scene().entity(id).map(|e| e.name.clone()))
+            .collect();
+        let visible = ids
             .iter()
             .all(|id| self.scene().entity(id).is_some_and(|e| e.visible));
-        if ui.checkbox(&mut visible, "Todos visíveis").changed() {
+        let mut toggle_visible = false;
+        ui.horizontal(|ui| {
+            let eye = 26. + ui.spacing().item_spacing.x;
+            ui.allocate_ui(Vec2::new(ui.available_width() - eye, 34.), |ui| {
+                Self::panel_title(
+                    ui,
+                    Icon::Group,
+                    &format!("{} objetos selecionados", ids.len()),
+                    &names.join(", "),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                let (icon, label) = if visible {
+                    (Icon::Eye, "Ocultar todos")
+                } else {
+                    (Icon::EyeOff, "Mostrar todos")
+                };
+                toggle_visible = icons::small(ui, icon, label, 26.).clicked();
+            });
+        });
+        if toggle_visible {
             for id in &ids {
                 if let Some(e) = self.scene_mut().entity_mut(id) {
-                    e.visible = visible;
+                    e.visible = !visible;
                 }
             }
         }
+        widgets::open_card(ui, "multiple_transform", "Transformar o conjunto", |ui| {
+            let center = editing::selection_center(self.scene(), &ids);
+            let mut position = center.to_array();
+            widgets::vec3_row(
+                ui,
+                "Centro",
+                "O centro dos objetos é o pivô temporário.",
+                &mut position,
+                0.05,
+                false,
+            );
+            if Vec3::from(position) != center {
+                self.transform_multiple(
+                    &ids,
+                    glam::Mat4::from_translation(Vec3::from(position) - center),
+                );
+            }
+            ui.separator();
+            widgets::vec3_row(
+                ui,
+                "Girar (graus)",
+                "",
+                &mut self.transform_ui.selection_rotation,
+                0.5,
+                false,
+            );
+            let mut rotate = false;
+            widgets::property_row(ui, "", "", |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    rotate = ui.button("Aplicar giro").clicked();
+                });
+            });
+            if rotate {
+                let [x, y, z] = self.transform_ui.selection_rotation.map(f32::to_radians);
+                let delta = glam::Mat4::from_translation(center)
+                    * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, x, y, z))
+                    * glam::Mat4::from_translation(-center);
+                self.transform_multiple(&ids, delta);
+                self.transform_ui.selection_rotation = [0.; 3];
+            }
+            let mut scale = false;
+            widgets::property_row(ui, "Escala (fator)", "", |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    scale = ui.button("Aplicar escala").clicked();
+                    ui.add_sized(
+                        [ui.available_width(), crate::theme::CONTROL_HEIGHT],
+                        egui::DragValue::new(&mut self.transform_ui.selection_scale)
+                            .range(0.01..=100.)
+                            .speed(0.02),
+                    );
+                });
+            });
+            if scale {
+                self.transform_multiple(
+                    &ids,
+                    glam::Mat4::from_translation(center)
+                        * glam::Mat4::from_scale(Vec3::splat(self.transform_ui.selection_scale))
+                        * glam::Mat4::from_translation(-center),
+                );
+                self.transform_ui.selection_scale = 1.;
+            }
+            widgets::hint(
+                ui,
+                "O centro dos objetos é o pivô temporário. Filhos de objetos também \
+                 selecionados não são transformados duas vezes.",
+            );
+        });
         if self.scene().kind == SceneKind::TwoD {
-            let mut layer = self
-                .selected
-                .as_deref()
-                .and_then(|id| self.scene().entity(id))
-                .map_or(0, |e| e.layer);
-            if ui
-                .add(egui::DragValue::new(&mut layer).prefix("Camada "))
-                .on_hover_text("Aplica a mesma ordem de desenho a todos os objetos selecionados.")
+            widgets::open_card(ui, "multiple_display", "Exibição", |ui| {
+                let mut layer = self
+                    .selected
+                    .as_deref()
+                    .and_then(|id| self.scene().entity(id))
+                    .map_or(0, |e| e.layer);
+                if widgets::property_row(
+                    ui,
+                    "Camada",
+                    "Aplica a mesma ordem de desenho a todos os objetos selecionados.",
+                    |ui| {
+                        ui.add_sized(
+                            [ui.available_width(), crate::theme::CONTROL_HEIGHT],
+                            egui::DragValue::new(&mut layer),
+                        )
+                    },
+                )
                 .changed()
-            {
-                for id in &ids {
-                    if let Some(e) = self.scene_mut().entity_mut(id) {
-                        e.layer = layer;
+                {
+                    for id in &ids {
+                        if let Some(e) = self.scene_mut().entity_mut(id) {
+                            e.layer = layer;
+                        }
                     }
                 }
-            }
-        }
-        let center = editing::selection_center(self.scene(), &ids);
-        let mut position = center.to_array();
-        vector3(ui, "Centro do conjunto", &mut position, 0.05, false);
-        if Vec3::from(position) != center {
-            self.transform_multiple(
-                &ids,
-                glam::Mat4::from_translation(Vec3::from(position) - center),
-            );
-        }
-        ui.separator();
-        vector3(
-            ui,
-            "Giro em graus",
-            &mut self.transform_ui.selection_rotation,
-            0.5,
-            false,
-        );
-        if ui.button("Aplicar giro").clicked() {
-            let [x, y, z] = self.transform_ui.selection_rotation.map(f32::to_radians);
-            let delta = glam::Mat4::from_translation(center)
-                * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, x, y, z))
-                * glam::Mat4::from_translation(-center);
-            self.transform_multiple(&ids, delta);
-            self.transform_ui.selection_rotation = [0.; 3];
-        }
-        ui.add(
-            egui::DragValue::new(&mut self.transform_ui.selection_scale)
-                .range(0.01..=100.)
-                .speed(0.02)
-                .prefix("Fator de escala "),
-        );
-        if ui.button("Aplicar escala").clicked() {
-            self.transform_multiple(
-                &ids,
-                glam::Mat4::from_translation(center)
-                    * glam::Mat4::from_scale(Vec3::splat(self.transform_ui.selection_scale))
-                    * glam::Mat4::from_translation(-center),
-            );
-            self.transform_ui.selection_scale = 1.;
+            });
         }
     }
     fn transform_multiple(&mut self, ids: &[Id], delta: glam::Mat4) {
@@ -188,11 +393,7 @@ impl Editor {
             ui.disable();
         }
         let Some(id) = self.selected.clone() else {
-            ui.heading("Projeto");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.state.project.name)
-                    .desired_width(ui.available_width()),
-            );
+            self.project_properties(ui);
             return;
         };
         if self.selection.ids.len() > 1 {

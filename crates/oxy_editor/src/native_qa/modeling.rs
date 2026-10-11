@@ -203,7 +203,7 @@ fn native_basic_modeling_workflow() {
                 Action::Chord(Key::V, Modifiers::SHIFT),
                 Action::WorldClick([0.5, 0.5, 0.5]),
                 Action::WorldClick([1.5, 0.5, 0.5]),
-                Action::Click("Confirmar encaixe (Enter)"),
+                Action::Click("Aplicar"),
                 Action::Check("m4_snap_done"),
                 Action::Key(Key::Z, true),
                 Action::Check("m4_cancel"),

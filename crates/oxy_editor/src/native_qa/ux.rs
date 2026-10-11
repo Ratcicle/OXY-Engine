@@ -121,7 +121,7 @@ fn native_ux_m1_workflow() {
                 Action::Click("Cancelar"),
                 Action::Check("ux_unchanged"),
                 Action::Click("Novo projeto"),
-                Action::Click("Cena 3D\nComece com modelos, profundidade e uma câmera 3D."),
+                Action::Click("Cena 3D"),
                 Action::Click("Criar projeto"),
                 Action::Check("ux_new_3d"),
                 Action::Click("Interface: 100%"),

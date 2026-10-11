@@ -60,6 +60,7 @@ impl Editor {
         pixels: &PaintImage,
     ) -> Result<(), String> {
         let base = self.state.clone();
+        let source = self.modeling.selection.clone();
         self.begin_mesh_operation(Operation::Extrude);
         let p = self
             .modeling
@@ -92,8 +93,9 @@ impl Editor {
         self.check_atlas_pixels(texture, &expanded, pixels)?;
         let applied = self.state.clone();
         let cap = self.modeling.selection.clone();
-        if cap.ids.len() < 2 {
-            return Err("Fixture não produziu tampa com seleção distinta da face de origem".into());
+        // A flat face insets into one cap that keeps the face's ID.
+        if cap != source || cap.ids.len() != 1 {
+            return Err("A tampa não é uma face única com o ID da face de origem".into());
         }
         let command = self.history.last_command_id().ok_or("Comando ausente")?;
         let bytes = self.history.estimated_bytes();

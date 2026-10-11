@@ -2,6 +2,17 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
+## Não lançado
+
+- **Tela inicial no visual novo:** barra superior e barra de status iguais às do editor, cartões para **Novo projeto** e **Abrir projeto**, um bloco **Exemplos** com a explicação de cada exemplo, e **Projetos recentes** num bloco com busca, há quanto tempo cada projeto foi salvo, aviso de arquivo não encontrado e as ações (Abrir, Remover da lista) no "⋯". Em janelas estreitas as colunas se empilham.
+- **Novo projeto:** a primeira cena (2D ou 3D) é escolhida em dois cartões lado a lado, com ícone e marca de seleção.
+- **Diálogos no mesmo padrão:** cabeçalho com fechar e a ação principal à direita do rodapé em Nova cena, Renomear cena, Excluir cena, Alterações não salvas e Preferências do editor (antes "Escala da interface"). Excluir cena explica por que não pode excluir e lista os nós pelo nome do objeto, sem identificadores; em Alterações não salvas, "Descartar alterações" fica separado de "Salvar e continuar".
+- **Propriedades sem seleção e com vários objetos:** sem seleção, um bloco Projeto com nome, arquivo, cena inicial e conteúdo, e uma indicação de como começar; com vários objetos, cabeçalho com os nomes, visibilidade de todos e o bloco Transformar o conjunto em linhas alinhadas.
+- **Forma em prévia e Encaixar vértices:** no mesmo bloco das operações em prévia, com Cancelar/Aplicar; o encaixe mostra os passos Origem e Destino. Clicar fora da prévia de forma continua aplicando.
+- **Ajuda da modelagem:** tópicos com tabela de atalhos no lugar dos parágrafos.
+- **Borda interna sem fragmentar a face:** a face interna sai como uma face só, com um quad de moldura por aresta, e as faces vizinhas não ganham vértices. Antes, cada triângulo interno da face (por exemplo, a base de um cone) virava um pedaço próprio, o que também fazia o arredondamento recusar arestas próximas. Faces com UVs que não são lineares no plano continuam divididas para preservar a pintura.
+- **Arrastar valores das operações:** arrastar Largura em Arredondar (ou outro campo do painel da operação) não passa mais para o campo de baixo quando a dica do painel desaparece.
+
 ## 0.4.1 — 2026-10-10
 
 - **Estúdio no visual novo:** Modelagem, Pintura e Animação usam as duas linhas de cabeçalho, o chip de status no viewport e blocos em Propriedades (Malha, Textura, operação em prévia com Cancelar/Aplicar). A Animação ganhou a linha do tempo no painel inferior, com trilhas por peça, régua adaptável, barra em duas linhas em janelas estreitas e as ações da animação no próprio seletor.

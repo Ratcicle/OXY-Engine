@@ -71,20 +71,87 @@ impl Editor {
         let mut confirm = false;
         let mut cancel = false;
         let mut frame = false;
-        let response=egui::Modal::new(egui::Id::new("primitive_creation"))
+        let remapping = creation.original.as_ref().is_some_and(|old| {
+            old.material.texture.is_some()
+                && (old.segments != creation.candidate.segments
+                    || primitives::Parameters::for_entity(old)
+                        != primitives::Parameters::for_entity(&creation.candidate))
+        });
+        let ready = creation.error.is_none() && (!remapping || creation.allow_mapping);
+        // Floats over the Properties panel, where the other operations in preview live;
+        // a click outside it applies a valid shape.
+        let top = crate::theme::TOPBAR_HEIGHT + crate::theme::PANEL_HEADER_HEIGHT + 8.;
+        let response = egui::Modal::new(egui::Id::new("primitive_creation"))
             .backdrop_color(Color32::TRANSPARENT)
-            .area(egui::Area::new(egui::Id::new("primitive_creation_area")).order(egui::Order::Foreground).anchor(egui::Align2::RIGHT_CENTER,Vec2::new(-14.,0.)))
-            .show(ctx,|ui|{
-                ui.set_width(280f32.min(ctx.content_rect().width()*0.7));
-                let kind=creation.candidate.primitive.unwrap();ui.heading(format!("Forma: {}",oxy_render::labels::primitive(kind)));
-                egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-100.).max(120.)).show(ui,|ui|{
-                    primitive_values(ui,&mut creation.candidate);
-                    let remapping=creation.original.as_ref().is_some_and(|old|old.material.texture.is_some() && (old.segments!=creation.candidate.segments || primitives::Parameters::for_entity(old)!=primitives::Parameters::for_entity(&creation.candidate)));
-                    if remapping {ui.colored_label(crate::theme::WARNING,"A nova topologia pode mudar onde a pintura aparece. Os pixels do PNG serão preservados.");ui.checkbox(&mut creation.allow_mapping,"Aceitar mudança do mapeamento");}
-                    if let Some(error)=&creation.error{ui.colored_label(crate::theme::WARNING,error);}
-                    ui.horizontal_wrapped(|ui|{confirm=ui.add_enabled(creation.error.is_none()&&(!remapping||creation.allow_mapping),egui::Button::new("Confirmar forma (Enter)")).clicked();cancel=ui.button("Cancelar forma (Esc)").clicked();frame=ui.button("Enquadrar prévia").clicked();});
-                    ui.small("Clique fora confirma a forma válida; Esc cancela.");
-                });
+            .frame(egui::Frame::new())
+            .area(
+                egui::Area::new(egui::Id::new("primitive_creation_area"))
+                    .order(egui::Order::Foreground)
+                    .anchor(egui::Align2::RIGHT_TOP, Vec2::new(-10., top)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(300f32.min(ctx.content_rect().width() * 0.7));
+                let kind = creation.candidate.primitive.unwrap();
+                let title = format!(
+                    "{} · {}",
+                    if creation.original.is_some() {
+                        "Ajustar forma"
+                    } else {
+                        "Nova forma"
+                    },
+                    oxy_render::labels::primitive(kind)
+                );
+                egui::ScrollArea::vertical()
+                    .max_height((ctx.content_rect().height() - top - 40.).max(120.))
+                    .show(ui, |ui| {
+                        crate::widgets::panel_card(
+                            ui,
+                            crate::icons::Icon::Create,
+                            &title,
+                            "Em prévia",
+                            true,
+                            |ui| {
+                                primitive_values(ui, &mut creation.candidate);
+                                if remapping {
+                                    crate::widgets::callout(
+                                        ui,
+                                        true,
+                                        "A nova topologia pode mudar onde a pintura aparece. \
+                                         Os pixels do PNG serão preservados.",
+                                    );
+                                    ui.checkbox(
+                                        &mut creation.allow_mapping,
+                                        "Aceitar mudança do mapeamento",
+                                    );
+                                }
+                                if let Some(error) = &creation.error {
+                                    ui.colored_label(crate::theme::WARNING, error);
+                                }
+                                match crate::widgets::preview_footer(
+                                    ui,
+                                    ready,
+                                    "Corrija os valores da forma primeiro.",
+                                    |ui| {
+                                        frame = crate::icons::small(
+                                            ui,
+                                            crate::icons::Icon::Frame,
+                                            "Enquadrar prévia",
+                                            26.,
+                                        )
+                                        .clicked();
+                                    },
+                                ) {
+                                    Some(true) => confirm = true,
+                                    Some(false) => cancel = true,
+                                    None => {}
+                                }
+                            },
+                        );
+                        crate::widgets::hint(
+                            ui,
+                            "Clicar fora da prévia também aplica uma forma válida.",
+                        );
+                    });
             });
         let parameters = primitives::Parameters::for_entity(&creation.candidate);
         let kind = creation.candidate.primitive.unwrap();
@@ -128,16 +195,29 @@ impl Editor {
     }
 }
 fn primitive_values(ui: &mut egui::Ui, entity: &mut Entity) {
+    use crate::widgets;
     let kind = entity.primitive.unwrap();
     let mut parameters = primitives::Parameters::for_entity(entity);
     let previous = parameters;
-    let mut number = |label: &str, value: &mut f32| {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.add(
+    let column = widgets::label_column(ui, &["Divisões de altura", "Espessura da parede"]);
+    let field = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
+        widgets::property_row_with(ui, column, label, "", |ui| add(ui));
+    };
+    let number = |ui: &mut egui::Ui, label: &str, value: &mut f32| {
+        field(ui, label, &mut |ui| {
+            ui.add_sized(
+                [ui.available_width(), crate::theme::CONTROL_HEIGHT],
                 egui::DragValue::new(value)
                     .speed(0.02)
                     .range(0.001..=100_000.),
+            );
+        });
+    };
+    let count = |ui: &mut egui::Ui, label: &str, value: &mut u32, min: u32| {
+        field(ui, label, &mut |ui| {
+            ui.add_sized(
+                [ui.available_width(), crate::theme::CONTROL_HEIGHT],
+                egui::DragValue::new(value).range(min..=256),
             );
         });
     };
@@ -147,20 +227,21 @@ fn primitive_values(ui: &mut egui::Ui, entity: &mut Entity) {
                 .iter()
                 .enumerate()
             {
-                number(label, &mut entity.dimensions[i]);
+                number(ui, label, &mut entity.dimensions[i]);
             }
         }
         Primitive::Plane => {
-            number("Largura", &mut entity.dimensions[0]);
-            number("Profundidade", &mut entity.dimensions[2]);
+            number(ui, "Largura", &mut entity.dimensions[0]);
+            number(ui, "Profundidade", &mut entity.dimensions[2]);
         }
         Primitive::Rectangle | Primitive::Sprite => {
-            number("Largura", &mut entity.dimensions[0]);
-            number("Altura", &mut entity.dimensions[1]);
+            number(ui, "Largura", &mut entity.dimensions[0]);
+            number(ui, "Altura", &mut entity.dimensions[1]);
         }
         _ => {
             let mut radius = entity.dimensions[0] * 0.5;
             number(
+                ui,
                 if kind == Primitive::Tube {
                     "Raio externo"
                 } else {
@@ -179,7 +260,7 @@ fn primitive_values(ui: &mut egui::Ui, entity: &mut Entity) {
                 }
             }
             if !matches!(kind, Primitive::Sphere | Primitive::Circle) {
-                number("Altura", &mut entity.dimensions[1]);
+                number(ui, "Altura", &mut entity.dimensions[1]);
             }
         }
     }
@@ -192,51 +273,43 @@ fn primitive_values(ui: &mut egui::Ui, entity: &mut Entity) {
             | Primitive::Pyramid
             | Primitive::Tube
     ) {
-        ui.add(
-            egui::DragValue::new(&mut entity.segments)
-                .range(3..=256)
-                .prefix(if kind == Primitive::Sphere {
-                    "Longitudes "
-                } else {
-                    "Lados "
-                }),
-        );
+        let label = if kind == Primitive::Sphere {
+            "Longitudes"
+        } else {
+            "Lados"
+        };
+        count(ui, label, &mut entity.segments, 3);
     }
     if kind == Primitive::Sphere {
-        ui.add(
-            egui::DragValue::new(&mut parameters.latitude)
-                .range(2..=256)
-                .prefix("Latitudes "),
-        );
+        count(ui, "Latitudes", &mut parameters.latitude, 2);
     }
     if matches!(
         kind,
         Primitive::Cylinder | Primitive::Cone | Primitive::Tube
     ) {
-        ui.add(
-            egui::DragValue::new(&mut parameters.height_divisions)
-                .range(1..=256)
-                .prefix("Divisões de altura "),
+        count(
+            ui,
+            "Divisões de altura",
+            &mut parameters.height_divisions,
+            1,
         );
     }
     if kind == Primitive::Plane {
-        for (i, label) in ["Divisões X ", "Divisões Z "].iter().enumerate() {
-            ui.add(
-                egui::DragValue::new(&mut parameters.plane_divisions[i])
-                    .range(1..=256)
-                    .prefix(*label),
-            );
-        }
+        let [x, z] = &mut parameters.plane_divisions;
+        count(ui, "Divisões X", x, 1);
+        count(ui, "Divisões Z", z, 1);
     }
     if kind == Primitive::Tube {
         let radius = entity.dimensions[0] * 0.5;
         let mut wall = parameters.wall_fraction * radius;
-        ui.add(
-            egui::DragValue::new(&mut wall)
-                .speed(0.01)
-                .range(radius * 0.001..=radius * 0.999)
-                .prefix("Espessura da parede "),
-        );
+        field(ui, "Espessura da parede", &mut |ui| {
+            ui.add_sized(
+                [ui.available_width(), crate::theme::CONTROL_HEIGHT],
+                egui::DragValue::new(&mut wall)
+                    .speed(0.01)
+                    .range(radius * 0.001..=radius * 0.999),
+            );
+        });
         parameters.wall_fraction = wall / radius;
     }
     if parameters != previous {

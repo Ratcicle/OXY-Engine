@@ -371,7 +371,7 @@ fn native_final_creation_workflow() {
             qa.editor = Editor::new(cc);
             qa.actions = VecDeque::from([
                 Action::Click("Novo projeto"),
-                Action::Click("Cena 3D\nComece com modelos, profundidade e uma câmera 3D."),
+                Action::Click("Cena 3D"),
                 Action::Click("Criar projeto"),
                 Action::Check("f7_new"),
                 Action::Final("save_location"),
