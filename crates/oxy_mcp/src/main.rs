@@ -17,7 +17,8 @@ const INSTRUCTIONS: &str = "OXY Engine is a desktop game editor (Rust). A projec
 optional shape, material, attributes, components (colliders, character, platform, camera \
 control, 2D movement), a logic graph of nodes and animation clips. Start with oxy_status, then \
 oxy_project and oxy_scene. Read oxy_catalog before building logic. Reads are compact JSON with \
-floats rounded to 4 decimals: long lists come in pages (limit, offset, next_offset), oxy_entity \
+floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long \
+lists come in pages (limit, offset, next_offset), oxy_entity \
 summarizes logic and geometry unless asked in full, and world positions and boxes (oxy_scene \
 fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
 (atomic batches, validated with the editor's own rules). When the project is open in the editor \

@@ -10,10 +10,10 @@ use crate::{
     scene_view::SceneView,
     spatial,
 };
-use glam::{EulerRot, Vec3};
+use glam::{EulerRot, Quat, Vec3};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value as Json, json};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 fn kind_name(kind: SceneKind) -> &'static str {
     match kind {
@@ -167,7 +167,7 @@ pub enum TreeField {
     Bounds,
 }
 
-/// Objects listed at the top of a scene tree when `limit` is absent.
+/// Objects in a scene tree's answer, its children included, when `limit` is absent.
 pub const TREE_LIMIT: usize = 100;
 /// Objects found when `limit` is absent.
 pub const FIND_LIMIT: usize = 50;
@@ -180,7 +180,8 @@ pub struct TreeQuery {
     pub root: Option<Id>,
     /// Levels of children shown below the listed objects; deeper children are only counted.
     pub depth: Option<usize>,
-    /// Over the listed objects, not their children.
+    /// The offset is over the listed objects; the limit caps every object in the answer,
+    /// children included.
     pub page: Page,
 }
 impl Default for TreeQuery {
@@ -211,18 +212,57 @@ impl TreeQuery {
     }
 }
 
+/// A vector worked out through f32 matrices, with the components that are only rounding noise
+/// next to the largest one set to 0: under a parent turned 90°, cos 90° is -4.4e-8 in f32, so
+/// a child 3 m away would sit 1.3e-7 m off its axis instead of on it.
+fn settled(v: Vec3) -> [f32; 3] {
+    let noise = v.abs().max_element() * 1e-6;
+    v.to_array().map(|c| if c.abs() <= noise { 0. } else { c })
+}
+
+/// A world rotation in degrees that reads as set_transform takes it. Two XYZ angle triples
+/// give each rotation, such as [0, 120, 0] and [180, 60, 180]; this picks the one nearest to
+/// the object's local rotation (`local`, in radians), so a piece turned along with its group
+/// does not read as upside down. Angles are in (-180, 180], a half turn reading 180.
+fn world_degrees(rotation: Quat, local: [f32; 3]) -> [f32; 3] {
+    let wrap = |degrees: f64| {
+        let wrapped = degrees - 360. * ((degrees - 180.) / 360.).ceil();
+        if wrapped < -180. + 1e-4 {
+            180.
+        } else {
+            wrapped
+        }
+    };
+    let (x, y, z) = rotation.as_dquat().to_euler(EulerRot::XYZ);
+    let [x, y, z] = [x, y, z].map(f64::to_degrees);
+    let local = local.map(|angle| f64::from(angle).to_degrees());
+    let distance = |angles: &[f64; 3]| -> f64 {
+        angles
+            .iter()
+            .zip(&local)
+            .map(|(angle, near)| wrap(angle - near).abs())
+            .sum()
+    };
+    let [first, second] =
+        [[x, y, z], [x + 180., 180. - y, z + 180.]].map(|angles| angles.map(wrap));
+    let nearest = if distance(&second) < distance(&first) {
+        second
+    } else {
+        first
+    };
+    settled(Vec3::from(nearest.map(|angle| angle as f32)))
+}
+
 fn bounds_json(bounds: Aabb) -> Json {
-    json!({"min": bounds.min.to_array(), "max": bounds.max.to_array()})
+    json!({"min": settled(bounds.min), "max": settled(bounds.max)})
 }
 
 /// Where an object's position (its pivot) is in the world: for a root object, its position.
 fn world_position(view: &SceneView, e: &Entity) -> Option<[f32; 3]> {
     let world = view.world_matrix(&e.id).ok().filter(|m| m.is_finite())?;
-    Some(
-        world
-            .transform_point3(Vec3::from(e.transform.pivot))
-            .to_array(),
-    )
+    Some(settled(
+        world.transform_point3(Vec3::from(e.transform.pivot)),
+    ))
 }
 
 /// The collider the game gives an object, in the physics world's order: the 3D character's
@@ -245,7 +285,7 @@ fn collider_box(view: &SceneView, e: &Entity) -> Option<Json> {
             (bounds, center, collider.is_trigger, collider.enabled)
         };
     let mut result = bounds_json(bounds);
-    result["center"] = json!(center.to_array());
+    result["center"] = json!(settled(center));
     if sensor {
         result["sensor"] = json!(true);
     }
@@ -256,7 +296,8 @@ fn collider_box(view: &SceneView, e: &Entity) -> Option<Json> {
 }
 
 /// Object tree of a scene: each node has ID, name, kind, local position, shape, components,
-/// logic size, the fields asked for and its children.
+/// logic size, the fields asked for and its children. The answer holds at most `limit`
+/// objects: children that no longer fit are only counted, and then `truncated` is true.
 pub fn scene_tree(project: &Project, scene: &str, query: &TreeQuery) -> Result<Json, String> {
     let scene = project
         .scene(scene)
@@ -273,18 +314,24 @@ pub fn scene_tree(project: &Project, scene: &str, query: &TreeQuery) -> Result<J
     for e in &scene.entities {
         children.entry(e.parent.as_deref()).or_default().push(e);
     }
-    let tree = Tree {
+    let mut tree = Tree {
         view: SceneView::new(scene),
         children,
         query,
+        expanded: HashSet::new(),
     };
     let listed = tree.children_of(root.map(|e| e.id.as_str()));
-    let (listed, about) = query.page.cut(listed);
+    let (listed, mut about) = query.page.cut(listed);
+    let (expanded, truncated) = tree.expand(&listed);
+    tree.expanded = expanded;
+    if truncated {
+        about.insert("truncated".into(), json!(true));
+    }
     let mut result = json!({
         "id": scene.id,
         "name": scene.name,
         "kind": kind_name(scene.kind),
-        "objects": listed.into_iter().map(|e| tree.node(e, 0)).collect::<Vec<_>>(),
+        "objects": listed.into_iter().map(|e| tree.node(e)).collect::<Vec<_>>(),
     });
     if let Some(root) = root {
         result["root"] = json!({"id": root.id, "name": root.name});
@@ -297,12 +344,43 @@ struct Tree<'a> {
     view: SceneView<'a>,
     children: HashMap<Option<&'a str>, Vec<&'a Entity>>,
     query: &'a TreeQuery,
+    /// Objects whose children the answer shows; the others only count them.
+    expanded: HashSet<&'a str>,
 }
 impl<'a> Tree<'a> {
     fn children_of(&self, parent: Option<&str>) -> Vec<&'a Entity> {
         self.children.get(&parent).cloned().unwrap_or_default()
     }
-    fn node(&self, e: &Entity, level: usize) -> Json {
+    /// The objects whose children the answer shows, level by level from the listed ones, as
+    /// long as all of an object's children fit in the limit with what is already shown and
+    /// lie within `depth`. True when the limit, not the depth, left children out.
+    fn expand(&self, listed: &[&'a Entity]) -> (HashSet<&'a str>, bool) {
+        let mut room = self.query.page.limit.saturating_sub(listed.len());
+        let mut expanded = HashSet::new();
+        let mut truncated = false;
+        let mut level = listed.to_vec();
+        let mut depth = 0;
+        while !level.is_empty() && self.query.depth.is_none_or(|d| depth < d) {
+            let mut next = Vec::new();
+            for e in level {
+                let kids = self.children_of(Some(&e.id));
+                if kids.is_empty() {
+                    continue;
+                }
+                if kids.len() > room {
+                    truncated = true;
+                    continue;
+                }
+                room -= kids.len();
+                expanded.insert(e.id.as_str());
+                next.extend(kids);
+            }
+            level = next;
+            depth += 1;
+        }
+        (expanded, truncated)
+    }
+    fn node(&self, e: &Entity) -> Json {
         let mut node = json!({
             "id": e.id,
             "name": e.name,
@@ -356,14 +434,14 @@ impl<'a> Tree<'a> {
         }
         let kids = self.children_of(Some(&e.id));
         if !kids.is_empty() {
-            if self.query.depth.is_some_and(|depth| level >= depth) {
-                node["children_count"] = json!(kids.len());
-            } else {
+            if self.expanded.contains(e.id.as_str()) {
                 node["children"] = json!(
                     kids.into_iter()
-                        .map(|kid| self.node(kid, level + 1))
+                        .map(|kid| self.node(kid))
                         .collect::<Vec<_>>()
                 );
+            } else {
+                node["children_count"] = json!(kids.len());
             }
         }
         node
@@ -521,15 +599,22 @@ fn entity_view(
     if let Ok(world) = view.world_matrix(id)
         && world.is_finite()
     {
-        let (scale, rotation, _) = world.to_scale_rotation_translation();
-        let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
-        let degrees = [x, y, z].map(f32::to_degrees);
+        // A root object's world rotation and scale are its own, read as they were set.
+        let (degrees, scale) = if e.parent.is_none() {
+            (e.transform.rotation.map(f32::to_degrees), e.transform.scale)
+        } else {
+            let (scale, rotation, _) = world.to_scale_rotation_translation();
+            (
+                world_degrees(rotation, e.transform.rotation),
+                scale.to_array(),
+            )
+        };
         map.insert(
             "world".into(),
             json!({
-                "position": world.transform_point3(Vec3::from(e.transform.pivot)).to_array(),
+                "position": settled(world.transform_point3(Vec3::from(e.transform.pivot))),
                 "rotation_degrees": degrees,
-                "scale": scale.to_array(),
+                "scale": scale,
             }),
         );
     }
@@ -863,23 +948,33 @@ pub fn catalog_with(query: &CatalogQuery) -> Result<Json, String> {
             categories.push(category);
         }
     }
-    if let Some(asked) = &query.category {
-        let category = categories
-            .iter()
-            .find(|c| c.to_lowercase() == asked.to_lowercase())
-            .ok_or_else(|| {
-                format!(
-                    "Categoria desconhecida: {asked}. Categorias: {}",
-                    categories.join(", ")
-                )
-            })?;
-        nodes.retain(|node| text(node, "category") == *category);
-    }
+    let category = match &query.category {
+        Some(asked) => Some(
+            categories
+                .iter()
+                .find(|c| c.to_lowercase() == asked.to_lowercase())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Categoria desconhecida: {asked}. Categorias: {}",
+                        categories.join(", ")
+                    )
+                })?,
+        ),
+        None => None,
+    };
+    let in_category = |node: &Json| {
+        category
+            .as_ref()
+            .is_none_or(|c| text(node, "category") == *c)
+    };
     if !query.operations.is_empty() {
+        // Looked up in every category first, so an operation of another category is not
+        // reported as unknown.
         let mut wanted = Vec::new();
         for asked in &query.operations {
             let prefix = asked.strip_suffix('*').unwrap_or(asked);
-            let matches = |node: &Json| {
+            let matches = |node: &&Json| {
                 let operation = text(node, "operation");
                 if prefix.ends_with('.') {
                     operation.starts_with(prefix)
@@ -887,22 +982,34 @@ pub fn catalog_with(query: &CatalogQuery) -> Result<Json, String> {
                     operation == *asked
                 }
             };
-            if !nodes.iter().any(matches) {
+            let found: Vec<&Json> = nodes.iter().filter(matches).collect();
+            let Some(first) = found.first() else {
                 return Err(if prefix.ends_with('.') {
                     format!("Nenhuma operação começa com {prefix}")
                 } else {
                     format!("Operação desconhecida: {asked}")
                 });
+            };
+            let kept: Vec<String> = found
+                .iter()
+                .filter(|n| in_category(n))
+                .map(|n| text(n, "operation"))
+                .collect();
+            if let (true, Some(category)) = (kept.is_empty(), &category) {
+                return Err(if prefix.ends_with('.') {
+                    format!("Nenhuma operação que começa com {prefix} é da categoria {category}")
+                } else {
+                    format!(
+                        "{asked} não é da categoria {category}, e sim de {}",
+                        text(first, "category")
+                    )
+                });
             }
-            wanted.extend(
-                nodes
-                    .iter()
-                    .filter(|n| matches(n))
-                    .map(|n| text(n, "operation")),
-            );
+            wanted.extend(kept);
         }
         nodes.retain(|node| wanted.contains(&text(node, "operation")));
     }
+    nodes.retain(in_category);
     let filtered = query.category.is_some() || !query.operations.is_empty();
     if query.brief.unwrap_or(!filtered) {
         for node in &mut nodes {

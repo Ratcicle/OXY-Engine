@@ -101,6 +101,10 @@ fn scene_tree_reports_world_positions_and_boxes_through_parent_groups() {
     let area = &group["children"][1];
     assert_eq!(area["visible"], false);
     near(&area["world_position"], &[16., 4., 0.]);
+    // cos 90° is not 0 in f32: the noise it leaves on the axis the group turned away from
+    // reads 0, not 2.6e-7.
+    assert_eq!(area["world_position"][2].as_f64(), Some(0.));
+    assert_eq!(area["collider_bounds"]["center"][2].as_f64(), Some(0.));
     assert!(area.get("visual_bounds").is_none(), "nothing to show");
     near(&area["collider_bounds"]["min"], &[14., 2., -2.]);
     near(&area["collider_bounds"]["max"], &[18., 6., 2.]);
@@ -244,6 +248,30 @@ fn big_scenes_are_read_part_by_part() {
     assert_eq!(names(&inside["objects"]), ["Bloco A"]);
     assert_eq!(inside["total"], 2);
     assert_eq!(inside["next_offset"], 1);
+    assert_eq!(inside["objects"][0]["children_count"], 1, "no room left");
+    assert_eq!(inside["truncated"], true);
+
+    // The limit counts children too, level by level: 6 listed objects, then Fase's 2
+    // children, then Detalhe.
+    let cut = tree(json!({"limit": 7})).unwrap();
+    assert_eq!(cut["objects"][5]["children_count"], 2);
+    assert_eq!(cut["truncated"], true);
+    assert!(
+        cut.get("next_offset").is_none(),
+        "every listed object is there"
+    );
+    let cut = tree(json!({"limit": 8})).unwrap();
+    assert_eq!(
+        names(&cut["objects"][5]["children"]),
+        ["Bloco A", "Bloco B"]
+    );
+    assert_eq!(cut["objects"][5]["children"][0]["children_count"], 1);
+    assert_eq!(cut["truncated"], true);
+    assert!(all.get("truncated").is_none());
+    assert!(
+        shallow.get("truncated").is_none(),
+        "depth cuts as asked, not by the limit"
+    );
     assert_eq!(
         TreeQuery::default().page,
         Page {
@@ -270,6 +298,169 @@ fn big_scenes_are_read_part_by_part() {
         [TreeField::Bounds],
         "other tool arguments are ignored"
     );
+}
+
+#[test]
+fn a_level_of_many_sections_stays_within_the_limit() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let mut commands = Vec::new();
+    for section in 1..=10 {
+        let group = commands.len();
+        commands.push(json!({"op": "create_entity", "kind": {"type": "group"},
+                             "name": format!("Seção {section}")}));
+        for platform in 1..=30 {
+            commands.push(
+                json!({"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                                 "name": format!("Plataforma {platform}"),
+                                 "parent": format!("${group}")}),
+            );
+        }
+    }
+    let small = commands.len();
+    commands.push(json!({"op": "create_entity", "kind": {"type": "group"}, "name": "Pequena"}));
+    for _ in 0..2 {
+        commands.push(
+            json!({"op": "create_entity", "kind": {"type": "group"}, "name": "Item",
+                             "parent": format!("${small}")}),
+        );
+    }
+    let applied = apply(&mut project, &scene, Json::Array(commands));
+    let tree = |args: Json| query::answer(&project, &scene, "scene_tree", &args).unwrap();
+    let count = |nodes: &Json| -> usize {
+        fn walk(node: &Json) -> usize {
+            1 + node["children"]
+                .as_array()
+                .map_or(0, |kids| kids.iter().map(walk).sum())
+        }
+        nodes.as_array().unwrap().iter().map(walk).sum()
+    };
+
+    // 11 listed objects leave room for 89: two whole sections, then the small group, whose
+    // children still fit; the other sections only count theirs.
+    let default = tree(json!({"fields": ["bounds"]}));
+    assert_eq!(default["total"], 11);
+    assert_eq!(default["truncated"], true);
+    assert!(default.get("next_offset").is_none());
+    let objects = default["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), 11);
+    assert_eq!(objects[0]["children"].as_array().unwrap().len(), 30);
+    assert_eq!(objects[1]["children"].as_array().unwrap().len(), 30);
+    for section in &objects[2..10] {
+        assert_eq!(section["children_count"], 30, "{}", section["name"]);
+        assert!(section.get("children").is_none());
+    }
+    assert_eq!(names(&objects[10]["children"]), ["Item", "Item"]);
+    assert_eq!(count(&default["objects"]), 73);
+    assert!(count(&default["objects"]) <= query::TREE_LIMIT);
+
+    // A section cut out is read with root, and a higher limit takes the whole level.
+    let third = tree(json!({"root": applied[62].created[0]}));
+    assert_eq!(third["objects"].as_array().unwrap().len(), 30);
+    assert!(third.get("truncated").is_none());
+    let whole = tree(json!({"limit": 400}));
+    assert_eq!(count(&whole["objects"]), 313);
+    assert!(whole.get("truncated").is_none());
+}
+
+/// Rotation of the object `id` in the world, from oxy_entity's degrees.
+fn world_rotation(project: &Project, scene: &str, id: &str) -> glam::Quat {
+    let view = query::entity(project, scene, id).unwrap();
+    let degrees: Vec<f32> = view["world"]["rotation_degrees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| (v.as_f64().unwrap() as f32).to_radians())
+        .collect();
+    glam::Quat::from_euler(glam::EulerRot::XYZ, degrees[0], degrees[1], degrees[2])
+}
+
+#[test]
+fn world_rotation_reads_as_set_transform_takes_it_under_turned_groups() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    // Groups turned 120°, 180° and 30° around Y, one pitched 90°, and one not turned, each
+    // with a child; the 30° group's child turns 150° more, and the plain group holds a piece
+    // turned 200° and one set upside down as [180, 0, 180].
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Curva"},
+            {"op": "set_transform", "entity": "$0", "rotation": [0.0, 120.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "A",
+             "parent": "$0", "position": [0.0, 0.0, 4.0]},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Volta"},
+            {"op": "set_transform", "entity": "$3", "rotation": [0.0, 180.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "B",
+             "parent": "$3"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Leve"},
+            {"op": "set_transform", "entity": "$6", "rotation": [0.0, 30.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "C",
+             "parent": "$6"},
+            {"op": "set_transform", "entity": "$8", "rotation": [0.0, 150.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Reta"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "D",
+             "parent": "$10"},
+            {"op": "set_transform", "entity": "$11", "rotation": [0.0, 200.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "E",
+             "parent": "$10"},
+            {"op": "set_transform", "entity": "$13", "rotation": [180.0, 0.0, 180.0]},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Parede"},
+            {"op": "set_transform", "entity": "$15", "rotation": [90.0, 0.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "F",
+             "parent": "$15"},
+            {"op": "set_transform", "entity": "$17", "rotation": [0.0, 120.0, 0.0]},
+        ]),
+    );
+    let id = |i: usize| applied[i].created[0].clone();
+    let degrees = |i: usize| {
+        query::entity(&project, &scene, &id(i)).unwrap()["world"]["rotation_degrees"].clone()
+    };
+    // Roots read exactly as they were set, and so do their children.
+    for (object, expected) in [
+        (0, [0., 120., 0.]),
+        (2, [0., 120., 0.]),
+        (3, [0., 180., 0.]),
+        (5, [0., 180., 0.]),
+        (8, [0., 180., 0.]),
+        (11, [0., -160., 0.]),
+        (13, [180., 0., 180.]),
+    ] {
+        near(&degrees(object), &expected);
+        let view = query::entity(&project, &scene, &id(object)).unwrap();
+        if view.get("parent").is_none() {
+            assert_eq!(view["world"]["rotation_degrees"], view["rotation_degrees"]);
+        }
+    }
+    // A child 4 m ahead of the 120° group sits where the turn puts it.
+    let a = query::entity(&project, &scene, &id(2)).unwrap();
+    near(
+        &a["world"]["position"],
+        &[
+            4. * 120f32.to_radians().sin(),
+            0.,
+            4. * 120f32.to_radians().cos(),
+        ],
+    );
+    // Whatever triple is shown, it is the rotation the object has in the world.
+    let current = project.scene(&scene).unwrap();
+    for object in [2, 5, 8, 11, 13, 17] {
+        let entity = current.entity(&id(object)).unwrap();
+        let parent = current.entity(entity.parent.as_ref().unwrap()).unwrap();
+        let expected = parent.transform.quaternion() * entity.transform.quaternion();
+        let shown = world_rotation(&project, &scene, &id(object));
+        assert!(
+            shown.dot(expected).abs() > 1. - 1e-6,
+            "{}: {shown} != {expected}",
+            entity.name
+        );
+    }
+    // Every angle is in (-180, 180].
+    for object in [2, 5, 8, 11, 13, 17] {
+        for angle in degrees(object).as_array().unwrap() {
+            let angle = angle.as_f64().unwrap();
+            assert!(angle > -180. && angle <= 180., "{angle}");
+        }
+    }
 }
 
 /// An object with logic: an input starts two equal messages, then sets an attribute from a
@@ -629,6 +820,11 @@ fn the_catalog_is_brief_by_default_and_full_for_the_nodes_asked_for() {
     assert_eq!(window["next_offset"], 6);
     let everything = query::catalog_query(&json!({"brief": false})).unwrap();
     assert_eq!(everything["nodes"], query::catalog()["nodes"]);
+    // Category and operations together: the operations of that category.
+    let both = query::catalog_query(&json!({"category": "Eventos", "operations": ["event.input"]}))
+        .unwrap();
+    assert_eq!(both["total"], 1);
+    assert_eq!(both["nodes"][0]["operation"], "event.input");
 
     for (args, expected) in [
         (
@@ -642,6 +838,19 @@ fn the_catalog_is_brief_by_default_and_full_for_the_nodes_asked_for() {
         (
             json!({"operations": ["voo."]}),
             "Nenhuma operação começa com voo.",
+        ),
+        // An operation of another category is not unknown.
+        (
+            json!({"category": "Ações", "operations": ["event.input"]}),
+            "event.input não é da categoria Ações, e sim de Eventos",
+        ),
+        (
+            json!({"category": "ações", "operations": ["event."]}),
+            "Nenhuma operação que começa com event. é da categoria Ações",
+        ),
+        (
+            json!({"category": "Ações", "operations": ["voar"]}),
+            "Operação desconhecida: voar",
         ),
         (json!({"operations": "event.input"}), "operations inválido"),
         (json!({"brief": "sim"}), "brief inválido"),

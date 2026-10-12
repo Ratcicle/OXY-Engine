@@ -32,20 +32,23 @@ impl Output {
     }
 }
 
+/// Values under this read 0: f32 rounding noise, such as what a parent turned 90° leaves in its
+/// children's world positions (cos 90° is -4.4e-8 in f32).
+const NOISE: f64 = 1e-5;
+
 /// Floats rounded to 4 decimals, since f32 noise such as 0.4000000059604645 hides the value;
-/// nonzero values under 0.0001 keep 4 significant digits instead of reading as 0.
+/// below 1 they keep 4 significant digits instead, so that 0.00015 reads as it was set and a
+/// read value can be written back. Values under [`NOISE`] read 0.
 fn rounded(value: Json) -> Json {
     match value {
         Json::Number(number) if number.is_f64() => {
             let value = number.as_f64().unwrap_or_default();
             let round = if value.abs() >= 1e11 {
                 value
+            } else if value.abs() < NOISE {
+                0.
             } else {
-                let digits = if value.abs() >= 1e-4 || value == 0. {
-                    4
-                } else {
-                    3 - value.abs().log10().floor() as i32
-                };
+                let digits = 4.max(3 - value.abs().log10().floor() as i32);
                 let scale = 10f64.powi(digits);
                 (value * scale).round() / scale
             };
@@ -94,7 +97,10 @@ box collider), with sensor: true for areas and enabled: false when off; bounds, 
 const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
 radians plus rotation_degrees, material, attributes, components, logic graph, animation clips; \
 empty (null) parts are left out) plus world {position, rotation_degrees, scale}, visual_bounds \
-and collider_bounds as oxy_scene describes them, components and can_add_components. The logic \
+and collider_bounds as oxy_scene describes them, components and can_add_components. \
+world.rotation_degrees is rotation_degrees for a root object; under parents it is, of the angle \
+triples that give the same rotation, the one nearest to the object's own, in (-180, 180] (a \
+piece turned 120° with its group reads [0, 120, 0], not [180, 60, 180]). The logic \
 graph is summarized by default: nodes maps each node's label (its operation, then its main \
 parameter in parentheses; a label repeated in the graph ends in #N, N being the node's index in \
 the stored graph) to {id, params}, params holding only the values that differ from the \
@@ -156,7 +162,10 @@ pub fn definitions() -> Json {
                         objects only show children_count. Default: every level."},
                    "offset": offset,
                    "limit": {"type": "integer", "minimum": 0, "description":
-                       "Listed objects at most (default 100); their children do not count."}}),
+                       "Objects in the answer at most, children included (default 100). \
+                        offset and next_offset page the listed objects; an object whose \
+                        children no longer fit only shows children_count, and the answer has \
+                        truncated: true (read them with root)."}}),
             json!([])
         ),
         tool(
@@ -191,7 +200,8 @@ pub fn definitions() -> Json {
             "oxy_catalog",
             CATALOG_DESCRIPTION,
             json!({"category": {"type": "string", "description":
-                       "Only nodes of this category (see categories), in full."},
+                       "Only nodes of this category (see categories), in full. With operations, \
+                        the operations asked for must be of it."},
                    "operations": {"type": "array", "items": {"type": "string"}, "description":
                        "Only these operations, in full; an entry ending in \".\" takes every \
                         operation starting with it, e.g. \"character.\"."},
@@ -978,6 +988,23 @@ mod tests {
             .clone()
     }
 
+    /// Numbers of an answer written with an exponent, such as 1.788e-7.
+    fn exponents(value: &Json) -> Vec<String> {
+        match value {
+            Json::Number(number) => {
+                let text = number.to_string();
+                if text.contains('e') {
+                    vec![text]
+                } else {
+                    Vec::new()
+                }
+            }
+            Json::Array(items) => items.iter().flat_map(exponents).collect(),
+            Json::Object(map) => map.values().flat_map(exponents).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     #[test]
     fn screenshot_and_simulate_document_views_inputs_and_the_interface() {
         let shot = schema("oxy_screenshot");
@@ -1019,6 +1046,12 @@ mod tests {
             "negative_zero": -0.0,
             "big": 150000000000.25,
             "nested": {"half": 0.00005, "text": "0.123456"},
+            // Below 1, 4 significant digits: small values set by hand read back as they are.
+            "small": [f64::from(0.00015f32), f64::from(0.00099f32), f64::from(0.00009f32),
+                      0.012345678, 0.99999994],
+            "metres": [13.000000476837158, -2.9999999, 1234.56789],
+            // f32 noise under 0.00001: a child under a parent turned 90° or 180°.
+            "f32_noise": [1.788e-7, -5.009e-6, -4.371139e-8, 0.0000099],
         }));
         assert!(!output.text.contains('\n') && !output.text.contains(": "));
         let value: Json = serde_json::from_str(&output.text).unwrap();
@@ -1031,8 +1064,12 @@ mod tests {
                 "negative_zero": 0.0,
                 "big": 150000000000.25,
                 "nested": {"half": 0.00005, "text": "0.123456"},
+                "small": [0.00015, 0.00099, 0.00009, 0.01235, 1.0],
+                "metres": [13.0, -3.0, 1234.5679],
+                "f32_noise": [0.0, 0.0, 0.0, 0.0],
             })
         );
+        assert_eq!(exponents(&value), Vec::<String>::new(), "{}", output.text);
         assert!(value["list"][0].is_u64(), "integers stay integers");
         assert!(
             output.text.contains("\"negative_zero\":0.0"),
@@ -1209,6 +1246,64 @@ mod tests {
             let error = Tools::default().call(tool, &args).unwrap_err();
             assert!(error.contains(expected), "{tool}: {error}");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn world_values_under_turned_groups_read_clean() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-turned-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Seções", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        let created = command::apply(
+            &mut project,
+            &start,
+            &command::parse(&json!([
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Secao",
+                 "position": [10.0, 2.0, 0.0]},
+                {"op": "set_transform", "entity": "$0", "rotation": [0.0, 90.0, 0.0]},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Plataforma", "parent": "$0", "position": [0.0, 1.0, 3.0]},
+                {"op": "add_component", "entity": "$2", "component": "collider3d"},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Volta"},
+                {"op": "set_transform", "entity": "$4", "rotation": [0.0, 180.0, 0.0]},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Peça", "parent": "$4"},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut read = |tool: &str, mut args: Json| {
+            args["project"] = json!(project_arg);
+            let output = tools.call(tool, &args).unwrap();
+            let value: Json = serde_json::from_str(&output.text).unwrap();
+            assert_eq!(
+                exponents(&value),
+                Vec::<String>::new(),
+                "f32 noise: {value}"
+            );
+            value
+        };
+        let tree = read(
+            "oxy_scene",
+            json!({"fields": ["world_position", "bounds"], "root": created[0].created[0]}),
+        );
+        let platform = &tree["objects"][0];
+        assert_eq!(platform["world_position"], json!([13.0, 3.0, 0.0]));
+        assert_eq!(
+            platform["collider_bounds"]["center"],
+            json!([13.0, 3.0, 0.0])
+        );
+        assert_eq!(platform["collider_bounds"]["min"], json!([12.5, 2.5, -0.5]));
+        let entity = read("oxy_entity", json!({"id": created[2].created[0]}));
+        assert_eq!(entity["world"]["position"], json!([13.0, 3.0, 0.0]));
+        assert_eq!(entity["world"]["rotation_degrees"], json!([0.0, 90.0, 0.0]));
+        let piece = read("oxy_entity", json!({"id": created[6].created[0]}));
+        assert_eq!(piece["world"]["rotation_degrees"], json!([0.0, 180.0, 0.0]));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

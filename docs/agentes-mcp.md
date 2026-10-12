@@ -65,7 +65,7 @@ As descrições das ferramentas estão em inglês, para os agentes. As mensagens
 ## Leituras compactas
 
 Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do agente. Por isso, desde a 0.5.1:
-- As respostas vêm em JSON compacto, sem espaços, com os números arredondados em 4 casas decimais (`0.4000000059604645` vira `0.4`). Valores diferentes de zero menores que 0,0001 guardam 4 algarismos significativos, para não virarem 0.
+- As respostas vêm em JSON compacto, sem espaços, com os números arredondados em 4 casas decimais (`0.4000000059604645` vira `0.4`). Abaixo de 1, guardam 4 algarismos significativos, para que um valor pequeno volte como foi posto (`0.00015` continua `0.00015`) e possa ser escrito de novo sem mudar. Valores menores que 0,00001 viram 0: é o ruído das contas em f32, como o que um grupo girado 90° deixa nas posições dos filhos no mundo.
 - Ao vivo e nos arquivos, as leituras aceitam as mesmas opções e dão a mesma resposta: o editor responde pela mesma função do núcleo que o servidor usa nos arquivos.
 - Opções inválidas são recusadas antes de o servidor procurar o editor ou o projeto, com o nome da opção na mensagem.
 
@@ -78,11 +78,12 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
   - `bounds`: as duas caixas.
 - `root` lista os filhos de um objeto em vez dos objetos da raiz da cena, e a resposta o identifica em `root`.
 - `depth` limita os níveis de filhos; abaixo dele, cada objeto só diz quantos filhos tem (`children_count`).
-- `offset` e `limit` (100 por padrão) leem os objetos listados por partes; os filhos não contam. A resposta traz `total` e, quando há mais, `next_offset`.
+- `limit` (100 por padrão) é o máximo de objetos na resposta, contando os filhos. `offset` e `limit` leem os objetos listados por partes: a resposta traz `total` e, quando há mais, `next_offset`. Os filhos entram nível a nível enquanto cabem; um objeto cujos filhos já não cabem só diz quantos tem (`children_count`), e a resposta traz `truncated: true`. Para ler esses filhos, use `root` com o ID do objeto.
 
 **Objetos** (`oxy_entity`):
 - `id` lê um objeto; `ids` lê vários, devolvidos em `objects`.
 - A resposta é a forma de documento do objeto, sem as partes vazias (nulas), mais `world` (posição, rotação em graus e escala no mundo), `visual_bounds` e `collider_bounds` como na árvore, os componentes e os que ainda pode receber.
+- A rotação no mundo (`world.rotation_degrees`) se lê como a do `set_transform`. Num objeto da raiz, é a própria `rotation_degrees`. Sob um grupo, a mesma rotação pode ser escrita com dois trios de ângulos, como `[0, 120, 0]` e `[180, 60, 180]`; vem o mais próximo da rotação do próprio objeto, entre -180 e 180. Assim, uma peça girada 120° junto com o grupo lê `[0, 120, 0]`, e não parece de cabeça para baixo.
 - `fields` corta a resposta nas partes pedidas, além do ID e do nome, como `character3d.actions`, `transform.position` ou `graph.edges`. Uma parte que não existe vem `null`.
 - A lógica vem resumida: `nodes` liga o rótulo de cada nó (a operação e o parâmetro principal, como `event.input(reiniciar)`) ao ID dele e aos parâmetros que fogem do padrão, e `edges` traz as ligações em texto, como `event.input(reiniciar).exec -> character.teleport.exec`. Quando dois nós têm o mesmo rótulo, ele termina em `#N`, a posição do nó no grafo.
 - Malhas e geometria de colisão convexa ou de triângulos vêm como contagens.
@@ -90,9 +91,9 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 
 **Busca** (`oxy_find`): devolve `{objects, total}` e `next_offset` quando há mais, com `offset` e `limit` (50 por padrão).
 
-**Catálogo** (`oxy_catalog`): sem opções, os nós vêm resumidos (operação, nome, categoria e descrição), com a lista de categorias em `categories`. Para montar a lógica, o agente pede os nós que vai usar com `operations` (por exemplo `["event.input", "character."]`, em que o ponto final pega todas as operações que começam assim) ou `category`, e recebe só esses nós, com portas e parâmetros. `brief` escolhe o formato, e `offset` e `limit` leem os nós por partes.
+**Catálogo** (`oxy_catalog`): sem opções, os nós vêm resumidos (operação, nome, categoria e descrição), com a lista de categorias em `categories`. Para montar a lógica, o agente pede os nós que vai usar com `operations` (por exemplo `["event.input", "character."]`, em que o ponto final pega todas as operações que começam assim) ou `category`, e recebe só esses nós, com portas e parâmetros. Com os dois, as operações pedidas precisam ser da categoria; uma que existe em outra categoria é recusada com o nome da categoria dela, e não como desconhecida. `brief` escolhe o formato, e `offset` e `limit` leem os nós por partes.
 
-**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções; e o `oxy_scene` lista até 100 objetos por vez.
+**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções; e o `oxy_scene` devolve até 100 objetos por vez, contando os filhos.
 
 ## Testes com `oxy_simulate`
 
