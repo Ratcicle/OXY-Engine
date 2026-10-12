@@ -49,10 +49,10 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | --- | --- |
 | `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer |
 | `oxy_project` | Cenas, recursos e ações de entrada |
-| `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica |
-| `oxy_entity` | Um objeto completo e os componentes que ainda pode receber |
-| `oxy_find` | Busca objetos pelo nome em todas as cenas |
-| `oxy_catalog` | Nós da lógica (portas, parâmetros, descrições), componentes, formas e presets |
+| `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
+| `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
+| `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
+| `oxy_catalog` | Nós da lógica (resumidos, ou com portas e parâmetros para os nós pedidos), componentes, formas e presets |
 | `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações…) |
 | `oxy_validate` | Valida o projeto com as regras de salvar |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo e os objetos observados |
@@ -61,6 +61,38 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_undo`, `oxy_redo` | Ao vivo: desfaz ou refaz o último passo |
 
 As descrições das ferramentas estão em inglês, para os agentes. As mensagens e erros do editor continuam em português.
+
+## Leituras compactas
+
+Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do agente. Por isso, desde a 0.5.1:
+- As respostas vêm em JSON compacto, sem espaços, com os números arredondados em 4 casas decimais (`0.4000000059604645` vira `0.4`). Valores diferentes de zero menores que 0,0001 guardam 4 algarismos significativos, para não virarem 0.
+- Ao vivo e nos arquivos, as leituras aceitam as mesmas opções e dão a mesma resposta: o editor responde pela mesma função do núcleo que o servidor usa nos arquivos.
+- Opções inválidas são recusadas antes de o servidor procurar o editor ou o projeto, com o nome da opção na mensagem.
+
+**Árvore da cena** (`oxy_scene`):
+- `fields` acrescenta a cada objeto:
+  - `world_position`: onde a posição do objeto (o pivô) fica no mundo. É o que conta para medir distâncias entre peças de grupos diferentes;
+  - `rotation` (local, em graus, como o `set_transform` recebe), `scale` (local) e `dimensions` (da forma);
+  - `visual_bounds`: a caixa `{min, max}` no mundo do que o objeto e os filhos mostram, inclusive peças ocultas;
+  - `collider_bounds`: a caixa `{min, max, center}` no mundo do colisor que o jogo usa (o corpo do personagem 3D, o colisor 3D ou o colisor de caixa), com `sensor: true` nas áreas e `enabled: false` quando está desligado;
+  - `bounds`: as duas caixas.
+- `root` lista os filhos de um objeto em vez dos objetos da raiz da cena, e a resposta o identifica em `root`.
+- `depth` limita os níveis de filhos; abaixo dele, cada objeto só diz quantos filhos tem (`children_count`).
+- `offset` e `limit` (100 por padrão) leem os objetos listados por partes; os filhos não contam. A resposta traz `total` e, quando há mais, `next_offset`.
+
+**Objetos** (`oxy_entity`):
+- `id` lê um objeto; `ids` lê vários, devolvidos em `objects`.
+- A resposta é a forma de documento do objeto, sem as partes vazias (nulas), mais `world` (posição, rotação em graus e escala no mundo), `visual_bounds` e `collider_bounds` como na árvore, os componentes e os que ainda pode receber.
+- `fields` corta a resposta nas partes pedidas, além do ID e do nome, como `character3d.actions`, `transform.position` ou `graph.edges`. Uma parte que não existe vem `null`.
+- A lógica vem resumida: `nodes` liga o rótulo de cada nó (a operação e o parâmetro principal, como `event.input(reiniciar)`) ao ID dele e aos parâmetros que fogem do padrão, e `edges` traz as ligações em texto, como `event.input(reiniciar).exec -> character.teleport.exec`. Quando dois nós têm o mesmo rótulo, ele termina em `#N`, a posição do nó no grafo.
+- Malhas e geometria de colisão convexa ou de triângulos vêm como contagens.
+- `graph: "full"` e `geometry: "full"` devolvem esses trechos como estão gravados, a forma que o `update_entity` edita.
+
+**Busca** (`oxy_find`): devolve `{objects, total}` e `next_offset` quando há mais, com `offset` e `limit` (50 por padrão).
+
+**Catálogo** (`oxy_catalog`): sem opções, os nós vêm resumidos (operação, nome, categoria e descrição), com a lista de categorias em `categories`. Para montar a lógica, o agente pede os nós que vai usar com `operations` (por exemplo `["event.input", "character."]`, em que o ponto final pega todas as operações que começam assim) ou `category`, e recebe só esses nós, com portas e parâmetros. `brief` escolhe o formato, e `offset` e `limit` leem os nós por partes.
+
+**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções; e o `oxy_scene` lista até 100 objetos por vez.
 
 ## Testes com `oxy_simulate`
 

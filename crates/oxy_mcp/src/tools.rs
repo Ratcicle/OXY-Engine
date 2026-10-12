@@ -22,11 +22,40 @@ pub struct Output {
     pub image: Option<String>,
 }
 impl Output {
+    /// Compact JSON with rounded floats: MCP clients cut long results, and every character
+    /// takes the agent's context.
     fn json(value: Json) -> Self {
         Self {
-            text: serde_json::to_string_pretty(&value).unwrap_or_default(),
+            text: serde_json::to_string(&rounded(value)).unwrap_or_default(),
             image: None,
         }
+    }
+}
+
+/// Floats rounded to 4 decimals, since f32 noise such as 0.4000000059604645 hides the value;
+/// nonzero values under 0.0001 keep 4 significant digits instead of reading as 0.
+fn rounded(value: Json) -> Json {
+    match value {
+        Json::Number(number) if number.is_f64() => {
+            let value = number.as_f64().unwrap_or_default();
+            let round = if value.abs() >= 1e11 {
+                value
+            } else {
+                let digits = if value.abs() >= 1e-4 || value == 0. {
+                    4
+                } else {
+                    3 - value.abs().log10().floor() as i32
+                };
+                let scale = 10f64.powi(digits);
+                (value * scale).round() / scale
+            };
+            // -0 reads as 0.
+            let round = if round == 0. { 0. } else { round };
+            serde_json::Number::from_f64(round).map_or(Json::Number(number), Json::Number)
+        }
+        Json::Array(items) => Json::Array(items.into_iter().map(rounded).collect()),
+        Json::Object(map) => Json::Object(map.into_iter().map(|(k, v)| (k, rounded(v))).collect()),
+        other => other,
     }
 }
 
@@ -56,6 +85,28 @@ degrees by default), +x turns right and +y looks down unless the camera inverts 
 click, at, entity}. They survive scene changes and reloads; a key held across one stays held.";
 const COLLIDERS: &str = "Draws colliders (green) and sensor areas (yellow) over the image, \
 invisible objects' too, as the editor's collider view does.";
+const TREE_FIELDS: &str = "Extra per-object fields: world_position, where its position (its \
+pivot) is in the world, which tells distances across parent groups; rotation (local, degrees, as \
+set_transform takes it); scale (local); dimensions (of its shape); visual_bounds, the world box \
+{min, max} of its shape and its children's, hidden ones too; collider_bounds, the world box \
+{min, max, center} of the collider the game uses (the 3D character body, the 3D collider or the \
+box collider), with sensor: true for areas and enabled: false when off; bounds, both boxes.";
+const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
+radians plus rotation_degrees, material, attributes, components, logic graph, animation clips; \
+empty (null) parts are left out) plus world {position, rotation_degrees, scale}, visual_bounds \
+and collider_bounds as oxy_scene describes them, components and can_add_components. The logic \
+graph is summarized by default: nodes maps each node's label (its operation, then its main \
+parameter in parentheses; a label repeated in the graph ends in #N, N being the node's index in \
+the stored graph) to {id, params}, params holding only the values that differ from the \
+operation's defaults (see oxy_catalog), and edges are text such as \
+\"event.input(reiniciar).exec -> character.teleport.exec\" (label.port -> label.port). Meshes \
+and convex/triangle collision geometry come as counts. graph=full and geometry=full give them as \
+stored, the form update_entity patches.";
+const CATALOG_DESCRIPTION: &str = "Catalog of logic nodes, components, shapes, interface \
+elements, presets and the value format. By default the nodes are brief (operation, label, \
+category, description) and categories lists their categories; then ask for the nodes you will \
+use with operations or category to get their ports with types and parameters with defaults \
+(only those nodes come back). Read it before building logic.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
@@ -65,6 +116,8 @@ pub fn definitions() -> Json {
     let inputs = json!({"type": "array", "items": {"type": "object"}, "description": INPUTS});
     let colliders = json!({"type": "boolean", "description": COLLIDERS});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
+    let offset = json!({"type": "integer", "minimum": 0, "description":
+        "Entries skipped (default 0): the answer's next_offset when more follow."});
     let tool = |name: &str, description: &str, properties: Json, required: Json| {
         json!({
             "name": name,
@@ -88,31 +141,66 @@ pub fn definitions() -> Json {
         ),
         tool(
             "oxy_scene",
-            "Object tree of a scene: ID, name, kind, shape, components, logic node count and children.",
-            json!({"project": project, "scene": scene}),
+            "Object tree of a scene: ID, name, kind, local position, shape, components, logic \
+             node count and children. fields adds world positions, sizes and boxes; root, depth, \
+             offset and limit read a big scene part by part.",
+            json!({"project": project, "scene": scene,
+                   "fields": {"type": "array", "items": {"type": "string", "enum": [
+                       "world_position", "rotation", "scale", "dimensions", "visual_bounds",
+                       "collider_bounds", "bounds"]}, "description": TREE_FIELDS},
+                   "root": {"type": "string", "description":
+                       "Lists this object's children instead of the scene's root objects; the \
+                        answer names it in root {id, name}."},
+                   "depth": {"type": "integer", "minimum": 0, "description":
+                       "Levels of children shown below the listed objects (0: none). Deeper \
+                        objects only show children_count. Default: every level."},
+                   "offset": offset,
+                   "limit": {"type": "integer", "minimum": 0, "description":
+                       "Listed objects at most (default 100); their children do not count."}}),
             json!([])
         ),
         tool(
             "oxy_entity",
-            "One object in full (its document JSON: transform in radians plus rotation_degrees, \
-             material, attributes, components, logic graph, animation clips) and the components \
-             it can still receive.",
+            ENTITY_DESCRIPTION,
             json!({"project": project, "scene": scene,
-                   "id": {"type": "string", "description": "Object ID."}}),
-            json!(["id"])
+                   "id": {"type": "string", "description": "Object ID."},
+                   "ids": {"type": "array", "items": {"type": "string"}, "description":
+                       "Several objects of the scene, answered as {objects: [...]}."},
+                   "fields": {"type": "array", "items": {"type": "string"}, "description":
+                       "Only these parts, besides id and name: top-level keys of the answer or \
+                        dotted paths such as character3d.actions, transform.position or \
+                        graph.edges (numbers index lists). A missing part is null."},
+                   "graph": {"type": "string", "enum": ["summary", "full"], "description":
+                       "The logic graph: summary (default) or full, as stored (node positions, \
+                        every parameter, edges by node ID)."},
+                   "geometry": {"type": "string", "enum": ["summary", "full"], "description":
+                       "Meshes and convex/triangle collision geometry: summary (default, counts \
+                        of vertices, edges, faces and triangles) or full."}}),
+            json!([])
         ),
         tool(
             "oxy_find",
-            "Finds objects by name (case-insensitive substring) in every scene.",
-            json!({"project": project, "text": {"type": "string"}}),
+            "Finds objects by name (case-insensitive substring) in every scene: {objects: \
+             [{scene, scene_name, id, name, kind}], total} plus next_offset when more follow.",
+            json!({"project": project, "text": {"type": "string"}, "offset": offset,
+                   "limit": {"type": "integer", "minimum": 0, "description":
+                       "Objects at most (default 50)."}}),
             json!(["text"])
         ),
         tool(
             "oxy_catalog",
-            "Catalog of logic nodes (operation ID, ports with types, parameters with defaults, \
-             description), components, shapes, interface elements, presets and the value format. \
-             Read it before building logic.",
-            json!({}),
+            CATALOG_DESCRIPTION,
+            json!({"category": {"type": "string", "description":
+                       "Only nodes of this category (see categories), in full."},
+                   "operations": {"type": "array", "items": {"type": "string"}, "description":
+                       "Only these operations, in full; an entry ending in \".\" takes every \
+                        operation starting with it, e.g. \"character.\"."},
+                   "brief": {"type": "boolean", "description":
+                       "Nodes as operation, label, category and description only. Default: true \
+                        unless category or operations is given."},
+                   "offset": offset,
+                   "limit": {"type": "integer", "minimum": 0, "description":
+                       "Nodes at most (default: all)."}}),
             json!([])
         ),
         tool(
@@ -292,8 +380,8 @@ set_material {entity, color?: [r,g,b,a] 0-1, texture?: asset ID, clear_texture?}
 - set_attribute {entity, name, value?} (no value removes); values are tagged, e.g. {\"Number\": 3}
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}
-- update_entity {entity, patch}: JSON merge patch over the object's document form (see \
-oxy_entity) for fields without a dedicated command
+- update_entity {entity, patch}: JSON merge patch over the object's document form (oxy_entity \
+with graph and geometry full) for fields without a dedicated command
 - add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
 to_node, to_port}
@@ -482,16 +570,29 @@ impl Tools {
     pub fn call(&mut self, name: &str, args: &Json) -> Result<Output, String> {
         match name {
             "oxy_status" => self.status(),
-            "oxy_catalog" => Ok(Output::json(query::catalog())),
-            "oxy_project" => self.read(args, "summary", |p, _| Ok(query::project_summary(p))),
-            "oxy_scene" => self.read(args, "scene_tree", query::scene_tree),
-            "oxy_entity" => {
-                let id = text_arg(args, "id").ok_or("Informe id")?;
-                self.read(args, "entity", move |p, scene| query::entity(p, scene, &id))
-            }
-            "oxy_find" => {
-                let text = text_arg(args, "text").ok_or("Informe text")?;
-                self.read(args, "find", move |p, _| Ok(query::find(p, &text)))
+            "oxy_catalog" => query::catalog_query(args).map(Output::json),
+            // Bad options fail before any editor or file is reached; live, the editor answers
+            // through the same query::answer.
+            "oxy_project" | "oxy_scene" | "oxy_entity" | "oxy_find" => {
+                let request = match name {
+                    "oxy_project" => "summary",
+                    "oxy_scene" => {
+                        query::TreeQuery::parse(args)?;
+                        "scene_tree"
+                    }
+                    "oxy_entity" => {
+                        query::EntityQuery::parse(args)?;
+                        "entity"
+                    }
+                    _ => {
+                        text_arg(args, "text").ok_or("Informe text")?;
+                        query::Page::parse(args, query::FIND_LIMIT)?;
+                        "find"
+                    }
+                };
+                self.read(args, request, |p, scene| {
+                    query::answer(p, scene, request, args)
+                })
             }
             "oxy_validate" => self.read(args, "validate", |p, _| {
                 Ok(match validate_project(p) {
@@ -907,6 +1008,208 @@ mod tests {
         assert!(inputs.contains("+y looks down"));
         assert_eq!(shot["inputs"], simulate["inputs"]);
         assert!(SIMULATE_DESCRIPTION.contains("game interface"));
+    }
+
+    #[test]
+    fn output_is_compact_json_with_rounded_floats() {
+        let output = Output::json(json!({
+            "noise": 0.4000000059604645,
+            "list": [1, -0.30000001192092896, 2.0, -0.00004],
+            "tiny": 0.000012345678,
+            "negative_zero": -0.0,
+            "big": 150000000000.25,
+            "nested": {"half": 0.00005, "text": "0.123456"},
+        }));
+        assert!(!output.text.contains('\n') && !output.text.contains(": "));
+        let value: Json = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "noise": 0.4,
+                "list": [1, -0.3, 2.0, -0.00004],
+                "tiny": 0.00001235,
+                "negative_zero": 0.0,
+                "big": 150000000000.25,
+                "nested": {"half": 0.00005, "text": "0.123456"},
+            })
+        );
+        assert!(value["list"][0].is_u64(), "integers stay integers");
+        assert!(
+            output.text.contains("\"negative_zero\":0.0"),
+            "{}",
+            output.text
+        );
+    }
+
+    #[test]
+    fn read_tools_document_paging_projection_and_summaries() {
+        let scene = schema("oxy_scene");
+        assert_eq!(
+            scene["fields"]["items"]["enum"],
+            json!([
+                "world_position",
+                "rotation",
+                "scale",
+                "dimensions",
+                "visual_bounds",
+                "collider_bounds",
+                "bounds"
+            ])
+        );
+        for option in ["fields", "root", "depth", "offset", "limit"] {
+            assert!(scene[option]["description"].is_string(), "{option}");
+        }
+        let entity = schema("oxy_entity");
+        for option in ["id", "ids", "fields", "graph", "geometry"] {
+            assert!(entity[option]["description"].is_string(), "{option}");
+        }
+        assert_eq!(entity["graph"]["enum"], json!(["summary", "full"]));
+        let required = |tool: &str| {
+            definitions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == tool)
+                .unwrap()["inputSchema"]["required"]
+                .clone()
+        };
+        assert_eq!(required("oxy_entity"), json!([]), "id or ids");
+        for option in ["offset", "limit"] {
+            assert!(schema("oxy_find")[option]["description"].is_string());
+        }
+        let catalog = schema("oxy_catalog");
+        for option in ["category", "operations", "brief", "offset", "limit"] {
+            assert!(catalog[option]["description"].is_string(), "{option}");
+        }
+        assert!(ENTITY_DESCRIPTION.contains("event.input(reiniciar).exec"));
+        assert!(TREE_FIELDS.contains("world_position") && TREE_FIELDS.contains("pivot"));
+        assert!(CATALOG_DESCRIPTION.contains("brief"));
+        assert!(APPLY_DESCRIPTION.contains("graph and geometry full"));
+    }
+
+    #[test]
+    fn reads_on_files_take_their_options_and_reject_bad_ones_first() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-reads-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Leituras", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        let created = command::apply(
+            &mut project,
+            &start,
+            &command::parse(&json!([
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Seção",
+                 "position": [10.0, 0.0, 0.0]},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Plataforma 1", "parent": "$0"},
+                {"op": "set_transform", "entity": "$1", "position": [0.1, 0.2, 0.3]},
+                {"op": "add_component", "entity": "$1", "component": "collider3d"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Plataforma 2", "parent": "$0"},
+                {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$1", "operation": "debug.message"},
+                {"op": "connect", "entity": "$1", "from_node": "$5", "from_port": "exec",
+                 "to_node": "$6", "to_port": "exec"},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let platform = created[1].created[0].clone();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut read = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let tree = read(
+            "oxy_scene",
+            json!({"fields": ["world_position", "collider_bounds"], "depth": 1}),
+        )
+        .unwrap();
+        let section = &tree["objects"][0];
+        assert_eq!(section["world_position"], json!([10.0, 0.0, 0.0]));
+        let first = &section["children"][0];
+        assert_eq!(first["world_position"], json!([10.1, 0.2, 0.3]), "rounded");
+        assert_eq!(first["collider_bounds"]["max"], json!([10.6, 0.7, 0.8]));
+        assert_eq!(tree["total"], 1);
+        let inside = read(
+            "oxy_scene",
+            json!({"root": created[0].created[0], "limit": 1}),
+        )
+        .unwrap();
+        assert_eq!(inside["objects"].as_array().unwrap().len(), 1);
+        assert_eq!(inside["next_offset"], 1);
+
+        let entity = read("oxy_entity", json!({"id": platform})).unwrap();
+        assert_eq!(
+            entity["graph"]["edges"],
+            json!(["event.scene_start.exec -> debug.message(Ação executada).exec"])
+        );
+        assert_eq!(entity["world"]["position"], json!([10.1, 0.2, 0.3]));
+        let both = read(
+            "oxy_entity",
+            json!({"ids": [platform, created[4].created[0]], "fields": ["world.position"]}),
+        )
+        .unwrap();
+        assert_eq!(both["objects"][1]["name"], "Plataforma 2");
+        assert_eq!(
+            both["objects"][1]["world"]["position"],
+            json!([10.0, 0.0, 0.0])
+        );
+        let full = read("oxy_entity", json!({"id": platform, "graph": "full"})).unwrap();
+        assert!(full["graph"]["nodes"][0]["position"].is_array());
+
+        let found = read("oxy_find", json!({"text": "plataforma", "limit": 1})).unwrap();
+        assert_eq!(found["objects"][0]["name"], "Plataforma 1");
+        assert_eq!(
+            (found["total"].clone(), found["next_offset"].clone()),
+            (json!(2), json!(1))
+        );
+        let catalog = Tools::default()
+            .call("oxy_catalog", &json!({"operations": ["debug.message"]}))
+            .unwrap();
+        let catalog: Json = serde_json::from_str(&catalog.text).unwrap();
+        assert_eq!(catalog["nodes"][0]["params"][0]["id"], "message");
+
+        // Bad options are refused before the project is looked for.
+        for (tool, args, expected) in [
+            ("oxy_scene", json!({"fields": ["cor"]}), "fields inválido"),
+            ("oxy_scene", json!({"limit": -1}), "limit inválido"),
+            ("oxy_entity", json!({}), "Informe id ou ids"),
+            (
+                "oxy_entity",
+                json!({"id": "x", "graph": "tudo"}),
+                "graph inválido",
+            ),
+            (
+                "oxy_entity",
+                json!({"id": "x", "fields": ["cor"]}),
+                "Campo desconhecido",
+            ),
+            ("oxy_find", json!({}), "Informe text"),
+            (
+                "oxy_find",
+                json!({"text": "a", "offset": "um"}),
+                "offset inválido",
+            ),
+            (
+                "oxy_catalog",
+                json!({"category": "Mágica"}),
+                "Categoria desconhecida",
+            ),
+        ] {
+            let mut args = args;
+            args["project"] = json!("Z:/nao/existe");
+            let error = Tools::default().call(tool, &args).unwrap_err();
+            assert!(error.contains(expected), "{tool}: {error}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

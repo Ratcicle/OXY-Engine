@@ -16,7 +16,10 @@ const INSTRUCTIONS: &str = "OXY Engine is a desktop game editor (Rust). A projec
 (2D or 3D); a scene is a flat list of objects with parent links; objects have a transform, an \
 optional shape, material, attributes, components (colliders, character, platform, camera \
 control, 2D movement), a logic graph of nodes and animation clips. Start with oxy_status, then \
-oxy_project and oxy_scene. Read oxy_catalog before building logic. Edit only through oxy_apply \
+oxy_project and oxy_scene. Read oxy_catalog before building logic. Reads are compact JSON with \
+floats rounded to 4 decimals: long lists come in pages (limit, offset, next_offset), oxy_entity \
+summarizes logic and geometry unless asked in full, and world positions and boxes (oxy_scene \
+fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
 (atomic batches, validated with the editor's own rules). When the project is open in the editor \
 your edits appear live and the person can undo them; you never save there, the person does. \
 After changes, check them with oxy_simulate and oxy_screenshot. Messages from the engine are in \
@@ -186,7 +189,7 @@ mod tests {
                         "status" => json!({"project": {"name": "Ao vivo"}}),
                         "apply" => json!({"applied": [{"op": "create_entity", "created": ["x"]}],
                                           "commands": request["params"]["commands"]}),
-                        _ => json!({}),
+                        _ => json!({"method": method, "params": request["params"]}),
                     };
                     methods.push(method);
                     writeln!(writer, "{}", json!({"id": request["id"], "result": result})).unwrap();
@@ -207,6 +210,36 @@ mod tests {
         // SAFETY: this test is the only one that reads OXY_AGENT_DIR in this process.
         unsafe { std::env::set_var("OXY_AGENT_DIR", &dir) };
         let mut tools = tools::Tools::default();
+        // Reads reach the editor with their options as given, for the editor to answer through
+        // the same query::answer as files; bad options never reach it.
+        let mut echo = |tool: &str, args: Json| {
+            let output = tools.call(tool, &args).unwrap();
+            serde_json::from_str::<Json>(&output.text).unwrap()
+        };
+        let tree = echo(
+            "oxy_scene",
+            json!({"fields": ["bounds"], "root": "grupo", "depth": 1, "limit": 5}),
+        );
+        assert_eq!(tree["method"], "scene_tree");
+        assert_eq!(
+            tree["params"],
+            json!({"fields": ["bounds"], "root": "grupo", "depth": 1, "limit": 5})
+        );
+        let entity = echo(
+            "oxy_entity",
+            json!({"ids": ["a", "b"], "fields": ["world"], "graph": "full"}),
+        );
+        assert_eq!(entity["method"], "entity");
+        assert_eq!(
+            entity["params"],
+            json!({"ids": ["a", "b"], "fields": ["world"], "graph": "full"})
+        );
+        let found = echo("oxy_find", json!({"text": "porta", "offset": 2}));
+        assert_eq!(found["params"], json!({"text": "porta", "offset": 2}));
+        let error = tools
+            .call("oxy_entity", &json!({"id": "a", "geometry": "toda"}))
+            .unwrap_err();
+        assert!(error.contains("geometry inválido"), "{error}");
         let output = tools
             .call(
                 "oxy_apply",
@@ -219,6 +252,11 @@ mod tests {
         drop(tools);
         let methods = server.join().unwrap();
         assert!(methods.contains(&"status".to_owned()) && methods.contains(&"apply".to_owned()));
+        assert_eq!(
+            methods.iter().filter(|m| *m == "entity").count(),
+            1,
+            "{methods:?}"
+        );
         let result: Json = serde_json::from_str(&output.text).unwrap();
         assert_eq!(result["commands"][0]["scene"], "cena-1");
         assert!(

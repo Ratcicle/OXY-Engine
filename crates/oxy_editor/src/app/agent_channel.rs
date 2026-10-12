@@ -282,12 +282,6 @@ impl Editor {
         method: &str,
         params: &Json,
     ) -> Result<Json, String> {
-        let text = |key: &str| {
-            params[key]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| format!("Parâmetro {key} ausente"))
-        };
         match method {
             "status" => Ok(json!({
                 "editor": env!("OXY_APP_VERSION"),
@@ -311,23 +305,12 @@ impl Editor {
                 self.agent_scene(params)?;
                 serde_json::to_value(&self.state.project).map_err(|e| e.to_string())
             }
-            "summary" => {
-                self.agent_scene(params)?;
-                Ok(query::project_summary(&self.state.project))
-            }
-            "scene_tree" => {
+            // The same answers, with the same arguments, as the MCP server gives on files.
+            "summary" | "scene_tree" | "entity" | "find" => {
                 let scene = self.agent_scene(params)?;
-                query::scene_tree(&self.state.project, &scene)
+                query::answer(&self.state.project, &scene, method, params)
             }
-            "entity" => {
-                let scene = self.agent_scene(params)?;
-                query::entity(&self.state.project, &scene, &text("id")?)
-            }
-            "find" => {
-                self.agent_scene(params)?;
-                Ok(query::find(&self.state.project, &text("text")?))
-            }
-            "catalog" => Ok(query::catalog()),
+            "catalog" => query::catalog_query(params),
             "validate" => {
                 self.agent_scene(params)?;
                 Ok(match validate_project(&self.state.project) {

@@ -168,7 +168,7 @@ fn queries_describe_the_project_for_agents() {
     let hero = command::apply(&mut project, &scene, &commands).unwrap()[0].created[0].clone();
     let summary = query::project_summary(&project);
     assert_eq!(summary["scenes"][0]["kind"], "3d");
-    let tree = query::scene_tree(&project, &scene).unwrap();
+    let tree = query::scene_tree(&project, &scene, &query::TreeQuery::default()).unwrap();
     let names: Vec<_> = tree["objects"]
         .as_array()
         .unwrap()
@@ -178,7 +178,10 @@ fn queries_describe_the_project_for_agents() {
     assert!(names.contains(&"Herói".to_owned()), "{names:?}");
     let entity = query::entity(&project, &scene, &hero).unwrap();
     assert_eq!(entity["id"], hero.as_str());
-    assert_eq!(query::find(&project, "herói")[0]["id"], hero.as_str());
+    assert_eq!(
+        query::find(&project, "herói", query::Page::ALL)["objects"][0]["id"],
+        hero.as_str()
+    );
     let catalog = query::catalog();
     let nodes = catalog["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), oxy_core::graph::registry().len());

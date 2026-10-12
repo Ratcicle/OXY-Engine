@@ -1,9 +1,9 @@
 //! Live agent channel in the real editor: a client finds the editor through its discovery
-//! file, edits the open project, reads it back, captures the viewport (with the collider view
-//! too, also while the game runs), is refused edits while the game is running, and undoes its
-//! own step.
+//! file, edits the open project, reads it back (with read options answering as they do on
+//! files), captures the viewport (with the collider view too, also while the game runs), is
+//! refused edits while the game is running, and undoes its own step.
 use super::*;
-use oxy_core::document::Value;
+use oxy_core::{document::Value, query};
 use serde_json::{Value as Json, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -83,6 +83,35 @@ fn client(dir: PathBuf, requests: Vec<(&'static str, Json)>) {
     *results().lock().unwrap() = Some(answers);
 }
 
+/// Reads with options (paging, world boxes, parts of objects, brief catalog). Answered live,
+/// they must equal the same reads on the editor's document, as the MCP server makes on files.
+fn live_reads(editor: &Editor) -> Vec<(&'static str, Json)> {
+    let scene = editor.scene();
+    let first = scene
+        .entities
+        .first()
+        .map(|e| e.id.clone())
+        .unwrap_or_default();
+    let scripted = scene
+        .entities
+        .iter()
+        .find(|e| !e.graph.nodes.is_empty())
+        .map_or_else(|| first.clone(), |e| e.id.clone());
+    vec![
+        ("find", json!({"text": "grupo do agente", "limit": 1})),
+        (
+            "scene_tree",
+            json!({"fields": ["world_position", "bounds"], "depth": 1, "limit": 3}),
+        ),
+        (
+            "entity",
+            json!({"ids": [first, scripted],
+                   "fields": ["world", "graph", "collider_bounds", "visual_bounds"]}),
+        ),
+        ("catalog", json!({"operations": ["event."]})),
+    ]
+}
+
 fn take_results() -> Result<Results, String> {
     results()
         .lock()
@@ -107,31 +136,29 @@ impl NativeQa {
             }
             "agent_edit" => {
                 let dir = self.agent_dir();
-                std::thread::spawn(move || {
-                    client(
-                        dir,
-                        vec![
-                            ("status", json!({})),
-                            (
-                                "apply",
-                                json!({"commands": [
-                                    {"op": "create_entity", "kind": {"type": "group"},
-                                     "name": "Grupo do agente"},
-                                    {"op": "set_attribute", "entity": "$0", "name": "vida",
-                                     "value": {"Number": 3.0}},
-                                ]}),
-                            ),
-                            ("find", json!({"text": "grupo do agente"})),
-                            ("screenshot", json!({})),
-                            ("screenshot", json!({"colliders": true})),
-                            (
-                                "apply",
-                                json!({"commands": [{"op": "rename_entity",
-                                    "entity": "inexistente", "name": "X"}]}),
-                            ),
-                        ],
-                    )
-                });
+                let mut requests = vec![
+                    ("status", json!({})),
+                    (
+                        "apply",
+                        json!({"commands": [
+                            {"op": "create_entity", "kind": {"type": "group"},
+                             "name": "Grupo do agente"},
+                            {"op": "set_attribute", "entity": "$0", "name": "vida",
+                             "value": {"Number": 3.0}},
+                        ]}),
+                    ),
+                ];
+                requests.extend(live_reads(&self.editor));
+                requests.extend([
+                    ("screenshot", json!({})),
+                    ("screenshot", json!({"colliders": true})),
+                    (
+                        "apply",
+                        json!({"commands": [{"op": "rename_entity",
+                            "entity": "inexistente", "name": "X"}]}),
+                    ),
+                ]);
+                std::thread::spawn(move || client(dir, requests));
             }
             "agent_edited" => {
                 let answers = take_results()?;
@@ -172,8 +199,26 @@ impl NativeQa {
                         self.editor.qa_undo_label()
                     ));
                 }
-                if get("find", 0)??[0]["id"] != json!(id) {
+                if get("find", 0)??["objects"][0]["id"] != json!(id) {
                     return Err("Busca não encontrou o objeto do agente".into());
+                }
+                let scene = self.editor.scene().id.clone();
+                for (method, params) in live_reads(&self.editor) {
+                    let live = get(method, 0)??;
+                    let local = query::answer(&self.editor.state.project, &scene, method, &params)?;
+                    // Through text, as the live answer came over the channel.
+                    let local: Json =
+                        serde_json::from_str(&local.to_string()).map_err(|e| e.to_string())?;
+                    if live != local {
+                        return Err(format!(
+                            "Leitura ao vivo de {method} difere da leitura do documento: \
+                             {live} / {local}"
+                        ));
+                    }
+                }
+                let tree = get("scene_tree", 0)??;
+                if tree["objects"][0].get("world_position").is_none() || tree["total"].is_null() {
+                    return Err(format!("Árvore sem as opções pedidas: {tree}"));
                 }
                 let shot = get("screenshot", 0)??;
                 if shot["png_base64"].as_str().is_none_or(|s| s.len() < 1000) {
