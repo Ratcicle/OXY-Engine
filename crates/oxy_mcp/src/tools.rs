@@ -98,9 +98,13 @@ const CHECK_REPLAY: &str = "Runs a second copy of the game alongside, on the sam
 seed, and compares the two states after every step (a few times the work of a plain run): the \
 answer adds replay {identical, steps (compared), first_difference? {time, object? {id, name}, \
 part}}, part being what differed first (transform, visible, attributes.<name>, document, \
-character, animation, tasks, random, variables.<name> (a game variable)…; exists: only one copy \
-has the object; order: both have it, in another scene order). identical: false \
+character, animation, tasks, random, variables.<name> (a game variable), save…; exists: only one \
+copy has the object; order: both have it, in another scene order). identical: false \
 means the engine did not repeat itself: tell the person, it is not a fault of the logic.";
+const SAVE: &str = "The progress earlier runs saved, as a returning player has it (absent: a \
+fresh install): {variable: value}, a persistent game variable by ID or name (\"$N\" from setup \
+too), \"name · key\" for the value of a key, with a plain or tagged value of its type. Unknown \
+and non-persistent variables are refused. A report's save goes here as it is, to chain runs.";
 const TREE_FIELDS: &str = "Extra per-object fields: world_position, where its position (its \
 pivot) is in the world, which tells distances across parent groups; rotation (local, degrees, as \
 set_transform takes it); scale (local); dimensions (of its shape); visual_bounds, the world box \
@@ -146,6 +150,7 @@ pub fn definitions() -> Json {
     let seed = json!({"type": "integer", "minimum": 0, "maximum": random::MAX_SEED,
         "description": SEED});
     let check_replay = json!({"type": "boolean", "description": CHECK_REPLAY});
+    let save = json!({"type": "object", "description": SAVE});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
     let offset = json!({"type": "integer", "minimum": 0, "description":
         "Entries skipped (default 0): the answer's next_offset when more follow."});
@@ -403,7 +408,8 @@ pub fn definitions() -> Json {
                        "Also returns the game camera view at the end, as oxy_screenshot view=game."},
                    "colliders": colliders,
                    "seed": seed,
-                   "check_replay": check_replay}),
+                   "check_replay": check_replay,
+                   "save": save}),
             json!(["seconds"])
         ),
         tool(
@@ -425,6 +431,7 @@ pub fn definitions() -> Json {
                        "As in oxy_simulate: stops the run early; the capture is taken then."},
                    "seed": seed,
                    "check_replay": check_replay,
+                   "save": save,
                    "colliders": colliders,
                    "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
                        "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
@@ -592,9 +599,9 @@ speed_multiplier?, conveyor?: [x,y,z] m/s, conveyor_space?: World|Local}; update
 {surface, and the same fields but preset}; delete_surface {surface}, refused while used. Assign \
 a surface with update_entity: physics3d.surface or character3d.body.surface.
 - Game variables hold values for the whole game, kept across scene changes and reloads until \
-the run ends (oxy_project lists them). create_variable {name, value, persistent?: bool (marks it \
-to be kept between runs; nothing is saved between runs yet)}: value is its initial value and \
-gives its type (Number, Text, Bool, Vector2 or Vector3; objects and surfaces are refused): a \
+the run ends (oxy_project lists them). create_variable {name, value, persistent?: bool (kept \
+between runs: save.write saves it and the next run starts from it)}: value is its initial value \
+and gives its type (Number, Text, Bool, Vector2 or Vector3; objects and surfaces are refused): a \
 plain number, text or true/false by its form, a vector tagged ({\"Vector3\": [0, 0, 0]}); \
 answers its ID. update_variable {variable, name?, value?, persistent?}: a plain value is read as \
 the variable's type, another type takes a tagged value; delete_variable {variable}, refused \
@@ -604,7 +611,12 @@ up to 4096 bytes. Logic: variable.get (value) and variable.set (exec, value of t
 type, else the node stops with an error); their variable parameter (ref variable) takes the ID \
 or the name and stores the ID. Their key (text, param or input) keeps one value per key, such as \
 scene.current.name for one value per scene: empty, the variable's own value; a key never \
-written reads the initial value; up to 1024 keys per variable, each up to 4096 bytes.
+written reads the initial value; up to 1024 keys per variable, each up to 4096 bytes. \
+Progress: save.write (exec) saves every persistent variable with its keys, save.clear (exec) \
+puts them back at their initial values and erases the progress, save.state (exists: bool) says \
+whether there is any; nothing is saved without save.write. The exported game keeps it in \
+%APPDATA%\\OXY Engine\\Jogos\\<project id>\\progresso.json, the editor test in memory until \
+another project opens; oxy_simulate takes and reports it (save, saves).
 Project, scene, input action, surface and variable commands take no `scene`; the others accept \
 it, and the tool's `scene` fills it when absent (for copy_entities, the scene copied from).";
 
@@ -644,7 +656,11 @@ the game interface at the end (ui: texts with their values, bars, buttons), the 
 objects and the game variables at the end (variables: {name: tagged value, as {\"Number\": 3}}, \
 \"name · key\" for the value of a key; up to 300, the variables' own values before the keys', \
 the rest counted in truncated; left out when the project has none). Each run starts the \
-variables at their initial values. Inputs use the project's input actions, by ID or name (see oxy_project). To test \
+variables at their initial values, the persistent ones at `save` when given. save.write and \
+save.clear never touch the disk: saves lists them [{time, kind: write|clear, values (as \
+variables)}] and save is the progress at the end in the shape the save input takes (absent \
+when there is none), so a run can start where another left off. Inputs use the project's \
+input actions, by ID or name (see oxy_project). To test \
 one section without editing the project, use setup (commands on the copy, update_variable to \
 start a variable elsewhere), spawn (place the player) and until (stop when something happens, a \
 variable reaching a value included). Draws repeat: random.number takes them from seed \
@@ -659,7 +675,7 @@ seconds rounded to 0.1 ms. Set screenshot=true to also get the game camera view 
 const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
 the editor viewport as the person sees it, with the collider view when colliders is set. Every \
 other view first runs the game on an in-memory copy for `seconds`, with inputs (and setup, spawn, \
-until and seed as in oxy_simulate), then captures: game (the default on files) through the game \
+until, seed and save as in oxy_simulate), then captures: game (the default on files) through the game \
 camera, and lists the game interface as ui like oxy_simulate, since the image leaves out texts, \
 buttons and bars (ui: false leaves the list out); free through a perspective camera at eye \
 looking at target (3D scenes); top and side through orthographic views framing ids: top \
@@ -1168,6 +1184,10 @@ impl Tools {
                 .map_err(invalid("Semente (seed) inválida"))?
                 .unwrap_or_default(),
             check_replay: args["check_replay"].as_bool() == Some(true),
+            save: arg("save")
+                .map(headless::SimulationRequest::read_save)
+                .transpose()
+                .map_err(invalid("Progresso salvo (save) inválido"))?,
         })
     }
 
@@ -1354,6 +1374,13 @@ mod tests {
         assert!(replay.contains("first_difference") && replay.contains("part"));
         assert!(SIMULATE_DESCRIPTION.contains("state_hash"));
         assert!(SCREENSHOT_DESCRIPTION.contains("check_replay"));
+        // Saved progress goes in alike and comes back in the same shape.
+        assert_eq!(shot["save"], simulate["save"]);
+        assert_eq!(simulate["save"]["type"], "object");
+        let save = simulate["save"]["description"].as_str().unwrap();
+        assert!(save.contains("\"name · key\"") && save.contains("chain runs"));
+        assert!(SIMULATE_DESCRIPTION.contains("saves lists them"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("seed and save as in oxy_simulate"));
         // Look units and signs, and the same inputs in both tools.
         let inputs = shot["inputs"]["description"].as_str().unwrap();
         assert!(inputs.contains("sensitivity") && inputs.contains("+x turns right"));
@@ -2099,6 +2126,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report["variables"]["Moedas"], json!({"Number": 16.0}));
+        // A returning player's progress, saved again by logic setup adds: only Recorde is kept
+        // between runs, and the report's save chains into the next run.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "save": {"recorde": 7}, "setup": [
+                {"op": "add_node", "entity": counter, "operation": "event.scene_start"},
+                {"op": "add_node", "entity": counter, "operation": "save.write"},
+                {"op": "connect", "entity": counter, "from_node": "$0", "from_port": "exec",
+                 "to_node": "$1", "to_port": "exec"},
+            ]}),
+        )
+        .unwrap();
+        let saves = report["saves"].as_array().unwrap();
+        assert_eq!(saves.len(), 1, "{report}");
+        assert_eq!(saves[0]["time"], 0.0);
+        assert_eq!(saves[0]["kind"], "write");
+        assert_eq!(saves[0]["values"], json!({"Recorde": {"Number": 7.0}}));
+        assert_eq!(report["save"], json!({"Recorde": {"Number": 7.0}}));
+        let chained = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "save": report["save"]}),
+        )
+        .unwrap();
+        assert_eq!(chained["variables"]["Recorde"], json!({"Number": 7.0}));
+        assert!(chained.get("saves").is_none(), "{chained}");
+        let error = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "save": {"Moedas": 1}}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("save: a variável Moedas não é salva entre partidas"),
+            "{error}"
+        );
+        let error = call("oxy_simulate", json!({"seconds": 0.1, "save": [1]})).unwrap_err();
+        assert!(
+            error.starts_with("Progresso salvo (save) inválido"),
+            "{error}"
+        );
         let error = call(
             "oxy_apply",
             json!({"commands": [{"op": "delete_variable", "variable": "Moedas"}]}),

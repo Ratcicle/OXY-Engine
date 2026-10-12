@@ -62,6 +62,12 @@ impl Topic {
             "variable.set" => {
                 "Crie a variável em Variáveis do jogo, na barra da Lógica, e escolha-a no nó. Conecte uma saída de execução à entrada Executar e forneça um Novo valor do tipo da variável."
             }
+            "save.write" | "save.clear" => {
+                "Marque as variáveis com Salva entre partidas em Variáveis do jogo, na barra da Lógica. Conecte uma saída de execução à entrada Executar."
+            }
+            "save.state" => {
+                "Não precisa de configuração. Ligue Existe a uma entrada booleana, como a Condição de Se / Senão; sozinho, o nó não inicia um comportamento."
+            }
             "scene.current" => {
                 "Não precisa de configuração. Ligue Cena à entrada Cena de Mudar de cena, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
             }

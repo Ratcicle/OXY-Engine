@@ -1,5 +1,5 @@
-//! Operations about the game as a whole rather than one object: its variables and the scene
-//! running.
+//! Operations about the game as a whole rather than one object: its variables, the progress
+//! saved between runs and the scene running.
 use super::*;
 pub(super) fn definitions() -> Vec<OperationDef> {
     use PortType::*;
@@ -31,6 +31,30 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             ],
         },
         op(
+            "save.write",
+            "Salvar progresso",
+            "Jogo",
+            true,
+            vec![],
+            vec![],
+        ),
+        op(
+            "save.clear",
+            "Apagar progresso",
+            "Jogo",
+            true,
+            vec![],
+            vec![],
+        ),
+        op(
+            "save.state",
+            "Ler progresso salvo",
+            "Jogo",
+            false,
+            vec![],
+            vec![port("exists", "Existe", Bool)],
+        ),
+        op(
             "scene.current",
             "Cena atual",
             "Jogo",
@@ -45,12 +69,27 @@ pub fn game_help(id: &str) -> Option<(&'static str, &'static str, &'static str)>
         "variable.get" => (
             "Fornece o valor atual de uma variável do jogo, que vale para o projeto todo e continua o mesmo ao mudar ou reiniciar a cena.",
             "Ao iniciar a cena, leia Moedas e grave o valor num atributo ligado a um texto da interface: a contagem segue de uma cena para outra.",
-            "Sem chave, o nó lê o valor único da variável. Com uma chave, lê o valor guardado para ela; uma chave em que nada foi gravado dá o valor inicial. Ligue o Nome de Cena atual à Chave para ler um valor por cena. A cada partida, as variáveis começam no valor inicial: ao Jogar de novo no editor e ao abrir o jogo.",
+            "Sem chave, o nó lê o valor único da variável. Com uma chave, lê o valor guardado para ela; uma chave em que nada foi gravado dá o valor inicial. Ligue o Nome de Cena atual à Chave para ler um valor por cena. A cada partida, as variáveis começam no valor inicial: ao Jogar de novo no editor e ao abrir o jogo; as marcadas como Salva entre partidas começam no progresso salvo, quando há (veja Salvar progresso).",
         ),
         "variable.set" => (
             "Muda o valor de uma variável do jogo. O novo valor vale para toda a lógica do projeto e continua depois de mudar ou reiniciar a cena.",
             "Ao coletar uma moeda, some 1 ao valor de Moedas e grave o resultado; a cena seguinte lê o total.",
             "O Novo valor precisa ser do tipo da variável, o do valor inicial dela: outro tipo interrompe o comportamento do objeto com erro. Com uma chave, o nó grava um valor só dela, e o valor único e as outras chaves ficam como estão; ligue o Nome de Cena atual à Chave para guardar um valor por cena. Cada variável guarda até 1024 chaves, e textos e chaves têm até 4096 bytes.",
+        ),
+        "save.write" => (
+            "Salva as variáveis do jogo marcadas como Salva entre partidas, com todas as chaves: na próxima vez que o jogo abrir, elas começam nesses valores.",
+            "Depois de Alterar variável do jogo gravar um novo recorde, ligue Continuar a Salvar progresso: o recorde volta na próxima partida.",
+            "Nada é salvo sem este nó: mudar uma variável não basta. As variáveis que não são salvas entre partidas ficam de fora. No teste do editor, o progresso vai para o progresso do teste, que dura até abrir outro projeto, nunca para o do jogo exportado. Salve em momentos marcados, como ao concluir uma etapa, e não a cada passo.",
+        ),
+        "save.clear" => (
+            "Apaga o progresso salvo e volta as variáveis salvas entre partidas ao valor inicial, com todas as chaves.",
+            "Num botão Recomeçar do menu, ligue Ao clicar a Apagar progresso: o jogo volta a ser como na primeira vez.",
+            "No jogo exportado, não há como desfazer. As variáveis que não são salvas entre partidas continuam como estão. No teste do editor, apaga só o progresso do teste.",
+        ),
+        "save.state" => (
+            "Fornece Existe: verdadeiro quando há progresso salvo, de uma partida anterior ou desta.",
+            "Ao iniciar a cena do menu, ligue Existe à Condição de Se / Senão para mostrar o botão Continuar só quando há progresso.",
+            "Existe passa a verdadeiro depois de Salvar progresso e a falso depois de Apagar progresso. Para ler os valores, use Ler variável do jogo: as variáveis salvas já começam neles.",
         ),
         "scene.current" => (
             "Fornece a cena em que o objeto está: o identificador, para Mudar de cena, e o nome, para chaves e textos.",

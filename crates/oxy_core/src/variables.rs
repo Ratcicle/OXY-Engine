@@ -7,7 +7,7 @@ use crate::{
     input_actions::{Use, every_entity},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Most variables a project declares.
 pub const MAX_VARIABLES: usize = 256;
@@ -93,6 +93,46 @@ pub fn label(name: &str, key: &str) -> String {
         name.into()
     } else {
         format!("{name} {KEY_SEPARATOR} {key}")
+    }
+}
+
+/// Values by (variable, key) as reports name them ([`label`]): at most `limit`, the variables'
+/// own values first and then the keys', each group in label order, with how many were left
+/// out. Values of variables the project lacks are left out.
+pub fn labeled<'a>(
+    project: &Project,
+    values: impl IntoIterator<Item = (&'a (Id, String), &'a Value)>,
+    limit: usize,
+) -> (BTreeMap<String, Value>, usize) {
+    let names: HashMap<&str, &str> = project
+        .variables
+        .iter()
+        .map(|v| (v.id.as_str(), v.name.as_str()))
+        .collect();
+    let mut labeled: Vec<(bool, String, &Value)> = values
+        .into_iter()
+        .filter_map(|((id, key), value)| {
+            let name = names.get(id.as_str())?;
+            Some((!key.is_empty(), label(name, key), value))
+        })
+        .collect();
+    labeled.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let left_out = labeled.len().saturating_sub(limit);
+    let values = labeled
+        .into_iter()
+        .take(limit)
+        .map(|(_, label, value)| (label, value.clone()))
+        .collect();
+    (values, left_out)
+}
+
+/// The variable (an ID or a name) and the key a [`label`] names; no separator, the variable's
+/// own value, the empty key.
+pub fn split_label(text: &str) -> (&str, &str) {
+    match text.split_once(KEY_SEPARATOR) {
+        // label() puts one space on each side of the separator.
+        Some((name, key)) => (name.trim(), key.strip_prefix(' ').unwrap_or(key)),
+        None => (text, ""),
     }
 }
 

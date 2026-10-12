@@ -6,6 +6,7 @@ use crate::graph_ui::{catalog_docked, categories, graph_meta, operation_descript
 use crate::icons::{self, Icon};
 use oxy_core::graph::Graph;
 use oxy_core::input_actions;
+pub(super) use variables::value_text;
 
 #[derive(Default)]
 pub(super) struct LogicUi {

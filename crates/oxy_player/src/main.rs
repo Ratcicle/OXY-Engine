@@ -4,11 +4,15 @@
 mod native_qa;
 use egui::{Color32, Rect, Sense, Vec2};
 use oxy_core::{
-    audio, persistence, random,
+    audio,
+    document::Project,
+    persistence, random,
     runtime::{Runtime, RuntimeOptions},
+    save::{self, SaveRequest, SaveSlot},
 };
 use oxy_render::{CameraState, GameUi, Renderer};
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -51,6 +55,8 @@ struct Player {
     last_update: Instant,
     last_size: Vec2,
     show_diagnostics: bool,
+    /// Where this game's progress lives and what it holds now; none when it cannot be saved.
+    progress: Option<(PathBuf, SaveSlot)>,
 }
 impl Player {
     fn new(cc: &eframe::CreationContext<'_>, path: PathBuf) -> Self {
@@ -72,6 +78,7 @@ impl Player {
             last_update: Instant::now(),
             last_size: Vec2::ZERO,
             show_diagnostics: false,
+            progress: None,
         };
         if let Some(renderer) = &mut player.renderer {
             renderer.show_grid = false;
@@ -87,17 +94,27 @@ impl Player {
     fn reload(&mut self) {
         // Every run draws differently; the low half of a v4 UUID has its fixed bits above the
         // 53 kept.
-        let options = RuntimeOptions {
-            seed: uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED,
-            ..Default::default()
-        };
+        let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
+        let mut notes = Vec::new();
         let loaded = persistence::load_project(&self.path)
             .map_err(String::from)
-            .and_then(|project| Runtime::with_options(&project, &project.start_scene, options));
+            .and_then(|project| {
+                // The progress is read before the run, which starts from it.
+                let (progress, problems) = load_progress(&project);
+                notes = problems;
+                let options = RuntimeOptions {
+                    seed,
+                    save: progress.as_ref().map(|(_, slot)| slot.clone()),
+                    ..Default::default()
+                };
+                Runtime::with_options(&project, &project.start_scene, options)
+                    .map(|runtime| (runtime, progress))
+            });
         match loaded {
-            Ok(runtime) => {
+            Ok((runtime, progress)) => {
                 self.error = None;
-                self.diagnostics.clear();
+                self.diagnostics = notes;
+                self.progress = progress;
                 for (action, key) in &runtime.project().input_bindings {
                     if let Err(error) = oxy_core::input_actions::check_key(key) {
                         self.diagnostics.push(format!("Ação {action}: {error}"));
@@ -252,6 +269,14 @@ impl eframe::App for Player {
         for error in new_diagnostics {
             self.push_diagnostic(error)
         }
+        if let Some(runtime) = &mut self.runtime {
+            let requests = std::mem::take(&mut runtime.save_requests);
+            if !requests.is_empty()
+                && let Err(error) = store_progress(&mut self.progress, runtime.project(), requests)
+            {
+                self.push_diagnostic(error);
+            }
+        }
         if self.runtime.as_ref().is_some_and(|runtime| runtime.paused) {
             egui::Window::new("Jogo pausado")
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
@@ -321,6 +346,65 @@ impl eframe::App for Player {
     }
 }
 
+/// The folder games keep their progress in: `$OXY_SAVE_DIR` when set (tests and QA point it to
+/// a temporary folder), else `%APPDATA%\OXY Engine\Jogos`, which an exported game can write
+/// even when its own folder is read-only. Each game has its own folder inside (see
+/// [`save::path`]).
+fn save_folder(override_dir: Option<OsString>, appdata: Option<OsString>) -> Option<PathBuf> {
+    let set = |dir: &OsString| !dir.is_empty();
+    override_dir.filter(set).map(PathBuf::from).or_else(|| {
+        appdata
+            .filter(set)
+            .map(|dir| PathBuf::from(dir).join("OXY Engine").join("Jogos"))
+    })
+}
+/// The progress of `project` in the folder this process saves games in (see [`save_folder`]).
+fn load_progress(project: &Project) -> (Option<(PathBuf, SaveSlot)>, Vec<String>) {
+    let folder = save_folder(
+        std::env::var_os("OXY_SAVE_DIR"),
+        std::env::var_os("APPDATA"),
+    );
+    load_progress_in(folder, project)
+}
+/// The progress of `project` under `folder`: where it lives and what it holds, with what could
+/// not be used, for the diagnostics. None when there is nowhere to save it.
+fn load_progress_in(
+    folder: Option<PathBuf>,
+    project: &Project,
+) -> (Option<(PathBuf, SaveSlot)>, Vec<String>) {
+    let path = folder
+        .ok_or_else(|| {
+            "A pasta %APPDATA% não foi encontrada; o progresso não será salvo".to_owned()
+        })
+        .and_then(|folder| save::path(&folder, &project.id));
+    match path {
+        Ok(path) => {
+            let (slot, problems) = save::load(project, &path);
+            (Some((path, slot)), problems)
+        }
+        Err(error) => (None, vec![error]),
+    }
+}
+/// Carries out the progress requests of a frame, in order, with one disk operation for all of
+/// them: the last state wins. A save that may not be written stays in memory, as the
+/// diagnostics said when it was read.
+fn store_progress(
+    progress: &mut Option<(PathBuf, SaveSlot)>,
+    project: &Project,
+    requests: Vec<SaveRequest>,
+) -> Result<(), String> {
+    let Some((path, slot)) = progress else {
+        return Ok(());
+    };
+    for request in requests {
+        slot.apply(request);
+    }
+    if !slot.writable {
+        return Ok(());
+    }
+    save::store(path, project, slot)
+}
+
 fn input_action_label<'a>(project: &'a oxy_core::document::Project, action: &'a str) -> &'a str {
     project
         .input_labels
@@ -337,6 +421,88 @@ fn player_controls_show_labels_and_preserve_legacy_actions() {
         .insert(id.into(), "Ataque principal".into());
     assert_eq!(input_action_label(&project, id), "Ataque principal");
     assert_eq!(input_action_label(&project, "pular"), "pular");
+}
+
+#[test]
+fn progress_lives_under_oxy_save_dir_or_the_roaming_app_data() {
+    let project = Project::new("Progresso");
+    let appdata = OsString::from("C:\\Users\\Ana\\AppData\\Roaming");
+    let file = |folder: PathBuf| save::path(&folder, &project.id).unwrap();
+    // OXY_SAVE_DIR wins, so tests never reach the real folder.
+    let temp = std::env::temp_dir().join("oxy-progresso");
+    let chosen = save_folder(Some(temp.clone().into()), Some(appdata.clone())).unwrap();
+    assert_eq!(file(chosen), temp.join(&project.id).join("progresso.json"));
+    let roaming = save_folder(Some(OsString::new()), Some(appdata)).unwrap();
+    assert_eq!(
+        file(roaming),
+        Path::new("C:\\Users\\Ana\\AppData\\Roaming")
+            .join("OXY Engine")
+            .join("Jogos")
+            .join(&project.id)
+            .join("progresso.json")
+    );
+    assert_eq!(save_folder(None, None), None);
+}
+
+#[test]
+fn progress_is_stored_once_per_frame_and_starts_the_next_run() {
+    use oxy_core::{
+        document::{Value, new_id},
+        variables,
+    };
+    let mut project = Project::new("Progresso");
+    let record = variables::create(&mut project, "Recorde", Value::Number(0.), true).unwrap();
+    let write = |value: f64| {
+        SaveRequest::Write([((record.clone(), String::new()), Value::Number(value))].into())
+    };
+    let folder = std::env::temp_dir().join(format!("oxy-player-progress-{}", new_id()));
+    // A fresh install: nothing read, nothing to explain.
+    let (mut progress, problems) = load_progress_in(Some(folder.clone()), &project);
+    assert!(problems.is_empty(), "{problems:?}");
+    let path = progress.as_ref().unwrap().0.clone();
+    assert_eq!(path, folder.join(&project.id).join("progresso.json"));
+    assert!(!path.exists());
+    // A frame's requests, in order, in one disk operation: the last state lands, in one file.
+    store_progress(
+        &mut progress,
+        &project,
+        vec![write(1.), SaveRequest::Clear, write(5.)],
+    )
+    .unwrap();
+    let files: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files, ["progresso.json"]);
+    // Relaunched, the game starts from it, as reload does.
+    let (relaunched, problems) = load_progress_in(Some(folder.clone()), &project);
+    assert!(problems.is_empty(), "{problems:?}");
+    let options = RuntimeOptions {
+        save: relaunched.map(|(_, slot)| slot),
+        ..Default::default()
+    };
+    let runtime = Runtime::with_options(&project, &project.start_scene, options).unwrap();
+    assert_eq!(runtime.variable(&record, ""), Some(&Value::Number(5.)));
+    assert!(runtime.save_slot().exists);
+    // Apagar progresso removes the file.
+    store_progress(&mut progress, &project, vec![SaveRequest::Clear]).unwrap();
+    assert!(!path.exists());
+    // A newer build's file is never written over nor removed.
+    let newer = format!("{{\"oxy_save\": 2, \"game\": \"{}\"}}", project.id);
+    std::fs::write(&path, &newer).unwrap();
+    let (mut progress, problems) = load_progress_in(Some(folder.clone()), &project);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    store_progress(&mut progress, &project, vec![write(9.)]).unwrap();
+    store_progress(&mut progress, &project, vec![SaveRequest::Clear]).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+    // Without a folder nothing is saved, and the diagnostics say so.
+    let (mut nowhere, problems) = load_progress_in(None, &project);
+    assert!(
+        nowhere.is_none() && problems[0].contains("%APPDATA%"),
+        "{problems:?}"
+    );
+    store_progress(&mut nowhere, &project, vec![write(2.)]).unwrap();
+    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[cfg(all(test, target_os = "windows"))]

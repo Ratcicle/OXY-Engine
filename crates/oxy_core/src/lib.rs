@@ -32,6 +32,7 @@ pub mod qa;
 pub mod query;
 pub mod random;
 pub mod runtime;
+pub mod save;
 pub mod scene_view;
 pub mod spatial;
 pub mod surface;

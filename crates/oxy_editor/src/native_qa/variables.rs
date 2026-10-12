@@ -116,6 +116,45 @@ impl NativeQa {
                     return Err("Cancelar a exclusão mudou o nó".into());
                 }
             }
+            "var_test_progress" => {
+                let variable = variable.ok_or("Variável sumiu")?;
+                let saved = &self.editor.play.test_save;
+                let expected = [((variable.id.clone(), String::new()), Value::Number(0.))];
+                if !saved.exists || saved.values != std::collections::BTreeMap::from(expected) {
+                    return Err(format!(
+                        "Parar e Jogar não guardaram o progresso do teste: {saved:?}"
+                    ));
+                }
+                let lines = self
+                    .editor
+                    .console
+                    .messages
+                    .iter()
+                    .filter(|m| m.starts_with("Teste: progresso salvo"))
+                    .count();
+                if lines != 2 {
+                    return Err(format!(
+                        "O Console tem {lines} linhas de progresso salvo, não uma por teste"
+                    ));
+                }
+                if visible(
+                    "Nenhum progresso gravado no teste. O próximo Jogar começa com os valores \
+                     iniciais.",
+                ) {
+                    return Err("Progresso do teste não lista os valores gravados".into());
+                }
+            }
+            "var_test_cleared" => {
+                if self.editor.play.test_save.exists {
+                    return Err("Apagar progresso do teste não apagou o progresso".into());
+                }
+                if !visible(
+                    "Nenhum progresso gravado no teste. O próximo Jogar começa com os valores \
+                     iniciais.",
+                ) {
+                    return Err("Progresso do teste não diz que está vazio".into());
+                }
+            }
             _ => return Err(format!("Verificação desconhecida: {label}")),
         }
         Ok(())
@@ -142,6 +181,9 @@ fn native_game_variables_workflow() {
         {"op": "add_node", "entity": "$0", "operation": "variable.set", "position": [320, 60]},
         {"op": "connect", "entity": "$0", "from_node": "$1", "from_port": "exec",
          "to_node": "$2", "to_port": "exec"},
+        {"op": "add_node", "entity": "$0", "operation": "save.write", "position": [600, 60]},
+        {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+         "to_node": "$4", "to_port": "exec"},
     ]))
     .unwrap();
     command::apply(&mut project, &scene, &commands).unwrap();
@@ -209,6 +251,20 @@ fn native_game_variables_workflow() {
                 Action::Click("Fechar variáveis do jogo"),
                 Action::Wait(4),
                 Action::Check("var_kept"),
+                // Each test saves Melhor tempo; Parar and Jogar keep the test progress.
+                Action::Click("Jogar"),
+                Action::Wait(10),
+                Action::Click("Parar"),
+                Action::Click("Jogar"),
+                Action::Wait(10),
+                Action::Click("Parar"),
+                Action::Click("Variáveis do jogo"),
+                Action::Wait(4),
+                Action::Check("var_test_progress"),
+                Action::Click("Apagar progresso do teste"),
+                Action::Wait(4),
+                Action::Check("var_test_cleared"),
+                Action::Click("Fechar variáveis do jogo"),
             ]);
             Ok(Box::new(qa))
         }),

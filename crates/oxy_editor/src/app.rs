@@ -17,6 +17,7 @@ mod preferences;
 mod properties;
 mod scenes;
 mod spatial_tools;
+mod test_progress;
 mod textures;
 mod toolbar;
 mod viewport;
@@ -133,6 +134,9 @@ pub(crate) struct PlaySession {
     /// The seed the current or last test of the project started with, for agents to repeat
     /// its draws in oxy_simulate after it stops too.
     pub(crate) seed: Option<u64>,
+    /// What Salvar progresso recorded in this editor session's tests, which the next test
+    /// starts from (see `test_progress`).
+    pub(crate) test_save: oxy_core::save::SaveSlot,
 }
 impl Default for PlaySession {
     fn default() -> Self {
@@ -144,7 +148,17 @@ impl Default for PlaySession {
             last_runtime_scene: None,
             game_size: None,
             seed: None,
+            test_save: Default::default(),
         }
+    }
+}
+impl PlaySession {
+    /// What another project must not inherit: the running test, its seed and the test progress.
+    pub(crate) fn forget_project(&mut self) {
+        self.runtime = None;
+        self.capture = false;
+        self.seed = None;
+        self.test_save = Default::default();
     }
 }
 #[derive(Default)]
@@ -461,9 +475,7 @@ impl Editor {
         self.hierarchy_ui.reveal_scroll = None;
         self.sync_console_feed();
         self.console_feed.new_test();
-        self.play.runtime = None;
-        self.play.capture = false;
-        self.play.seed = None;
+        self.play.forget_project();
         self.selected = None;
         self.selection.single(None);
         self.hierarchy_ui.rename = None;
@@ -839,10 +851,7 @@ impl Editor {
         // Every test draws differently, as the exported game does. The low half of a v4 UUID
         // has its fixed bits above the 53 kept.
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
-        let options = RuntimeOptions {
-            seed,
-            ..Default::default()
-        };
+        let options = self.play.options(seed);
         match Runtime::with_options(&self.state.project, &self.scene_id, options) {
             Ok(runtime) => {
                 self.play.seed = Some(seed);
@@ -864,7 +873,8 @@ impl Editor {
         }
     }
     fn stop(&mut self) {
-        // The last frame's logs reach agents after the test too.
+        // What the last frame saved, and its logs, reach the Console and agents after the test.
+        self.take_test_saves();
         self.sync_console_feed();
         self.play.runtime = None;
         self.play.capture = false;
@@ -1158,6 +1168,7 @@ impl Editor {
                 self.log(e);
             }
         }
+        self.take_test_saves();
     }
     /// Console on the home screen, where the editor dock does not exist.
     pub(super) fn home_console(&mut self, ctx: &egui::Context) {

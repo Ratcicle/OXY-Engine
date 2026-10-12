@@ -1,18 +1,18 @@
 //! A fingerprint of the running game, to tell whether two runs stayed the same: a hash of
 //! everything that shapes the steps to come, and a digest that names the part where two runs
-//! differ. Left out are the host's queues (logs, traces, sounds, scene starts, the recording),
-//! which the host takes whenever it likes, and caches rebuilt from the scene (lookups,
-//! prepared graphs, physics worlds). Maps and sets are read sorted, never in their own order,
-//! and floats exactly: JSON and Debug text both write the shortest form that reads back the
-//! same number. The hash is the portable one of `random`: a build gives the same one in every
-//! process.
+//! differ. Left out are the host's queues (logs, traces, sounds, save requests, scene starts,
+//! the recording), which the host takes whenever it likes, and caches rebuilt from the scene
+//! (lookups, prepared graphs, physics worlds). Maps and sets are read sorted, never in their
+//! own order, and floats exactly: JSON and Debug text both write the shortest form that reads
+//! back the same number. The hash is the portable one of `random`: a build gives the same one
+//! in every process.
 use super::*;
 use crate::random::Hasher;
 use serde::Serialize;
 use std::fmt::{self, Write as _};
 
 /// The state in parts, each with its hash. The run's own come first (scene, time, input,
-/// tasks, areas, characters, random, variables.<name> for each game variable, camera), then
+/// tasks, areas, characters, random, variables.<name> for each game variable, save, camera), then
 /// each object's in scene order: transform, visible, attributes.<name>, document (its whole
 /// document form), character, platform, body (2D movement), animation and behavior (stopped by
 /// an error or by logic).
@@ -192,6 +192,7 @@ impl Runtime {
             logs: _,
             traces: _,
             sounds: _,
+            save_requests: _,
             scene_starts: _,
             recording: _,
             // Only within a step.
@@ -282,6 +283,7 @@ impl Runtime {
             rolls,
             spawns,
             variables,
+            save,
         } = run;
         digest.add(None, "random", |s| {
             s.debug(seed).debug(rolls).debug(spawns);
@@ -298,6 +300,10 @@ impl Runtime {
                 }
             });
         }
+        // What a new run would start from, and whether Ler progresso salvo finds any.
+        digest.add(None, "save", |s| {
+            s.debug(save);
+        });
         digest.add(None, "camera", |s| {
             let _ = cameras.write_digest(self.scene(), s);
         });

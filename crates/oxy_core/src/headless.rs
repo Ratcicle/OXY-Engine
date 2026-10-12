@@ -1,9 +1,9 @@
 //! Runs a game without a window for a simulated time and reports what happened: scene
 //! changes, logs, logic actions, sounds, movement and area events, the game camera, the game
-//! interface, the state of watched objects, the game variables and a hash of the whole state
-//! at the end. Used by the MCP server so an agent can test a change, and by tests. On request
-//! a second copy runs alongside on the same inputs, to check that the run repeats itself step
-//! by step.
+//! interface, the state of watched objects, the game variables, the progress saved and a hash
+//! of the whole state at the end. Used by the MCP server so an agent can test a change, and by
+//! tests. On request a second copy runs alongside on the same inputs, to check that the run
+//! repeats itself step by step.
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -20,6 +20,8 @@ use crate::{
     input_timeline::{InputChange, InputTimeline, TimedInput},
     random,
     runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime, RuntimeOptions},
+    save::{self, SaveRequest, SaveSlot},
+    variables,
 };
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -244,6 +246,22 @@ fn plain_or_tagged<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<
         other => serde_json::from_value(other).map_err(serde::de::Error::custom),
     }
 }
+fn plain_or_tagged_values<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, Value>>, D::Error> {
+    let Some(values) = Option::<BTreeMap<String, Json>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    values
+        .into_iter()
+        .map(|(label, value)| {
+            let value = plain_or_tagged(value)
+                .map_err(|error| serde::de::Error::custom(format!("{label}: {error}")))?;
+            Ok((label, value))
+        })
+        .collect::<Result<_, D::Error>>()
+        .map(Some)
+}
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Comparison {
     #[serde(rename = "==")]
@@ -360,6 +378,18 @@ pub struct SimulationRequest {
     /// states after every step: the report's `replay` says whether they stayed the same.
     #[serde(default)]
     pub check_replay: bool,
+    /// The progress a returning player has, which starts the persistent game variables: each
+    /// one by ID or name (`"$N"` too), `"name · key"` for the value of a key, with a plain or
+    /// tagged value of its type. Absent, the game runs as on a fresh install; the report's
+    /// `save` has this shape, so a run can start where another left off.
+    #[serde(default, deserialize_with = "plain_or_tagged_values")]
+    pub save: Option<BTreeMap<String, Value>>,
+}
+impl SimulationRequest {
+    /// Reads a `save` given apart from the rest of a request, as the MCP tools take it.
+    pub fn read_save(value: Json) -> Result<BTreeMap<String, Value>, serde_json::Error> {
+        plain_or_tagged_values(value).map(Option::unwrap_or_default)
+    }
 }
 fn on() -> bool {
     true
@@ -516,13 +546,36 @@ pub struct ReplayCheck {
 pub struct ReplayDifference {
     pub time: f64,
     /// The object that differed; none for the run's own state (scene, time, input, tasks,
-    /// areas, characters, random, variables.<name>, camera).
+    /// areas, characters, random, variables.<name>, save, camera).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<Named>,
     /// What differed, a part of [`crate::runtime::StateDigest`]: transform, attributes.<name>,
     /// document, character… for an object; exists when only one copy has it, order when both
     /// have it in another scene order.
     pub part: String,
+}
+
+/// A request of Salvar progresso (write, with the values saved) or Apagar progresso (clear).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SaveEvent {
+    pub time: f64,
+    pub kind: SaveKind,
+    /// What a write saved, as in `variables`: up to `MAX_ENTRIES`, the variables' own values
+    /// first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<BTreeMap<String, Value>>,
+    /// Values of a write left out of `values`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub values_truncated: usize,
+}
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveKind {
+    Write,
+    Clear,
+}
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -560,6 +613,14 @@ pub struct SimulationReport {
     /// first `MAX_ENTRIES` of [`Runtime::variable_values`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub variables: BTreeMap<String, Value>,
+    /// What Salvar progresso and Apagar progresso asked, oldest first (the most recent
+    /// `MAX_ENTRIES`). The run never touches the disk.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub saves: Vec<SaveEvent>,
+    /// The saved progress at the end, in the shape [`SimulationRequest::save`] takes (up to
+    /// `MAX_ENTRIES` values); absent when there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub save: Option<BTreeMap<String, Value>>,
     /// Entries dropped per list because it reached `MAX_ENTRIES`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub truncated: BTreeMap<&'static str, usize>,
@@ -913,6 +974,7 @@ struct Recorder<'a> {
     logs: Recent<Log>,
     sounds: Recent<Event>,
     events: Recent<GameEvent>,
+    saves: Recent<SaveEvent>,
 }
 impl Recorder<'_> {
     fn lookup<'b>(&'b self, runtime: &'b Runtime) -> Lookup<'b> {
@@ -935,6 +997,7 @@ impl Recorder<'_> {
         let logs = std::mem::take(&mut runtime.logs);
         let traces = std::mem::take(&mut runtime.traces);
         let sounds = std::mem::take(&mut runtime.sounds);
+        let saves = std::mem::take(&mut runtime.save_requests);
         let runtime = &*runtime;
         let Recording {
             crossings,
@@ -984,6 +1047,19 @@ impl Recorder<'_> {
             self.sounds.push(Event {
                 time: rounded(time),
                 text: name,
+            });
+        }
+        for request in saves {
+            let (kind, values) = match &request {
+                SaveRequest::Write(values) => (SaveKind::Write, Some(values)),
+                SaveRequest::Clear => (SaveKind::Clear, None),
+            };
+            let values = values.map(|values| variables::labeled(self.source, values, MAX_ENTRIES));
+            self.saves.push(SaveEvent {
+                time: rounded(time),
+                kind,
+                values_truncated: values.as_ref().map_or(0, |(_, left_out)| *left_out),
+                values: values.map(|(values, _)| values),
             });
         }
         let lookup = Lookup {
@@ -1099,6 +1175,7 @@ impl Recorder<'_> {
         report.logs = self.logs.finish("logs", truncated);
         report.sounds = self.sounds.finish("sounds", truncated);
         report.events = self.events.finish("events", truncated);
+        report.saves = self.saves.finish("saves", truncated);
         report.actions = match self.mode {
             ActionsMode::None => None,
             ActionsMode::All => Some(Actions::All(self.actions.finish("actions", truncated))),
@@ -1548,6 +1625,7 @@ impl Twin {
         twin.logs.clear();
         twin.traces.clear();
         twin.sounds.clear();
+        twin.save_requests.clear();
         self.check.steps = steps;
         let runtime = lookup.runtime;
         if runtime.state_hash() == twin.state_hash() {
@@ -1572,6 +1650,56 @@ impl Twin {
         });
         self.runtime = None;
     }
+}
+
+/// The progress a request's `save` describes: each label a persistent variable of `project` by
+/// ID or name (`"$N"` from setup too) and its key, with a value the variable takes.
+fn saved_progress(
+    project: &Project,
+    values: &BTreeMap<String, Value>,
+    applied: &[Applied],
+) -> Result<SaveSlot, String> {
+    let mut slot = SaveSlot {
+        exists: true,
+        ..SaveSlot::default()
+    };
+    let mut keys: HashMap<Id, usize> = HashMap::new();
+    for (label, value) in values {
+        let (variable, key) = variables::split_label(label);
+        let id = variables::find(project, &resolve(variable, applied)?)
+            .map_err(|error| format!("save: {error}"))?;
+        let declared = save::check(project, &id, key, value).map_err(|error| {
+            let hint = if error.contains("não é salva entre partidas") {
+                "; marque-a com update_variable e persistent: true no setup, ou use \
+                 update_variable no setup para mudar só o valor inicial"
+            } else {
+                ""
+            };
+            format!("save: {error}{hint}")
+        })?;
+        if !key.is_empty() {
+            let count = keys.entry(id.clone()).or_default();
+            *count += 1;
+            if *count > variables::MAX_KEYS {
+                return Err(format!(
+                    "save: a variável {} passa de {} chaves",
+                    declared.name,
+                    variables::MAX_KEYS
+                ));
+            }
+        }
+        if slot
+            .values
+            .insert((id, key.to_owned()), value.clone())
+            .is_some()
+        {
+            return Err(format!(
+                "save: {} aparece duas vezes",
+                variables::label(&declared.name, key)
+            ));
+        }
+    }
+    Ok(slot)
 }
 
 /// Runs `request` on a copy of `project`. Nothing in `project` changes.
@@ -1750,10 +1878,17 @@ pub fn run(
         logs: Recent::default(),
         sounds: Recent::default(),
         events: Recent::default(),
+        saves: Recent::default(),
     };
+    let save = request
+        .save
+        .as_ref()
+        .map(|values| saved_progress(source, values, &applied))
+        .transpose()?;
     let options = RuntimeOptions {
         record: true,
         seed: request.seed,
+        save,
     };
     let mut runtime = Runtime::with_options(source, &start, options.clone())?;
     let mut twin = Twin {
@@ -1792,6 +1927,8 @@ pub fn run(
             })
             .collect(),
         variables: BTreeMap::new(),
+        saves: Vec::new(),
+        save: None,
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
@@ -1859,6 +1996,14 @@ pub fn run(
     report.variables = variables;
     if left_out > 0 {
         report.truncated.insert("variables", left_out);
+    }
+    let slot = runtime.save_slot();
+    if slot.exists {
+        let (save, left_out) = variables::labeled(source, &slot.values, MAX_ENTRIES);
+        report.save = Some(save);
+        if left_out > 0 {
+            report.truncated.insert("save", left_out);
+        }
     }
     report.final_scene = runtime.scene_id().to_owned();
     report.state_hash = format!("{:016x}", runtime.state_hash());
@@ -2005,7 +2150,11 @@ mod tests {
         let die_id = die.id.clone();
         project.scenes[0].entities.push(die);
         let start = |seed| {
-            let options = RuntimeOptions { record: true, seed };
+            let options = RuntimeOptions {
+                record: true,
+                seed,
+                ..Default::default()
+            };
             Runtime::with_options(&project, &project.start_scene, options).unwrap()
         };
         let twin = |seed| Twin {

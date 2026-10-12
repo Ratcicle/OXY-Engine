@@ -1626,7 +1626,11 @@ fn factory() -> Project {
 /// Each object the runtime copies when "gerar" is pressed twice in a run started with `seed`:
 /// its ID, name, clip IDs and node IDs.
 fn made(project: &Project, seed: u64) -> Vec<(Id, String, Vec<Id>, Vec<Id>)> {
-    let options = RuntimeOptions { record: true, seed };
+    let options = RuntimeOptions {
+        record: true,
+        seed,
+        ..Default::default()
+    };
     let mut runtime = Runtime::with_options(project, &project.start_scene, options).unwrap();
     let press = InputFrame {
         pressed: ["gerar".into()].into(),

@@ -83,7 +83,7 @@ fn bool_label(on: bool) -> &'static str {
 
 /// An initial value as the dialog writes it: numbers with a point, vectors with ";" between
 /// their numbers.
-fn value_text(value: &Value) -> String {
+pub(crate) fn value_text(value: &Value) -> String {
     let vector = |numbers: &[f32]| {
         numbers
             .iter()
@@ -674,8 +674,13 @@ impl Editor {
             state.persistent = false;
         }
     }
-    /// What Salvar progresso recorded in this editor session's tests.
+    /// What Salvar progresso recorded in this editor session's tests, with Apagar progresso do
+    /// teste.
     fn test_progress(&mut self, ui: &mut egui::Ui) {
+        let saved = self.play.test_save.exists;
+        let rows =
+            super::super::test_progress::saved_rows(&self.state.project, &self.play.test_save);
+        let mut clear = false;
         egui::Frame::new()
             .fill(Color32::from_rgb(37, 37, 40))
             .stroke(egui::Stroke::new(1., theme::CARD_BORDER))
@@ -690,11 +695,13 @@ impl Editor {
                             .color(theme::TEXT),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_enabled_ui(false, |ui| {
-                            widgets::secondary_button(ui, "Apagar progresso do teste")
-                        })
-                        .inner
-                        .on_disabled_hover_text("Nenhum progresso gravado no teste.");
+                        clear = ui
+                            .add_enabled_ui(saved, |ui| {
+                                widgets::secondary_button(ui, "Apagar progresso do teste")
+                            })
+                            .inner
+                            .on_disabled_hover_text("Nenhum progresso gravado no teste.")
+                            .clicked();
                     });
                 });
                 widgets::hint(
@@ -703,18 +710,58 @@ impl Editor {
                      Jogar começa daqui. O jogo exportado guarda o próprio progresso, em \
                      %APPDATA%\\OXY Engine\\Jogos.",
                 );
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(
-                            "Nenhum progresso gravado no teste. O próximo Jogar começa com os \
-                             valores iniciais.",
+                let empty = if !saved {
+                    "Nenhum progresso gravado no teste. O próximo Jogar começa com os valores \
+                     iniciais."
+                } else if rows.is_empty() {
+                    "O teste gravou progresso, mas nenhuma variável é salva entre partidas."
+                } else {
+                    ""
+                };
+                if !empty.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(empty)
+                                .size(12.)
+                                .color(Color32::from_rgb(168, 168, 174)),
                         )
-                        .size(12.)
-                        .color(Color32::from_rgb(168, 168, 174)),
-                    )
-                    .wrap(),
-                );
+                        .wrap(),
+                    );
+                    return;
+                }
+                let label_width = (ui.available_width() * 0.4).clamp(120., 220.);
+                egui::Grid::new("test_progress")
+                    .num_columns(2)
+                    .min_col_width(label_width)
+                    .spacing([12., 4.])
+                    .show(ui, |ui| {
+                        for (name, key, value) in &rows {
+                            let mut label = egui::text::LayoutJob::default();
+                            let font = egui::FontId::proportional(12.5);
+                            label.append(
+                                name,
+                                0.,
+                                egui::TextFormat::simple(font.clone(), theme::TEXT),
+                            );
+                            if !key.is_empty() {
+                                label.append(
+                                    &format!(" · {key}"),
+                                    0.,
+                                    egui::TextFormat::simple(font, theme::TEXT_MUTED),
+                                );
+                            }
+                            ui.add(egui::Label::new(label).truncate());
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(value).monospace().size(12.))
+                                    .truncate(),
+                            );
+                            ui.end_row();
+                        }
+                    });
             });
+        if clear {
+            self.play.test_save = Default::default();
+        }
     }
 }
 

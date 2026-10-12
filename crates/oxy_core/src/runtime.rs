@@ -3,9 +3,9 @@
 //! Runtime state has three lifetimes; a new field picks one and follows its rules:
 //! - Per run: survives `change_scene` and dies with the `Runtime` (Parar, a new player run).
 //!   The clock (`time`), activation serials, the host pause, logs and traces with their
-//!   counters, the host queues (`sounds`, `scene_starts`, `recording`) and `run`, the
-//!   `RunState` (draws, copy counts, game variables) that new run-wide state goes into. `stop`
-//!   resets `run`.
+//!   counters, the host queues (`sounds`, `save_requests`, `scene_starts`, `recording`) and
+//!   `run`, the `RunState` (draws, copy counts, game variables, saved progress) that new
+//!   run-wide state goes into. `stop` resets `run`.
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
@@ -45,6 +45,8 @@ pub use state_hash::{StateDifference, StateDigest, StatePart};
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
 pub const MAX_NODE_WORK: usize = 1024;
+/// Save requests a host may leave queued before they are folded (see `request_save`).
+const MAX_SAVE_REQUESTS: usize = 64;
 
 #[derive(Clone, Debug, Default)]
 pub struct InputFrame {
@@ -152,8 +154,8 @@ struct BodyState {
     grounded: bool,
 }
 /// Run-lifetime state: `change_scene` keeps it and `stop` resets it. The home of the seeded
-/// draws, the spawn counters and the game variables, and later of music and volumes, and the
-/// game-clock offset. The counts of an object made during the run go with it (see
+/// draws, the spawn counters, the game variables and the saved progress, and later of music and
+/// volumes, and the game-clock offset. The counts of an object made during the run go with it (see
 /// `Runtime::forget_copies`).
 #[derive(Debug, Default)]
 pub(crate) struct RunState {
@@ -168,6 +170,9 @@ pub(crate) struct RunState {
     /// The game variables' values by (variable, key): the empty key is the variable's own
     /// value, which starts at the declared one; a key never written reads the declared value.
     variables: BTreeMap<(Id, String), Value>,
+    /// The saved progress as the host gave it, then as Salvar progresso and Apagar progresso
+    /// left it; Ler progresso salvo reads whether there is any.
+    save: crate::save::SaveSlot,
 }
 impl RunState {
     /// A run's start: the draws from `seed`, every variable at its declared value.
@@ -191,6 +196,9 @@ pub struct RuntimeOptions {
     /// What Sortear número draws from: hosts that play pass entropy, a headless run the seed
     /// asked for, 0 by default. The same seed and inputs give the same draws.
     pub seed: u64,
+    /// The progress saved by earlier runs, which starts the persistent game variables before
+    /// the scene start logic; none is a fresh install. Hosts read it from disk (see `save`).
+    pub save: Option<crate::save::SaveSlot>,
 }
 
 pub struct Runtime {
@@ -212,6 +220,9 @@ pub struct Runtime {
     /// the same step drops the rest: they belong to scenes that started and ended within the
     /// step, as in a scene that restarts itself as it starts until the work budget runs out.
     sounds_before_change: Option<usize>,
+    /// What Salvar progresso and Apagar progresso asked since the host last took them, oldest
+    /// first. Unlike sounds, scene changes and `stop` never drop them: they are the game's state.
+    pub save_requests: Vec<crate::save::SaveRequest>,
     /// Scenes started by `change_scene` (reloads included), oldest first, until a host takes them.
     pub scene_starts: Vec<Id>,
     /// Off unless the runtime was created with `recorded`.
@@ -281,6 +292,7 @@ impl Runtime {
             traces_written: 0,
             sounds: Vec::new(),
             sounds_before_change: None,
+            save_requests: Vec::new(),
             scene_starts: Vec::new(),
             recording: options.record.then(Recording::default),
             time: 0.0,
@@ -312,6 +324,9 @@ impl Runtime {
             // Before the scene start logic, which may read the variables.
             run: RunState::new(project, options.seed),
         };
+        if let Some(slot) = options.save {
+            runtime.load_save(slot);
+        }
         runtime.initialize_character_states()?;
         runtime.begin_camera_input(&InputFrame::default());
         runtime.emit(RuntimeEvent::SceneStart);

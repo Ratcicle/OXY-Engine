@@ -1,7 +1,10 @@
 //! Operations about the game as a whole, exposed by the typed graph adapter: the game
-//! variables, the scene running and the scenes logic names.
+//! variables, the saved progress, the scene running and the scenes logic names.
 use super::*;
-use crate::variables::{self, GameVariable, MAX_KEYS, MAX_TEXT};
+use crate::{
+    save::{self, SaveRequest, SaveSlot},
+    variables::{self, GameVariable, MAX_KEYS, MAX_TEXT},
+};
 impl Runtime {
     pub(super) fn game_data(
         &self,
@@ -23,6 +26,7 @@ impl Runtime {
                     .unwrap_or(&variable.value)
                     .clone())
             }
+            "save.state" => Ok(Value::Bool(self.run.save.exists)),
             // Logic runs only in the running scene, so it is the owner's scene.
             "scene.current" => match output {
                 "scene" => Ok(Value::Text(self.scene_id.clone())),
@@ -89,6 +93,36 @@ impl Runtime {
                 }
                 self.run.variables.insert(entry, value);
             }
+            // The values as they are now, to the host; the run reads them back only in a new run.
+            "save.write" => {
+                let persistent: HashSet<&str> = self
+                    .source
+                    .variables
+                    .iter()
+                    .filter(|v| v.persistent)
+                    .map(|v| v.id.as_str())
+                    .collect();
+                let values: BTreeMap<(Id, String), Value> = self
+                    .run
+                    .variables
+                    .iter()
+                    .filter(|((id, _), _)| persistent.contains(id.as_str()))
+                    .map(|(entry, value)| (entry.clone(), value.clone()))
+                    .collect();
+                self.run.save.apply(SaveRequest::Write(values.clone()));
+                self.request_save(SaveRequest::Write(values));
+            }
+            "save.clear" => {
+                for variable in self.source.variables.iter().filter(|v| v.persistent) {
+                    let id = &variable.id;
+                    self.run.variables.retain(|(owner, _), _| owner != id);
+                    self.run
+                        .variables
+                        .insert((id.clone(), String::new()), variable.value.clone());
+                }
+                self.run.save.apply(SaveRequest::Clear);
+                self.request_save(SaveRequest::Clear);
+            }
             _ => return self.math_action(graph, node, context, budget),
         }
         Ok(true)
@@ -141,29 +175,68 @@ impl Runtime {
     /// value of a key: at most `limit`, the variables' own values first and then the keys', each
     /// group in label order, with how many were left out.
     pub fn variable_values(&self, limit: usize) -> (BTreeMap<String, Value>, usize) {
-        let names: HashMap<&str, &str> = self
-            .source
-            .variables
-            .iter()
-            .map(|v| (v.id.as_str(), v.name.as_str()))
-            .collect();
-        let mut labeled: Vec<(bool, String, &Value)> = self
-            .run
-            .variables
-            .iter()
-            .filter_map(|((id, key), value)| {
-                let name = names.get(id.as_str())?;
-                Some((!key.is_empty(), variables::label(name, key), value))
-            })
-            .collect();
-        labeled.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-        let left_out = labeled.len().saturating_sub(limit);
-        let values = labeled
-            .into_iter()
-            .take(limit)
-            .map(|(_, label, value)| (label, value.clone()))
-            .collect();
-        (values, left_out)
+        variables::labeled(&self.source, &self.run.variables, limit)
+    }
+
+    /// The saved progress as the run sees it: what the host gave it, then what Salvar progresso
+    /// and Apagar progresso made of it.
+    pub fn save_slot(&self) -> &SaveSlot {
+        &self.run.save
+    }
+
+    /// Starts the persistent variables at the values `slot` holds, before the scene start
+    /// logic. A value the project's variables do not take is skipped with a log line, and the
+    /// variable keeps its initial value.
+    pub(super) fn load_save(&mut self, slot: SaveSlot) {
+        let mut keys: HashMap<Id, usize> = HashMap::new();
+        for ((id, key), value) in &slot.values {
+            let checked = save::check(&self.source, id, key, value).and_then(|variable| {
+                let count = keys.entry(id.clone()).or_default();
+                if key.is_empty() {
+                    return Ok(());
+                }
+                if *count == MAX_KEYS {
+                    return Err(format!(
+                        "a variável {} já guarda valores para {MAX_KEYS} chaves, o limite",
+                        variable.name
+                    ));
+                }
+                *count += 1;
+                Ok(())
+            });
+            match checked {
+                Ok(()) => {
+                    self.run
+                        .variables
+                        .insert((id.clone(), key.clone()), value.clone());
+                }
+                Err(reason) => self.log(format!("Progresso salvo ignorado: {reason}")),
+            }
+        }
+        self.run.save = slot;
+    }
+
+    /// Queues `request` for the host. A host that leaves many queued gets them folded into the
+    /// same outcome: the last Apagar progresso and the last Salvar progresso after it.
+    fn request_save(&mut self, request: SaveRequest) {
+        self.save_requests.push(request);
+        if self.save_requests.len() > MAX_SAVE_REQUESTS {
+            let clear = self
+                .save_requests
+                .iter()
+                .rposition(|r| *r == SaveRequest::Clear);
+            let write = self
+                .save_requests
+                .iter()
+                .rposition(|r| matches!(r, SaveRequest::Write(_)))
+                .filter(|&write| clear.is_none_or(|clear| write > clear));
+            let kept: Vec<usize> = [clear, write].into_iter().flatten().collect();
+            let mut index = 0;
+            self.save_requests.retain(|_| {
+                index += 1;
+                kept.contains(&(index - 1))
+            });
+        }
     }
 
     /// The scene Mudar de cena opens: the one its Cena input receives when connected, else the
