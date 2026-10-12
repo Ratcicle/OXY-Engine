@@ -66,6 +66,9 @@ impl InputTimeline {
         frame.movement[0] += self.movement[0];
         frame.movement[1] += self.movement[1];
     }
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty() && self.held.is_empty() && self.movement == [0.; 2]
+    }
     pub fn unconsumed_look(&self, time: f64) -> glam::Vec2 {
         self.queue
             .iter()

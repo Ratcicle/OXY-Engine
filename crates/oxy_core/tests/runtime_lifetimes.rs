@@ -1,6 +1,10 @@
 use oxy_core::{
+    animation::{AnimationEvent, Clip},
+    character::{CharacterConfig, MovementEvent},
     document::*,
     graph::{Edge, Graph, Node},
+    input_timeline::{InputChange, TimedInput},
+    physics3d::{Collider3d, CollisionShape},
     runtime::{FIXED_DT, InputFrame, Runtime},
     scene_view::SceneEvaluation,
 };
@@ -239,5 +243,205 @@ fn refreshed_subtree_boxes_match_linear_reference_after_sequential_parent_moves(
         let a = eval.boxes[i].unwrap();
         let b = oxy_core::spatial::collider_bounds(&s, &e.id).unwrap();
         assert!(a.min.abs_diff_eq(b.min, 1e-5) && a.max.abs_diff_eq(b.max, 1e-5));
+    }
+}
+/// Both orders: the ids sort one way, so only scene order passes both.
+const ORDERS: [[&str; 2]; 2] = [["primeiro", "segundo"], ["segundo", "primeiro"]];
+fn marker_project(order: [&str; 2]) -> Project {
+    let mut p = Project::new("Marcadores");
+    for name in order {
+        let mut e = Entity::new(name, None);
+        e.id = name.into();
+        let mut clip = Clip::new("Golpe");
+        clip.events.push(AnimationEvent {
+            time: 0.,
+            name: "Impacto".into(),
+        });
+        let start = Node::new("event.scene_start", [0.; 2]);
+        let mut play = Node::new("action.animation", [0.; 2]);
+        play.params
+            .insert("clip".into(), Value::Text(clip.id.clone()));
+        let marker = Node::new("event.animation", [0.; 2]);
+        let mut message = Node::new("debug.message", [0.; 2]);
+        message
+            .params
+            .insert("message".into(), Value::Text(name.into()));
+        edge(&mut e.graph, &start, "exec", &play, "exec");
+        edge(&mut e.graph, &marker, "exec", &message, "exec");
+        e.graph.nodes = vec![start, play, marker, message];
+        e.clips.push(clip);
+        p.scenes[0].entities.push(e);
+    }
+    p
+}
+#[test]
+fn animation_markers_of_one_step_are_emitted_in_scene_order() {
+    for order in ORDERS {
+        let p = marker_project(order);
+        for _ in 0..20 {
+            let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+            rt.advance(FIXED_DT, &InputFrame::default());
+            let messages: Vec<_> = rt
+                .logs
+                .iter()
+                .filter_map(|line| line.rsplit(' ').next())
+                .collect();
+            assert_eq!(messages, order, "{:?}", rt.logs);
+        }
+    }
+}
+fn standing_pair(order: [&str; 2]) -> Project {
+    let mut p = Project::new("Apoio");
+    let s = &mut p.scenes[0];
+    s.kind = SceneKind::ThreeD;
+    for name in order {
+        let mut body = Entity::new(name, None);
+        body.id = name.into();
+        body.transform.position = [if name == "primeiro" { -2. } else { 2. }, 0.02, 0.];
+        body.character3d = Some(CharacterConfig::default());
+        s.entities.push(body);
+    }
+    let mut platform = Entity::new("Plataforma", Some(Primitive::Cube));
+    platform.id = "plataforma".into();
+    platform.transform.position = [0., -0.5, 0.];
+    platform.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [20., 1., 20.],
+        },
+        ..Default::default()
+    });
+    s.entities.push(platform);
+    p
+}
+/// A 3D level that fills the per-scene structures (all but the ready queue and released
+/// keys, empty between steps, and pending look, with no camera rig to take it), and an empty
+/// 2D menu to change to.
+fn busy_level() -> (Project, Id) {
+    let mut p = standing_pair(ORDERS[0]);
+    let mut clock = Entity::new("Relógio", None);
+    let clip = Clip {
+        duration: 10.,
+        ..Clip::new("Giro")
+    };
+    let start = Node::new("event.scene_start", [0.; 2]);
+    let mut play = Node::new("action.animation", [0.; 2]);
+    play.params
+        .insert("clip".into(), Value::Text(clip.id.clone()));
+    let mut wait = Node::new("control.wait", [0.; 2]);
+    wait.params.insert("seconds".into(), Value::Number(100.));
+    let late = Node::new("debug.message", [0.; 2]);
+    edge(&mut clock.graph, &start, "exec", &play, "exec");
+    edge(&mut clock.graph, &play, "exec", &wait, "exec");
+    edge(&mut clock.graph, &wait, "exec", &late, "exec");
+    clock.graph.nodes = vec![start, play, wait, late];
+    clock.clips.push(clip);
+    let mut broken = Entity::new("Sem atributo", None);
+    let start = Node::new("event.scene_start", [0.; 2]);
+    let set = Node::new("attribute.set", [0.; 2]);
+    edge(&mut broken.graph, &start, "exec", &set, "exec");
+    broken.graph.nodes = vec![start, set];
+    let mut walker = Entity::new("Móvel", None);
+    walker.controller = Some(Controller::default());
+    let mut area = Entity::new("Área", None);
+    area.transform.position = [10., 0., 0.];
+    area.collider = Some(Collider {
+        is_trigger: true,
+        ..Default::default()
+    });
+    let mut contact = Entity::new("Contato", None);
+    contact.transform.position = [10., 0., 0.];
+    contact.collider = Some(Collider::default());
+    p.scenes[0]
+        .entities
+        .extend([clock, broken, walker, area, contact]);
+    let menu = Scene::new("Menu", SceneKind::TwoD);
+    let id = menu.id.clone();
+    p.scenes.push(menu);
+    (p, id)
+}
+#[test]
+fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
+    let (p, menu) = busy_level();
+    let busy = || {
+        let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+        let held = InputFrame {
+            held: ["segurar".into()].into(),
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            rt.advance(FIXED_DT, &held);
+        }
+        rt.queue_timed_input(TimedInput {
+            at: rt.time + 10.,
+            change: InputChange::Press("pular".into()),
+        })
+        .unwrap();
+        let input = InputFrame {
+            pressed: ["pular".into()].into(),
+            wheel: 1.,
+            ..Default::default()
+        };
+        rt.advance(FIXED_DT * 0.5, &input);
+        assert_eq!(
+            rt.scene_state_in_use(),
+            [
+                "graphs",
+                "input_timeline",
+                "pending_pressed",
+                "pending_wheel",
+                "step_input",
+                "characters",
+                "cameras",
+                "waiting",
+                "bodies",
+                "animations",
+                "disabled_behaviors",
+                "overlap_pairs",
+                "area_activations",
+                "damage_hits",
+                "area_hits",
+            ]
+        );
+        rt
+    };
+    let mut rt = busy();
+    let run = rt.run_state_debug();
+    let (time, logs) = (rt.time, rt.logs.clone());
+    assert!(!logs.is_empty());
+    rt.change_scene(&menu).unwrap();
+    assert_eq!(rt.scene_state_in_use(), Vec::<&str>::new());
+    assert_eq!(rt.run_state_debug(), run);
+    assert_eq!((rt.time, &rt.logs), (time, &logs));
+    assert_eq!(rt.scene_starts, [menu]);
+    let mut rt = busy();
+    rt.stop();
+    assert_eq!(rt.scene_state_in_use(), Vec::<&str>::new());
+    assert_eq!(
+        rt.run_state_debug(),
+        Runtime::new(&p, &p.start_scene).unwrap().run_state_debug()
+    );
+}
+#[test]
+fn removing_a_shared_support_reports_departures_in_scene_order() {
+    for order in ORDERS {
+        let p = standing_pair(order);
+        for _ in 0..20 {
+            let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+            for _ in 0..3 {
+                rt.advance(FIXED_DT, &InputFrame::default());
+            }
+            for id in order {
+                assert!(rt.character_state(id).unwrap().support.is_some());
+            }
+            rt.remove_object("plataforma");
+            rt.advance(FIXED_DT, &InputFrame::default());
+            let left: Vec<_> = rt
+                .movement_records()
+                .iter()
+                .filter(|r| matches!(r.event, MovementEvent::LeftSupport))
+                .map(|r| r.object.as_str())
+                .collect();
+            assert_eq!(left, order);
+        }
     }
 }

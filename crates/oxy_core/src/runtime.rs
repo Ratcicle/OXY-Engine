@@ -1,4 +1,20 @@
 //! Fixed-step, editor-independent execution of ordinary project documents.
+//!
+//! Runtime state has three lifetimes; a new field picks one and follows its rules:
+//! - Per run: survives `change_scene` and dies with the `Runtime` (Parar, a new player run).
+//!   The clock (`time`), activation serials, the host pause, logs and traces with their
+//!   counters, the host queues (`sounds`, `scene_starts`, `recording`) and `run`, the
+//!   `RunState` that new run-wide state goes into. `stop` resets `run`.
+//! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
+//!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
+//!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
+//!   stopped behaviors, area pairs, activations and hit leases.
+//! - Per object: the entries of per-scene structures keyed by an object, pruned in
+//!   `remove_object` when it goes (the cameras' lazily, at the next presentation).
+//!
+//! Anything whose order reaches events, tasks, logs, the recording or physics is walked in
+//! an order the scene fixes (scene order, as `emit` visits owners), a BTreeMap or a Vec,
+//! never in the order of a HashMap or HashSet.
 use crate::scene_view::{SceneEvaluation, SceneIndex, SceneView};
 use crate::{
     animation::AnimationPlayer,
@@ -128,6 +144,17 @@ struct BodyState {
     velocity: Vec3,
     grounded: bool,
 }
+/// Run-lifetime state: `change_scene` keeps it and `stop` resets it. Empty for now; the home
+/// of game variables, the seeded RNG and spawn counters, music and volumes, and the
+/// game-clock offset.
+#[derive(Debug, Default)]
+pub(crate) struct RunState {}
+/// How a host starts a [`Runtime`]. The default is [`Runtime::new`].
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeOptions {
+    /// Keep a [`Recording`] from the scene start logic on, as [`Runtime::recorded`] does.
+    pub record: bool,
+}
 
 pub struct Runtime {
     project: Project,
@@ -178,20 +205,21 @@ pub struct Runtime {
     area_hits: HashMap<Id, HitLease>,
     serial: u64,
     stopped: bool,
+    run: RunState,
 }
 
 impl Runtime {
     pub fn new(project: &Project, scene_id: &str) -> Result<Self, String> {
-        Self::start(project, scene_id, None)
+        Self::with_options(project, scene_id, RuntimeOptions::default())
     }
     /// `new` with a `Recording`, kept from the scene start logic on.
     pub fn recorded(project: &Project, scene_id: &str) -> Result<Self, String> {
-        Self::start(project, scene_id, Some(Recording::default()))
+        Self::with_options(project, scene_id, RuntimeOptions { record: true })
     }
-    fn start(
+    pub fn with_options(
         project: &Project,
         scene_id: &str,
-        recording: Option<Recording>,
+        options: RuntimeOptions,
     ) -> Result<Self, String> {
         validate_project(project)?;
         if project.scene(scene_id).is_none() {
@@ -210,7 +238,7 @@ impl Runtime {
             sounds: Vec::new(),
             sounds_before_change: None,
             scene_starts: Vec::new(),
-            recording,
+            recording: options.record.then(Recording::default),
             time: 0.0,
             source: project.clone(),
             accumulator: 0.0,
@@ -237,6 +265,7 @@ impl Runtime {
             area_hits: HashMap::new(),
             serial: 0,
             stopped: false,
+            run: RunState::default(),
         };
         runtime.initialize_character_states()?;
         runtime.begin_camera_input(&InputFrame::default());
@@ -300,6 +329,61 @@ impl Runtime {
             self.waiting.len(),
         ]
     }
+    /// The run state as text, for the lifetime contract test (tests/runtime_lifetimes.rs).
+    #[doc(hidden)]
+    pub fn run_state_debug(&self) -> String {
+        format!("{:?}", self.run)
+    }
+    /// The per-scene structures holding anything, for the same test: none right after
+    /// `change_scene` into a scene without start logic, characters or cameras, nor after `stop`.
+    #[doc(hidden)]
+    pub fn scene_state_in_use(&self) -> Vec<&'static str> {
+        let InputFrame {
+            held,
+            pressed,
+            released,
+            movement,
+            look,
+            wheel,
+        } = &self.step_input;
+        [
+            ("graphs", self.graphs.is_empty()),
+            ("input_timeline", self.input_timeline.is_empty()),
+            ("pending_pressed", self.pending_pressed.is_empty()),
+            ("pending_released", self.pending_released.is_empty()),
+            ("pending_look", self.pending_look == [0.; 2]),
+            ("pending_wheel", self.pending_wheel == 0.),
+            (
+                "step_input",
+                held.is_empty()
+                    && pressed.is_empty()
+                    && released.is_empty()
+                    && *movement == [0.; 2]
+                    && *look == [0.; 2]
+                    && *wheel == 0.,
+            ),
+            (
+                "characters",
+                self.characters.states.is_empty() && self.characters.world.is_none(),
+            ),
+            (
+                "cameras",
+                self.cameras.worlds.is_none() && self.cameras.pose.is_none(),
+            ),
+            ("ready", self.ready.is_empty()),
+            ("waiting", self.waiting.is_empty()),
+            ("bodies", self.bodies.is_empty()),
+            ("animations", self.animations.is_empty()),
+            ("disabled_behaviors", self.disabled_behaviors.is_empty()),
+            ("overlap_pairs", self.overlap_pairs.is_empty()),
+            ("area_activations", self.area_activations.is_empty()),
+            ("damage_hits", self.damage_hits.is_empty()),
+            ("area_hits", self.area_hits.is_empty()),
+        ]
+        .into_iter()
+        .filter_map(|(name, empty)| (!empty).then_some(name))
+        .collect()
+    }
     pub fn set_paused(&mut self, paused: bool) {
         self.input_timeline = Default::default();
         self.paused = paused;
@@ -315,10 +399,12 @@ impl Runtime {
     pub fn stop(&mut self) {
         self.stopped = true;
         self.set_paused(true);
+        self.graphs.clear();
         self.ready.clear();
         self.waiting.clear();
         self.sounds.clear();
         self.animations.clear();
+        self.disabled_behaviors.clear();
         self.area_hits.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -326,6 +412,7 @@ impl Runtime {
         self.bodies.clear();
         self.characters = Default::default();
         self.cameras = Default::default();
+        self.run = RunState::default();
     }
     pub fn click(&mut self, entity: &str) {
         if !self.paused && !self.stopped {
@@ -1134,6 +1221,7 @@ impl Runtime {
         self.waiting.retain(|task| !ids.contains(&task.owner));
         self.bodies.retain(|owner, _| !ids.contains(owner));
         self.animations.retain(|owner, _| !ids.contains(owner));
+        self.disabled_behaviors.retain(|owner| !ids.contains(owner));
         self.overlap_pairs
             .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
         self.damage_hits.retain(|(a, _), hits| {
@@ -1162,6 +1250,7 @@ impl Runtime {
         if self.scene_starts.len() > 64 {
             self.scene_starts.drain(..32);
         }
+        // Per-scene state only (see the module docs): `run` carries over.
         self.input_timeline = Default::default();
         self.characters = Default::default();
         self.cameras = Default::default();
@@ -1329,8 +1418,13 @@ impl Runtime {
             self.physics_dirty = true;
         }
         let mut players = std::mem::take(&mut self.animations);
+        // Scene order, as `emit` visits owners: the markers of one step and clips that share
+        // a target never follow the map's order.
+        let index = self.index();
+        let mut ordered: Vec<_> = players.iter_mut().collect();
+        ordered.sort_by_key(|(owner, _)| index.and_then(|index| index.position(owner)));
         let mut events = Vec::new();
-        for (owner, player) in &mut players {
+        for (owner, player) in ordered {
             let clip = self
                 .entity(owner)
                 .and_then(|entity| entity.clips.iter().find(|clip| clip.id == player.clip_id))
