@@ -1,6 +1,7 @@
 //! Stable input identities and editable display names, independent of native keys/UI.
 use crate::document::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MovementActions {
@@ -57,8 +58,18 @@ pub fn label<'a>(project: &'a Project, id: &str) -> std::borrow::Cow<'a, str> {
 }
 /// The action `text` names: its ID, or the name of exactly one action (case-insensitive).
 pub fn find(project: &Project, text: &str) -> Result<Id, String> {
+    find_named(project, text)?.ok_or_else(|| {
+        format!(
+            "A ação de entrada \"{text}\" não existe no projeto. Ações: {}",
+            summary(project)
+        )
+    })
+}
+/// [`find`], with `None` when no action has that ID or name; several actions sharing the
+/// name are still an error.
+pub fn find_named(project: &Project, text: &str) -> Result<Option<Id>, String> {
     if project.input_bindings.contains_key(text) {
-        return Ok(text.into());
+        return Ok(Some(text.into()));
     }
     let wanted = text.trim().to_lowercase();
     let named: Vec<&Id> = project
@@ -67,11 +78,8 @@ pub fn find(project: &Project, text: &str) -> Result<Id, String> {
         .filter(|id| label(project, id).to_lowercase() == wanted)
         .collect();
     match named.as_slice() {
-        [one] => Ok((*one).clone()),
-        [] => Err(format!(
-            "A ação de entrada \"{text}\" não existe no projeto. Ações: {}",
-            summary(project)
-        )),
+        [one] => Ok(Some((*one).clone())),
+        [] => Ok(None),
         many => Err(format!(
             "Há {} ações de entrada chamadas \"{text}\"; use o ID: {}",
             many.len(),
@@ -186,6 +194,17 @@ pub fn check_key(key: &str) -> Result<&'static str, String> {
 pub fn valid_binding(key: &str) -> bool {
     check_key(key).is_ok()
 }
+/// The keys two or more actions are bound to, by the name the game reads ("r" and "R" are one
+/// key), with those actions in ID order. In the game, pressing such a key fires them all.
+pub fn shared_keys(project: &Project) -> BTreeMap<String, Vec<&Id>> {
+    let mut bound: BTreeMap<String, Vec<&Id>> = BTreeMap::new();
+    for (id, key) in &project.input_bindings {
+        let name = key_name(key).map_or_else(|| key.clone(), str::to_owned);
+        bound.entry(name).or_default().push(id);
+    }
+    bound.retain(|_, ids| ids.len() > 1);
+    bound
+}
 
 pub fn create(project: &mut Project, name: &str, key: &str) -> Result<Id, String> {
     if name.trim().is_empty() {
@@ -218,20 +237,59 @@ pub struct Use {
     /// What uses the item: a component (controller2d, character, camera_control,
     /// collider3d), a node operation, "attribute <name>", or for assets material, ui or model.
     pub role: String,
+    /// The model asset holding the object, when it exists only inside a model: scene reads
+    /// do not reach it, and the scenes get it where the model is placed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+impl Use {
+    pub(crate) fn new(scope: Holder, entity: &Entity, role: impl Into<String>) -> Self {
+        Self {
+            scope: scope.into(),
+            entity: entity.id.clone(),
+            name: entity.name.clone(),
+            role: role.into(),
+            model: scope.model.then(|| scope.name.to_owned()),
+        }
+    }
 }
 
-/// Every object of the scenes and models, with the name of the scene or model holding it.
-pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (&str, &Entity)> {
+/// What holds an object: a scene or a model asset, by name. It reads as its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Holder<'a> {
+    pub name: &'a str,
+    pub model: bool,
+}
+impl std::fmt::Display for Holder<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+impl From<Holder<'_>> for String {
+    fn from(holder: Holder<'_>) -> Self {
+        holder.name.to_owned()
+    }
+}
+
+/// Every object of the scenes and models, with the scene or model holding it.
+pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (Holder<'_>, &Entity)> {
     project
         .scenes
         .iter()
-        .map(|s| (s.name.as_str(), s.entities.as_slice()))
-        .chain(
-            project
-                .assets
-                .iter()
-                .filter_map(|a| a.model.as_deref().map(|m| (a.name.as_str(), m))),
-        )
+        .map(|s| {
+            let scope = Holder {
+                name: &s.name,
+                model: false,
+            };
+            (scope, s.entities.as_slice())
+        })
+        .chain(project.assets.iter().filter_map(|a| {
+            let scope = Holder {
+                name: &a.name,
+                model: true,
+            };
+            a.model.as_deref().map(|m| (scope, m))
+        }))
         .flat_map(|(scope, entities)| entities.iter().map(move |e| (scope, e)))
 }
 
@@ -240,14 +298,7 @@ pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (&str, &En
 pub fn uses(project: &Project, id: &str) -> Vec<Use> {
     let mut found = Vec::new();
     for (scope, entity) in every_entity(project) {
-        let mut add = |role: &str| {
-            found.push(Use {
-                scope: scope.into(),
-                entity: entity.id.clone(),
-                name: entity.name.clone(),
-                role: role.into(),
-            })
-        };
+        let mut add = |role: &str| found.push(Use::new(scope, entity, role));
         if entity
             .controller
             .as_ref()

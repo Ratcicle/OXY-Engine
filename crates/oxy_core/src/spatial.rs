@@ -106,28 +106,10 @@ pub fn visual_bounds_in(view: &SceneView, ids: &[Id]) -> Result<Aabb, String> {
                     .into(),
             );
         }
-        if let Some(mesh) = &e.mesh {
-            for vertex in &mesh.data().vertices {
-                let p = world.transform_point3(Vec3::from(vertex.position));
-                min = min.min(p);
-                max = max.max(p);
-            }
-            continue;
-        }
-        let mut half = Vec3::from(e.dimensions) * 0.5;
-        match e.primitive {
-            Some(Primitive::Plane) => half.y = 0.,
-            Some(Primitive::Rectangle | Primitive::Sprite | Primitive::Circle) => half.z = 0.,
-            _ => {}
-        }
-        for x in [-1., 1.] {
-            for y in [-1., 1.] {
-                for z in [-1., 1.] {
-                    let p = world.transform_point3(half * Vec3::new(x, y, z));
-                    min = min.min(p);
-                    max = max.max(p);
-                }
-            }
+        for point in shape_points(e) {
+            let p = world.transform_point3(point);
+            min = min.min(p);
+            max = max.max(p);
         }
     }
     if !min.is_finite() || !max.is_finite() {
@@ -140,6 +122,149 @@ pub fn visual_bounds_in(view: &SceneView, ids: &[Id]) -> Result<Aabb, String> {
         (min + max) * 0.5,
         ((max - min) * 0.5).max(Vec3::splat(0.0005)),
     ))
+}
+
+/// Points that bound an object's own shape in its local space: a mesh's vertices, or the
+/// corners of its dimensions, flat shapes having no depth along their normal.
+fn shape_points(e: &Entity) -> Vec<Vec3> {
+    if let Some(mesh) = &e.mesh {
+        return mesh
+            .data()
+            .vertices
+            .iter()
+            .map(|vertex| Vec3::from(vertex.position))
+            .collect();
+    }
+    let mut half = Vec3::from(e.dimensions) * 0.5;
+    match e.primitive {
+        Some(Primitive::Plane) => half.y = 0.,
+        Some(Primitive::Rectangle | Primitive::Sprite | Primitive::Circle) => half.z = 0.,
+        _ => {}
+    }
+    let mut corners = Vec::with_capacity(8);
+    for x in [-1., 1.] {
+        for y in [-1., 1.] {
+            for z in [-1., 1.] {
+                corners.push(half * Vec3::new(x, y, z));
+            }
+        }
+    }
+    corners
+}
+
+/// Smallest side of a fitted box, so a flat shape (a plane) still gets a valid collider.
+const FIT_MIN_SIZE: f32 = 0.001;
+
+/// Fits the collider of `id` to its shape or, with `children`, to its shape and every piece
+/// under it, as the editor's Ajustar ao objeto and Ajustar ao grupo/filhos do (cameras and
+/// interface elements left out), with `margin` metres more on every side. A 3D box collider
+/// (solid or sensor) stays turned with the object and takes the box of the pieces in the
+/// object's own axes, its size and center; the 2D box collider takes their world box.
+/// Capsules, spheres, convex and triangle shapes and the 3D character's body are refused.
+pub fn fit_collider(
+    scene: &mut Scene,
+    id: &str,
+    children: bool,
+    margin: f32,
+) -> Result<(), String> {
+    if !margin.is_finite() || margin < 0. {
+        return Err("margin precisa ser um número finito de metros, 0 ou mais".into());
+    }
+    let e = scene
+        .entity(id)
+        .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))?;
+    let name = e.name.clone();
+    if e.character3d.is_some() {
+        return Err(format!(
+            "{name} é um Personagem 3D: a colisão dele é o corpo (character3d.body), com altura \
+             e raio próprios, que se mudam com update_entity"
+        ));
+    }
+    let box3d = match e.physics3d.as_ref().map(|c| &c.shape) {
+        Some(CollisionShape::Box { .. }) => true,
+        Some(shape) => {
+            let what = match shape {
+                CollisionShape::Capsule { .. } => "uma cápsula",
+                CollisionShape::Sphere { .. } => "uma esfera",
+                CollisionShape::Convex { .. } => "o convexo da peça",
+                _ => "a malha estática da peça",
+            };
+            return Err(format!(
+                "O colisor 3D de {name} é {what}, e fit_collider ajusta só caixas. Para uma \
+                 caixa, remova o componente e adicione-o de novo (remove_component e \
+                 add_component), ou troque a forma no editor"
+            ));
+        }
+        None if e.collider.is_some() => false,
+        None => {
+            return Err(format!(
+                "{name} não tem colisor: adicione um com add_component (collider3d ou sensor3d \
+                 numa cena 3D, collider2d ou sensor2d numa cena 2D)"
+            ));
+        }
+    };
+    let ids = if children {
+        scene.descendants(id)
+    } else {
+        vec![id.to_owned()]
+    };
+    let pieces: Vec<Id> = ids
+        .into_iter()
+        .filter(|piece| {
+            scene
+                .entity(piece)
+                .is_some_and(|e| e.has_geometry() && e.camera.is_none() && e.ui.is_none())
+        })
+        .collect();
+    if pieces.is_empty() {
+        return Err(if children {
+            format!("Nem {name} nem as peças dentro dele têm forma para o colisor envolver")
+        } else {
+            format!(
+                "{name} não tem forma própria; com children: true, o colisor envolve as peças \
+                 dentro dele"
+            )
+        });
+    }
+    if !box3d {
+        let mut bounds = visual_bounds(scene, &pieces)?;
+        bounds.min -= Vec3::splat(margin);
+        bounds.max += Vec3::splat(margin);
+        return set_collider_bounds(scene, id, bounds);
+    }
+    let world = invertible_world(scene, id)?;
+    let inverse = world.inverse();
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for piece in &pieces {
+        // The object's own shape is read as it is, without the rounding of the matrices.
+        let into = if piece == id {
+            Mat4::IDENTITY
+        } else {
+            inverse * invertible_world(scene, piece)?
+        };
+        for point in shape_points(scene.entity(piece).ok_or("Peça não encontrada")?) {
+            let p = into.transform_point3(point);
+            min = min.min(p);
+            max = max.max(p);
+        }
+    }
+    // The margin is in metres of the world; the box is in the object's scaled axes.
+    let room = Vec3::splat(margin) / physical_scale(world);
+    let size = (max - min).max(Vec3::splat(FIT_MIN_SIZE)) + room * 2.;
+    let center = (min + max) * 0.5;
+    if !size.is_finite() || !center.is_finite() {
+        return Err("Não foi possível medir as peças para o colisor".into());
+    }
+    let collider = scene
+        .entity_mut(id)
+        .and_then(|e| e.physics3d.as_mut())
+        .ok_or("Objeto sem colisor")?;
+    collider.shape = CollisionShape::Box {
+        size: size.to_array(),
+    };
+    collider.center = center.to_array();
+    Ok(())
 }
 
 /// World box of what `id` and its children show, hidden pieces included. Cameras, interface

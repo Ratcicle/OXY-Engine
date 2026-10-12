@@ -120,8 +120,9 @@ lists their categories; then ask for the nodes you will use with operations or c
 their ports with types and parameters with defaults (only those nodes come back). A parameter \
 with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
 any other. ref says what a parameter names: scene, audio, clip, object, attribute, \
-input_action, surface or marker (an ID, or for attribute and marker a name). Read it before \
-building logic.";
+input_action, surface or marker (an ID, or for attribute and marker a name; an input_action \
+also by its name, which add_node and set_node_params store as the ID). value_format says how \
+values are written. Read it before building logic.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
@@ -154,14 +155,18 @@ pub fn definitions() -> Json {
             "oxy_project",
             "Summary of a project: scenes (ID, name, 2D/3D, object count), assets [{id, name, \
              kind: Texture|Audio|Model, path (images and sounds, relative to the project \
-             folder), used_by}], input actions [{id, name, key, used_by}], physics surfaces [{id, \
-             name, friction, traction, speed_multiplier, conveyor, conveyor_space, used_by}] and \
-             collision groups [{bit, name}] (bit: the bit of collider category and mask; the \
-             groups not listed are named Grupo N, N being bit + 1). used_by lists up to 10 objects \
-             {entity, name, role}, role being a component (controller2d, character, \
-             camera_control, collider3d), a node operation, attribute <name>, or for assets \
-             material, ui (an interface element's image) or model; used_by_total counts them \
-             when there are more.",
+             folder), used_by}], input actions [{id, name, key, shares_key_with?, used_by}] \
+             (shares_key_with: the other actions [{id, name}] on the same key, which the game \
+             fires together), physics surfaces [{id, name, friction, traction, \
+             speed_multiplier, conveyor, conveyor_space, used_by}] and collision groups [{bit, \
+             name}] (bit: the bit of collider category and mask; the groups not listed are \
+             named Grupo N, N being bit + 1). used_by lists up to 10 objects {entity, name, \
+             role, model?}, role being a component (controller2d, character, camera_control, \
+             collider3d), a node operation, attribute <name>, or for assets material, ui (an \
+             interface element's image) or model (a model's placements, one per placed root); \
+             model names the model asset holding an object that exists only inside it, which \
+             oxy_entity and oxy_find do not reach. used_by_total counts them when there are \
+             more.",
             json!({"project": project}),
             json!([])
         ),
@@ -448,12 +453,16 @@ pub fn definitions() -> Json {
 }
 
 const APPLY_DESCRIPTION: &str = "Edits the project with a batch of commands, all-or-nothing: if \
-one fails, nothing changes and the error names it. Live, the batch is one undo step labelled \
-'Agente: …' in the editor and the person saves; on files, the project file is saved (the \
-previous version is kept as project.oxy.json.agente.bak). The answer is {created, warnings?}: \
-created maps the index of each command that created something to [{id, name}] (every piece of \
-a preset, its root first; a node's name is its operation), and warnings lists what the batch \
-left that the game will ignore, such as a node naming an input action the project lacks.
+one fails, nothing changes and the error names it as \"Comando N (op, o Kº do lote)\", N being \
+its 0-based index, the one \"$N\" and created use (K = N + 1). Live, the batch is one undo step \
+labelled 'Agente: …' in the editor and the person saves; on files, the project file is saved \
+(the previous version is kept as project.oxy.json.agente.bak). The answer is {created, \
+warnings?}: created maps the index of each command that created something to [{id, name}] \
+(every piece of a preset, its root first; a node's name is its operation; what a later command \
+removed keeps the name it was created with), and warnings lists what the batch left that the \
+game will ignore or take otherwise than it may seem: a node naming an input action the project \
+lacks, two actions on one key (the game fires both), a box collider left at an object's old \
+dimensions, logic copied to another scene that still opens the scene it came from.
 Placeholders: in later commands, a whole string \"$N\" is the first ID created by command N \
 (0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included; \"$$N\" is the \
 text \"$N\" itself. Other text with '$', such as \"$10 de bônus\", stays as it is.
@@ -473,10 +482,12 @@ set_parent {ids, parent?} (keeps world transform)
 - copy_entities {ids, to_scene, parent?}: copies objects of `scene`, with everything under them, \
 to another scene, keeping their place in the world and the world path of the animations that \
 move them, under a scaled or turned parent too; answers the copies' roots. Refused while they \
-point to objects or animations left behind (copy those too)
+point to objects or animations left behind (copy those too). action.scene nodes keep their \
+scene: those opening the scene copied from come back in warnings (set_node_params them)
 - save_model {entity, name?}: the object and everything under it become a model asset (answers \
-its ID); place_model {model: ID or name, parent?, position?, name?}: places a copy in `scene`, \
-answering every piece, its root first. Reuse a player rig, HUD or puzzle across levels this way
+its ID); a name another model has is refused (any case). place_model {model: ID or name, \
+parent?, position?, name?}: places a copy in `scene`, answering every piece, its root first. \
+Reuse a player rig, HUD or puzzle across levels this way
 - set_transform {entity, position?, rotation? (degrees), scale?, move_tracks?}: keyframes that \
 animate the object follow it (a moved platform keeps its path around its new place) when \
 move_tracks is true; by default when its own animations move it. set_visible {entity, visible}; \
@@ -489,20 +500,34 @@ Keyframes are local transforms; channels left out are the target's current ones.
 action.animation node (param clip). delete_clip {entity, clip}, refused while a node plays it
 - apply_movement_profile {entity, profile: direct|parkour|chained}: writes the profile's values \
 (oxy_catalog movement_profiles) into a 3D character; they stay editable
-- set_attribute {entity, name, value?} (no value removes); values are tagged, e.g. {\"Number\": 3}
+- set_attribute {entity, name, value?} (no value removes); attribute values are always tagged, \
+e.g. {\"Number\": 3}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\"}
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
-camera_control|collider2d|sensor2d|controller2d}
+camera_control|collider2d|sensor2d|controller2d}. A box collider takes the shape's dimensions \
+when added and follows the object's scale, not later dimension changes
+- fit_collider {entity, children?: bool (default false), margin?: metres (default 0)}: fits the \
+object's box collider to its shape, or with children to its shape and every piece under it, \
+plus margin on every side, like the editor's Ajustar ao objeto / Ajustar ao grupo/filhos. A 3D \
+box (collider3d or sensor3d) stays turned with the object, its size and center in the object's \
+axes; a 2D box collider takes the world box. Capsules, spheres, convex and mesh colliders and \
+3D characters (their body is the collider) are refused
 - update_entity {entity, patch}: JSON merge patch over the object's document form (oxy_entity \
 with graph and geometry full) for fields without a dedicated command
 - add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
-to_node, to_port}. A parameter with choices in oxy_catalog takes only those values.
+to_node, to_port}. Parameter values are tagged like attributes, or plain when oxy_catalog gives \
+the parameter's type: a number for a Number parameter, a text for Text, true/false for Bool \
+(\"mode\": \"held\"); other plain values are refused with the tagged form expected. A parameter \
+with choices in oxy_catalog takes only those values. An input action parameter (ref \
+input_action) takes the action's ID or name and stores the ID, which the game reads.
 - create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
 key}; delete_input_action {action}, refused while used (oxy_project lists used_by). action is \
 the ID or the name (an exact ID wins); key is one of oxy_catalog input_keys (Escape and F3 are \
 reserved). create and rename refuse a name another action has or uses as its ID; presets and \
 components that add default actions (Pular, Correr…) do not check, so a name two actions share \
-comes back in warnings: use the ID then. Logic nodes and oxy_simulate use the ID.
+comes back in warnings: use the ID then. A key another action already has is accepted with a \
+warning naming it: in the game the key fires both, and oxy_simulate, which presses actions, \
+never shows it. Logic nodes and oxy_simulate use the ID.
 - create_surface {preset?: common|ice|mud|conveyor (default common), name?, friction?, traction?, \
 speed_multiplier?, conveyor?: [x,y,z] m/s, conveyor_space?: World|Local}; update_surface \
 {surface, and the same fields but preset}; delete_surface {surface}, refused while used. Assign \
@@ -1543,6 +1568,8 @@ mod tests {
             json!({"op": "delete_clip", "entity": "e", "clip": "c", "scene": "s"}),
             json!({"op": "apply_movement_profile", "entity": "e", "profile": "parkour",
                    "scene": "s"}),
+            json!({"op": "fit_collider", "entity": "e", "children": true, "margin": 0.1,
+                   "scene": "s"}),
         ] {
             command::parse(&command).unwrap();
         }
@@ -1664,6 +1691,128 @@ mod tests {
                 .unwrap()
                 .contains(&json!("Space"))
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The test run's findings on files: a collider left at a shape's old size, input actions
+    /// by name, plain parameters, shared keys and objects only inside models.
+    #[test]
+    fn files_fit_colliders_and_take_actions_by_name_and_plain_parameters() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-fit-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ajustes", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Pouso do checkpoint", "position": [0.0, 0.7, -93.5]},
+                {"op": "add_component", "entity": "$0", "component": "collider3d"},
+                {"op": "update_entity", "entity": "$0", "patch": {"dimensions": [9, 0.4, 7]}},
+                {"op": "create_input_action", "name": "Voltar ao checkpoint", "key": "R"},
+                {"op": "create_input_action", "name": "Reiniciar fase", "key": "r"},
+                {"op": "add_node", "entity": "$0", "operation": "event.input",
+                 "params": {"action": "Reiniciar fase", "mode": "held"}},
+            ]}),
+        )
+        .unwrap();
+        let pad = applied["created"]["0"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let restart = applied["created"]["4"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let warnings: Vec<&str> = applied["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w.as_str().unwrap())
+            .collect();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("A tecla R é de 2 ações"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].starts_with("Comando 2 (update_entity, o 3º do lote)")
+                && warnings[1].contains("fit_collider"),
+            "{warnings:?}"
+        );
+        let node = call(
+            "oxy_entity",
+            json!({"id": pad, "graph": "full", "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            node["graph"]["nodes"][0]["params"],
+            json!({"action": {"Text": restart}, "mode": {"Text": "held"}}),
+            "{node}"
+        );
+
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "fit_collider", "entity": pad}]}),
+        )
+        .unwrap();
+        let tree = call("oxy_scene", json!({"fields": ["bounds"]})).unwrap();
+        let listed = &tree["objects"][0];
+        assert_eq!(
+            listed["collider_bounds"]["min"],
+            listed["visual_bounds"]["min"]
+        );
+        assert_eq!(listed["collider_bounds"]["max"], json!([4.5, 0.9, -90.0]));
+
+        // The other action on the key, in the summary.
+        let summary = call("oxy_project", json!({})).unwrap();
+        let action = summary["input_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == restart.as_str())
+            .unwrap()
+            .clone();
+        assert_eq!(action["shares_key_with"][0]["name"], "Voltar ao checkpoint");
+        // A refused command is named by its 0-based index, in Portuguese.
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "rename_entity", "entity": pad, "name": "Pouso"},
+                {"op": "set_node_params", "entity": pad, "node": "nao-existe", "params": {}},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("Comando 1 (set_node_params, o 2º do lote): Nó nao-existe"),
+            "{error}"
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "set_attribute", "entity": pad, "name": "vida",
+                                 "value": 3}]}),
+        )
+        .unwrap_err();
+        assert!(error.contains("como {\"Number\":3}"), "{error}");
+        for text in [
+            "fit_collider",
+            "plain when oxy_catalog gives",
+            "two actions on one key",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

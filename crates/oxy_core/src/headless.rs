@@ -1755,6 +1755,7 @@ mod tests {
         let applied = vec![Applied {
             op: "create_entity".into(),
             created: vec!["a".into(), "b".into()],
+            ..Default::default()
         }];
         assert_eq!(resolve("$0", &applied).unwrap(), "a");
         assert_eq!(resolve("$0.1", &applied).unwrap(), "b");

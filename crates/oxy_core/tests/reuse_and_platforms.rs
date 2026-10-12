@@ -883,23 +883,37 @@ fn models_are_saved_and_placed_in_any_level() {
         error.contains("fora do modelo") && error.contains("atributo alvo → Alvo"),
         "{error}"
     );
-    apply(
+    // place_model takes models by name, so save_model refuses a name another model has.
+    let error = refused(
         &mut project,
         &first,
-        json!({"op": "save_model", "entity": tower, "name": "Torre"}),
+        json!({"op": "save_model", "entity": tower, "name": " torre "}),
     );
+    assert_eq!(
+        error,
+        format!("Já existe um modelo chamado \"Torre\" ({model}); escolha outro nome com name")
+    );
+    let error = refused(
+        &mut project,
+        &first,
+        json!({"op": "place_model", "model": "Castelo"}),
+    );
+    assert!(
+        error.contains("Modelo Castelo não existe no projeto. Modelos: Torre (")
+            && error.contains("Plataforma padrão ("),
+        "the error lists the models: {error}"
+    );
+    // Projects saved before may still have two; by name, place_model refuses both.
+    let mut twin = project.asset(&model).unwrap().clone();
+    twin.id = new_id();
+    project.assets.push(twin);
     let error = refused(
         &mut project,
         &first,
         json!({"op": "place_model", "model": "Torre"}),
     );
     assert!(error.contains("2 modelos se chamam \"Torre\""), "{error}");
-    let error = refused(
-        &mut project,
-        &first,
-        json!({"op": "place_model", "model": "Castelo"}),
-    );
-    assert!(error.contains("Modelo Castelo não existe"), "{error}");
+    project.assets.pop();
     let error = refused(
         &mut project,
         &first,
@@ -1129,4 +1143,119 @@ fn movement_profiles_are_applied_by_command_and_described_in_the_catalog() {
         json!([4.0, 0.0, 0.0])
     );
     assert!(preset("third_person")["description"].is_string());
+}
+
+#[test]
+fn copies_to_another_level_warn_about_logic_that_opens_the_level_they_left() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle da fase"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": first}},
+            // Another level is a choice, not a leftover.
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": "$0"}},
+            {"op": "copy_entities", "ids": ["$1"], "to_scene": "$0"},
+            // Into the same level, the scene it opens is its own.
+            {"op": "copy_entities", "ids": ["$1"], "to_scene": first},
+        ])),
+    )
+    .unwrap();
+    let second = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let copy = report["created"]["4"][0]["id"].as_str().unwrap().to_owned();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    let node = &entity(&project, &second, &copy).graph.nodes[0];
+    assert_eq!(
+        node.text("scene"),
+        first,
+        "the copy still opens the old level"
+    );
+    assert!(
+        warning.starts_with("Comando 4 (copy_entities, o 5º do lote): estes nós copiados")
+            && warning.contains("ainda abrem Cena 3D, a cena de onde vieram")
+            && warning.contains(&format!("{{\"Text\": \"{second}\"}}"))
+            && warning.contains(&format!("Controle da fase → nó action.scene ({})", node.id)),
+        "{warning}"
+    );
+    assert_eq!(warning.matches("nó action.scene").count(), 1, "{warning}");
+}
+
+#[test]
+fn uses_name_the_model_holding_them_and_a_model_lists_its_placements() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Agir", "key": "G"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Rig"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+             "name": "Corpo", "parent": "$1"},
+            {"op": "add_node", "entity": "$2", "operation": "event.input",
+             "params": {"action": {"Text": "$0"}}},
+            {"op": "save_model", "entity": "$1", "name": "Modelo rig"},
+            {"op": "delete_entities", "ids": ["$1"]},
+        ])),
+    )
+    .unwrap();
+    // What a later command removed keeps the name it was created with.
+    assert_eq!(report["created"]["1"][0]["name"], "Rig");
+    assert_eq!(report["created"]["2"][0]["name"], "Corpo");
+    assert_eq!(report["created"]["3"][0]["name"], "event.input");
+    assert_eq!(report["created"]["4"][0]["name"], "Modelo rig");
+    let action = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let model = report["created"]["4"][0]["id"].as_str().unwrap().to_owned();
+    let summary = |project: &Project| query::project_summary(project);
+    let action_uses = |summary: &Json| {
+        summary["input_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == action.as_str())
+            .unwrap()["used_by"]
+            .clone()
+    };
+    // Only inside the model: scene reads do not reach it, and the answer says where it is.
+    let inside = action_uses(&summary(&project));
+    assert_eq!(inside.as_array().unwrap().len(), 1, "{inside}");
+    assert_eq!(inside[0]["name"], "Corpo");
+    assert_eq!(inside[0]["model"], "Modelo rig");
+
+    let placed = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "place_model", "model": "Modelo rig", "position": [0.0, 0.0, 0.0]},
+            {"op": "place_model", "model": model, "position": [5.0, 0.0, 0.0], "name": "Rig 2"},
+        ]),
+    );
+    let uses = action_uses(&summary(&project));
+    let models: Vec<&Json> = uses
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| &u["model"])
+        .collect();
+    assert_eq!(models, [&Json::Null, &Json::Null, &json!("Modelo rig")]);
+    // The model lists each placement by its root, not every piece.
+    let listed = summary(&project)["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == model.as_str())
+        .unwrap()["used_by"]
+        .clone();
+    assert_eq!(
+        listed,
+        json!([
+            {"entity": placed[0].created[0], "name": "Rig", "role": "model"},
+            {"entity": placed[1].created[0], "name": "Rig 2", "role": "model"},
+        ])
+    );
 }

@@ -75,14 +75,7 @@ impl SurfaceMaterial {
 pub fn uses(project: &Project, id: &str) -> Vec<Use> {
     let mut found = Vec::new();
     for (scope, e) in every_entity(project) {
-        let mut add = |role: String| {
-            found.push(Use {
-                scope: scope.into(),
-                entity: e.id.clone(),
-                name: e.name.clone(),
-                role,
-            })
-        };
+        let mut add = |role: String| found.push(Use::new(scope, e, role));
         if e.physics3d
             .as_ref()
             .is_some_and(|c| c.surface.as_deref() == Some(id))

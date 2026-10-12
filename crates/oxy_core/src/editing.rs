@@ -482,26 +482,30 @@ pub fn transform_selection(scene: &mut Scene, ids: &[Id], delta: Mat4) -> Result
 }
 
 /// Objects of the scenes and models that use an asset, with the part that uses it: role
-/// `material`, `ui` (the image of an interface element), `model` (a placed model) or the
-/// operation of a node naming it.
+/// `material`, `ui` (the image of an interface element), `model` (a placed model, by the root
+/// of each placement, not every piece) or the operation of a node naming it.
 pub fn asset_uses(project: &Project, asset: &str) -> Vec<crate::input_actions::Use> {
+    use crate::input_actions::{Use, every_entity};
+    // The pieces of the placements: a placement's root is the one whose parent is not one.
+    let placed: HashSet<&str> = every_entity(project)
+        .filter(|(_, e)| e.model_source.as_deref() == Some(asset))
+        .map(|(_, e)| e.id.as_str())
+        .collect();
     let mut found = Vec::new();
-    for (scope, entity) in crate::input_actions::every_entity(project) {
-        let mut add = |role: &str| {
-            found.push(crate::input_actions::Use {
-                scope: scope.into(),
-                entity: entity.id.clone(),
-                name: entity.name.clone(),
-                role: role.into(),
-            })
-        };
+    for (scope, entity) in every_entity(project) {
+        let mut add = |role: &str| found.push(Use::new(scope, entity, role));
         if entity.material.texture.as_deref() == Some(asset) {
             add("material");
         }
         if entity.ui.as_ref().and_then(|u| u.texture.as_deref()) == Some(asset) {
             add("ui");
         }
-        if entity.model_source.as_deref() == Some(asset) {
+        if placed.contains(entity.id.as_str())
+            && entity
+                .parent
+                .as_deref()
+                .is_none_or(|parent| !placed.contains(parent))
+        {
             add("model");
         }
         for node in &entity.graph.nodes {

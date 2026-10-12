@@ -5,16 +5,18 @@
 //! A batch is all-or-nothing: commands run in order on a copy of the project, the project is
 //! validated after each one, and only a fully valid copy replaces the original. A string
 //! such as `"$0"` in a later command stands for the first ID created by command 0 (see
-//! [`Placeholder`]).
+//! [`Placeholder`]); commands are counted from 0 in errors and answers too.
 use crate::{
     animation::{AnimationEvent, Clip, Interpolation, Keyframe, Track},
     authoring::{self, ComponentKind},
     character::MovementProfile,
     document::*,
     editing,
-    graph::{self, Edge, Node},
+    graph::{self, Edge, Node, OperationDef, Reference},
     input_actions::{self, every_entity},
     movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
+    physics3d::CollisionShape,
+    spatial,
     surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace},
 };
 use glam::{Mat4, Vec3};
@@ -117,6 +119,105 @@ pub struct TrackSpec {
 pub struct MarkerSpec {
     pub time: f32,
     pub name: String,
+}
+
+/// A logic node parameter or an attribute value as a command gives it: tagged with its type,
+/// such as `{"Number": 3}`, or plain. A plain value counts only for a node parameter whose
+/// type the catalog knows and only in the obvious reading (a number for Number, a text for
+/// Text, true or false for Bool); anything else is refused with the tagged form expected.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ParamValue {
+    Tagged(Value),
+    /// Read when the command runs, against the parameter's type.
+    Plain(Json),
+}
+impl ParamValue {
+    /// The value, a plain one read as `expected` (the type the catalog gives, None for
+    /// attributes, which have none). `what` names it in the error, such as "O parâmetro
+    /// volume do nó action.sound".
+    fn value(&self, expected: Option<&Value>, what: &str) -> Result<Value, String> {
+        let plain = match self {
+            Self::Tagged(value) => return Ok(value.clone()),
+            Self::Plain(plain) => plain,
+        };
+        match (expected, plain) {
+            (Some(Value::Number(_)), Json::Number(n)) if n.as_f64().is_some() => {
+                return Ok(Value::Number(n.as_f64().unwrap_or_default()));
+            }
+            (Some(Value::Text(_)), Json::String(text)) => return Ok(Value::Text(text.clone())),
+            (Some(Value::Bool(_)), Json::Bool(b)) => return Ok(Value::Bool(*b)),
+            _ => {}
+        }
+        let (example, case) = tagged_example(expected, plain);
+        Err(format!(
+            "{what} precisa de um valor marcado com o tipo, como {example}; recebeu {plain}{}",
+            if case {
+                " (o nome do tipo começa com maiúscula)"
+            } else {
+                ""
+            }
+        ))
+    }
+}
+
+/// The tags of [`Value`], as values are written.
+const VALUE_TAGS: [&str; 7] = [
+    "Number", "Text", "Bool", "Object", "Vector2", "Vector3", "Surface",
+];
+
+/// How `plain` reads tagged as `expected` or, without a type, as its JSON form suggests, for
+/// messages; true when `plain` is a tag written in another case, such as {"number": 3}.
+fn tagged_example(expected: Option<&Value>, plain: &Json) -> (String, bool) {
+    let tagged = |tag: &str, inner: Json| {
+        Json::Object(Map::from_iter([(tag.to_owned(), inner)])).to_string()
+    };
+    // A tag, in any case, around a value: the example shows the tag as written and the value
+    // in its form.
+    let mut plain = plain;
+    let mut known = None;
+    let mut case = false;
+    if let Json::Object(map) = plain
+        && map.len() == 1
+        && let Some((key, inner)) = map.iter().next()
+        && let Some(tag) = VALUE_TAGS.iter().find(|tag| tag.eq_ignore_ascii_case(key))
+    {
+        known = Some(*tag);
+        case = *tag != key.as_str();
+        plain = inner;
+    }
+    // The catalog's type first, then the tag given, then what the JSON looks like.
+    let typed = expected.map(|value| match value {
+        Value::Number(_) => "Number",
+        Value::Text(_) => "Text",
+        Value::Bool(_) => "Bool",
+        Value::Object(_) => "Object",
+        Value::Vector2(_) => "Vector2",
+        Value::Vector3(_) => "Vector3",
+        Value::Surface(_) => "Surface",
+    });
+    let tag = typed.or(known).unwrap_or(match plain {
+        Json::Number(_) => "Number",
+        Json::Bool(_) => "Bool",
+        Json::Array(items) if items.len() == 2 => "Vector2",
+        Json::Array(items) if items.len() == 3 => "Vector3",
+        _ => "Text",
+    });
+    let inner = match (tag, plain) {
+        ("Number", Json::Number(_))
+        | ("Bool", Json::Bool(_))
+        | ("Text" | "Object" | "Surface", Json::String(_)) => plain.clone(),
+        ("Vector2", Json::Array(items)) if items.len() == 2 => plain.clone(),
+        ("Vector3", Json::Array(items)) if items.len() == 3 => plain.clone(),
+        ("Number", _) => json!(1),
+        ("Bool", _) => json!(true),
+        ("Object", _) => json!("<ID do objeto>"),
+        ("Surface", _) => json!("<ID da superfície>"),
+        ("Vector2", _) => json!([0, 0]),
+        ("Vector3", _) => json!([0, 0, 0]),
+        _ => json!("texto"),
+    };
+    (tagged(tag, inner), case)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -276,14 +377,15 @@ pub enum Command {
         #[serde(default)]
         clear_texture: bool,
     },
-    /// Sets an attribute, or removes it when `value` is absent.
+    /// Sets an attribute, or removes it when `value` is absent. Attributes have no type in
+    /// the catalog, so the value is always tagged.
     SetAttribute {
         #[serde(default)]
         scene: Option<Id>,
         entity: Id,
         name: String,
         #[serde(default)]
-        value: Option<Value>,
+        value: Option<ParamValue>,
     },
     AddComponent {
         #[serde(default)]
@@ -296,6 +398,17 @@ pub enum Command {
         scene: Option<Id>,
         entity: Id,
         component: ComponentKind,
+    },
+    /// Fits the object's box collider to its shape or, with `children`, to its shape and the
+    /// pieces under it, plus `margin` metres on every side (see [`spatial::fit_collider`]).
+    FitCollider {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        #[serde(default)]
+        children: bool,
+        #[serde(default)]
+        margin: Option<f32>,
     },
     /// Writes a movement profile's values into a 3D character (see
     /// [`crate::character::PROFILE_FIELDS`]); they stay editable.
@@ -313,6 +426,7 @@ pub enum Command {
         entity: Id,
         patch: Json,
     },
+    /// An input action parameter takes the action's ID or its name, and keeps the ID.
     AddNode {
         #[serde(default)]
         scene: Option<Id>,
@@ -321,7 +435,7 @@ pub enum Command {
         #[serde(default)]
         position: Option<[f32; 2]>,
         #[serde(default)]
-        params: BTreeMap<String, Value>,
+        params: BTreeMap<String, ParamValue>,
     },
     /// Removes a node and its connections.
     RemoveNode {
@@ -335,7 +449,7 @@ pub enum Command {
         scene: Option<Id>,
         entity: Id,
         node: Id,
-        params: BTreeMap<String, Value>,
+        params: BTreeMap<String, ParamValue>,
     },
     Connect {
         #[serde(default)]
@@ -446,6 +560,7 @@ impl Command {
             Self::SetAttribute { .. } => "Mudar atributo",
             Self::AddComponent { .. } => "Adicionar componente",
             Self::RemoveComponent { .. } => "Remover componente",
+            Self::FitCollider { .. } => "Ajustar colisor",
             Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
             Self::AddNode { .. } => "Adicionar nó",
@@ -465,11 +580,30 @@ impl Command {
 }
 
 /// What one command did.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Applied {
     pub op: String,
     /// IDs the command created, in order (objects, scenes or nodes).
     pub created: Vec<Id>,
+    /// The name of each created ID right after the command (a node's is its operation), for
+    /// the answer to name what a later command of the batch removed.
+    #[serde(skip)]
+    pub names: Vec<Option<String>>,
+    /// What the command left that the game takes otherwise than it may seem, as the batch
+    /// ended (see [`Check`]).
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+}
+
+/// Which command of a batch, as errors and warnings name it: its index, counted from 0 as
+/// `"$N"` and `created` count, its op and its place in words, "Comando 1 (set_node_params, o
+/// 2º do lote)".
+fn which(index: usize, op: &str) -> String {
+    if op.is_empty() {
+        format!("Comando {index} (o {}º do lote)", index + 1)
+    } else {
+        format!("Comando {index} ({op}, o {}º do lote)", index + 1)
+    }
 }
 
 /// A command that failed; nothing in its batch was applied.
@@ -481,12 +615,12 @@ pub struct CommandError {
 }
 impl std::fmt::Display for CommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Messages written as sentences end in a period already.
         write!(
             f,
-            "Comando {} ({}): {}. Nada foi alterado.",
-            self.index + 1,
-            self.op,
-            self.message
+            "{}: {}. Nada foi alterado.",
+            which(self.index, &self.op),
+            self.message.trim_end().trim_end_matches('.')
         )
     }
 }
@@ -501,6 +635,7 @@ pub fn apply(
 ) -> Result<Vec<Applied>, CommandError> {
     let mut draft = project.clone();
     let mut applied: Vec<Applied> = Vec::with_capacity(commands.len());
+    let mut checks: Vec<(usize, Check)> = Vec::new();
     for (index, command) in commands.iter().enumerate() {
         let fail = |message: String| CommandError {
             index,
@@ -508,15 +643,129 @@ pub fn apply(
             message,
         };
         let command = resolve_placeholders(command, &applied).map_err(fail)?;
-        let created = apply_one(&mut draft, default_scene, &command).map_err(fail)?;
+        let mut raised = Vec::new();
+        let created = apply_one(&mut draft, default_scene, &command, &mut raised).map_err(fail)?;
         validate_project(&draft).map_err(|e| fail(e.to_string()))?;
+        checks.extend(raised.into_iter().map(|check| (index, check)));
+        let names = if created.is_empty() {
+            Vec::new()
+        } else {
+            let wanted: HashSet<&str> = created.iter().map(String::as_str).collect();
+            let found = names_of(&draft, &wanted);
+            created
+                .iter()
+                .map(|id| found.get(id.as_str()).cloned())
+                .collect()
+        };
         applied.push(Applied {
             op: command.op(),
             created,
+            names,
+            warnings: Vec::new(),
         });
+    }
+    // Checked on the final project: a later command may have settled them.
+    for (index, check) in checks {
+        if let Some(message) = check.message(&draft) {
+            let command = &mut applied[index];
+            command
+                .warnings
+                .push(format!("{}: {message}", which(index, &command.op)));
+        }
     }
     *project = draft;
     Ok(applied)
+}
+
+/// Something a command left that the batch checks once it ends, since a later command may
+/// settle it.
+enum Check {
+    /// update_entity gave an object other dimensions while its box collider kept `size`, the
+    /// old ones.
+    StaleCollider {
+        scene: Id,
+        entity: Id,
+        size: [f32; 3],
+    },
+    /// copy_entities copied into `scene` the action.scene nodes `nodes` ([object, node]),
+    /// which open `from`, the scene the copies came from.
+    SceneBack {
+        scene: Id,
+        from: Id,
+        nodes: Vec<(Id, Id)>,
+    },
+}
+impl Check {
+    /// The warning, when what was checked is still so in `project`.
+    fn message(&self, project: &Project) -> Option<String> {
+        match self {
+            Self::StaleCollider {
+                scene,
+                entity,
+                size,
+            } => {
+                let e = project.scene(scene)?.entity(entity)?;
+                if box_size(e) != Some(*size) || near(e.dimensions, *size) {
+                    return None;
+                }
+                let shown = |v: [f32; 3]| format!("[{}, {}, {}]", v[0], v[1], v[2]);
+                Some(format!(
+                    "{} ({entity}) agora mede {}, mas o colisor de caixa continua com {}; no \
+                     jogo, a colisão não acompanha a forma. Para ajustá-lo, use fit_collider \
+                     {{\"entity\": \"{entity}\"}}",
+                    e.name,
+                    shown(e.dimensions),
+                    shown(*size)
+                ))
+            }
+            Self::SceneBack { scene, from, nodes } => {
+                let to = project.scene(scene)?;
+                let listed: Vec<String> = nodes
+                    .iter()
+                    .filter_map(|(entity, node)| {
+                        let e = to.entity(entity)?;
+                        e.graph
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == *node && n.text("scene") == from)
+                            .map(|n| format!("{} → nó action.scene ({})", e.name, n.id))
+                    })
+                    .collect();
+                if listed.is_empty() {
+                    return None;
+                }
+                let source = project.scene(from).map_or(from.as_str(), |s| &s.name);
+                Some(format!(
+                    "estes nós copiados para {} ainda abrem {source}, a cena de onde vieram; \
+                     para que abram a cena nova (reiniciar a fase, por exemplo), use \
+                     set_node_params com scene {{\"Text\": \"{}\"}}: {}",
+                    to.name,
+                    to.id,
+                    listed.join("; ")
+                ))
+            }
+        }
+    }
+}
+
+/// The size of an object's box collider: its 3D box collider or, without one, its 2D box
+/// collider. None for other shapes and for 3D characters, whose body is their collider.
+fn box_size(e: &Entity) -> Option<[f32; 3]> {
+    if e.character3d.is_some() {
+        return None;
+    }
+    match &e.physics3d {
+        Some(collider) => match collider.shape {
+            CollisionShape::Box { size } => Some(size),
+            _ => None,
+        },
+        None => e.collider.as_ref().map(|c| c.size),
+    }
+}
+
+/// Whether two sizes are the same but for f32 rounding.
+fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1e-4)
 }
 
 /// Applies `commands` like [`apply`] and answers as an agent reads the result: see [`report`].
@@ -530,21 +779,13 @@ pub fn apply_and_report(
     Ok(report(project, &applied, &before))
 }
 
-/// A batch's result for agents: `created` maps the index of each command that created
-/// something to the IDs it created, in order (a preset's root first), with their names (a
-/// node's is its operation); `warnings`, present when the batch added any, lists what the
-/// game will ignore without failing and the action names it left ambiguous (see
-/// [`batch_warnings`]); `before` are the project's [`batch_warnings`] before the batch, which
-/// are not repeated.
-pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Json {
-    let wanted: HashSet<&str> = applied
-        .iter()
-        .flat_map(|a| a.created.iter().map(String::as_str))
-        .collect();
-    let mut names: HashMap<&str, String> = HashMap::new();
+/// The names of the `wanted` IDs in `project`: scenes, objects of scenes and models, nodes
+/// (by their operation), animations, input actions, surfaces and assets.
+fn names_of<'a>(project: &Project, wanted: &HashSet<&'a str>) -> HashMap<&'a str, String> {
+    let mut names = HashMap::new();
     let mut found = |id: &str, name: &str| {
         if let Some(id) = wanted.get(id) {
-            names.insert(id, name.to_owned());
+            names.insert(*id, name.to_owned());
         }
     };
     for scene in &project.scenes {
@@ -568,6 +809,22 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
     for asset in &project.assets {
         found(&asset.id, &asset.name);
     }
+    names
+}
+
+/// A batch's result for agents: `created` maps the index of each command that created
+/// something to the IDs it created, in order (a preset's root first), with their names (a
+/// node's is its operation; what a later command removed keeps the name it was created
+/// with); `warnings`, present when the batch added any, lists what the game will ignore
+/// without failing, the action names and keys it left shared (see [`batch_warnings`]) and
+/// what its commands left that the game takes otherwise than it may seem (see [`Check`]);
+/// `before` are the project's [`batch_warnings`] before the batch, which are not repeated.
+pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Json {
+    let wanted: HashSet<&str> = applied
+        .iter()
+        .flat_map(|a| a.created.iter().map(String::as_str))
+        .collect();
+    let names = names_of(project, &wanted);
     let created: Map<String, Json> = applied
         .iter()
         .enumerate()
@@ -576,17 +833,24 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
             let ids: Vec<Json> = a
                 .created
                 .iter()
-                .map(|id| json!({"id": id, "name": names.get(id.as_str())}))
+                .enumerate()
+                .map(|(nth, id)| {
+                    let name = names
+                        .get(id.as_str())
+                        .or_else(|| a.names.get(nth).and_then(Option::as_ref));
+                    json!({"id": id, "name": name})
+                })
                 .collect();
             (index.to_string(), Json::Array(ids))
         })
         .collect();
     let mut result = json!({"created": created});
-    let new: Vec<String> = batch_warnings(project)
+    let mut new: Vec<String> = batch_warnings(project)
         .into_iter()
         .filter(|w| !before.iter().any(|old| old.about == w.about))
         .map(|w| w.message)
         .collect();
+    new.extend(applied.iter().flat_map(|a| a.warnings.iter().cloned()));
     if !new.is_empty() {
         result["warnings"] = json!(new);
     }
@@ -604,7 +868,8 @@ pub struct Warning {
 
 /// What the game will ignore without failing, so validation lets it through: input actions
 /// bound to keys the game does not read (or keeps, Escape and F3), logic nodes that name an
-/// input action the project does not have, and fixed-choice parameters holding another value
+/// input action the project does not have (or name it instead of giving its ID, as nodes
+/// stored before commands kept the ID), and fixed-choice parameters holding another value
 /// (set by update_entity or by hand).
 pub fn warnings(project: &Project) -> Vec<Warning> {
     let mut found = Vec::new();
@@ -626,12 +891,21 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
             if matches!(node.operation.as_str(), "event.input" | "input.read")
                 && !project.input_bindings.contains_key(action)
             {
-                found.push(Warning {
-                    about: format!("action {} {action}", node.id),
-                    message: format!(
+                // The game reads only IDs: a name the project knows is still never pressed.
+                let message = match input_actions::find_named(project, action) {
+                    Ok(Some(id)) => format!(
+                        "{}: \"{action}\" é o nome da ação de entrada {id}, e o jogo lê o ID; \
+                         set_node_params com o nome guarda o ID",
+                        place()
+                    ),
+                    _ => format!(
                         "{}: a ação de entrada \"{action}\" não existe no projeto",
                         place()
                     ),
+                };
+                found.push(Warning {
+                    about: format!("action {} {action}", node.id),
+                    message,
                 });
             }
             // An empty mode is an event.input never configured, which the game reads as
@@ -652,12 +926,14 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
     found
 }
 
-/// [`warnings`], plus the input action names that stand for several actions. By name,
-/// commands and simulations refuse a name two actions share and take first the action whose
-/// ID it is. create and rename keep names apart, but the default actions of presets and
-/// components (Pular, Correr…) arrive without that check. The game itself tells them apart,
-/// and projects may share a name on purpose (one label for keys 1, 2 and 3), so only the batch
-/// that leaves a name ambiguous reports it, not validation.
+/// [`warnings`], plus the input action names that stand for several actions and the keys
+/// bound to several actions. By name, commands and simulations refuse a name two actions
+/// share and take first the action whose ID it is. create and rename keep names apart, but
+/// the default actions of presets and components (Pular, Correr…) arrive without that check.
+/// A key fires every action bound to it, which simulations, pressing actions, never show. The
+/// game itself tells names apart, and projects may share a name or a key on purpose (one label
+/// for keys 1, 2 and 3; jump and confirm on Space), so only the batch that leaves a name or a
+/// key shared reports it, not validation.
 pub fn batch_warnings(project: &Project) -> Vec<Warning> {
     let mut found = warnings(project);
     let mut named: BTreeMap<String, Vec<&str>> = BTreeMap::new();
@@ -685,6 +961,28 @@ pub fn batch_warnings(project: &Project) -> Vec<Warning> {
             ),
         });
     }
+    for (key, ids) in input_actions::shared_keys(project) {
+        let listed: Vec<String> = ids
+            .iter()
+            .map(|id| format!("{id} ({})", input_actions::label(project, id)))
+            .collect();
+        found.push(Warning {
+            about: format!(
+                "shared key {key} {}",
+                ids.iter()
+                    .map(|id| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            message: format!(
+                "A tecla {key} é de {} ações de entrada: {}. No jogo, apertá-la dispara todas; \
+                 o oxy_simulate aperta ações, não teclas, e não mostra isso. Se não for de \
+                 propósito, mude a tecla de uma delas com set_input_key",
+                ids.len(),
+                listed.join(", ")
+            ),
+        });
+    }
     found
 }
 
@@ -697,10 +995,53 @@ pub fn parse(json: &Json) -> Result<Vec<Command>, String> {
     list.into_iter()
         .enumerate()
         .map(|(i, item)| {
-            serde_json::from_value(item)
-                .map_err(|e| format!("Comando {} não reconhecido: {e}", i + 1))
+            let op = item["op"].as_str().unwrap_or_default().to_owned();
+            serde_json::from_value(item).map_err(|e| {
+                format!(
+                    "{} não reconhecido: {}",
+                    which(i, &op),
+                    explain(&e.to_string())
+                )
+            })
         })
         .collect()
+}
+
+/// A serde message about an unknown value, an unknown field or a missing one, in Portuguese,
+/// with the accepted spelling when only the case differs ("Parkour" for `parkour`); other
+/// messages as they are.
+fn explain(message: &str) -> String {
+    // The names serde quotes between backticks: the one given, then the ones accepted.
+    let quoted: Vec<&str> = message.split('`').skip(1).step_by(2).collect();
+    let listed = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let (what, given, accepted) = match quoted.as_slice() {
+        [given, accepted @ ..] if message.starts_with("unknown variant") => {
+            ("valor", *given, accepted)
+        }
+        [given, accepted @ ..] if message.starts_with("unknown field") => {
+            ("campo", *given, accepted)
+        }
+        [missing] if message.starts_with("missing field") => {
+            return format!("falta o campo `{missing}`");
+        }
+        _ => return message.to_owned(),
+    };
+    let mut text = format!("{what} `{given}` desconhecido");
+    if !accepted.is_empty() {
+        text.push_str(&format!("; os aceitos são {}", listed(accepted)));
+    }
+    if let Some(right) = accepted.iter().find(|a| a.eq_ignore_ascii_case(given)) {
+        text.push_str(&format!(
+            " (maiúsculas e minúsculas contam: escreva `{right}`)"
+        ));
+    }
+    text
 }
 
 /// A text that stands for an ID created earlier in a batch. Only a whole text of this form
@@ -811,7 +1152,14 @@ fn finite(values: &[f32], what: &str) -> Result<(), String> {
     }
 }
 
-fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<Vec<Id>, String> {
+/// Applies one command to `project`, answering the IDs it created; `checks` takes what the
+/// batch checks once it ends.
+fn apply_one(
+    project: &mut Project,
+    default: &str,
+    command: &Command,
+    checks: &mut Vec<Check>,
+) -> Result<Vec<Id>, String> {
     use Command as C;
     match command {
         C::RenameProject { name } => {
@@ -902,7 +1250,29 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
         } => {
             let from = scene_id(project, scene, default)?;
             let to = scene_id(project, &Some(to_scene.clone()), default)?;
-            copy_entities(project, &from, ids, &to, parent.as_ref())
+            let roots = copy_entities(project, &from, ids, &to, parent.as_ref())?;
+            // Logic that opens the scene it came from, such as a restart, still opens it.
+            let target = project.scene(&to).unwrap();
+            let nodes: Vec<(Id, Id)> = roots
+                .iter()
+                .flat_map(|root| target.descendants(root))
+                .filter_map(|id| target.entity(&id))
+                .flat_map(|e| {
+                    e.graph
+                        .nodes
+                        .iter()
+                        .filter(|n| n.operation == "action.scene" && n.text("scene") == from)
+                        .map(|n| (e.id.clone(), n.id.clone()))
+                })
+                .collect();
+            if from != to && !nodes.is_empty() {
+                checks.push(Check::SceneBack {
+                    scene: to,
+                    from,
+                    nodes,
+                });
+            }
+            Ok(roots)
         }
         C::SaveModel {
             scene,
@@ -919,6 +1289,16 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
                 Some(name) => name.trim().to_owned(),
                 None => source.entity(entity).unwrap().name.clone(),
             };
+            // place_model takes a model by name, which two models would share.
+            if let Some(other) = project.assets.iter().find(|a| {
+                a.kind == AssetKind::Model
+                    && a.name.trim().to_lowercase() == name.trim().to_lowercase()
+            }) {
+                return Err(format!(
+                    "Já existe um modelo chamado \"{}\" ({}); escolha outro nome com name",
+                    other.name, other.id
+                ));
+            }
             let pieces: HashSet<Id> = source.descendants(entity).into_iter().collect();
             refuse_outside(source, &pieces, "do modelo")?;
             Ok(vec![project.save_model(&id, entity, name)?])
@@ -1093,7 +1473,8 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             let e = entity_mut(scene_mut(project, &id), entity)?;
             match value {
                 Some(value) => {
-                    e.attributes.insert(name.trim().into(), value.clone());
+                    let value = value.value(None, &format!("O atributo {}", name.trim()))?;
+                    e.attributes.insert(name.trim().into(), value);
                 }
                 None => {
                     if e.attributes.remove(name.trim()).is_none() {
@@ -1129,6 +1510,21 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             authoring::remove(entity_mut(scene_mut(project, &id), entity)?, *component)?;
             Ok(vec![])
         }
+        C::FitCollider {
+            scene,
+            entity,
+            children,
+            margin,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            spatial::fit_collider(
+                scene_mut(project, &id),
+                entity,
+                *children,
+                margin.unwrap_or(0.),
+            )?;
+            Ok(vec![])
+        }
         C::ApplyMovementProfile {
             scene,
             entity,
@@ -1157,7 +1553,21 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             if value.get("id").and_then(Json::as_str) != Some(entity.as_str()) {
                 return Err("O patch não pode mudar o ID do objeto".into());
             }
+            let before = (e.dimensions, box_size(e));
             *e = serde_json::from_value(value).map_err(|e| format!("Patch inválido: {e}"))?;
+            // A box collider follows the object's scale but not its dimensions: one that fit
+            // the old ones, and that the patch left as it was, no longer fits the shape.
+            if let (dimensions, Some(size)) = before
+                && near(size, dimensions)
+                && !near(e.dimensions, dimensions)
+                && box_size(e) == Some(size)
+            {
+                checks.push(Check::StaleCollider {
+                    scene: id,
+                    entity: entity.clone(),
+                    size,
+                });
+            }
             Ok(vec![])
         }
         C::AddNode {
@@ -1172,13 +1582,7 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
                 .iter()
                 .find(|op| op.id == operation)
                 .ok_or_else(|| format!("Nó {operation} não existe no catálogo"))?;
-            if let Some(key) = params
-                .keys()
-                .find(|k| !def.params.iter().any(|p| p.id == *k))
-            {
-                return Err(format!("O nó {operation} não tem o parâmetro {key}"));
-            }
-            graph::check_choices(operation, params)?;
+            let params = node_params(project, def, params)?;
             let e = entity_mut(scene_mut(project, &id), entity)?;
             let position = position.unwrap_or_else(|| {
                 // To the right of the rightmost node, so new nodes do not overlap.
@@ -1196,7 +1600,7 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             });
             finite(&position, "Posição do nó")?;
             let mut node = Node::new(operation, position);
-            node.params.extend(params.clone());
+            node.params.extend(params);
             let node_id = node.id.clone();
             e.graph.nodes.push(node);
             Ok(vec![node_id])
@@ -1225,28 +1629,27 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             params,
         } => {
             let id = scene_id(project, scene, default)?;
-            let e = entity_mut(scene_mut(project, &id), entity)?;
-            let target = e
+            let operation = project
+                .scene(&id)
+                .unwrap()
+                .entity(entity)
+                .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?
                 .graph
                 .nodes
-                .iter_mut()
+                .iter()
                 .find(|n| n.id == *node)
-                .ok_or_else(|| format!("Nó {node} não existe neste objeto"))?;
+                .ok_or_else(|| format!("Nó {node} não existe neste objeto"))?
+                .operation
+                .clone();
             let def = graph::registry()
                 .iter()
-                .find(|op| op.id == target.operation)
+                .find(|op| op.id == operation)
                 .ok_or("Nó com operação desconhecida")?;
-            if let Some(key) = params
-                .keys()
-                .find(|k| !def.params.iter().any(|p| p.id == *k))
-            {
-                return Err(format!(
-                    "O nó {} não tem o parâmetro {key}",
-                    target.operation
-                ));
+            let params = node_params(project, def, params)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            if let Some(target) = e.graph.nodes.iter_mut().find(|n| n.id == *node) {
+                target.params.extend(params);
             }
-            graph::check_choices(&target.operation, params)?;
-            target.params.extend(params.clone());
             Ok(vec![])
         }
         C::Connect {
@@ -1372,6 +1775,38 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             Ok(vec![])
         }
     }
+}
+
+/// The parameters `given` to a node of `def`, as the node keeps them: plain values read by the
+/// catalog's types, fixed choices checked, and an input action given by name kept by its ID,
+/// which is what the game reads. An action the project lacks stays as given, and the batch
+/// warns about it; a name two actions share is refused, as by input action commands.
+fn node_params(
+    project: &Project,
+    def: &OperationDef,
+    given: &BTreeMap<String, ParamValue>,
+) -> Result<BTreeMap<String, Value>, String> {
+    let mut params = BTreeMap::new();
+    for (key, value) in given {
+        let param = def
+            .params
+            .iter()
+            .find(|p| p.id == key)
+            .ok_or_else(|| format!("O nó {} não tem o parâmetro {key}", def.id))?;
+        let mut value = value.value(
+            Some(&param.default),
+            &format!("O parâmetro {key} do nó {}", def.id),
+        )?;
+        if graph::reference(def.id, param) == Some(Reference::InputAction)
+            && let Value::Text(action) = &mut value
+            && let Some(id) = input_actions::find_named(project, action)?
+        {
+            *action = id;
+        }
+        params.insert(key.clone(), value);
+    }
+    graph::check_choices(def.id, &params)?;
+    Ok(params)
 }
 
 /// Two actions with one name could not be told apart by name, as simulations allow, and a
@@ -1766,7 +2201,25 @@ fn find_model(project: &Project, model: &str) -> Result<Id, String> {
         .collect();
     match named.as_slice() {
         [one] => Ok(one.id.clone()),
-        [] => Err(format!("Modelo {model} não existe no projeto")),
+        [] => {
+            let models: Vec<String> = project
+                .assets
+                .iter()
+                .filter(|a| a.kind == AssetKind::Model)
+                .map(|a| format!("{} ({})", a.name, a.id))
+                .collect();
+            Err(if models.is_empty() {
+                format!(
+                    "Modelo {model} não existe no projeto, que não tem modelos; crie um com \
+                     save_model"
+                )
+            } else {
+                format!(
+                    "Modelo {model} não existe no projeto. Modelos: {}",
+                    models.join(", ")
+                )
+            })
+        }
         many => Err(format!(
             "{} modelos se chamam \"{}\"; use o ID",
             many.len(),

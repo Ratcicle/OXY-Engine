@@ -139,6 +139,7 @@ fn uses_json(entry: &mut Json, uses: Vec<input_actions::Use>) {
 }
 
 pub fn project_summary(project: &Project) -> Json {
+    let shared = input_actions::shared_keys(project);
     let actions: Vec<Json> = project
         .input_bindings
         .iter()
@@ -148,6 +149,14 @@ pub fn project_summary(project: &Project) -> Json {
                 "name": input_actions::label(project, id),
                 "key": key,
             });
+            // The other actions on its key: the game fires them together.
+            if let Some(others) = shared.values().find(|ids| ids.contains(&id)) {
+                action["shares_key_with"] = others
+                    .iter()
+                    .filter(|other| **other != id)
+                    .map(|other| json!({"id": other, "name": input_actions::label(project, other)}))
+                    .collect();
+            }
             uses_json(&mut action, input_actions::uses(project, id));
             action
         })
@@ -975,7 +984,7 @@ pub fn catalog() -> Json {
         "movement_profiles": movement_profiles(),
         "surface_presets": ["common", "ice", "mud", "conveyor"],
         "input_keys": input_actions::keys().collect::<Vec<_>>(),
-        "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}.",
+        "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}. A node parameter may also be plain when its default above has the type: a number for Number, a text for Text, true or false for Bool.",
     })
 }
 

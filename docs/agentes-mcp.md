@@ -43,7 +43,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 - Antes de salvar, a versão anterior é guardada em `project.oxy.json.agente.bak`.
 - Se o mesmo projeto estiver aberto num editor, o servidor sempre usa o editor, para não haver duas versões.
 
-**Atomicidade.** Os lotes valem por inteiro: se um comando falha, nada muda, e a mensagem diz qual comando falhou e por quê. As regras são as mesmas do editor, porque a validação é a mesma de salvar.
+**Atomicidade.** Os lotes valem por inteiro: se um comando falha, nada muda, e a mensagem diz qual comando falhou e por quê. As regras são as mesmas do editor, porque a validação é a mesma de salvar. O comando é contado do 0, como em `"$N"` e em `created`, e a posição vem também por extenso: `Comando 1 (set_node_params, o 2º do lote): Nó … não existe neste objeto. Nada foi alterado.` Na primeira versão do servidor, a mensagem contava do 1 e dizia `Comando 2`. Os erros de leitura dos comandos também vêm em português, como ``valor `Parkour` desconhecido; os aceitos são `direct`, `parkour`, `chained` (maiúsculas e minúsculas contam: escreva `parkour`)``.
 
 ## Ferramentas
 
@@ -55,7 +55,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
 | `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
 | `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets (o que cada um cria e as opções), perfis de movimento (com os valores) e as teclas que as ações de entrada aceitam |
-| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações, ações de entrada, superfícies físicas, modelos, cópias entre cenas, animações, perfis de movimento…) |
+| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, ações de entrada, superfícies físicas, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_import` | Importa uma imagem PNG ou um som WAV como recurso do projeto e, se pedido, já aplica a imagem num objeto |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo e os objetos observados |
@@ -104,9 +104,10 @@ Sem opções, o catálogo traz também:
 - `movement_profiles`: os perfis Direto, Parkour e Saltos encadeados, com `id` (`direct`, `parkour` ou `chained`), `label` e `values`, os 14 valores que o perfil escreve no personagem.
 
 **Projeto** (`oxy_project`):
-- `input_actions`: cada ação de entrada com `id`, `name`, `key` e `used_by`, os objetos que a usam (`{entity, name, role}`, em que `role` é o componente, como `character` ou `controller2d`, ou a operação do nó, como `event.input`).
+- `input_actions`: cada ação de entrada com `id`, `name`, `key` e `used_by`, os objetos que a usam (`{entity, name, role}`, em que `role` é o componente, como `character` ou `controller2d`, ou a operação do nó, como `event.input`). Quando outra ação usa a mesma tecla, `shares_key_with` lista essas ações (`{id, name}`): no jogo, a tecla dispara todas.
 - `surfaces`: cada superfície física com os valores dela (`friction`, `traction`, `speed_multiplier`, `conveyor`, `conveyor_space`) e `used_by`, como nas ações (`role` `collider3d`, `character`, a operação do nó ou `attribute <nome>`).
-- `assets`: cada recurso com `id`, `name`, `kind` (`Texture`, `Audio` ou `Model`), `path` (o arquivo, relativo à pasta do projeto; os modelos ficam no próprio arquivo do projeto e não têm `path`) e `used_by`, como nas ações (`role` `material`, `ui` para a imagem de um elemento da interface, `model` para um modelo colocado, ou a operação do nó, como `action.sound`).
+- `assets`: cada recurso com `id`, `name`, `kind` (`Texture`, `Audio` ou `Model`), `path` (o arquivo, relativo à pasta do projeto; os modelos ficam no próprio arquivo do projeto e não têm `path`) e `used_by`, como nas ações (`role` `material`, `ui` para a imagem de um elemento da interface, `model` para um modelo colocado, ou a operação do nó, como `action.sound`). Um modelo lista cada colocação uma vez, pela raiz, e não cada peça colocada.
+- Um objeto que só existe dentro de um modelo vem em `used_by` com `model`, o nome do modelo: o `oxy_entity` e o `oxy_find` não chegam a ele, que aparece nas cenas onde o modelo for colocado.
 - `used_by` lista até 10 objetos; quando há mais, `used_by_total` diz quantos são.
 - `collision_groups`: os nomes dos grupos de colisão, `{bit, name}`, em que `bit` é o bit da categoria e da máscara dos colisores. Vêm os três grupos com nome padrão e os que o projeto nomeou; os outros se chamam `Grupo N`, com N = bit + 1. Por enquanto só se leem; os nomes se mudam no editor.
 
@@ -115,9 +116,10 @@ Sem opções, o catálogo traz também:
 ## Comandos do `oxy_apply`
 
 **Resposta.** O lote responde `{created, warnings}`:
-- `created` liga o índice de cada comando que criou algo (contando do 0) aos IDs criados, na ordem, com o nome de cada um: `{"0": [{"id": "…", "name": "Porta"}]}`. O nome de um nó é a operação dele. Os comandos que não criam nada ficam de fora.
-- `warnings` só aparece quando o lote deixa algo que o jogo vai ignorar sem dar erro: um nó que usa uma ação de entrada que o projeto não tem, uma tecla que o jogo não lê ou um parâmetro com valor fora das opções. Um valor vazio também está fora das opções; a exceção é o modo vazio de um nó de ação de entrada, que o jogo lê como "pressionar". Vêm só os avisos que o lote criou, tanto ao vivo quanto nos arquivos (um lote vazio responde `{"created": {}}`); o `oxy_validate` lista todos os do projeto.
-- O lote também avisa quando deixa duas ações de entrada atendendo pelo mesmo nome (veja abaixo). O jogo as distingue e há projetos que repetem um nome de propósito (um rótulo para as teclas 1, 2 e 3), então o `oxy_validate` não lista esse aviso.
+- `created` liga o índice de cada comando que criou algo (contando do 0) aos IDs criados, na ordem, com o nome de cada um: `{"0": [{"id": "…", "name": "Porta"}]}`. O nome de um nó é a operação dele. O que um comando seguinte do mesmo lote apagou continua com o nome que tinha ao ser criado; antes, vinha `null`. Os comandos que não criam nada ficam de fora.
+- `warnings` só aparece quando o lote deixa algo que o jogo vai ignorar sem dar erro: um nó que usa uma ação de entrada que o projeto não tem (ou que guarda o nome dela, e não o ID), uma tecla que o jogo não lê ou um parâmetro com valor fora das opções. Um valor vazio também está fora das opções; a exceção é o modo vazio de um nó de ação de entrada, que o jogo lê como "pressionar". Vêm só os avisos que o lote criou, tanto ao vivo quanto nos arquivos (um lote vazio responde `{"created": {}}`); o `oxy_validate` lista todos os do projeto.
+- O lote também avisa quando deixa duas ações de entrada atendendo pelo mesmo nome ou na mesma tecla (veja abaixo). O jogo distingue os nomes, e há projetos que repetem um nome ou uma tecla de propósito (um rótulo para as teclas 1, 2 e 3; pular e confirmar no Espaço), então o `oxy_validate` não lista esses avisos.
+- E avisa o que os comandos deixaram e o jogo leva de outro jeito, com o comando que o deixou (`Comando 2 (update_entity, o 3º do lote): …`): um colisor de caixa que ficou com as dimensões antigas do objeto (veja **Colisores**) e nós copiados para outra cena que ainda abrem a cena de onde vieram. Esses avisos olham o lote já terminado: se um comando seguinte resolve, o aviso não vem.
 - Nos arquivos, a resposta traz também `saved` e `previous_version`.
 
 **IDs criados no mesmo lote.** Num comando, um texto que é inteiro `"$N"` vale o primeiro ID criado pelo comando N, e `"$N.M"`, o M-ésimo (os dois contam do 0):
@@ -130,12 +132,20 @@ Sem opções, o catálogo traz também:
 
 **Valores fixos.** `add_node` e `set_node_params` recusam valores fora das opções do parâmetro, como o modo `segurando` numa ação de entrada, e a mensagem lista as opções. Antes, o valor era aceito e o nó nunca disparava. O editor usa as mesmas listas.
 
+**Valores dos parâmetros e atributos.** Os valores levam o tipo: `{"Number": 3}`, `{"Text": "…"}`, `{"Bool": true}`, `{"Object": "<ID>"}`, `{"Vector2": [x, y]}`, `{"Vector3": [x, y, z]}`, `{"Surface": "<ID>"}`.
+- Num parâmetro de nó, o valor também pode vir simples quando o catálogo dá o tipo do parâmetro e a leitura é óbvia: um número num parâmetro `Number`, um texto num `Text` e `true` ou `false` num `Bool`. Assim, `"params": {"action": "Pausar", "mode": "held"}` vale o mesmo que com `{"Text": …}`.
+- Os outros valores simples são recusados com uma mensagem em português que diz o parâmetro e a forma esperada, como `O parâmetro target do nó action.damage precisa de um valor marcado com o tipo, como {"Object":"abc"}; recebeu "abc"`. Um texto nunca vira objeto ou superfície sozinho, e um tipo com a inicial minúscula (`{"number": 3}`) também é recusado, com o aviso de que o nome do tipo começa com maiúscula.
+- Os atributos não têm tipo no catálogo: o `set_attribute` só aceita valores com o tipo, e um valor simples é recusado da mesma forma (`O atributo vida precisa de um valor marcado com o tipo, como {"Number":3}; recebeu 3`).
+- Antes, todos esses casos davam o erro do leitor de JSON, em inglês, sem dizer o parâmetro.
+
 **Ações de entrada.**
 - `create_input_action {name, key}` cria uma ação. O ID dela é o que os nós e o `oxy_simulate` usam (`"$N"` no mesmo lote).
 - `rename_input_action {action, name}`, `set_input_key {action, key}` e `delete_input_action {action}` aceitam o ID ou o nome da ação. Um texto igual ao ID de uma ação vale por ela, antes dos nomes.
 - A tecla é uma das de `input_keys` no catálogo: letras, números, as outras teclas do teclado, F1 a F35, Shift, os botões do mouse e a roda. Outras grafias que o jogo entende viram o nome do catálogo (`a` vira `A`, `ArrowUp` vira `Up`). Escape (pausa o jogo e libera o mouse) e F3 (diagnóstico do player) são recusadas.
 - `create_input_action` e `rename_input_action` recusam um nome que outra ação já tem ou que é o ID de outra ação (como `atacar` ou `pular` em projetos antigos), sem diferenciar maiúsculas.
 - Os presets e componentes que criam as ações padrão (Pular, Correr, Agachar…) não fazem essa verificação. Se o nome de uma ação coincidir com o de outra, o lote avisa em `warnings`, e por esse nome os comandos e o `oxy_simulate` recusam a ação (ou, se ele for o ID de uma delas, escolhem essa); renomeie uma delas ou use o ID.
+- Uma tecla que outra ação já usa é aceita, e o lote avisa em `warnings`, com as ações dessa tecla: no jogo, apertá-la dispara todas, e o `oxy_simulate`, que aperta ações e não teclas, não mostra isso. O `oxy_project` marca essas ações com `shares_key_with`.
+- Nos nós, o parâmetro de ação de entrada (`ref` `input_action` no catálogo, como o `action` do `event.input` e do `input.read`) aceita o ID ou o nome da ação, com as mesmas regras do `rename_input_action`, e guarda o ID, que é o que o jogo lê. Antes, o nome era guardado como estava e o nó nunca disparava, com um aviso dizendo que a ação não existia. Um nome que duas ações têm é recusado; uma ação que o projeto não tem fica como foi escrita, com o aviso. Um nó que já guardava o nome de uma ação ganha um aviso próprio: `set_node_params` com o nome guarda o ID.
 - Excluir uma ação em uso é recusado, com a lista de quem a usa.
 
 **Superfícies físicas.**
@@ -146,10 +156,17 @@ Sem opções, o catálogo traz também:
 
 Os comandos de ações de entrada e de superfícies valem para o projeto todo e, como os de cena, não recebem `scene`.
 
+**Colisores.**
+- O `add_component` dá ao colisor de caixa (`collider3d`, `sensor3d`, `collider2d`, `sensor2d`) as dimensões da forma naquele momento. Depois, a caixa acompanha a escala do objeto, mas não as mudanças de dimensões: um `update_entity` em `dimensions` depois do `add_component` deixa a caixa com o tamanho antigo, e o jogador atravessa a parte nova. O lote avisa quando isso acontece, com o tamanho da forma e o da caixa.
+- `fit_collider {entity, children?, margin?}` ajusta a caixa à forma do objeto, como o **Ajustar ao objeto** do editor, ou, com `children: true`, à forma dele e de todas as peças dentro dele, como o **Ajustar ao grupo/filhos** (câmeras e elementos da interface ficam de fora). `margin` soma uma folga, em metros, em todos os lados (0 por padrão).
+- No 3D, a caixa continua girada com o objeto: o tamanho e o centro são medidos nos eixos dele, então um grupo girado e com escala envolve as peças sem sobra. No 2D, o colisor de caixa recebe a caixa das peças no mundo, como no editor.
+- São recusados, com o motivo: cápsulas, esferas e colisores convexos ou de malha (o `fit_collider` ajusta só caixas), o Personagem 3D (a colisão dele é o corpo, em `character3d.body`), um objeto sem colisor e, sem `children`, um objeto sem forma própria, como um grupo.
+
 **Reaproveitar entre fases.**
 - `duplicate_entities {ids, offset?, count?}` faz `count` cópias (de 1 a 100; 1 por padrão). A cópia k fica a k × `offset` do original, em relação ao pai (`[0.5, 0, 0]` por padrão, como no editor), e as animações que movem o objeto vão junto. Uma fileira de plataformas a cada 4 m é um comando só: `{"op": "duplicate_entities", "ids": ["$0"], "offset": [4, 0, 0], "count": 10}` põe 10 cópias depois da original. Com mais de uma cópia, os nomes ganham o número: `Plataforma (cópia 3)`.
 - `copy_entities {ids, to_scene, parent?}` copia objetos, com tudo o que está dentro deles, da cena `scene` (a do comando ou a da ferramenta) para `to_scene`, na raiz ou dentro de `parent`. Eles ficam no mesmo lugar do mundo, e as animações que os movem fazem o mesmo percurso no mundo: uma plataforma que anda 4 m continua andando 4 m dentro de um grupo com escala 2 ou girado. Se a escala não uniforme do pai de destino deformasse o objeto ou a animação, a cópia é recusada. Para outra cena, as referências precisam ficar dentro da cópia: um atributo, um vínculo da interface, uma câmera, um nó ou uma animação que aponta para um objeto que não vai junto faz o comando ser recusado, com a lista do que falta. Copie esses objetos junto.
-- `save_model {entity, name?}` guarda o objeto e tudo o que está dentro dele como um modelo, um recurso do projeto (o nome padrão é o do objeto), com a mesma regra das referências. `place_model {model, parent?, position?, name?}` coloca uma cópia do modelo na cena, pelo ID ou pelo nome do modelo, com a raiz em `position` (em relação ao pai). As referências internas (lógica, câmera, animações) apontam para as peças colocadas.
+- Os nós `action.scene` copiados continuam abrindo a cena que já abriam. Quando é a cena de onde a cópia saiu (um "reiniciar fase" levado para a fase 2 reabriria a fase 1), o lote avisa, com a lista desses nós; aponte-os para a cena nova com `set_node_params`.
+- `save_model {entity, name?}` guarda o objeto e tudo o que está dentro dele como um modelo, um recurso do projeto (o nome padrão é o do objeto), com a mesma regra das referências. Um nome que outro modelo já tem é recusado, sem diferenciar maiúsculas, porque o `place_model` acha os modelos pelo nome. `place_model {model, parent?, position?, name?}` coloca uma cópia do modelo na cena, pelo ID ou pelo nome do modelo, com a raiz em `position` (em relação ao pai). As referências internas (lógica, câmera, animações) apontam para as peças colocadas. Um modelo que não existe é recusado com a lista dos modelos do projeto.
 - O jogador dos presets tem a câmera ao lado, e não dentro dele. Para levar o jogador com a câmera para outra fase, agrupe os dois (`create_entity` de um grupo e `set_parent`) e salve o grupo como modelo. A interface e a lógica de um cronômetro vão do mesmo jeito: num grupo, com os objetos que elas usam.
 
 **Plataformas móveis e animações.**
@@ -169,6 +186,9 @@ Os comandos de ações de entrada e de superfícies valem para o projeto todo e,
 - `add_node` e `set_node_params` recusam valores fora das opções.
 - `set_transform` move junto os quadros-chave dos objetos que as próprias animações movem, como as plataformas móveis (`move_tracks: false` mantém o comportamento antigo). O editor faz o mesmo.
 - `duplicate_entities` sem `count` nem `offset` continua fazendo uma cópia a 0,5 m em X.
+- As mensagens de erro contam os comandos do 0, como `"$N"` e `created`, e dizem a posição por extenso (`Comando 1 (set_node_params, o 2º do lote)`); antes, contavam do 1.
+- Os parâmetros de ação de entrada dos nós guardam o ID também quando recebem o nome, e os parâmetros aceitam valores simples quando o catálogo dá o tipo.
+- `save_model` recusa o nome de outro modelo; `fit_collider` é novo.
 
 ## Testes com `oxy_simulate`
 
@@ -255,4 +275,5 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 - **Importação:** só PNG e WAV, como no editor. Ao desfazer uma importação, a cópia continua na pasta `assets`, como acontece com o **Importar** da Biblioteca.
 - **Teste ao vivo:** o agente vê se você está testando e lê o Console, mas não inicia nem para o seu teste.
 - **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.
+- **Lógica de cópias:** a lógica de um objeto duplicado ainda não se religa no mesmo lote. A cópia recebe nós com IDs novos, que o lote não devolve, e os nós só se acham pelo ID; para mudar a lógica da cópia, leia os IDs novos com o `oxy_entity` e mande outro lote. Isso fica para a 0.6.
 - **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto.

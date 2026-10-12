@@ -441,7 +441,7 @@ mod tests {
         for (args, expected) in [
             (
                 json!({"setup": [{"op": "voar"}]}),
-                "Preparação (setup): Comando 1",
+                "Preparação (setup): Comando 0 (voar, o 1º do lote) não reconhecido",
             ),
             (
                 json!({"watch": [{"id": "x", "campos": []}]}),
