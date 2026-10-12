@@ -306,6 +306,29 @@ fn watch_entries_choose_fields_and_attributes() {
     );
 }
 
+#[test]
+fn watched_rotation_reads_like_the_queries_past_a_quarter_turn() {
+    let (mut project, clock, _) = clock();
+    let scene = project.start_scene.clone();
+    project
+        .scene_mut(&scene)
+        .unwrap()
+        .entity_mut(&clock)
+        .unwrap()
+        .transform
+        .rotation = [0., 120f32.to_radians(), 0.];
+    let report = run(
+        &project,
+        json!({"seconds": 0.2, "watch": [{"id": clock, "fields": ["rotation"]}]}),
+    );
+    let [x, y, z] = report.watched[0].samples[0].rotation.unwrap();
+    assert!(
+        near(x.into(), 0.) && near(y.into(), 120.) && near(z.into(), 0.),
+        "{:?}",
+        [x, y, z]
+    );
+}
+
 const BODY: &str = "00000000-0000-4000-8000-000000000002";
 const GOAL: &str = "00000000-0000-4000-8000-000000000004";
 

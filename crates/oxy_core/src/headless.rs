@@ -18,7 +18,7 @@ use crate::{
     input_timeline::{InputChange, InputTimeline, TimedInput},
     runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime},
 };
-use glam::{EulerRot, Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use std::{
@@ -1064,9 +1064,10 @@ fn sample(lookup: Lookup, watch: &WatchPlan) -> Sample {
             .map(|(_, _, position)| position.to_array()),
         rotation: world
             .filter(|_| has(Field::Rotation))
+            // The same reading as oxy_scene and oxy_entity: nearest to the local angles, so a
+            // character yawed past 90 degrees does not read as upside down.
             .map(|(_, rotation, _)| {
-                let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
-                [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+                crate::query::world_degrees(rotation, entity.transform.rotation)
             }),
         scale: world
             .filter(|_| has(Field::Scale))

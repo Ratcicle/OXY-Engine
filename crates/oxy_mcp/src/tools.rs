@@ -373,6 +373,13 @@ pub fn definitions() -> Json {
                        "Simulated seconds before the capture, max 600 (default 0: the first frame). \
                         Every view but editor."},
                    "inputs": inputs,
+                   "setup": {"type": "array", "items": {"type": "object"}, "description":
+                       "As in oxy_simulate: oxy_apply commands on the in-memory copy before the \
+                        run. Every view but editor."},
+                   "spawn": {"type": "object", "description":
+                       "As in oxy_simulate: {entity, position, yaw?} on the copy before the run."},
+                   "until": {"type": "object", "description":
+                       "As in oxy_simulate: stops the run early; the capture is taken then."},
                    "colliders": colliders,
                    "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
                        "items": {"type": "number"}, "minItems": 3, "maxItems": 3},

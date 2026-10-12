@@ -68,7 +68,7 @@ As descrições das ferramentas estão em inglês, para os agentes. As mensagens
 
 ## Leituras compactas
 
-Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do agente. Por isso, desde a 0.5.1:
+Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do agente. Por isso:
 - As respostas vêm em JSON compacto, sem espaços, com os números arredondados em 4 casas decimais (`0.4000000059604645` vira `0.4`). Abaixo de 1, guardam 4 algarismos significativos, para que um valor pequeno volte como foi posto (`0.00015` continua `0.00015`) e possa ser escrito de novo sem mudar. Valores menores que 0,00001 viram 0: é o ruído das contas em f32, como o que um grupo girado 90° deixa nas posições dos filhos no mundo.
 - Ao vivo e nos arquivos, as leituras aceitam as mesmas opções e dão a mesma resposta: o editor responde pela mesma função do núcleo que o servidor usa nos arquivos.
 - Opções inválidas são recusadas antes de o servidor procurar o editor ou o projeto, com o nome da opção na mensagem.
@@ -110,7 +110,7 @@ Sem opções, o catálogo traz também:
 - `used_by` lista até 10 objetos; quando há mais, `used_by_total` diz quantos são.
 - `collision_groups`: os nomes dos grupos de colisão, `{bit, name}`, em que `bit` é o bit da categoria e da máscara dos colisores. Vêm os três grupos com nome padrão e os que o projeto nomeou; os outros se chamam `Grupo N`, com N = bit + 1. Por enquanto só se leem; os nomes se mudam no editor.
 
-**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções e descreve os presets (`presets` passou de uma lista de nomes para uma lista de objetos, com o nome em `id`); o `oxy_scene` devolve até 100 objetos por vez, contando os filhos; e o `oxy_project` lista as ações de entrada como `[{id, name, key, used_by}]`, em vez de um mapa de ID para tecla.
+**Mudanças em relação à primeira versão do servidor:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções e descreve os presets (`presets` passou de uma lista de nomes para uma lista de objetos, com o nome em `id`); o `oxy_scene` devolve até 100 objetos por vez, contando os filhos; e o `oxy_project` lista as ações de entrada como `[{id, name, key, used_by}]`, em vez de um mapa de ID para tecla.
 
 ## Comandos do `oxy_apply`
 
@@ -154,7 +154,7 @@ Os comandos de ações de entrada e de superfícies valem para o projeto todo e,
 
 **Plataformas móveis e animações.**
 - O preset `platform` aceita `travel` (quanto a plataforma anda a partir de onde é posta, em metros; `[4, 0, 0]` por padrão) e `period` (segundos da ida e da volta; 4 por padrão). Ele cria uma animação comum, em loop, que um nó toca quando a cena começa.
-- `set_transform` move junto os quadros-chave do objeto quando as animações dele mesmo o movem, como as de uma plataforma móvel. Assim, a plataforma movida continua indo e voltando a partir do lugar novo; na 0.5.0, o jogo a devolvia ao percurso antigo. Um giro gira o percurso em volta do lugar do objeto, e os ângulos de cada quadro-chave mudam o mesmo tanto que os do objeto (um quadro-chave a 120° num objeto girado 30° passa a 150°, e um a 360°, a 390°). Uma escala muda a escala dos quadros-chave, sem mudar o percurso. `move_tracks: false` deixa os quadros-chave como estão; `move_tracks: true` também move as trilhas que outras animações têm para o objeto (a peça de um boneco, por exemplo). O editor segue a mesma regra ao mover, girar ou escalar o objeto pelas alças ou pelas Propriedades, fora da aba Animação.
+- `set_transform` move junto os quadros-chave do objeto quando as animações dele mesmo o movem, como as de uma plataforma móvel. Assim, a plataforma movida continua indo e voltando a partir do lugar novo; na primeira versão do servidor, o jogo a devolvia ao percurso antigo. Um giro gira o percurso em volta do lugar do objeto, e os ângulos de cada quadro-chave mudam o mesmo tanto que os do objeto (um quadro-chave a 120° num objeto girado 30° passa a 150°, e um a 360°, a 390°). Uma escala muda a escala dos quadros-chave, sem mudar o percurso. `move_tracks: false` deixa os quadros-chave como estão; `move_tracks: true` também move as trilhas que outras animações têm para o objeto (a peça de um boneco, por exemplo). O editor segue a mesma regra ao mover, girar ou escalar o objeto pelas alças ou pelas Propriedades, fora da aba Animação.
 - `set_clip {entity, clip?, name, duration, looping?, tracks, events?}` cria uma animação do objeto ou substitui a animação `clip` (pelo ID ou pelo nome), mantendo o ID que os nós usam. Cada trilha anima o próprio objeto (`target` ausente ou `"self"`) ou uma peça dentro dele, com quadros-chave `{time, position?, rotation?, scale?, interpolation?}`: transformações locais, com a rotação em graus e `interpolation` `linear` (padrão) ou `hold` (fica parado até o próximo). O que o quadro-chave não diz vem da transformação atual do alvo, e o pivô dele é mantido. `events` são marcadores `{time, name}`, que o nó `event.animation` usa pelo nome. Para tocar a animação, use o nó `action.animation` com o ID dela em `clip`.
 - `delete_clip {entity, clip}` exclui uma animação; é recusado enquanto um nó `action.animation` a toca, com a lista desses nós.
 
@@ -162,7 +162,7 @@ Os comandos de ações de entrada e de superfícies valem para o projeto todo e,
 - Os presets de personagem (`first_person` e `third_person`) aceitam `camera`: `create` (padrão) cria a Câmera principal; `reuse` faz a câmera ativa da cena (ou a primeira) seguir o novo jogador, sem criar outra; `none` não põe câmera nenhuma. `reuse` é recusado se a cena não tem câmera ou se a câmera já segue outro objeto. Sem a Câmera principal, as peças seguintes sobem uma posição na resposta.
 - `apply_movement_profile {entity, profile}` aplica um perfil de movimento (`direct`, `parkour` ou `chained`) a um personagem 3D, como o botão do editor: os valores listados no catálogo são escritos no personagem e continuam editáveis.
 
-**Mudanças em relação à 0.5.0:**
+**Mudanças em relação à primeira versão do servidor:**
 - O `oxy_apply` responde `{created, warnings}` em vez de `{applied: [{op, created}]}`.
 - Os marcadores também valem dentro do `patch`. Um texto que é inteiro `"$N"` passou a ser marcador também no primeiro comando do lote, onde é recusado; para o texto em si, use `"$$N"`.
 - Um preset devolve todas as peças, não só a raiz.
@@ -175,7 +175,7 @@ Os comandos de ações de entrada e de superfícies valem para o projeto todo e,
 O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no editor nem no histórico.
 
 - **Entradas programadas** (`inputs`): ações de entrada com horário. Continuam valendo depois de uma troca de cena ou de reiniciar a cena, e uma tecla segurada continua segurada.
-  - `press` e `release` usam o ID ou o nome de uma ação de entrada do projeto (ou `"$N"` de uma ação criada no `setup`). Uma ação que o projeto não tem é recusada, com a lista das ações; na 0.5.0, ela era apertada em vão.
+  - `press` e `release` usam o ID ou o nome de uma ação de entrada do projeto (ou `"$N"` de uma ação criada no `setup`). Uma ação que o projeto não tem é recusada, com a lista das ações; na primeira versão do servidor, ela era apertada em vão.
   - `movement` é a intenção de andar, `[direita, frente]` de -1 a 1, e vale até o próximo `movement`.
   - `look` é um movimento do mouse, aplicado uma vez: cada unidade gira a câmera pela sensibilidade dela (no controle de câmera, 0,12° por padrão). `x` positivo vira para a direita e `y` positivo olha para baixo, a menos que a câmera inverta o eixo.
   - `click` clica num objeto ou botão da interface.
@@ -196,11 +196,18 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 
 **Eventos.** Os eventos entram no relatório no momento em que o jogo os dispara. Por isso aparecem mesmo quando a lógica, no mesmo passo, remove a área ou o objeto (moedas, pontos de controle, zonas de morte) ou troca de cena. Uma área que desliga o próprio colisor não gera saída, como no jogo; ao ser religada, gera uma nova entrada.
 
+**Mudanças no relatório em relação à primeira versão do servidor:**
+- `scene_changes` passou de `{time, text}` para `{time, scene, name, reload}`.
+- Os logs saem sem IDs no texto e ganham `object` e `node`.
+- `actions` passou a ser um resumo por padrão (veja abaixo); a lista completa vem com `actions: "all"`.
+- As amostras de `watch` só trazem os campos pedidos em `fields`, e a rotação no mundo é lida como no `oxy_scene` (um objeto girado 120° lê `[0, 120, 0]`, não `[180, 60, 180]`).
+- `oxy_simulate` e `oxy_screenshot` recusam `width` e `height` fora de 16–4096, e o texto do `oxy_screenshot` nas vistas do jogo passou a ser JSON (tempo, cena e câmera usada).
+
 **Resumo das ações.**
 - A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça (`actions_filter: {exclude_operations: []}`).
 - A troca de cena (`action.scene`) sempre aparece, mesmo quando um `event.step` a dispara. Assim, cada troca de cena tem a ação que a explica.
 - Objetos com o mesmo nome dividem uma linha, como as cópias criadas durante o jogo (`Bala (cópia)`).
-- `actions: "all"` lista cada ação com o horário e usa o mesmo filtro. Na 0.5.0 a lista completa era o padrão.
+- `actions: "all"` lista cada ação com o horário e usa o mesmo filtro. Na primeira versão do servidor, a lista completa era o padrão.
 - Cada lista do relatório guarda as 300 entradas mais recentes; no resumo, ficam as 300 linhas com atividade mais recente. `truncated` conta o que ficou de fora.
 
 ## Importar imagens e sons com `oxy_import`

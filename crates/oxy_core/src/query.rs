@@ -300,7 +300,7 @@ fn settled(v: Vec3) -> [f32; 3] {
 /// give each rotation, such as [0, 120, 0] and [180, 60, 180]; this picks the one nearest to
 /// the object's local rotation (`local`, in radians), so a piece turned along with its group
 /// does not read as upside down. Angles are in (-180, 180], a half turn reading 180.
-fn world_degrees(rotation: Quat, local: [f32; 3]) -> [f32; 3] {
+pub(crate) fn world_degrees(rotation: Quat, local: [f32; 3]) -> [f32; 3] {
     let wrap = |degrees: f64| {
         let wrapped = degrees - 360. * ((degrees - 180.) / 360.).ceil();
         if wrapped < -180. + 1e-4 {
