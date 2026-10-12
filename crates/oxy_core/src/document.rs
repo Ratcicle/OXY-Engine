@@ -666,13 +666,40 @@ impl Project {
     pub fn asset(&self, id: &str) -> Option<&Asset> {
         self.assets.iter().find(|a| a.id == id)
     }
-    /// Stores the editable hierarchy in a shared model asset. Instances remain explicit.
+    /// The model called `name`, in any case and without the spaces around it. Agents place
+    /// models by name, so no two models share one.
+    pub fn model_named(&self, name: &str) -> Option<&Asset> {
+        let wanted = name.trim().to_lowercase();
+        self.assets
+            .iter()
+            .find(|a| a.kind == AssetKind::Model && a.name.trim().to_lowercase() == wanted)
+    }
+    /// `name` or, when a model has it, the first of "name 2", "name 3"… no model has.
+    pub fn free_model_name(&self, name: &str) -> String {
+        let name = name.trim();
+        if self.model_named(name).is_none() {
+            return name.into();
+        }
+        (2..)
+            .map(|number| format!("{name} {number}"))
+            .find(|free| self.model_named(free).is_none())
+            .expect("a free number")
+    }
+    /// Stores the editable hierarchy in a shared model asset. Instances remain explicit. A name
+    /// another model has is refused ([`Self::model_named`]).
     pub fn save_model(
         &mut self,
         scene_id: &str,
         entity_id: &str,
         name: impl Into<String>,
     ) -> Result<Id, String> {
+        let name = name.into();
+        if let Some(other) = self.model_named(&name) {
+            return Err(format!(
+                "Já existe um modelo chamado \"{}\" ({})",
+                other.name, other.id
+            ));
+        }
         let scene = self.scene(scene_id).ok_or("Cena não encontrada")?;
         if scene.entity(entity_id).is_none() {
             return Err("Objeto não encontrado".into());
@@ -702,7 +729,7 @@ impl Project {
         let id = new_id();
         self.assets.push(Asset {
             id: id.clone(),
-            name: name.into(),
+            name,
             path: String::new(),
             kind: AssetKind::Model,
             model: Some(pieces),

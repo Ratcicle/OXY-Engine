@@ -1100,8 +1100,37 @@ fn fit_collider_wraps_the_shape_or_its_pieces_and_a_box_left_behind_is_warned() 
     )
     .unwrap();
     assert!(report.get("warnings").is_none(), "{report}");
-    let cube = report["created"]["0"][0]["id"].as_str().unwrap();
-    assert_eq!(box_of(&project, &scene, cube).0, [3., 4., 5.]);
+    let cube = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(box_of(&project, &scene, &cube).0, [3., 4., 5.]);
+
+    // A fitted box is followed too: a plane's, as thin as allowed, and one with a margin.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Plane"}, "name": "Piso"},
+            {"op": "add_component", "entity": "$0", "component": "collider3d"},
+            {"op": "fit_collider", "entity": "$0"},
+        ])),
+    )
+    .unwrap();
+    let floor = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    assert!(near(box_of(&project, &scene, &floor).0, [1., 0.001, 1.]));
+    for entity in [&floor, &cube] {
+        let report = command::apply_and_report(
+            &mut project,
+            &scene,
+            &batch(json!({"op": "update_entity", "entity": entity,
+                          "patch": {"dimensions": [20.0, 1.0, 20.0]}})),
+        )
+        .unwrap();
+        let warning = report["warnings"][0].as_str().unwrap_or_default();
+        assert!(
+            warning.contains(&format!("({entity}) agora mede [20, 1, 20]"))
+                && warning.contains("fit_collider"),
+            "{report}"
+        );
+    }
 
     // With children: the pieces of a turned and scaled group, in the group's own axes.
     let applied = command::apply(
@@ -1227,6 +1256,21 @@ fn fit_collider_wraps_the_shape_or_its_pieces_and_a_box_left_behind_is_warned() 
             "{bounds:?}"
         );
     }
+    // Fitted, it is still followed.
+    let report = command::apply_and_report(
+        &mut flat,
+        &plane,
+        &batch(json!({"op": "update_entity", "entity": floor,
+                      "patch": {"dimensions": [8.0, 2.0, 1.0]}})),
+    )
+    .unwrap();
+    assert!(
+        report["warnings"][0]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Chão"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -1336,6 +1380,30 @@ fn an_input_parameter_takes_the_action_name_and_keeps_its_id() {
             .contains(&format!("é o nome da ação de entrada {jump}"))),
         "{warnings:?}"
     );
+    // A name two actions share: they exist, and the warning says so.
+    old.scene_mut(&scene)
+        .unwrap()
+        .entity_mut(&control)
+        .unwrap()
+        .graph
+        .nodes[0]
+        .params
+        .insert("action".into(), Value::Text("Pausar".into()));
+    let warnings: Vec<String> = command::warnings(&old)
+        .into_iter()
+        .map(|w| w.message)
+        .collect();
+    let shared = warnings
+        .iter()
+        .find(|w| w.contains("\"Pausar\""))
+        .unwrap_or_else(|| panic!("{warnings:?}"));
+    assert!(
+        shared.contains("\"Pausar\" é o nome de 2 ações de entrada (")
+            && shared.contains(&action)
+            && shared.contains("pausa_antiga")
+            && !shared.contains("não existe"),
+        "{shared}"
+    );
 }
 
 #[test]
@@ -1396,6 +1464,28 @@ fn a_key_bound_to_two_actions_is_warned_by_the_batch_and_listed_in_the_summary()
     run(json!({"op": "set_input_key", "action": back, "key": "R"}));
     let summary = query::project_summary(&project);
     assert!(listed(&summary, &restart).get("shares_key_with").is_none());
+
+    // Only a batch that adds an action to a shared key warns, not one that takes one away.
+    let mut run = |command: serde_json::Value| {
+        command::apply_and_report(&mut project, &scene, &batch(command)).unwrap()
+    };
+    assert!(
+        run(json!({"op": "set_input_key", "action": back, "key": "K"}))
+            .get("warnings")
+            .is_some()
+    );
+    let third = run(json!({"op": "create_input_action", "name": "Recarregar", "key": "K"}));
+    assert!(
+        third["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("A tecla K é de 3 ações de entrada"),
+        "{third}"
+    );
+    assert_eq!(
+        run(json!({"op": "delete_input_action", "action": "Recarregar"})),
+        json!({"created": {}})
+    );
 }
 
 #[test]
@@ -1426,6 +1516,36 @@ fn plain_values_follow_the_catalog_type_and_the_rest_is_refused_in_portuguese() 
     assert_eq!(nodes[0].params["amount"], Value::Number(3.));
     assert_eq!(nodes[0].params["once"], Value::Bool(false));
     assert_eq!(nodes[1].text("mode"), "held");
+
+    // Parameters whose input takes any type (attribute.set's value, condition.compare's a and
+    // b) have a number as default, not as type: a plain value is read by its form.
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": trap, "operation": "attribute.set",
+             "params": {"attribute": "Checkpoint", "value": "Outro"}},
+            {"op": "add_node", "entity": trap, "operation": "condition.compare",
+             "params": {"a": 5, "b": true, "operator": "=="}},
+        ])),
+    )
+    .unwrap();
+    let node = |id: &str| {
+        project
+            .scene(&scene)
+            .unwrap()
+            .entity(&trap)
+            .unwrap()
+            .graph
+            .node(id)
+            .unwrap()
+            .clone()
+    };
+    let set = node(&applied[0].created[0]);
+    assert_eq!(set.params["value"], Value::Text("Outro".into()));
+    let compare = node(&applied[1].created[0]);
+    assert_eq!(compare.params["a"], Value::Number(5.));
+    assert_eq!(compare.params["b"], Value::Bool(true));
 
     let add = |params: serde_json::Value| json!({"op": "add_node", "entity": trap, "operation": "action.damage", "params": params});
     for (command, expected) in [
@@ -1461,6 +1581,13 @@ fn plain_values_follow_the_catalog_type_and_the_rest_is_refused_in_portuguese() 
                    "params": {"mode": "segurando"}}),
             "recebeu \"segurando\"",
         ),
+        // A parameter of any type is read only by an obvious form, and the example follows it.
+        (
+            json!({"op": "add_node", "entity": trap, "operation": "attribute.set",
+                   "params": {"value": [1, 2, 3]}}),
+            "O parâmetro value do nó attribute.set precisa de um valor marcado com o tipo, como \
+             {\"Vector3\":[1,2,3]}",
+        ),
     ] {
         let before = project.clone();
         let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
@@ -1482,4 +1609,28 @@ fn plain_values_follow_the_catalog_type_and_the_rest_is_refused_in_portuguese() 
     let error =
         command::parse(&json!({"op": "rename_entity", "entity": trap, "nome": "X"})).unwrap_err();
     assert!(error.contains("campo `nome` desconhecido"), "{error}");
+    // Wrong types and lengths, too.
+    for (command, expected) in [
+        (
+            json!({"op": "set_transform", "entity": trap, "position": [1, 2]}),
+            "não reconhecido: tamanho errado: 2 itens, esperava uma lista de 3 itens",
+        ),
+        (
+            json!({"op": "set_node_params", "entity": trap, "node": damage, "params": [1]}),
+            "não reconhecido: tipo errado: recebeu uma lista, esperava um objeto",
+        ),
+        (
+            json!("texto"),
+            "não reconhecido: tipo errado: recebeu o texto \"texto\", esperava um comando, um \
+             objeto com op",
+        ),
+        (
+            json!({"op": "duplicate_entities", "ids": [trap], "count": -1}),
+            "não reconhecido: valor inválido: recebeu o número `-1`, esperava um número inteiro, \
+             0 ou mais",
+        ),
+    ] {
+        let error = command::parse(&command).unwrap_err();
+        assert!(error.ends_with(expected), "{error}");
+    }
 }

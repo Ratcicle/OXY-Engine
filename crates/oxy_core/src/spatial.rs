@@ -155,6 +155,34 @@ fn shape_points(e: &Entity) -> Vec<Vec3> {
 /// Smallest side of a fitted box, so a flat shape (a plane) still gets a valid collider.
 const FIT_MIN_SIZE: f32 = 0.001;
 
+/// Whether a box collider of `size`, in `e`'s axes under the world `scale`, wraps `e`'s own
+/// shape as [`fit_collider`] does, or as a box the size of its dimensions does: each side the
+/// shape's, plus the same metres on every side (the margin, 0 or more). Along a flat shape's
+/// normal (a plane's height) the box may have any size, since the fit only keeps it valid.
+pub fn fits_shape(e: &Entity, size: [f32; 3], scale: Vec3) -> bool {
+    let (min, max) = shape_points(e).into_iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(min, max), p| (min.min(p), max.max(p)),
+    );
+    let side = max - min;
+    let mut margin = None;
+    for axis in 0..3 {
+        if !side[axis].is_finite() || side[axis] < FIT_MIN_SIZE {
+            continue;
+        }
+        // Metres on each side, in the world.
+        let room = (size[axis] - side[axis]) * scale[axis] * 0.5;
+        let tolerance = 1e-4 * (1. + side[axis] * scale[axis]);
+        match margin {
+            _ if room < -tolerance => return false,
+            None => margin = Some(room),
+            Some(first) if (room - first).abs() > tolerance => return false,
+            Some(_) => {}
+        }
+    }
+    margin.is_some()
+}
+
 /// Fits the collider of `id` to its shape or, with `children`, to its shape and every piece
 /// under it, as the editor's Ajustar ao objeto and Ajustar ao grupo/filhos do (cameras and
 /// interface elements left out), with `margin` metres more on every side. A 3D box collider

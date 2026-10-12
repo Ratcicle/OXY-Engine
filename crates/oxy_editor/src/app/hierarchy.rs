@@ -510,9 +510,15 @@ impl Editor {
                 .entity(id)
                 .map(|e| e.name.clone())
                 .unwrap_or_default();
-            match self.state.project.save_model(&scene_id, id, &name) {
+            // Agents place models by name, so a name another model has gets a number.
+            let free = self.state.project.free_model_name(&name);
+            match self.state.project.save_model(&scene_id, id, &free) {
                 Ok(asset) => {
-                    self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco.");
+                    if free == name.trim() {
+                        self.log("Modelo salvo na biblioteca, com sua estrutura editável. Salve o projeto para gravar em disco.");
+                    } else {
+                        self.log(format!("Modelo salvo na biblioteca como \"{free}\", porque já há um modelo \"{}\", com sua estrutura editável. Salve o projeto para gravar em disco.", name.trim()));
+                    }
                     // Reveal the new model, even where the Library starts collapsed.
                     self.asset_ui.locate = Some(asset);
                 }

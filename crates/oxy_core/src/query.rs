@@ -984,7 +984,7 @@ pub fn catalog() -> Json {
         "movement_profiles": movement_profiles(),
         "surface_presets": ["common", "ice", "mud", "conveyor"],
         "input_keys": input_actions::keys().collect::<Vec<_>>(),
-        "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}. A node parameter may also be plain when its default above has the type: a number for Number, a text for Text, true or false for Bool.",
+        "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}. A node parameter may also be plain when its default above has the type: a number for Number, a text for Text, true or false for Bool. A parameter with an input of the same id of type any (attribute.set value, condition.compare a and b) takes any type: its default is only where it starts, and a plain number, text or true/false keeps that type.",
     })
 }
 

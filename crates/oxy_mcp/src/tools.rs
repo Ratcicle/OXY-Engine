@@ -483,11 +483,14 @@ set_parent {ids, parent?} (keeps world transform)
 to another scene, keeping their place in the world and the world path of the animations that \
 move them, under a scaled or turned parent too; answers the copies' roots. Refused while they \
 point to objects or animations left behind (copy those too). action.scene nodes keep their \
-scene: those opening the scene copied from come back in warnings (set_node_params them)
+scene: those opening the scene copied from come back in warnings, each with its copy's ID \
+(set_node_params them)
 - save_model {entity, name?}: the object and everything under it become a model asset (answers \
 its ID); a name another model has is refused (any case). place_model {model: ID or name, \
 parent?, position?, name?}: places a copy in `scene`, answering every piece, its root first. \
-Reuse a player rig, HUD or puzzle across levels this way
+Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene nodes keep the \
+scene they opened when it was saved, with no warning (a restart saved in level 1 reopens level \
+1): set_node_params them after placing
 - set_transform {entity, position?, rotation? (degrees), scale?, move_tracks?}: keyframes that \
 animate the object follow it (a moved platform keeps its path around its new place) when \
 move_tracks is true; by default when its own animations move it. set_visible {entity, visible}; \
@@ -517,7 +520,10 @@ with graph and geometry full) for fields without a dedicated command
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
 to_node, to_port}. Parameter values are tagged like attributes, or plain when oxy_catalog gives \
 the parameter's type: a number for a Number parameter, a text for Text, true/false for Bool \
-(\"mode\": \"held\"); other plain values are refused with the tagged form expected. A parameter \
+(\"mode\": \"held\"). A parameter with an input port of the same id of type any (attribute.set \
+value, condition.compare a and b) takes any type: its default is only where it starts, and a \
+plain number, text or true/false keeps that type. Other plain values are refused with the \
+tagged form expected. A parameter \
 with choices in oxy_catalog takes only those values. An input action parameter (ref \
 input_action) takes the action's ID or name and stores the ID, which the game reads.
 - create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
@@ -1806,9 +1812,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("como {\"Number\":3}"), "{error}");
+        // A parameter of any type keeps a plain text as text, though its default is a number.
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "add_node", "entity": pad, "operation": "attribute.set",
+                                 "params": {"attribute": "Checkpoint", "value": "Outro"}}]}),
+        )
+        .unwrap();
+        let nodes = call(
+            "oxy_entity",
+            json!({"id": pad, "graph": "full", "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            nodes["graph"]["nodes"][1]["params"]["value"],
+            json!({"Text": "Outro"}),
+            "{nodes}"
+        );
         for text in [
             "fit_collider",
             "plain when oxy_catalog gives",
+            "of type any (attribute.set",
             "two actions on one key",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");

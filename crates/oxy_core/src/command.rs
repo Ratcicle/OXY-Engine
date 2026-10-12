@@ -12,7 +12,7 @@ use crate::{
     character::MovementProfile,
     document::*,
     editing,
-    graph::{self, Edge, Node, OperationDef, Reference},
+    graph::{self, Edge, Node, OperationDef, PortType, Reference},
     input_actions::{self, every_entity},
     movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
     physics3d::CollisionShape,
@@ -124,7 +124,9 @@ pub struct MarkerSpec {
 /// A logic node parameter or an attribute value as a command gives it: tagged with its type,
 /// such as `{"Number": 3}`, or plain. A plain value counts only for a node parameter whose
 /// type the catalog knows and only in the obvious reading (a number for Number, a text for
-/// Text, true or false for Bool); anything else is refused with the tagged form expected.
+/// Text, true or false for Bool); a parameter that takes any type (its input port is Any)
+/// reads a plain number, text or true/false by that form. Anything else is refused with the
+/// tagged form expected.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ParamValue {
@@ -133,9 +135,9 @@ pub enum ParamValue {
     Plain(Json),
 }
 impl ParamValue {
-    /// The value, a plain one read as `expected` (the type the catalog gives, None for
-    /// attributes, which have none). `what` names it in the error, such as "O parâmetro
-    /// volume do nó action.sound".
+    /// The value, a plain one read as `expected` (the type the catalog gives or, for a
+    /// parameter of any type, [`Self::form`]; None for attributes, which have none). `what`
+    /// names it in the error, such as "O parâmetro volume do nó action.sound".
     fn value(&self, expected: Option<&Value>, what: &str) -> Result<Value, String> {
         let plain = match self {
             Self::Tagged(value) => return Ok(value.clone()),
@@ -158,6 +160,16 @@ impl ParamValue {
                 ""
             }
         ))
+    }
+    /// The type a plain number, text or true/false has by its form, for a parameter that takes
+    /// any type; None for a tagged value and other forms, which stay refused.
+    fn form(&self) -> Option<Value> {
+        match self {
+            Self::Plain(Json::Number(_)) => Some(Value::Number(0.)),
+            Self::Plain(Json::String(_)) => Some(Value::Text(String::new())),
+            Self::Plain(Json::Bool(_)) => Some(Value::Bool(false)),
+            _ => None,
+        }
     }
 }
 
@@ -680,8 +692,8 @@ pub fn apply(
 /// Something a command left that the batch checks once it ends, since a later command may
 /// settle it.
 enum Check {
-    /// update_entity gave an object other dimensions while its box collider kept `size`, the
-    /// old ones.
+    /// update_entity gave an object other dimensions while its box collider kept `size`, which
+    /// wrapped the old shape.
     StaleCollider {
         scene: Id,
         entity: Id,
@@ -704,10 +716,11 @@ impl Check {
                 entity,
                 size,
             } => {
-                let e = project.scene(scene)?.entity(entity)?;
-                if box_size(e) != Some(*size) || near(e.dimensions, *size) {
+                let level = project.scene(scene)?;
+                if box_fit(level, entity) != Some((*size, false)) {
                     return None;
                 }
+                let e = level.entity(entity)?;
                 let shown = |v: [f32; 3]| format!("[{}, {}, {}]", v[0], v[1], v[2]);
                 Some(format!(
                     "{} ({entity}) agora mede {}, mas o colisor de caixa continua com {}; no \
@@ -728,7 +741,9 @@ impl Check {
                             .nodes
                             .iter()
                             .find(|n| n.id == *node && n.text("scene") == from)
-                            .map(|n| format!("{} → nó action.scene ({})", e.name, n.id))
+                            // The copy's ID, which set_node_params takes: the answer gives only
+                            // the copied roots.
+                            .map(|n| format!("{} ({}) → nó action.scene ({})", e.name, e.id, n.id))
                     })
                     .collect();
                 if listed.is_empty() {
@@ -761,6 +776,15 @@ fn box_size(e: &Entity) -> Option<[f32; 3]> {
         },
         None => e.collider.as_ref().map(|c| c.size),
     }
+}
+
+/// The size of the box collider of `entity` and whether it wraps the object's own shape
+/// ([`spatial::fits_shape`]); None without a box collider.
+fn box_fit(scene: &Scene, entity: &str) -> Option<([f32; 3], bool)> {
+    let e = scene.entity(entity)?;
+    let size = box_size(e)?;
+    let scale = spatial::physical_scale(scene.world_matrix(entity).ok()?);
+    Some((size, spatial::fits_shape(e, size, scale)))
 }
 
 /// Whether two sizes are the same but for f32 rounding.
@@ -818,7 +842,8 @@ fn names_of<'a>(project: &Project, wanted: &HashSet<&'a str>) -> HashMap<&'a str
 /// with); `warnings`, present when the batch added any, lists what the game will ignore
 /// without failing, the action names and keys it left shared (see [`batch_warnings`]) and
 /// what its commands left that the game takes otherwise than it may seem (see [`Check`]);
-/// `before` are the project's [`batch_warnings`] before the batch, which are not repeated.
+/// `before` are the project's [`batch_warnings`] before the batch, which are not repeated (a
+/// shared name or key comes back only when the batch added an action to it).
 pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Json {
     let wanted: HashSet<&str> = applied
         .iter()
@@ -845,9 +870,13 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
         })
         .collect();
     let mut result = json!({"created": created});
+    let known: HashSet<&str> = before
+        .iter()
+        .flat_map(|w| w.about.iter().map(String::as_str))
+        .collect();
     let mut new: Vec<String> = batch_warnings(project)
         .into_iter()
-        .filter(|w| !before.iter().any(|old| old.about == w.about))
+        .filter(|w| w.about.iter().any(|about| !known.contains(about.as_str())))
         .map(|w| w.message)
         .collect();
     new.extend(applied.iter().flat_map(|a| a.warnings.iter().cloned()));
@@ -861,8 +890,10 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
 /// [`batch_warnings`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warning {
-    /// What it is about, by IDs and values only, so renaming an object does not make it new.
-    pub about: String,
+    /// What it is about, by IDs and values only, so renaming an object does not make it new:
+    /// one entry per action of a shared name or key, so a batch makes the warning new only when
+    /// it adds an action to them, not when it takes one away.
+    pub about: Vec<String>,
     pub message: String,
 }
 
@@ -876,7 +907,7 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
     for (id, key) in &project.input_bindings {
         if let Err(error) = input_actions::check_key(key) {
             found.push(Warning {
-                about: format!("key {id} {key}"),
+                about: vec![format!("key {id} {key}")],
                 message: format!(
                     "Ação de entrada {} ({id}): {error}",
                     input_actions::label(project, id)
@@ -898,13 +929,30 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
                          set_node_params com o nome guarda o ID",
                         place()
                     ),
-                    _ => format!(
+                    Ok(None) => format!(
                         "{}: a ação de entrada \"{action}\" não existe no projeto",
                         place()
                     ),
+                    // A name several actions share, which only their IDs tell apart.
+                    Err(_) => {
+                        let wanted = action.trim().to_lowercase();
+                        let named: Vec<&str> = project
+                            .input_bindings
+                            .keys()
+                            .filter(|id| input_actions::label(project, id).to_lowercase() == wanted)
+                            .map(String::as_str)
+                            .collect();
+                        format!(
+                            "{}: \"{action}\" é o nome de {} ações de entrada ({}), e o jogo lê \
+                             o ID; use set_node_params com o ID da ação certa",
+                            place(),
+                            named.len(),
+                            named.join(", ")
+                        )
+                    }
                 };
                 found.push(Warning {
-                    about: format!("action {} {action}", node.id),
+                    about: vec![format!("action {} {action}", node.id)],
                     message,
                 });
             }
@@ -917,7 +965,7 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
             });
             if let Err(error) = graph::check_choices(&node.operation, set) {
                 found.push(Warning {
-                    about: format!("choice {} {error}", node.id),
+                    about: vec![format!("choice {} {error}", node.id)],
                     message: format!("{}: {error}", place()),
                 });
             }
@@ -952,7 +1000,10 @@ pub fn batch_warnings(project: &Project) -> Vec<Warning> {
             .map(|id| format!("{id} ({})", input_actions::label(project, id)))
             .collect();
         found.push(Warning {
-            about: format!("action name {name} {}", ids.join(" ")),
+            about: ids
+                .iter()
+                .map(|id| format!("action name {name} {id}"))
+                .collect(),
             message: format!(
                 "{} ações de entrada atendem pelo nome \"{name}\": {}. Pelo nome, os comandos e o \
                  oxy_simulate não as distinguem; renomeie uma delas ou use o ID",
@@ -967,13 +1018,10 @@ pub fn batch_warnings(project: &Project) -> Vec<Warning> {
             .map(|id| format!("{id} ({})", input_actions::label(project, id)))
             .collect();
         found.push(Warning {
-            about: format!(
-                "shared key {key} {}",
-                ids.iter()
-                    .map(|id| id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
+            about: ids
+                .iter()
+                .map(|id| format!("shared key {key} {id}"))
+                .collect(),
             message: format!(
                 "A tecla {key} é de {} ações de entrada: {}. No jogo, apertá-la dispara todas; \
                  o oxy_simulate aperta ações, não teclas, e não mostra isso. Se não for de \
@@ -1008,9 +1056,12 @@ pub fn parse(json: &Json) -> Result<Vec<Command>, String> {
 }
 
 /// A serde message about an unknown value, an unknown field or a missing one, in Portuguese,
-/// with the accepted spelling when only the case differs ("Parkour" for `parkour`); other
-/// messages as they are.
+/// with the accepted spelling when only the case differs ("Parkour" for `parkour`), and one
+/// about a wrong type or length (see [`wrong_shape`]); other messages as they are.
 fn explain(message: &str) -> String {
+    if let Some(text) = wrong_shape(message) {
+        return text;
+    }
     // The names serde quotes between backticks: the one given, then the ones accepted.
     let quoted: Vec<&str> = message.split('`').skip(1).step_by(2).collect();
     let listed = |names: &[&str]| {
@@ -1042,6 +1093,81 @@ fn explain(message: &str) -> String {
         ));
     }
     text
+}
+
+/// A serde message about a value of the wrong type or length, in Portuguese: "invalid type:
+/// sequence, expected a map" is "tipo errado: recebeu uma lista, esperava um objeto". Phrases
+/// it does not know stay as serde wrote them; None for other messages.
+fn wrong_shape(message: &str) -> Option<String> {
+    let items = |n: &str| format!("{n} {}", if n == "1" { "item" } else { "itens" });
+    let expected = |what: &str| -> String {
+        let fixed = match what {
+            "a map" => "um objeto",
+            "a sequence" => "uma lista",
+            "a string" => "um texto",
+            "a boolean" => "true ou false",
+            "f32" | "f64" => "um número",
+            "u8" | "u16" | "u32" | "u64" | "usize" => "um número inteiro, 0 ou mais",
+            "i8" | "i16" | "i32" | "i64" | "isize" => "um número inteiro",
+            "fewer elements in array" => "menos itens",
+            "internally tagged enum Command" => "um comando, um objeto com op",
+            _ => "",
+        };
+        if !fixed.is_empty() {
+            return fixed.into();
+        }
+        if let Some(n) = what
+            .strip_prefix("an array of length ")
+            .or_else(|| what.strip_prefix("a tuple of size "))
+        {
+            return format!("uma lista de {}", items(n));
+        }
+        if let Some(name) = what
+            .strip_prefix("internally tagged enum ")
+            .or_else(|| what.strip_prefix("struct "))
+        {
+            return format!("um objeto ({name})");
+        }
+        match what.strip_prefix("enum ") {
+            Some(name) => format!("um dos valores de {name}"),
+            None => what.into(),
+        }
+    };
+    if let Some(rest) = message.strip_prefix("invalid length ") {
+        let (length, what) = rest.split_once(", expected ")?;
+        return Some(format!(
+            "tamanho errado: {}, esperava {}",
+            items(length),
+            expected(what)
+        ));
+    }
+    let (start, rest) = match message.strip_prefix("invalid type: ") {
+        Some(rest) => ("tipo errado", rest),
+        None => ("valor inválido", message.strip_prefix("invalid value: ")?),
+    };
+    // A text given may hold ", expected " itself; what serde expects never does.
+    let (given, what) = rest.rsplit_once(", expected ")?;
+    let given = [
+        ("string ", "o texto "),
+        ("integer ", "o número "),
+        ("floating point ", "o número "),
+        ("boolean ", "o valor "),
+    ]
+    .iter()
+    .find_map(|(en, pt)| given.strip_prefix(en).map(|value| format!("{pt}{value}")))
+    .unwrap_or_else(|| {
+        match given {
+            "sequence" => "uma lista",
+            "map" => "um objeto",
+            "unit value" | "null" => "null",
+            other => other,
+        }
+        .into()
+    });
+    Some(format!(
+        "{start}: recebeu {given}, esperava {}",
+        expected(what)
+    ))
 }
 
 /// A text that stands for an ID created earlier in a batch. Only a whole text of this form
@@ -1290,10 +1416,7 @@ fn apply_one(
                 None => source.entity(entity).unwrap().name.clone(),
             };
             // place_model takes a model by name, which two models would share.
-            if let Some(other) = project.assets.iter().find(|a| {
-                a.kind == AssetKind::Model
-                    && a.name.trim().to_lowercase() == name.trim().to_lowercase()
-            }) {
+            if let Some(other) = project.model_named(&name) {
                 return Err(format!(
                     "Já existe um modelo chamado \"{}\" ({}); escolha outro nome com name",
                     other.name, other.id
@@ -1547,20 +1670,23 @@ fn apply_one(
             patch,
         } => {
             let id = scene_id(project, scene, default)?;
-            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let scene = scene_mut(project, &id);
+            let fitted = box_fit(scene, entity);
+            let e = entity_mut(scene, entity)?;
             let mut value = serde_json::to_value(&*e).map_err(|e| e.to_string())?;
             merge_patch(&mut value, patch);
             if value.get("id").and_then(Json::as_str) != Some(entity.as_str()) {
                 return Err("O patch não pode mudar o ID do objeto".into());
             }
-            let before = (e.dimensions, box_size(e));
+            let dimensions = e.dimensions;
             *e = serde_json::from_value(value).map_err(|e| format!("Patch inválido: {e}"))?;
+            let resized = !near(e.dimensions, dimensions);
             // A box collider follows the object's scale but not its dimensions: one that fit
-            // the old ones, and that the patch left as it was, no longer fits the shape.
-            if let (dimensions, Some(size)) = before
-                && near(size, dimensions)
-                && !near(e.dimensions, dimensions)
-                && box_size(e) == Some(size)
+            // the old shape (its dimensions or fit_collider's box, margin and all), and that
+            // the patch left as it was, no longer fits the new one.
+            if let Some((size, true)) = fitted
+                && resized
+                && box_fit(scene, entity) == Some((size, false))
             {
                 checks.push(Check::StaleCollider {
                     scene: id,
@@ -1778,9 +1904,10 @@ fn apply_one(
 }
 
 /// The parameters `given` to a node of `def`, as the node keeps them: plain values read by the
-/// catalog's types, fixed choices checked, and an input action given by name kept by its ID,
-/// which is what the game reads. An action the project lacks stays as given, and the batch
-/// warns about it; a name two actions share is refused, as by input action commands.
+/// catalog's types (by their form where the input port takes any type), fixed choices checked,
+/// and an input action given by name kept by its ID, which is what the game reads. An action
+/// the project lacks stays as given, and the batch warns about it; a name two actions share is
+/// refused, as by input action commands.
 fn node_params(
     project: &Project,
     def: &OperationDef,
@@ -1793,8 +1920,19 @@ fn node_params(
             .iter()
             .find(|p| p.id == key)
             .ok_or_else(|| format!("O nó {} não tem o parâmetro {key}", def.id))?;
+        // An Any input takes every attribute type (attribute.set's value, condition.compare's
+        // a and b), so its default is only where it starts, not its type.
+        let any = def
+            .inputs
+            .iter()
+            .any(|port| port.id == key && port.kind == PortType::Any);
+        let expected = if any {
+            value.form()
+        } else {
+            Some(param.default.clone())
+        };
         let mut value = value.value(
-            Some(&param.default),
+            expected.as_ref(),
             &format!("O parâmetro {key} do nó {}", def.id),
         )?;
         if graph::reference(def.id, param) == Some(Reference::InputAction)

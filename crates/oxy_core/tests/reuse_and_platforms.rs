@@ -893,6 +893,18 @@ fn models_are_saved_and_placed_in_any_level() {
         error,
         format!("Já existe um modelo chamado \"Torre\" ({model}); escolha outro nome com name")
     );
+    // Every way of saving keeps the names apart: the editor saves under the object's name,
+    // with a number when a model has it.
+    let error = project.save_model(&first, &tower, "TORRE").unwrap_err();
+    assert!(
+        error.contains("Já existe um modelo chamado \"Torre\""),
+        "{error}"
+    );
+    assert_eq!(project.free_model_name("Torre"), "Torre 2");
+    let numbered = project.save_model(&first, &tower, "Torre 2").unwrap();
+    assert_eq!(project.free_model_name(" torre "), "torre 3");
+    assert_eq!(project.free_model_name("Castelo"), "Castelo");
+    project.assets.retain(|a| a.id != numbered);
     let error = refused(
         &mut project,
         &first,
@@ -1159,6 +1171,9 @@ fn copies_to_another_level_warn_about_logic_that_opens_the_level_they_left() {
             // Another level is a choice, not a leftover.
             {"op": "add_node", "entity": "$1", "operation": "action.scene",
              "params": {"scene": "$0"}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Filho", "parent": "$1"},
+            {"op": "add_node", "entity": "$4", "operation": "action.scene",
+             "params": {"scene": first}},
             {"op": "copy_entities", "ids": ["$1"], "to_scene": "$0"},
             // Into the same level, the scene it opens is its own.
             {"op": "copy_entities", "ids": ["$1"], "to_scene": first},
@@ -1166,7 +1181,7 @@ fn copies_to_another_level_warn_about_logic_that_opens_the_level_they_left() {
     )
     .unwrap();
     let second = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
-    let copy = report["created"]["4"][0]["id"].as_str().unwrap().to_owned();
+    let copy = report["created"]["6"][0]["id"].as_str().unwrap().to_owned();
     let warnings = report["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     let warning = warnings[0].as_str().unwrap();
@@ -1176,14 +1191,29 @@ fn copies_to_another_level_warn_about_logic_that_opens_the_level_they_left() {
         first,
         "the copy still opens the old level"
     );
+    // A piece inside the copy comes with its ID, which the answer does not give.
+    let child = project
+        .scene(&second)
+        .unwrap()
+        .entities
+        .iter()
+        .find(|e| e.parent.as_deref() == Some(copy.as_str()))
+        .unwrap();
     assert!(
-        warning.starts_with("Comando 4 (copy_entities, o 5º do lote): estes nós copiados")
+        warning.starts_with("Comando 6 (copy_entities, o 7º do lote): estes nós copiados")
             && warning.contains("ainda abrem Cena 3D, a cena de onde vieram")
             && warning.contains(&format!("{{\"Text\": \"{second}\"}}"))
-            && warning.contains(&format!("Controle da fase → nó action.scene ({})", node.id)),
+            && warning.contains(&format!(
+                "Controle da fase ({copy}) → nó action.scene ({})",
+                node.id
+            ))
+            && warning.contains(&format!(
+                "Filho ({}) → nó action.scene ({})",
+                child.id, child.graph.nodes[0].id
+            )),
         "{warning}"
     );
-    assert_eq!(warning.matches("nó action.scene").count(), 1, "{warning}");
+    assert_eq!(warning.matches("nó action.scene").count(), 2, "{warning}");
 }
 
 #[test]
