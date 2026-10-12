@@ -237,7 +237,7 @@ pub fn definitions() -> Json {
             "Validates the whole project with the same rules used when saving: {valid, error?, \
              warnings?}. warnings lists what the game would ignore without failing: logic nodes \
              naming an input action the project lacks, keys the game does not read and \
-             parameters outside their choices.",
+             parameters outside their choices (empty included).",
             json!({"project": project}),
             json!([])
         ),
@@ -417,8 +417,10 @@ set_node_params {entity, node, params}; connect / disconnect {entity, from_node,
 to_node, to_port}. A parameter with choices in oxy_catalog takes only those values.
 - create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
 key}; delete_input_action {action}, refused while used (oxy_project lists used_by). action is \
-the ID or the name; key is one of oxy_catalog input_keys (Escape and F3 are reserved); names are \
-unique. Logic nodes and oxy_simulate use the ID.
+the ID or the name (an exact ID wins); key is one of oxy_catalog input_keys (Escape and F3 are \
+reserved). create and rename refuse a name another action has or uses as its ID; presets and \
+components that add default actions (Pular, Correr…) do not check, so a name two actions share \
+comes back in warnings: use the ID then. Logic nodes and oxy_simulate use the ID.
 - create_surface {preset?: common|ice|mud|conveyor (default common), name?, friction?, traction?, \
 speed_multiplier?, conveyor?: [x,y,z] m/s, conveyor_space?: World|Local}; update_surface \
 {surface, and the same fields but preset}; delete_surface {surface}, refused while used. Assign \
@@ -1388,6 +1390,9 @@ mod tests {
         assert!(
             CATALOG_DESCRIPTION.contains("choices") && CATALOG_DESCRIPTION.contains("input_keys")
         );
+        // Names are kept apart only by create and rename, so the description says so.
+        assert!(APPLY_DESCRIPTION.contains("name two actions share comes back in warnings"));
+        assert!(!APPLY_DESCRIPTION.contains("names are unique"));
         assert!(INPUTS.contains("by ID or name"));
     }
 

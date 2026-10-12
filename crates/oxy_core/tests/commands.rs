@@ -451,6 +451,207 @@ fn input_actions_are_created_renamed_rebound_and_deleted_by_command() {
 }
 
 #[test]
+fn an_input_action_name_never_stands_for_another_action() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    // Older projects keep readable IDs, which commands and simulations take before names.
+    for (id, key) in [("atacar", "J"), ("interagir", "E")] {
+        project.input_bindings.insert(id.into(), key.into());
+    }
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "rename_input_action", "action": "atacar", "name": "Golpear"})),
+    )
+    .unwrap();
+    for (command, expected) in [
+        (
+            json!({"op": "create_input_action", "name": "Atacar", "key": "K"}),
+            "é o ID da ação de entrada Golpear",
+        ),
+        (
+            json!({"op": "rename_input_action", "action": "interagir", "name": "atacar"}),
+            "é o ID da ação de entrada Golpear",
+        ),
+        (
+            json!({"op": "rename_input_action", "action": "interagir", "name": "GOLPEAR"}),
+            "Já existe uma ação de entrada chamada \"GOLPEAR\" (atacar)",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+    // An action may take its own ID back as its name.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "rename_input_action", "action": "Golpear", "name": "Atacar"})),
+    )
+    .unwrap();
+    assert_eq!(input_actions::label(&project, "atacar"), "Atacar");
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+
+    // Presets and components add their default actions without that check, so the batch
+    // that leaves a name to two actions warns, and by name commands refuse it.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Pular", "key": "Space"},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"}},
+        ])),
+    )
+    .unwrap();
+    let created = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(input_actions::label(&project, "pular"), "Pular");
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("2 ações de entrada atendem pelo nome \"pular\"")
+            && warning.contains(&format!("{created} (Pular)"))
+            && warning.contains("pular (Pular)"),
+        "{warning}"
+    );
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "set_input_key", "action": "Pular", "key": "K"})),
+    )
+    .unwrap_err();
+    assert!(error.message.contains("Há 2 ações"), "{error}");
+    // The game tells them apart, and projects may share a name on purpose (one label for
+    // keys 1, 2 and 3), so validation leaves it out and a later batch does not repeat it.
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+    assert_eq!(
+        command::apply_and_report(
+            &mut project,
+            &scene,
+            &batch(json!({"op": "set_input_key", "action": created, "key": "K"})),
+        )
+        .unwrap(),
+        json!({"created": {}})
+    );
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "rename_input_action", "action": created, "name": "Saltar"})),
+    )
+    .unwrap();
+    assert_eq!(
+        command::batch_warnings(&project),
+        command::warnings(&project)
+    );
+}
+
+#[test]
+fn empty_choices_are_warned_but_an_unset_input_mode_reads_as_pressed() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Pular", "key": "Space"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Lógica"},
+            {"op": "add_node", "entity": "$1", "operation": "event.character"},
+            {"op": "add_node", "entity": "$1", "operation": "math.binary"},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": {"Text": "$0"}}},
+        ])),
+    )
+    .unwrap();
+    let entity = created[1].created[0].clone();
+    // add_node refuses the empty value, as any other one outside the choices.
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": entity, "operation": "event.character",
+                      "params": {"kind": {"Text": ""}}}),
+        ),
+    )
+    .unwrap_err();
+    assert!(error.message.contains("recebeu \"\""), "{error}");
+
+    // update_entity lets it through, so the batch warns: the game never matches it.
+    let nodes = &project
+        .scene(&scene)
+        .unwrap()
+        .entity(&entity)
+        .unwrap()
+        .graph
+        .nodes;
+    let mut nodes = serde_json::to_value(nodes).unwrap();
+    for (index, key) in [(0, "kind"), (1, "operator"), (2, "mode")] {
+        nodes[index]["params"][key] = json!({"Text": ""});
+    }
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "update_entity", "entity": entity,
+                      "patch": {"graph": {"nodes": nodes}}})),
+    )
+    .unwrap();
+    let warnings: Vec<&str> = report["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    for operation in ["event.character", "math.binary"] {
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains(&format!("nó {operation} ")) && w.contains("recebeu \"\"")),
+            "{operation}: {warnings:?}"
+        );
+    }
+    // The empty mode of an event.input is one never set, which the game reads as pressed.
+    assert!(
+        !warnings.iter().any(|w| w.contains("event.input")),
+        "{warnings:?}"
+    );
+    let validation = query::validation(&project);
+    assert_eq!(validation["valid"], true);
+    assert_eq!(validation["warnings"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn an_empty_batch_changes_nothing_and_repeats_no_warning() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": "event.input",
+             "params": {"action": {"Text": "nada"}}},
+        ])),
+    )
+    .unwrap();
+    // One label for two keys, as some examples do.
+    for (id, key) in [("1", "1"), ("2", "2")] {
+        project.input_bindings.insert(id.into(), key.into());
+        project
+            .input_labels
+            .insert(id.into(), "Escolher perfil".into());
+    }
+    assert_eq!(command::warnings(&project).len(), 1);
+    assert_eq!(command::batch_warnings(&project).len(), 2);
+    let before = project.clone();
+    let answer = command::apply_and_report(&mut project, &scene, &[]).unwrap();
+    assert_eq!(answer, json!({"created": {}}));
+    assert_eq!(project, before);
+    // The editor answers an empty batch without an undo step, from the same warnings.
+    assert_eq!(
+        command::report(&project, &[], &command::batch_warnings(&project)),
+        answer
+    );
+}
+
+#[test]
 fn surfaces_are_created_assigned_through_patches_and_deleted_when_unused() {
     let (mut project, scene) = project(SceneKind::ThreeD);
     let created = command::apply(

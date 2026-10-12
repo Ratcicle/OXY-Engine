@@ -105,7 +105,8 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 
 **Resposta.** O lote responde `{created, warnings}`:
 - `created` liga o índice de cada comando que criou algo (contando do 0) aos IDs criados, na ordem, com o nome de cada um: `{"0": [{"id": "…", "name": "Porta"}]}`. O nome de um nó é a operação dele. Os comandos que não criam nada ficam de fora.
-- `warnings` só aparece quando o lote deixa algo que o jogo vai ignorar sem dar erro: um nó que usa uma ação de entrada que o projeto não tem, uma tecla que o jogo não lê ou um parâmetro com valor fora das opções. Vêm só os avisos que o lote criou; o `oxy_validate` lista todos os do projeto.
+- `warnings` só aparece quando o lote deixa algo que o jogo vai ignorar sem dar erro: um nó que usa uma ação de entrada que o projeto não tem, uma tecla que o jogo não lê ou um parâmetro com valor fora das opções. Um valor vazio também está fora das opções; a exceção é o modo vazio de um nó de ação de entrada, que o jogo lê como "pressionar". Vêm só os avisos que o lote criou, tanto ao vivo quanto nos arquivos (um lote vazio responde `{"created": {}}`); o `oxy_validate` lista todos os do projeto.
+- O lote também avisa quando deixa duas ações de entrada atendendo pelo mesmo nome (veja abaixo). O jogo as distingue e há projetos que repetem um nome de propósito (um rótulo para as teclas 1, 2 e 3), então o `oxy_validate` não lista esse aviso.
 - Nos arquivos, a resposta traz também `saved` e `previous_version`.
 
 **IDs criados no mesmo lote.** Num comando, um texto que é inteiro `"$N"` vale o primeiro ID criado pelo comando N, e `"$N.M"`, o M-ésimo (os dois contam do 0):
@@ -119,9 +120,10 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 
 **Ações de entrada.**
 - `create_input_action {name, key}` cria uma ação. O ID dela é o que os nós e o `oxy_simulate` usam (`"$N"` no mesmo lote).
-- `rename_input_action {action, name}`, `set_input_key {action, key}` e `delete_input_action {action}` aceitam o ID ou o nome da ação.
+- `rename_input_action {action, name}`, `set_input_key {action, key}` e `delete_input_action {action}` aceitam o ID ou o nome da ação. Um texto igual ao ID de uma ação vale por ela, antes dos nomes.
 - A tecla é uma das de `input_keys` no catálogo: letras, números, as outras teclas do teclado, F1 a F35, Shift, os botões do mouse e a roda. Outras grafias que o jogo entende viram o nome do catálogo (`a` vira `A`, `ArrowUp` vira `Up`). Escape (pausa o jogo e libera o mouse) e F3 (diagnóstico do player) são recusadas.
-- Duas ações não podem ter o mesmo nome, sem diferenciar maiúsculas.
+- `create_input_action` e `rename_input_action` recusam um nome que outra ação já tem ou que é o ID de outra ação (como `atacar` ou `pular` em projetos antigos), sem diferenciar maiúsculas.
+- Os presets e componentes que criam as ações padrão (Pular, Correr, Agachar…) não fazem essa verificação. Se o nome de uma ação coincidir com o de outra, o lote avisa em `warnings`, e por esse nome os comandos e o `oxy_simulate` recusam a ação (ou, se ele for o ID de uma delas, escolhem essa); renomeie uma delas ou use o ID.
 - Excluir uma ação em uso é recusado, com a lista de quem a usa.
 
 **Superfícies físicas.**

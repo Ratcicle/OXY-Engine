@@ -38,7 +38,10 @@ impl Editor {
             return Err(reason.into());
         }
         if commands.is_empty() {
-            return Ok(command::report(&self.state.project, &[], &[]));
+            // No undo step for nothing; the answer leaves out the project's warnings, as on
+            // files.
+            let before = command::batch_warnings(&self.state.project);
+            return Ok(command::report(&self.state.project, &[], &before));
         }
         let label = match commands {
             [one] => format!("Agente: {}", one.label()),

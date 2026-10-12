@@ -1,8 +1,8 @@
 //! Live agent channel in the real editor: a client finds the editor through its discovery
 //! file, edits the open project (objects, logic and an input action, with the warning the
-//! batch added), reads it back (with read options answering as they do on
-//! files), captures the viewport (with the collider view too, also while the game runs), is
-//! refused edits while the game is running, and undoes its own step.
+//! batch added, which an empty batch then does not repeat), reads it back (with read options
+//! answering as they do on files), captures the viewport (with the collider view too, also
+//! while the game runs), is refused edits while the game is running, and undoes its own step.
 use super::*;
 use oxy_core::{document::Value, query};
 use serde_json::{Value as Json, json};
@@ -154,6 +154,8 @@ impl NativeQa {
                              "params": {"action": {"Text": "inexistente"}}},
                         ]}),
                     ),
+                    // Nothing to apply: no undo step, and the warning above is not repeated.
+                    ("apply", json!({"commands": []})),
                 ];
                 requests.extend(live_reads(&self.editor));
                 requests.extend([
@@ -220,6 +222,12 @@ impl NativeQa {
                 }) {
                     return Err(format!("Lote sem o aviso esperado: {applied}"));
                 }
+                let empty = get("apply", 1)??;
+                if empty != json!({"created": {}}) {
+                    return Err(format!(
+                        "Lote vazio respondeu diferente dos arquivos: {empty}"
+                    ));
+                }
                 if self.editor.qa_undo_label() != Some("Agente: 5 comandos") {
                     return Err(format!(
                         "Passo de desfazer inesperado: {:?}",
@@ -262,7 +270,7 @@ impl NativeQa {
                 if colliders["png_base64"] == shot["png_base64"] {
                     return Err("A captura com colisores não desenhou os colisores".into());
                 }
-                let error = get("apply", 1)?
+                let error = get("apply", 2)?
                     .err()
                     .ok_or("Comando inválido foi aceito")?;
                 if !error.contains("Nada foi alterado") {

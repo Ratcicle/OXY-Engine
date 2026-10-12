@@ -389,7 +389,7 @@ pub fn apply_and_report(
     default_scene: &str,
     commands: &[Command],
 ) -> Result<Json, CommandError> {
-    let before = warnings(project);
+    let before = batch_warnings(project);
     let applied = apply(project, default_scene, commands)?;
     Ok(report(project, &applied, &before))
 }
@@ -397,8 +397,9 @@ pub fn apply_and_report(
 /// A batch's result for agents: `created` maps the index of each command that created
 /// something to the IDs it created, in order (a preset's root first), with their names (a
 /// node's is its operation); `warnings`, present when the batch added any, lists what the
-/// game will ignore without failing (see [`warnings`]); `before` are the project's warnings
-/// before the batch, which are not repeated.
+/// game will ignore without failing and the action names it left ambiguous (see
+/// [`batch_warnings`]); `before` are the project's [`batch_warnings`] before the batch, which
+/// are not repeated.
 pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Json {
     let wanted: HashSet<&str> = applied
         .iter()
@@ -442,7 +443,7 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
         })
         .collect();
     let mut result = json!({"created": created});
-    let new: Vec<String> = warnings(project)
+    let new: Vec<String> = batch_warnings(project)
         .into_iter()
         .filter(|w| !before.iter().any(|old| old.about == w.about))
         .map(|w| w.message)
@@ -453,7 +454,8 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
     result
 }
 
-/// Something the game will ignore without failing; see [`warnings`].
+/// Something the game will ignore without failing, or that a batch should hear about; see
+/// [`batch_warnings`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warning {
     /// What it is about, by IDs and values only, so renaming an object does not make it new.
@@ -493,11 +495,13 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
                     ),
                 });
             }
-            // An empty value is a node never configured, which event.input reads as pressed.
-            let set = node
-                .params
-                .iter()
-                .filter(|(_, v)| !matches!(v, Value::Text(t) if t.is_empty()));
+            // An empty mode is an event.input never configured, which the game reads as
+            // pressed; any other empty choice never matches, like any other wrong value.
+            let set = node.params.iter().filter(|(key, v)| {
+                !(node.operation == "event.input"
+                    && key.as_str() == "mode"
+                    && matches!(v, Value::Text(t) if t.is_empty()))
+            });
             if let Err(error) = graph::check_choices(&node.operation, set) {
                 found.push(Warning {
                     about: format!("choice {} {error}", node.id),
@@ -505,6 +509,42 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
                 });
             }
         }
+    }
+    found
+}
+
+/// [`warnings`], plus the input action names that stand for several actions. By name,
+/// commands and simulations refuse a name two actions share and take first the action whose
+/// ID it is. create and rename keep names apart, but the default actions of presets and
+/// components (Pular, Correr…) arrive without that check. The game itself tells them apart,
+/// and projects may share a name on purpose (one label for keys 1, 2 and 3), so only the batch
+/// that leaves a name ambiguous reports it, not validation.
+pub fn batch_warnings(project: &Project) -> Vec<Warning> {
+    let mut found = warnings(project);
+    let mut named: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for id in project.input_bindings.keys() {
+        let label = input_actions::label(project, id).trim().to_lowercase();
+        for name in [label, id.to_lowercase()] {
+            let ids = named.entry(name).or_default();
+            if !ids.contains(&id.as_str()) {
+                ids.push(id);
+            }
+        }
+    }
+    for (name, ids) in named.into_iter().filter(|(_, ids)| ids.len() > 1) {
+        let listed: Vec<String> = ids
+            .iter()
+            .map(|id| format!("{id} ({})", input_actions::label(project, id)))
+            .collect();
+        found.push(Warning {
+            about: format!("action name {name} {}", ids.join(" ")),
+            message: format!(
+                "{} ações de entrada atendem pelo nome \"{name}\": {}. Pelo nome, os comandos e o \
+                 oxy_simulate não as distinguem; renomeie uma delas ou use o ID",
+                ids.len(),
+                listed.join(", ")
+            ),
+        });
     }
     found
 }
@@ -1066,15 +1106,30 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
     }
 }
 
-/// Two actions with one name could not be told apart by name, as simulations allow.
+/// Two actions with one name could not be told apart by name, as simulations allow, and a
+/// name that is another action's ID would reach that action, which [`input_actions::find`]
+/// takes first.
 fn unique_action_name(project: &Project, name: &str, renamed: Option<&str>) -> Result<(), String> {
     let wanted = name.trim().to_lowercase();
-    match project.input_bindings.keys().find(|id| {
-        Some(id.as_str()) != renamed && input_actions::label(project, id).to_lowercase() == wanted
-    }) {
-        Some(id) => Err(format!(
+    let mut others = project
+        .input_bindings
+        .keys()
+        .filter(|id| Some(id.as_str()) != renamed);
+    if let Some(id) = others
+        .clone()
+        .find(|id| input_actions::label(project, id).to_lowercase() == wanted)
+    {
+        return Err(format!(
             "Já existe uma ação de entrada chamada \"{}\" ({id})",
             name.trim()
+        ));
+    }
+    match others.find(|id| id.to_lowercase() == wanted) {
+        Some(id) => Err(format!(
+            "\"{}\" é o ID da ação de entrada {}; por esse nome, os comandos e o oxy_simulate \
+             chegariam a ela. Escolha outro nome",
+            name.trim(),
+            input_actions::label(project, id)
         )),
         None => Ok(()),
     }
