@@ -33,6 +33,9 @@ pub(super) struct MotorStep {
     pub path: Vec<(Vec3, Vec3)>,
     pub lateral: Vec<QueryHit>,
     pub warning: Option<String>,
+    /// The platform that dropped or refused the support this step because it turned, scaled
+    /// or jumped: the part that did, not the piece under the feet.
+    pub released: Option<Id>,
 }
 fn append_path(
     path: &mut Vec<(Vec3, Vec3)>,
@@ -203,6 +206,20 @@ impl MotorContext<'_> {
             surface: hit.surface,
             velocity,
         })
+    }
+    /// The part that turned, scaled or jumped, for a `collider` that did: its outermost
+    /// ancestor that did too, since a group that turns turns every piece in it.
+    fn moved_part(&self, mut collider: Id) -> Id {
+        while let Some(parent) = self
+            .evaluation
+            .index
+            .position(&collider)
+            .and_then(|i| self.scene.entities[i].parent.as_ref())
+            && self.platforms.get(parent).is_some_and(|p| p.discontinuous)
+        {
+            collider = parent.clone();
+        }
+        collider
     }
     pub fn advance(
         &self,
@@ -638,16 +655,7 @@ impl MotorContext<'_> {
         if !state.position.is_finite() || !state.velocity.is_finite() {
             return Err("Estado de movimento não finito; verifique forças e dimensões.".into());
         }
-        if let Some(platform) = dropped {
-            let name = self
-                .evaluation
-                .index
-                .position(&platform)
-                .map_or(platform.as_str(), |i| self.scene.entities[i].name.as_str());
-            out.warning = Some(format!(
-                "Apoio em {name} liberado sem herdar velocidade, porque a plataforma girou, mudou de escala ou saltou de posição."
-            ));
-        }
+        out.released = dropped.map(|collider| self.moved_part(collider));
         Ok(out)
     }
 }

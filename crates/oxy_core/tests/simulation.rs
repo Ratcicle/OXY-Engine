@@ -7,7 +7,7 @@ use oxy_core::{
     graph::{Edge, Node},
     headless::{self, Actions, EventKind, SimulationReport, SimulationRequest},
     physics3d::{Collider3d, CollisionShape},
-    runtime::{FIXED_DT, InputFrame, MAX_PENDING_SOUNDS, Runtime},
+    runtime::{FIXED_DT, InputFrame, MAX_STEPS, Runtime},
 };
 use serde_json::json;
 
@@ -230,18 +230,56 @@ fn a_sound_played_right_before_a_scene_change_is_kept() {
         "{sounds:?}"
     );
 
-    // A scene that restarts as it starts, until the work budget runs out, keeps a bounded
-    // number of requests.
+    // A scene that restarts itself as it starts runs until the work budget of the update runs
+    // out. The beep that started the loop is heard, and at most the one of the scene running at
+    // the end; those of the scenes that started and ended within the step are not.
     let project = beep_then_restart(true);
-    let runtime = Runtime::new(&project, &project.start_scene).unwrap();
-    assert!(runtime.scene_starts.len() > MAX_PENDING_SOUNDS);
-    assert_eq!(runtime.sounds.len(), MAX_PENDING_SOUNDS);
-    let limit = format!("Limite de {MAX_PENDING_SOUNDS} sons");
-    assert!(
-        runtime.logs.iter().any(|l| l.contains(&limit)),
-        "{:?}",
-        runtime.logs
+    let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    for update in 0..4 {
+        // The host takes the sounds once per update (a frame of up to MAX_STEPS steps).
+        let starts = std::mem::take(&mut runtime.scene_starts);
+        let sounds = std::mem::take(&mut runtime.sounds);
+        assert!(
+            starts.len() > 2,
+            "update {update}: the scene keeps restarting"
+        );
+        assert!(sounds.len() <= 2, "update {update}: {sounds:?}");
+        runtime.advance(FIXED_DT * MAX_STEPS as f32, &InputFrame::default());
+    }
+}
+
+#[test]
+fn every_sound_of_a_step_is_kept() {
+    // Without scene changes nothing is dropped, however many sounds a step plays.
+    let mut project = beep_then_restart(false);
+    let control = &mut project.scenes[0].entities[0];
+    // "reiniciar" plays 20 beeps and no longer restarts.
+    control.graph.nodes.truncate(1);
+    control.graph.edges.clear();
+    let mut previous = control.graph.nodes[0].id.clone();
+    for _ in 0..20 {
+        let beep = node(
+            control,
+            "action.sound",
+            &[("asset", text("00000000-0000-4000-8000-0000000000b1"))],
+        );
+        link(control, &previous, &beep);
+        previous = beep;
+    }
+    let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    let press = InputFrame {
+        pressed: ["reiniciar".to_owned()].into(),
+        ..Default::default()
+    };
+    runtime.advance(FIXED_DT, &press);
+    assert_eq!(runtime.sounds.len(), 20, "{:?}", runtime.logs);
+    assert!(runtime.logs.is_empty(), "{:?}", runtime.logs);
+    // The report lists the same as the game plays.
+    let report = run(
+        &project,
+        json!({"seconds": 0.5, "inputs": [{"type": "press", "at": 0.25, "action": "reiniciar"}]}),
     );
+    assert_eq!(report.sounds.len(), 20, "{:?}", report.logs);
 }
 
 /// "Relógio" runs logic every step and greets at the start; "Quebrado" fails at the start.

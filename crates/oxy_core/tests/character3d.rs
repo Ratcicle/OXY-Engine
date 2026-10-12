@@ -773,6 +773,101 @@ fn a_platform_that_turns_with_nobody_on_it_reports_nothing() {
 }
 
 #[test]
+fn a_character_on_the_seam_of_turning_planks_is_warned_once_per_platform() {
+    use oxy_core::surface::*;
+    let warning = |platform: &str| {
+        format!(
+            "Personagem {BODY}: Apoio em {platform} liberado sem herdar velocidade, porque a \
+             plataforma girou, mudou de escala ou saltou de posição."
+        )
+    };
+    // Two 2 m planks side by side, either the children of one turning platform ("Ponte") or
+    // each a turning platform of its own. On the seam, the support probe hits one plank or the
+    // other from step to step.
+    for grouped in [true, false] {
+        for (x, walking) in [(0., false), (0.05, false), (-0.6, true)] {
+            let mut project = fixture();
+            let scene = &mut project.scenes[0];
+            let mut bridge = Entity::new("Ponte", None);
+            bridge.id = "bridge".into();
+            bridge.transform.position = [0., 0.4, 0.];
+            bridge.platform = Some(TranslationPlatform::default());
+            if grouped {
+                scene.entities.push(bridge);
+            }
+            for (id, name, side) in [("plank_a", "Tábua A", -1.), ("plank_b", "Tábua B", 1.)] {
+                let mut plank = Entity::new(name, None);
+                plank.id = id.into();
+                plank.physics3d = Some(Collider3d {
+                    shape: CollisionShape::Box {
+                        size: [2., 0.2, 2.],
+                    },
+                    ..Default::default()
+                });
+                if grouped {
+                    plank.parent = Some("bridge".into());
+                    plank.transform.position = [side, 0., 0.];
+                } else {
+                    plank.transform.position = [side, 0.4, 0.];
+                    plank.platform = Some(TranslationPlatform::default());
+                }
+                scene.entities.push(plank);
+            }
+            let body = scene.entity_mut(BODY).unwrap();
+            body.transform.position = [x, 0.52, 0.];
+            // Slowly, so that walking crosses the seam without leaving the planks.
+            body.character3d.as_mut().unwrap().horizontal_limit = 0.5;
+            let mut rt = runtime(&project);
+            settle(&mut rt);
+            assert!(rt.character_state(BODY).unwrap().grounded);
+            let turning: &[&str] = if grouped {
+                &["bridge"]
+            } else {
+                &["plank_a", "plank_b"]
+            };
+            for _ in 0..120 {
+                for id in turning {
+                    rt.scene_mut().entity_mut(id).unwrap().transform.rotation[1] += 0.01;
+                }
+                let mut input = InputFrame::default();
+                if walking {
+                    input.held.insert("mover_direita".into());
+                }
+                rt.advance(FIXED_DT, &input);
+            }
+            let case = format!("grouped {grouped}, x {x}, walking {walking}");
+            let state = rt.character_state(BODY).unwrap();
+            assert!(
+                !state.grounded && state.position.y > 0.4,
+                "{case}: {state:?}"
+            );
+            if walking {
+                assert!(
+                    state.position.x > 0.2,
+                    "{case}: crosses the seam, {state:?}"
+                );
+            }
+            // Once per platform that dropped the character: the group, named as such, or
+            // each plank.
+            if grouped {
+                assert_eq!(rt.logs, [warning("Ponte")], "{case}");
+            } else {
+                assert!(
+                    !rt.logs.is_empty()
+                        && rt.logs.len() <= 2
+                        && rt
+                            .logs
+                            .iter()
+                            .all(|l| *l == warning("Tábua A") || *l == warning("Tábua B")),
+                    "{case}: {:?}",
+                    rt.logs
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn elevator_cannot_push_character_through_a_ceiling() {
     use oxy_core::surface::*;
     let mut project = fixture();
