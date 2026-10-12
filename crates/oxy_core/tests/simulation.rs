@@ -1,6 +1,6 @@
 //! The headless simulation used by agents: inputs across scene changes, the readable report,
-//! movement and camera detail, setup, spawn and stop conditions on the copy, and the game
-//! interface at the end.
+//! movement and camera detail, setup, spawn and stop conditions on the copy, the game
+//! interface and the game variables at the end.
 use oxy_core::{
     animation::Clip,
     character::{CameraRig, CharacterConfig},
@@ -10,11 +10,12 @@ use oxy_core::{
     headless::{self, Actions, EventKind, SimulationReport, SimulationRequest},
     physics3d::{Collider3d, CollisionShape},
     random::MAX_SEED,
-    runtime::{FIXED_DT, InputFrame, MAX_STEPS, Runtime, RuntimeOptions},
+    runtime::{FIXED_DT, InputFrame, MAX_STEPS, Runtime, RuntimeOptions, StateDifference},
     surface::{PlatformMode, TranslationPlatform},
+    variables,
 };
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 fn node(entity: &mut Entity, operation: &str, params: &[(&str, Value)]) -> Id {
     let mut node = Node::new(operation, [0.; 2]);
@@ -1972,4 +1973,313 @@ fn the_interface_reported_is_the_final_scene_one() {
     let played = run(&project, json!({"seconds": 1.5}));
     assert_eq!(played.final_scene, level);
     assert!(played.ui.is_empty(), "the level has no interface");
+}
+
+/// A Menu and a Fase that count every scene start in the game variable Visitas, and the starts
+/// of each scene in Recorde, keyed by the scene's name, after setting Recorde's own value to
+/// 100 (so keys never written must read the initial 0, not it). The menu opens the level after
+/// 0.5 s; the level reloads itself on "reiniciar".
+fn visits() -> (Project, Id, Id) {
+    let mut project = Project::new("Visitas");
+    project
+        .input_bindings
+        .insert("reiniciar".into(), "R".into());
+    project.scenes[0].kind = SceneKind::TwoD;
+    project.scenes[0].name = "Menu".into();
+    let visits = variables::create(&mut project, "Visitas", Value::Number(0.), false).unwrap();
+    let record = variables::create(&mut project, "Recorde", Value::Number(0.), false).unwrap();
+    let counter = || {
+        let mut e = Entity::new("Contador", None);
+        let start = node(&mut e, "event.scene_start", &[]);
+        let read = node(&mut e, "variable.get", &[("variable", text(&visits))]);
+        let add = node(&mut e, "math.binary", &[("b", Value::Number(1.))]);
+        let write = node(&mut e, "variable.set", &[("variable", text(&visits))]);
+        link(&mut e, &start, &write);
+        wire(&mut e, &read, "value", &add, "a");
+        wire(&mut e, &add, "value", &write, "value");
+        let write_own = node(
+            &mut e,
+            "variable.set",
+            &[("variable", text(&record)), ("value", Value::Number(100.))],
+        );
+        link(&mut e, &write, &write_own);
+        let here = node(&mut e, "scene.current", &[]);
+        let read_key = node(&mut e, "variable.get", &[("variable", text(&record))]);
+        let add_key = node(&mut e, "math.binary", &[("b", Value::Number(1.))]);
+        let write_key = node(&mut e, "variable.set", &[("variable", text(&record))]);
+        link(&mut e, &write_own, &write_key);
+        wire(&mut e, &here, "name", &read_key, "key");
+        wire(&mut e, &here, "name", &write_key, "key");
+        wire(&mut e, &read_key, "value", &add_key, "a");
+        wire(&mut e, &add_key, "value", &write_key, "value");
+        e
+    };
+    let mut level = Scene::new("Fase", SceneKind::TwoD);
+    let level_id = level.id.clone();
+    let mut menu = Entity::new("Menu", None);
+    let start = node(&mut menu, "event.scene_start", &[]);
+    let wait = node(
+        &mut menu,
+        "control.wait",
+        &[("seconds", Value::Number(0.5))],
+    );
+    let open = node(&mut menu, "action.scene", &[("scene", text(&level_id))]);
+    link(&mut menu, &start, &wait);
+    link(&mut menu, &wait, &open);
+    project.scenes[0].entities.extend([counter(), menu]);
+    let mut hero = Entity::new("Herói", None);
+    let restart = node(&mut hero, "event.input", &[("action", text("reiniciar"))]);
+    let reload = node(&mut hero, "action.scene", &[("scene", text(&level_id))]);
+    link(&mut hero, &restart, &reload);
+    level.entities.extend([counter(), hero]);
+    project.scenes.push(level);
+    validate_project(&project).unwrap();
+    (project, level_id, visits)
+}
+fn restart_at_one() -> serde_json::Value {
+    json!([
+        {"type": "press", "at": 1.0, "action": "reiniciar"},
+        {"type": "release", "at": 1.1, "action": "reiniciar"},
+    ])
+}
+
+#[test]
+fn game_variables_survive_scene_changes_and_reloads_and_each_run_starts_over() {
+    let (project, level, visits) = visits();
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": restart_at_one()}),
+    );
+    let changes: Vec<_> = report
+        .scene_changes
+        .iter()
+        .map(|c| (c.scene.as_str(), c.reload))
+        .collect();
+    assert_eq!(changes, [(level.as_str(), false), (level.as_str(), true)]);
+    // Menu, Fase and Fase again, each reading what the scene before wrote.
+    assert_eq!(report.variables["Visitas"], Value::Number(3.));
+    // Another run starts from the initial value again.
+    let again = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": restart_at_one()}),
+    );
+    assert_eq!(again.variables, report.variables);
+
+    // A runtime fills the variables before the start logic, keeps them across scene changes,
+    // and a new one starts over.
+    let mut rt = Runtime::new(&project, &project.start_scene).unwrap();
+    assert_eq!(rt.variable(&visits, ""), Some(&Value::Number(1.)));
+    for expected in [2., 3.] {
+        rt.change_scene(&level).unwrap();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(rt.variable(&visits, ""), Some(&Value::Number(expected)));
+    }
+    let fresh = Runtime::new(&project, &project.start_scene).unwrap();
+    assert_eq!(fresh.variable(&visits, ""), Some(&Value::Number(1.)));
+    rt.stop();
+    assert_eq!(rt.variable(&visits, ""), Some(&Value::Number(0.)));
+    assert_eq!(rt.variable("variavel-inexistente", ""), None);
+    // The project itself never changes.
+    assert_eq!(project.variables[0].value, Value::Number(0.));
+}
+
+#[test]
+fn a_key_keeps_one_value_per_scene_name_and_unwritten_keys_read_the_initial_value() {
+    let (project, _, _) = visits();
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": restart_at_one()}),
+    );
+    // The keys count from the initial 0, not from the own value of 100.
+    let expected: BTreeMap<String, Value> = [
+        ("Recorde", 100.),
+        ("Recorde · Fase", 2.),
+        ("Recorde · Menu", 1.),
+        ("Visitas", 3.),
+    ]
+    .into_iter()
+    .map(|(label, value)| (label.to_owned(), Value::Number(value)))
+    .collect();
+    assert_eq!(report.variables, expected);
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["variables"]["Recorde · Fase"], json!({"Number": 2.0}));
+    // Without variables, the report leaves them out.
+    let (plain, _) = menu_and_level();
+    let json = serde_json::to_value(run(&plain, json!({"seconds": 0.1}))).unwrap();
+    assert!(json.get("variables").is_none());
+}
+
+#[test]
+fn a_value_of_another_type_stops_only_the_object_that_writes_it() {
+    let (mut project, _, visits) = visits();
+    let start = project.start_scene.clone();
+    let mut wrong = Entity::new("Errado", None);
+    let step = node(&mut wrong, "event.step", &[]);
+    let write = node(
+        &mut wrong,
+        "variable.set",
+        &[("variable", text(&visits)), ("value", text("muitas"))],
+    );
+    link(&mut wrong, &step, &write);
+    project.scene_mut(&start).unwrap().entities.push(wrong);
+    let report = run(&project, json!({"seconds": 1.0}));
+    let refused: Vec<_> = report
+        .logs
+        .iter()
+        .filter(|l| l.text.contains("Valor incompatível"))
+        .collect();
+    assert_eq!(refused.len(), 1, "{:?}", report.logs);
+    assert_eq!(refused[0].object.as_ref().unwrap().name, "Errado");
+    assert!(
+        refused[0].text.starts_with(
+            "Valor incompatível com o tipo da variável Visitas: ela guarda número, e o Novo \
+             valor é texto"
+        ),
+        "{}",
+        refused[0].text
+    );
+    // The menu still opened the level, and both counters counted.
+    assert_eq!(report.scene_changes.len(), 1);
+    assert_eq!(report.variables["Visitas"], Value::Number(2.));
+}
+
+#[test]
+fn a_variable_keeps_up_to_1024_keys_and_refuses_longer_keys() {
+    let mut project = Project::new("Chaves");
+    project.scenes[0].kind = SceneKind::TwoD;
+    let keys = variables::create(&mut project, "Chaves", Value::Number(0.), false).unwrap();
+    // A new key every step: the time in hundredths of a second.
+    let mut writer = Entity::new("Escritor", None);
+    let step = node(&mut writer, "event.step", &[]);
+    let time = node(&mut writer, "time.read", &[]);
+    let format = node(&mut writer, "text.time", &[("format", text("mm:ss.cc"))]);
+    let write = node(
+        &mut writer,
+        "variable.set",
+        &[("variable", text(&keys)), ("value", Value::Number(1.))],
+    );
+    link(&mut writer, &step, &write);
+    wire(&mut writer, &time, "time", &format, "seconds");
+    wire(&mut writer, &format, "text", &write, "key");
+    // A key one byte too long, once at the start.
+    let mut long = Entity::new("Longa", None);
+    let start = node(&mut long, "event.scene_start", &[]);
+    let write_long = node(
+        &mut long,
+        "variable.set",
+        &[
+            ("variable", text(&keys)),
+            ("key", text(&"a".repeat(variables::MAX_TEXT + 1))),
+            ("value", Value::Number(1.)),
+        ],
+    );
+    link(&mut long, &start, &write_long);
+    project.scenes[0].entities.extend([writer, long]);
+    validate_project(&project).unwrap();
+
+    let seconds = (variables::MAX_KEYS + 30) as f64 * f64::from(FIXED_DT);
+    let (report, runtime) = headless::run(&project, &request(json!({"seconds": seconds}))).unwrap();
+    let errors = |text: &str| -> Vec<String> {
+        report
+            .logs
+            .iter()
+            .filter(|l| l.text.contains(text))
+            .map(|l| l.object.as_ref().unwrap().name.clone())
+            .collect()
+    };
+    assert_eq!(
+        errors("A variável Chaves já guarda valores para 1024 chaves, o limite"),
+        ["Escritor"],
+        "{:?}",
+        report.logs
+    );
+    assert_eq!(
+        errors("A chave passa de 4096 bytes"),
+        ["Longa"],
+        "{:?}",
+        report.logs
+    );
+    // Every key besides the own value, which the report lists first; the rest is counted.
+    let (all, left_out) = runtime.variable_values(usize::MAX);
+    assert_eq!((all.len(), left_out), (variables::MAX_KEYS + 1, 0));
+    assert_eq!(report.variables.len(), headless::MAX_ENTRIES);
+    assert_eq!(report.variables["Chaves"], Value::Number(0.));
+    assert_eq!(
+        report.truncated["variables"],
+        variables::MAX_KEYS + 1 - headless::MAX_ENTRIES
+    );
+}
+
+#[test]
+fn until_stops_when_a_variable_or_a_key_reaches_a_value() {
+    let (project, _, _) = visits();
+    let report = run(
+        &project,
+        json!({"seconds": 5.0, "until": {"variable": {"variable": "visitas", "op": ">=",
+                                                       "value": 2}}}),
+    );
+    let stopped = report.stopped_at.unwrap();
+    assert_eq!(stopped.reason, "variable");
+    assert_eq!(stopped.detail, "Visitas >= 2 (valor 2)");
+    assert!(near(stopped.time, 0.5), "{stopped:?}");
+    let report = run(
+        &project,
+        json!({"seconds": 5.0, "inputs": restart_at_one(),
+               "until": {"variable": {"variable": "Recorde", "key": "Fase", "op": "==",
+                                      "value": {"Number": 2}}}}),
+    );
+    let stopped = report.stopped_at.unwrap();
+    assert_eq!(stopped.detail, "Recorde · Fase == 2 (valor 2)");
+    assert!(near(stopped.time, 1.0), "{stopped:?}");
+    for (until, expected) in [
+        (
+            json!({"variable": "Vidas", "op": "==", "value": 1}),
+            "until: A variável do jogo \"Vidas\" não existe no projeto. Variáveis: Visitas, \
+             Recorde",
+        ),
+        (
+            json!({"variable": "Visitas", "op": "==", "value": "duas"}),
+            "until: a variável Visitas é número, mas o valor informado é texto",
+        ),
+        (
+            json!({"variable": "Visitas", "op": ">", "value": true}),
+            "until: a comparação > precisa de um número",
+        ),
+    ] {
+        let error = headless::simulate(
+            &project,
+            &request(json!({"seconds": 1.0, "until": {"variable": until}})),
+        )
+        .unwrap_err();
+        assert_eq!(error, expected);
+    }
+}
+
+#[test]
+fn runs_with_variables_repeat_and_setup_starts_them_elsewhere() {
+    let (project, _, _) = visits();
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": restart_at_one(), "check_replay": true}),
+    );
+    let replay = report.replay.unwrap();
+    assert!(replay.identical, "{replay:?}");
+    // Only setup gives a variable another initial value, on the copy; the state digests name
+    // the variable where two runs part.
+    let state = |value: f64| {
+        let asked = request(json!({"seconds": 0.1, "setup": [
+            {"op": "update_variable", "variable": "Visitas", "value": value},
+        ]}));
+        let (report, runtime) = headless::run(&project, &asked).unwrap();
+        (report.variables["Visitas"].clone(), runtime.state_digest())
+    };
+    let (zero, five) = (state(0.), state(5.));
+    assert_eq!((&zero.0, &five.0), (&Value::Number(1.), &Value::Number(6.)));
+    assert_eq!(
+        zero.1.first_difference(&five.1),
+        Some(StateDifference {
+            object: None,
+            part: "variables.Visitas".into()
+        })
+    );
 }

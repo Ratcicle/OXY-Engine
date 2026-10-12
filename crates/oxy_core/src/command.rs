@@ -18,6 +18,7 @@ use crate::{
     physics3d::CollisionShape,
     spatial,
     surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace},
+    variables,
 };
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
@@ -538,6 +539,29 @@ pub enum Command {
     DeleteSurface {
         surface: Id,
     },
+    /// New game variable (Variáveis do jogo). Its value gives its type: a plain number, text or
+    /// true/false by its form, a vector tagged. Its ID is what logic nodes use.
+    CreateVariable {
+        name: String,
+        value: ParamValue,
+        #[serde(default)]
+        persistent: bool,
+    },
+    /// `variable` is the variable's ID or its name. A plain value is read as the variable's
+    /// type; giving it another type takes a tagged value.
+    UpdateVariable {
+        variable: Id,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        value: Option<ParamValue>,
+        #[serde(default)]
+        persistent: Option<bool>,
+    },
+    /// Refused while a logic node uses the variable.
+    DeleteVariable {
+        variable: Id,
+    },
 }
 impl Command {
     /// The command's name as written in JSON.
@@ -587,6 +611,9 @@ impl Command {
             Self::CreateSurface { .. } => "Criar superfície física",
             Self::UpdateSurface { .. } => "Editar superfície física",
             Self::DeleteSurface { .. } => "Excluir superfície física",
+            Self::CreateVariable { .. } => "Criar variável do jogo",
+            Self::UpdateVariable { .. } => "Editar variável do jogo",
+            Self::DeleteVariable { .. } => "Excluir variável do jogo",
         }
     }
 }
@@ -851,7 +878,7 @@ pub fn apply_and_report(
 }
 
 /// The names of the `wanted` IDs in `project`: scenes, objects of scenes and models, nodes
-/// (by their operation), animations, input actions, surfaces and assets.
+/// (by their operation), animations, input actions, surfaces, game variables and assets.
 fn names_of<'a>(project: &Project, wanted: &HashSet<&'a str>) -> HashMap<&'a str, String> {
     let mut names = HashMap::new();
     let mut found = |id: &str, name: &str| {
@@ -876,6 +903,9 @@ fn names_of<'a>(project: &Project, wanted: &HashSet<&'a str>) -> HashMap<&'a str
     }
     for surface in &project.surfaces {
         found(&surface.id, &surface.name);
+    }
+    for variable in &project.variables {
+        found(&variable.id, &variable.name);
     }
     for asset in &project.assets {
         found(&asset.id, &asset.name);
@@ -949,8 +979,8 @@ pub struct Warning {
 /// bound to keys the game does not read (or keeps, Escape and F3), logic nodes that name an
 /// input action the project does not have (or name it instead of giving its ID, as nodes
 /// stored before commands kept the ID), fixed-choice parameters holding another value (set by
-/// update_entity or by hand), and switches of a component aimed at an object that lacks it,
-/// which stop with an error in the game.
+/// update_entity or by hand), and switches of a component aimed at an object that lacks it and
+/// game variables set to a constant of another type, which stop with an error in the game.
 pub fn warnings(project: &Project) -> Vec<Warning> {
     let mut found = Vec::new();
     for (id, key) in &project.input_bindings {
@@ -1019,6 +1049,30 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
                 found.push(Warning {
                     about: vec![format!("choice {} {error}", node.id)],
                     message: format!("{}: {error}", place()),
+                });
+            }
+            // Only a value in the parameter is known here; one from a port is known in the game.
+            if node.operation == "variable.set"
+                && !e.graph.input_connected(&node.id, "value")
+                && let Some(variable) = variables::get(project, node.text("variable"))
+                && let Some(value) = node.params.get("value")
+                && std::mem::discriminant(value) != std::mem::discriminant(&variable.value)
+            {
+                found.push(Warning {
+                    about: vec![format!(
+                        "variable value {} {} {}",
+                        node.id,
+                        variable.id,
+                        variables::type_name(&variable.value)
+                    )],
+                    message: format!(
+                        "{}: o value é {}, mas a variável do jogo {} guarda {}; no jogo, o nó \
+                         para com erro. Dê um value desse tipo com set_node_params",
+                        place(),
+                        variables::kind(value),
+                        variable.name,
+                        variables::kind(&variable.value)
+                    ),
                 });
             }
         }
@@ -1997,14 +2051,50 @@ fn apply_one(
             surface::remove(project, surface)?;
             Ok(vec![])
         }
+        C::CreateVariable {
+            name,
+            value,
+            persistent,
+        } => {
+            let what = format!("O valor da variável {}", name.trim());
+            let value = value.value(value.form().as_ref(), &what)?;
+            Ok(vec![variables::create(project, name, value, *persistent)?])
+        }
+        C::UpdateVariable {
+            variable,
+            name,
+            value,
+            persistent,
+        } => {
+            let id = variables::find(project, variable)?;
+            if let Some(name) = name {
+                variables::rename(project, &id, name)?;
+            }
+            let value = match value {
+                Some(value) => {
+                    let current = variables::get(project, &id).expect("found above");
+                    let what = format!("O valor da variável {}", current.name);
+                    Some(value.value(Some(&current.value), &what)?)
+                }
+                None => None,
+            };
+            variables::update(project, &id, value, *persistent)?;
+            Ok(vec![])
+        }
+        C::DeleteVariable { variable } => {
+            let id = variables::find(project, variable)?;
+            variables::remove(project, &id)?;
+            Ok(vec![])
+        }
     }
 }
 
 /// The parameters `given` to a node of `def`, as the node keeps them: plain values read by the
 /// catalog's types (by their form where the input port takes any type), fixed choices checked,
-/// and an input action given by name kept by its ID, which is what the game reads. An action
-/// the project lacks stays as given, and the batch warns about it; a name two actions share is
-/// refused, as by input action commands.
+/// and an input action or a game variable given by name kept by its ID, which is what the game
+/// reads. An action the project lacks stays as given, and the batch warns about it; a name two
+/// actions share is refused, as by input action commands. A variable the project lacks is
+/// refused.
 fn node_params(
     project: &Project,
     def: &OperationDef,
@@ -2037,6 +2127,13 @@ fn node_params(
             && let Some(id) = input_actions::find_named(project, action)?
         {
             *action = id;
+        }
+        // A variable the project lacks would be a broken reference: refused with the list.
+        if graph::reference(def.id, param) == Some(Reference::Variable)
+            && let Value::Text(variable) = &mut value
+            && !variable.is_empty()
+        {
+            *variable = variables::find(project, variable)?;
         }
         params.insert(key.clone(), value);
     }

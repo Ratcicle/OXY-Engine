@@ -36,3 +36,4 @@ pub mod scene_view;
 pub mod spatial;
 pub mod surface;
 pub mod texture_cache;
+pub mod variables;

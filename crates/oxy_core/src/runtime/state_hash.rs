@@ -12,9 +12,10 @@ use serde::Serialize;
 use std::fmt::{self, Write as _};
 
 /// The state in parts, each with its hash. The run's own come first (scene, time, input,
-/// tasks, areas, characters, random, camera), then each object's in scene order: transform,
-/// visible, attributes.<name>, document (its whole document form), character, platform, body
-/// (2D movement), animation and behavior (stopped by an error or by logic).
+/// tasks, areas, characters, random, variables.<name> for each game variable, camera), then
+/// each object's in scene order: transform, visible, attributes.<name>, document (its whole
+/// document form), character, platform, body (2D movement), animation and behavior (stopped by
+/// an error or by logic).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateDigest {
     pub parts: Vec<StatePart>,
@@ -177,7 +178,7 @@ impl Runtime {
         // Every field, so that a new one is read here or left out on purpose.
         let Self {
             // The running scene is read below; the other scenes and the source stay as they
-            // are until a scene change copies them again.
+            // are until a scene change copies them again (the source names the variables).
             project: _,
             source: _,
             scene_id,
@@ -276,9 +277,27 @@ impl Runtime {
         digest.add(None, "characters", |s| {
             let _ = characters.write_shared(s);
         });
+        let RunState {
+            seed,
+            rolls,
+            spawns,
+            variables,
+        } = run;
         digest.add(None, "random", |s| {
-            s.debug(run);
+            s.debug(seed).debug(rolls).debug(spawns);
         });
+        // One part per variable, in the order the project declares them, with every key's value.
+        for declared in &self.source.variables {
+            let id = &declared.id;
+            digest.add(None, format!("variables.{}", declared.name), |s| {
+                for entry in variables
+                    .range((id.clone(), String::new())..)
+                    .take_while(|((owner, _), _)| owner == id)
+                {
+                    s.debug(&entry);
+                }
+            });
+        }
         digest.add(None, "camera", |s| {
             let _ = cameras.write_digest(self.scene(), s);
         });

@@ -98,8 +98,8 @@ const CHECK_REPLAY: &str = "Runs a second copy of the game alongside, on the sam
 seed, and compares the two states after every step (a few times the work of a plain run): the \
 answer adds replay {identical, steps (compared), first_difference? {time, object? {id, name}, \
 part}}, part being what differed first (transform, visible, attributes.<name>, document, \
-character, animation, tasks, random…; exists: only one copy has the object; order: both have \
-it, in another scene order). identical: false \
+character, animation, tasks, random, variables.<name> (a game variable)…; exists: only one copy \
+has the object; order: both have it, in another scene order). identical: false \
 means the engine did not repeat itself: tell the person, it is not a fault of the logic.";
 const TREE_FIELDS: &str = "Extra per-object fields: world_position, where its position (its \
 pivot) is in the world, which tells distances across parent groups; rotation (local, degrees, as \
@@ -131,9 +131,10 @@ lists their categories; then ask for the nodes you will use with operations or c
 their ports with types and parameters with defaults (only those nodes come back). A parameter \
 with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
 any other. ref says what a parameter names: scene, audio, clip, object, attribute, \
-input_action, surface or marker (an ID, or for attribute and marker a name; an input_action \
-also by its name, which add_node and set_node_params store as the ID). value_format says how \
-values are written. Read it before building logic.";
+input_action, surface, marker or variable (a game variable; oxy_project lists them) (an ID, or \
+for attribute and marker a name; an input_action or a variable also by its name, which add_node \
+and set_node_params store as the ID). value_format says how values are written. Read it before \
+building logic.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
@@ -163,8 +164,10 @@ pub fn definitions() -> Json {
              whether the person is testing the game: {running, paused?, scene? {id, name}, \
              time? (simulated seconds), seed? (of the test's random.number draws, new on each \
              test and still there after it stops: oxy_simulate with this seed gives each \
-             random.number node the same numbers in the same order)}; while it runs, edits are \
-             refused. Call this first.",
+             random.number node the same numbers in the same order), variables? (the game \
+             variables now, {name: tagged value}, \"name · key\" for the value of a key, up to \
+             300 as in oxy_simulate), variables_truncated? (how many were left out)}; while it \
+             runs, edits are refused. Call this first.",
             json!({}),
             json!([])
         ),
@@ -175,7 +178,9 @@ pub fn definitions() -> Json {
              folder), used_by}], input actions [{id, name, key, shares_key_with?, used_by}] \
              (shares_key_with: the other actions [{id, name}] on the same key, which the game \
              fires together), physics surfaces [{id, name, friction, traction, \
-             speed_multiplier, conveyor, conveyor_space, used_by}] and collision groups [{bit, \
+             speed_multiplier, conveyor, conveyor_space, used_by}], game variables [{id, name, \
+             type: Number|Text|Bool|Vector2|Vector3, value (the initial one, tagged), \
+             persistent, used_by}] and collision groups [{bit, \
              name}] (bit: the bit of collider category and mask; the groups not listed are \
              named Grupo N, N being bit + 1). used_by lists up to 10 objects {entity, name, \
              role, model?}, role being a component (controller2d, character, camera_control, \
@@ -292,9 +297,10 @@ pub fn definitions() -> Json {
             "Validates the whole project with the same rules used when saving: {valid, error?, \
              warnings?}. warnings lists what saves but the game would ignore or stop on: logic \
              nodes naming an input action the project lacks, keys the game does not read, \
-             parameters outside their choices (empty included) and action.component nodes \
-             whose target parameter names an object lacking the part they switch (the node \
-             stops with an error in the game).",
+             parameters outside their choices (empty included), action.component nodes \
+             whose target parameter names an object lacking the part they switch and \
+             variable.set nodes whose value parameter is not of the variable's type (both \
+             stop with an error in the game).",
             json!({"project": project}),
             json!([])
         ),
@@ -343,7 +349,8 @@ pub fn definitions() -> Json {
                        "oxy_apply commands applied to the in-memory copy before the run, never to \
                         the project; commands without a scene use the start scene. The IDs they \
                         create are \"$N\" (\"$N.M\" for the M-th) in watch, inputs, spawn, \
-                        until and actions_filter, and the report lists them under setup."},
+                        until and actions_filter, and the report lists them under setup. \
+                        update_variable here starts a game variable at another value."},
                    "spawn": {"type": "object", "properties": {
                        "entity": {"type": "string"},
                        "position": {"type": "array", "items": {"type": "number"}},
@@ -362,6 +369,15 @@ pub fn definitions() -> Json {
                                the attribute's type. For an object or surface attribute, a text \
                                is its ID (\"$N\" allowed)."}},
                            "required": ["entity", "name", "op", "value"]},
+                       "variable": {"type": "object", "properties": {
+                           "variable": {"type": "string", "description":
+                               "A game variable's ID or name (\"$N\" from setup too)."},
+                           "key": {"type": "string", "description":
+                               "Compares the value of this key; absent: the variable's own value."},
+                           "op": {"type": "string", "enum": ["==", "!=", "<", "<=", ">", ">="]},
+                           "value": {"description": "Number, boolean, text or a tagged value, of \
+                               the variable's type."}},
+                           "required": ["variable", "op", "value"]},
                        "entity_absent": {"type": "string", "description":
                            "Stops once this object of the start scene no longer exists."},
                        "event": {"type": "object", "properties": {
@@ -487,7 +503,8 @@ warnings?}: created maps the index of each command that created something to [{i
 removed keeps the name it was created with), and warnings lists what the batch left that the \
 game will ignore, stop on or take otherwise than it may seem: a node naming an input action the \
 project lacks, two actions on one key (the game fires both), an action.component whose target \
-parameter names an object lacking the part it switches (the node stops with an error), a box \
+parameter names an object lacking the part it switches (the node stops with an error), a \
+variable.set whose value parameter is not of the variable's type (the same), a box \
 collider left at an object's old dimensions, logic copied to another scene that still opens the \
 scene it came from.
 Placeholders: in later commands, a whole string \"$N\" is the first ID created by command N \
@@ -574,8 +591,22 @@ never shows it. Logic nodes and oxy_simulate use the ID.
 speed_multiplier?, conveyor?: [x,y,z] m/s, conveyor_space?: World|Local}; update_surface \
 {surface, and the same fields but preset}; delete_surface {surface}, refused while used. Assign \
 a surface with update_entity: physics3d.surface or character3d.body.surface.
-Project, scene, input action and surface commands take no `scene`; the others accept it, and \
-the tool's `scene` fills it when absent (for copy_entities, the scene copied from).";
+- Game variables hold values for the whole game, kept across scene changes and reloads until \
+the run ends (oxy_project lists them). create_variable {name, value, persistent?: bool (marks it \
+to be kept between runs; nothing is saved between runs yet)}: value is its initial value and \
+gives its type (Number, Text, Bool, Vector2 or Vector3; objects and surfaces are refused): a \
+plain number, text or true/false by its form, a vector tagged ({\"Vector3\": [0, 0, 0]}); \
+answers its ID. update_variable {variable, name?, value?, persistent?}: a plain value is read as \
+the variable's type, another type takes a tagged value; delete_variable {variable}, refused \
+while a node uses it. variable is the ID or the name; no two variables share a name (any case), \
+and names have no · (reports write a key's value as \"name · key\"). Up to 256 variables, texts \
+up to 4096 bytes. Logic: variable.get (value) and variable.set (exec, value of the variable's \
+type, else the node stops with an error); their variable parameter (ref variable) takes the ID \
+or the name and stores the ID. Their key (text, param or input) keeps one value per key, such as \
+scene.current.name for one value per scene: empty, the variable's own value; a key never \
+written reads the initial value; up to 1024 keys per variable, each up to 4096 bytes.
+Project, scene, input action, surface and variable commands take no `scene`; the others accept \
+it, and the tool's `scene` fills it when absent (for copy_entities, the scene copied from).";
 
 const IMPORT_DESCRIPTION: &str = "Imports a PNG image or a WAV sound as a project asset, as the \
 editor's Importar does: the source is checked (extension, header, full content, at most 64 MB, \
@@ -609,10 +640,14 @@ when a scene restarts), logs with object and node names, a summary of the logic 
 sounds, movement and area events {time, kind: jump|land|leave|side|surface|posture|area_enter|\
 area_exit, object, other?} as the game fires them (also when its logic then removes the objects \
 involved or changes scene), the game camera at the end {active, mode, position, forward, fov}, \
-the game interface at the end (ui: texts with their values, bars, buttons) and the watched \
-objects. Inputs use the project's input actions, by ID or name (see oxy_project). To test one \
-section without editing the project, use setup (commands on the copy), spawn (place the player) \
-and until (stop when something happens). Draws repeat: random.number takes them from seed \
+the game interface at the end (ui: texts with their values, bars, buttons), the watched \
+objects and the game variables at the end (variables: {name: tagged value, as {\"Number\": 3}}, \
+\"name · key\" for the value of a key; up to 300, the variables' own values before the keys', \
+the rest counted in truncated; left out when the project has none). Each run starts the \
+variables at their initial values. Inputs use the project's input actions, by ID or name (see oxy_project). To test \
+one section without editing the project, use setup (commands on the copy, update_variable to \
+start a variable elsewhere), spawn (place the player) and until (stop when something happens, a \
+variable reaching a value included). Draws repeat: random.number takes them from seed \
 (default 0, echoed in the report; vary it to see other draws), and copies made by action.spawn \
 get the same IDs on every run (not those of the logic setup creates: see seed). state_hash, 16 \
 hex digits, fingerprints the game state at the end: equal hashes, same state (the seed counts \
@@ -638,7 +673,7 @@ const CONSOLE_ORIGINS: [&str; 4] = ["editor", "agente", "jogo", "logica"];
 
 /// Project-level commands: they take no `scene`, so the tool's default scene is not added
 /// (commands refuse unknown fields).
-const PROJECT_OPS: [&str; 13] = [
+const PROJECT_OPS: [&str; 16] = [
     "rename_project",
     "set_start_scene",
     "create_scene",
@@ -652,6 +687,9 @@ const PROJECT_OPS: [&str; 13] = [
     "create_surface",
     "update_surface",
     "delete_surface",
+    "create_variable",
+    "update_variable",
+    "delete_variable",
 ];
 
 fn text_arg(args: &Json, key: &str) -> Option<String> {
@@ -1777,6 +1815,9 @@ mod tests {
             json!({"op": "create_surface", "preset": "ice"}),
             json!({"op": "update_surface", "surface": "s", "friction": 0.5}),
             json!({"op": "delete_surface", "surface": "s"}),
+            json!({"op": "create_variable", "name": "Moedas", "value": 0}),
+            json!({"op": "update_variable", "variable": "v", "value": 3, "persistent": true}),
+            json!({"op": "delete_variable", "variable": "v"}),
         ];
         assert_eq!(project_commands.len(), PROJECT_OPS.len());
         for command in project_commands {
@@ -1812,6 +1853,8 @@ mod tests {
         for text in [
             "create_input_action",
             "delete_surface",
+            "create_variable",
+            "delete_variable",
             "warnings",
             "\"$N.M\"",
             "input_keys",
@@ -1943,6 +1986,127 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&json!("Space"))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_take_game_variables_and_simulations_report_them() {
+        let dir = std::env::temp_dir().join(format!(
+            "oxy-mcp-variables-{}",
+            oxy_core::document::new_id()
+        ));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Variáveis", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // A counter that adds 1 to Moedas every step; with the tool's scene, which variable
+        // commands must not receive.
+        let applied = call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "create_variable", "name": "Moedas", "value": 0},
+                {"op": "create_variable", "name": "Recorde", "value": {"Number": 0},
+                 "persistent": true},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Contador"},
+                {"op": "add_node", "entity": "$2", "operation": "event.step"},
+                {"op": "add_node", "entity": "$2", "operation": "variable.get",
+                 "params": {"variable": "moedas"}},
+                {"op": "add_node", "entity": "$2", "operation": "math.binary", "params": {"b": 1}},
+                {"op": "add_node", "entity": "$2", "operation": "variable.set",
+                 "params": {"variable": "Moedas"}},
+                {"op": "connect", "entity": "$2", "from_node": "$3", "from_port": "exec",
+                 "to_node": "$6", "to_port": "exec"},
+                {"op": "connect", "entity": "$2", "from_node": "$4", "from_port": "value",
+                 "to_node": "$5", "to_port": "a"},
+                {"op": "connect", "entity": "$2", "from_node": "$5", "from_port": "value",
+                 "to_node": "$6", "to_port": "value"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(applied["created"]["0"][0]["name"], "Moedas");
+        assert!(applied.get("warnings").is_none(), "{applied}");
+        let coins = applied["created"]["0"][0]["id"].clone();
+        let counter = applied["created"]["2"][0]["id"].clone();
+
+        let summary = call("oxy_project", json!({})).unwrap();
+        assert_eq!(
+            summary["variables"][0],
+            json!({"id": coins, "name": "Moedas", "type": "Number", "value": {"Number": 0.0},
+            "persistent": false, "used_by": [
+                {"entity": counter, "name": "Contador", "role": "variable.get"},
+                {"entity": counter, "name": "Contador", "role": "variable.set"},
+            ]})
+        );
+        assert_eq!(summary["variables"][1]["persistent"], true);
+        let nodes = call(
+            "oxy_entity",
+            json!({"id": counter, "graph": "full", "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            nodes["graph"]["nodes"][1]["params"]["variable"]["Text"],
+            coins
+        );
+        // The summarized graph names the variable, not its ID.
+        let brief = call("oxy_entity", json!({"id": counter})).unwrap();
+        assert!(
+            brief["graph"]["nodes"]
+                .as_object()
+                .unwrap()
+                .contains_key("variable.get(Moedas)"),
+            "{brief}"
+        );
+        assert_eq!(
+            call("oxy_validate", json!({})).unwrap(),
+            json!({"valid": true})
+        );
+        let catalog = Tools::default()
+            .call("oxy_catalog", &json!({"operations": ["variable.get"]}))
+            .unwrap();
+        let catalog: Json = serde_json::from_str(&catalog.text).unwrap();
+        assert_eq!(catalog["nodes"][0]["params"][0]["ref"], "variable");
+
+        // 30 steps reach 30; setup starts the copy's counter at 10.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 2.0, "ui": false,
+                   "until": {"variable": {"variable": "Moedas", "op": ">=", "value": 30}}}),
+        )
+        .unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "variable");
+        assert_eq!(report["stopped_at"]["time"], 0.5);
+        assert_eq!(
+            report["variables"],
+            json!({"Moedas": {"Number": 30.0}, "Recorde": {"Number": 0.0}})
+        );
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "setup": [
+                {"op": "update_variable", "variable": "moedas", "value": 10},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(report["variables"]["Moedas"], json!({"Number": 16.0}));
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "delete_variable", "variable": "Moedas"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Contador → nó Ler variável do jogo"),
+            "{error}"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

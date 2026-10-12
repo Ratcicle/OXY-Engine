@@ -309,13 +309,25 @@ impl Editor {
                 "redo": self.history.redo_label(),
                 // A test the person is running: edits are refused until it stops.
                 "play": match &self.play.runtime {
-                    Some(runtime) => json!({
-                        "running": true,
-                        "paused": runtime.paused,
-                        "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
-                        "time": runtime.time,
-                        "seed": self.play.seed,
-                    }),
+                    Some(runtime) => {
+                        let mut play = json!({
+                            "running": true,
+                            "paused": runtime.paused,
+                            "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
+                            "time": runtime.time,
+                            "seed": self.play.seed,
+                        });
+                        // Capped like a simulation report's variables.
+                        let (variables, left_out) =
+                            runtime.variable_values(oxy_core::headless::MAX_ENTRIES);
+                        if !variables.is_empty() {
+                            play["variables"] = json!(variables);
+                        }
+                        if left_out > 0 {
+                            play["variables_truncated"] = json!(left_out);
+                        }
+                        play
+                    }
                     // The last test's seed stays for the person's report after it stops.
                     None => match self.play.seed {
                         Some(seed) => json!({"running": false, "seed": seed}),

@@ -1,8 +1,9 @@
 //! Runs a game without a window for a simulated time and reports what happened: scene
 //! changes, logs, logic actions, sounds, movement and area events, the game camera, the game
-//! interface, the state of watched objects and a hash of the whole state at the end. Used by
-//! the MCP server so an agent can test a change, and by tests. On request a second copy runs
-//! alongside on the same inputs, to check that the run repeats itself step by step.
+//! interface, the state of watched objects, the game variables and a hash of the whole state
+//! at the end. Used by the MCP server so an agent can test a change, and by tests. On request
+//! a second copy runs alongside on the same inputs, to check that the run repeats itself step
+//! by step.
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -193,6 +194,8 @@ pub struct Until {
     pub log_contains: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribute: Option<AttributeCondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variable: Option<VariableCondition>,
     /// The object no longer exists in the running scene.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entity_absent: Option<Id>,
@@ -213,6 +216,20 @@ pub struct AttributeCondition {
     pub op: Comparison,
     /// A plain number, boolean or text, or a tagged value such as `{"Number": 3}`, of the
     /// attribute's type. For an object or surface attribute, a text is the ID (`"$N"` too).
+    #[serde(deserialize_with = "plain_or_tagged")]
+    pub value: Value,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VariableCondition {
+    /// The game variable's ID or name (`"$N"` too).
+    pub variable: String,
+    /// The key whose value is compared; empty or absent, the variable's own value.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    pub op: Comparison,
+    /// A plain number, boolean or text, or a tagged value such as `{"Vector3": [0, 1, 0]}`, of
+    /// the variable's type.
     #[serde(deserialize_with = "plain_or_tagged")]
     pub value: Value,
 }
@@ -317,7 +334,7 @@ pub struct SimulationRequest {
     pub samples: u32,
     /// Commands applied to the copy before the run, as in a batch; commands without a scene
     /// use the start scene. IDs they create are `"$N"` (or `"$N.M"`) in watch, inputs, spawn
-    /// and until.
+    /// and until. update_variable here gives a game variable another initial value.
     #[serde(default)]
     pub setup: Vec<Command>,
     #[serde(default)]
@@ -499,7 +516,7 @@ pub struct ReplayCheck {
 pub struct ReplayDifference {
     pub time: f64,
     /// The object that differed; none for the run's own state (scene, time, input, tasks,
-    /// areas, characters, random, camera).
+    /// areas, characters, random, variables.<name>, camera).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<Named>,
     /// What differed, a part of [`crate::runtime::StateDigest`]: transform, attributes.<name>,
@@ -539,6 +556,10 @@ pub struct SimulationReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ui: Vec<UiState>,
     pub watched: Vec<Watched>,
+    /// The game variables at the end, by name, or "name · key" for the value of a key: the
+    /// first `MAX_ENTRIES` of [`Runtime::variable_values`].
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub variables: BTreeMap<String, Value>,
     /// Entries dropped per list because it reached `MAX_ENTRIES`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub truncated: BTreeMap<&'static str, usize>,
@@ -1225,6 +1246,8 @@ struct Stop {
     scene: Option<Option<Id>>,
     log: Option<String>,
     attribute: Option<(AttributeCondition, String)>,
+    /// With the variable's ID, and its label in reports.
+    variable: Option<(VariableCondition, String)>,
     absent: Option<(Id, String)>,
     event: Option<(EventKind, Option<Id>)>,
 }
@@ -1310,6 +1333,37 @@ impl Stop {
                 ))
             }
         };
+        let variable = match &until.variable {
+            None => None,
+            Some(condition) => {
+                let id = crate::variables::find(project, &resolve(&condition.variable, applied)?)
+                    .map_err(|error| format!("until: {error}"))?;
+                let declared = crate::variables::get(project, &id).expect("found above");
+                if condition.op.ordered() && condition.value.number().is_none() {
+                    return Err(format!(
+                        "until: a comparação {} precisa de um número",
+                        condition.op.symbol()
+                    ));
+                }
+                if std::mem::discriminant(&declared.value)
+                    != std::mem::discriminant(&condition.value)
+                {
+                    return Err(format!(
+                        "until: a variável {} é {}, mas o valor informado é {}",
+                        declared.name,
+                        crate::variables::kind(&declared.value),
+                        crate::variables::kind(&condition.value)
+                    ));
+                }
+                Some((
+                    VariableCondition {
+                        variable: id,
+                        ..condition.clone()
+                    },
+                    crate::variables::label(&declared.name, &condition.key),
+                ))
+            }
+        };
         let absent = match &until.entity_absent {
             None => None,
             Some(id) => {
@@ -1340,6 +1394,7 @@ impl Stop {
         if scene.is_none()
             && until.log_contains.is_none()
             && attribute.is_none()
+            && variable.is_none()
             && absent.is_none()
             && event.is_none()
         {
@@ -1349,6 +1404,7 @@ impl Stop {
             scene,
             log: until.log_contains.clone(),
             attribute,
+            variable,
             absent,
             event,
         })
@@ -1391,6 +1447,20 @@ impl Stop {
                 format!(
                     "{name}.{} {} {} (valor {})",
                     condition.name,
+                    condition.op.symbol(),
+                    value_text(&condition.value),
+                    value_text(value)
+                ),
+            ));
+        }
+        if let Some((condition, label)) = &self.variable
+            && let Some(value) = runtime.variable(&condition.variable, &condition.key)
+            && condition.op.holds(value, &condition.value)
+        {
+            return Some(stopped(
+                "variable",
+                format!(
+                    "{label} {} {} (valor {})",
                     condition.op.symbol(),
                     value_text(&condition.value),
                     value_text(value)
@@ -1721,6 +1791,7 @@ pub fn run(
                 samples: Vec::new(),
             })
             .collect(),
+        variables: BTreeMap::new(),
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
@@ -1784,6 +1855,11 @@ pub fn run(
         }
     }
     recorder.finish(&mut report);
+    let (variables, left_out) = runtime.variable_values(MAX_ENTRIES);
+    report.variables = variables;
+    if left_out > 0 {
+        report.truncated.insert("variables", left_out);
+    }
     report.final_scene = runtime.scene_id().to_owned();
     report.state_hash = format!("{:016x}", runtime.state_hash());
     report.replay = request.check_replay.then_some(twin.check);

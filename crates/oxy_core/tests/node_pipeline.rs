@@ -1,12 +1,12 @@
 //! The contract every registered node keeps, and the integrity checks a node gets from
-//! `graph::reference` alone: a scene, audio, clip or input action it names is guarded like
-//! those of the nodes that came first.
+//! `graph::reference` alone: a scene, audio, clip, input action or game variable it names is
+//! guarded like those of the nodes that came first.
 use oxy_core::{
     command::{self, Command},
     document::*,
     editing,
     graph::{self, Graph, Node, PortType, Reference},
-    guide, input_actions, query,
+    guide, input_actions, query, variables,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -126,6 +126,7 @@ fn node_references_report_every_parameter_that_names_a_project_item() {
         Reference::Audio,
         Reference::Clip,
         Reference::InputAction,
+        Reference::Variable,
     ] {
         for (operation, param) in naming(kind) {
             let node = Node::new(operation, [0.; 2]);
@@ -409,5 +410,98 @@ fn an_audio_named_by_any_node_must_be_a_project_wav() {
                 "{operation}: {named}"
             );
         }
+    }
+}
+
+#[test]
+fn a_variable_named_by_any_node_is_listed_where_it_is_used_and_must_exist() {
+    for (operation, param) in naming(Reference::Variable) {
+        let mut project = editing::blank_project("Variáveis", SceneKind::TwoD).unwrap();
+        let start = project.start_scene.clone();
+        let points = variables::create(&mut project, "Pontos", Value::Number(0.), false).unwrap();
+        let mut owner = Entity::new("Placar", None);
+        owner.graph.nodes.push(node(operation, param, &points));
+        let owner_id = owner.id.clone();
+        project.scenes[0].entities.push(owner.clone());
+        let mut piece = owner;
+        piece.id = new_id();
+        let piece_id = piece.id.clone();
+        project.assets.push(model("Placar salvo", vec![piece]));
+        validate_project(&project).unwrap();
+        assert!(command::warnings(&project).is_empty(), "{operation}");
+
+        let summary = query::project_summary(&project);
+        assert_eq!(
+            summary["variables"][0]["used_by"],
+            json!([
+                {"entity": owner_id, "name": "Placar", "role": operation},
+                {"entity": piece_id, "name": "Placar", "role": operation, "model": "Placar salvo"},
+            ]),
+            "{operation}"
+        );
+        let role = format!("nó {}", label(operation));
+        assert_eq!(
+            variables::references(&project, &points),
+            [
+                format!("Cena 2D → Placar → {role}"),
+                format!("Placar salvo → Placar → {role}"),
+            ],
+            "{operation}"
+        );
+        let before = project.clone();
+        let error = command::apply(
+            &mut project,
+            &start,
+            &batch(json!([{"op": "delete_variable", "variable": "pontos"}])),
+        )
+        .unwrap_err();
+        assert!(error.message.contains(&role), "{operation}: {error}");
+        assert_eq!(project, before);
+
+        // A variable the project lacks is a broken reference, in a scene as in a model.
+        let unknown = Value::Text("variavel-inexistente".into());
+        let mut in_scene = before.clone();
+        in_scene.scenes[0].entities[0].graph.nodes[0]
+            .params
+            .insert(param.into(), unknown.clone());
+        let mut in_model = before.clone();
+        in_model.assets[0].model.as_mut().unwrap()[0].graph.nodes[0]
+            .params
+            .insert(param.into(), unknown);
+        for (broken, holder) in [(in_scene, ""), (in_model, "modelo Placar salvo, ")] {
+            let error = validate_project(&broken).unwrap_err();
+            assert!(
+                error.starts_with(&format!("Referência quebrada: {holder}objeto Placar, nó ")),
+                "{operation}: {error}"
+            );
+        }
+        // Commands take the name and keep the ID; an unknown name is refused with the list.
+        let applied = command::apply(
+            &mut project,
+            &start,
+            &batch(
+                json!([{"op": "add_node", "entity": owner_id, "operation": operation,
+                           "params": {param: "PONTOS"}}]),
+            ),
+        )
+        .unwrap();
+        let added = &project.scenes[0].entities[0].graph.nodes[1];
+        assert_eq!(added.id, applied[0].created[0]);
+        assert_eq!(added.text(param), points, "{operation}");
+        let error = command::apply(
+            &mut project,
+            &start,
+            &batch(
+                json!([{"op": "add_node", "entity": owner_id, "operation": operation,
+                           "params": {param: "Vidas"}}]),
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("A variável do jogo \"Vidas\" não existe no projeto. Variáveis: Pontos"),
+            "{operation}: {error}"
+        );
     }
 }

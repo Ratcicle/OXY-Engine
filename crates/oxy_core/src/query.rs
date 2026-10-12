@@ -9,7 +9,7 @@ use crate::{
     graph::{self, Graph, Node, PortType},
     input_actions,
     scene_view::SceneView,
-    spatial, surface,
+    spatial, surface, variables,
 };
 use glam::{EulerRot, Quat, Vec3};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -127,7 +127,8 @@ impl Page {
     }
 }
 
-/// Uses of an input action, surface or asset listed in the summary; more are only counted.
+/// Uses of an input action, surface, game variable or asset listed in the summary; more are
+/// only counted.
 const USES_LISTED: usize = 10;
 
 /// `used_by` with the first uses, plus `used_by_total` when some are left out.
@@ -178,6 +179,21 @@ pub fn project_summary(project: &Project) -> Json {
             surface
         })
         .collect();
+    let variables: Vec<Json> = project
+        .variables
+        .iter()
+        .map(|v| {
+            let mut variable = json!({
+                "id": v.id,
+                "name": v.name,
+                "type": variables::type_name(&v.value),
+                "value": v.value,
+                "persistent": v.persistent,
+            });
+            uses_json(&mut variable, variables::uses(project, &v.id));
+            variable
+        })
+        .collect();
     // The three groups named by default and the ones the project names; the others read
     // "Grupo N", N being the bit plus 1.
     let groups: Vec<Json> = (0..32_u8)
@@ -209,6 +225,7 @@ pub fn project_summary(project: &Project) -> Json {
         }).collect::<Vec<_>>(),
         "input_actions": actions,
         "surfaces": surfaces,
+        "variables": variables,
         "collision_groups": groups,
     })
 }
@@ -775,7 +792,8 @@ fn summarize_geometry(part: &mut Json) {
 }
 
 /// A node in a few characters: its operation and, in parentheses, its first non-empty text
-/// parameter (the name of the scene or asset it names, shortened), or its only parameter.
+/// parameter (the name of the scene, asset or game variable it names, shortened), or its only
+/// parameter.
 fn node_label(project: &Project, node: &Node) -> String {
     let Some(definition) = graph::registry().iter().find(|d| d.id == node.operation) else {
         return node.operation.clone();
@@ -786,6 +804,7 @@ fn node_label(project: &Project, node: &Node) -> String {
                 .scene(text)
                 .map(|s| s.name.as_str())
                 .or_else(|| project.asset(text).map(|a| a.name.as_str()))
+                .or_else(|| variables::get(project, text).map(|v| v.name.as_str()))
                 .unwrap_or(text.as_str());
             Some(if named.chars().count() > 24 {
                 format!("{}…", named.chars().take(23).collect::<String>())

@@ -94,6 +94,8 @@ pub enum Reference {
     Surface,
     /// The name of a marker in an animation clip.
     Marker,
+    /// The ID of a game variable (Variáveis do jogo).
+    Variable,
 }
 
 /// What the parameter `param` of `operation` refers to, if anything.
@@ -106,6 +108,7 @@ pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
         ("action.animation", "clip", _) => Reference::Clip,
         ("event.input" | "input.read", "action", _) => Reference::InputAction,
         ("event.animation", "marker", _) => Reference::Marker,
+        ("variable.get" | "variable.set", "variable", _) => Reference::Variable,
         (_, "attribute", Value::Text(_)) => Reference::Attribute,
         _ => return None,
     })
@@ -113,7 +116,8 @@ pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
 
 /// The parameters of `node` that name something of the project ([`reference`]), in registry
 /// order, with what they name. Integrity checks go through here, so a new node that names a
-/// scene, an audio, a clip or an input action needs only its line in [`reference`].
+/// scene, an audio, a clip, an input action or a game variable needs only its line in
+/// [`reference`].
 pub fn node_references(
     node: &Node,
 ) -> impl Iterator<Item = (&'static ParamDef, Reference, &Value)> {

@@ -652,6 +652,8 @@ pub struct Project {
     pub collision_groups: BTreeMap<u8, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surfaces: Vec<crate::surface::SurfaceMaterial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<crate::variables::GameVariable>,
 }
 impl Project {
     pub fn collision_group_label(&self, bit: u8) -> String {
@@ -677,6 +679,7 @@ impl Project {
             input_labels: BTreeMap::new(),
             collision_groups: BTreeMap::new(),
             surfaces: Vec::new(),
+            variables: Vec::new(),
             input_bindings: BTreeMap::from([
                 ("mover_esquerda".into(), "A".into()),
                 ("mover_direita".into(), "D".into()),
@@ -842,6 +845,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
             return Err("Identificador de superfície duplicado.".into());
         }
     }
+    crate::variables::validate_all(&project.variables, &mut identifiers)?;
     for entity in project.scenes.iter().flat_map(|s| &s.entities).chain(
         project
             .assets
@@ -1066,9 +1070,9 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     }
     Ok(())
 }
-/// The scenes, audios and clips named by the logic of `entities`, a scene's objects or the
-/// pieces of the model named `model`. Clips are checked in scenes only: a model may name the
-/// clip of an object it is placed with, such as the visitor of its area.
+/// The scenes, audios, clips and game variables named by the logic of `entities`, a scene's
+/// objects or the pieces of the model named `model`. Clips are checked in scenes only: a model
+/// may name the clip of an object it is placed with, such as the visitor of its area.
 fn validate_action_references(
     project: &Project,
     entities: &[Entity],
@@ -1089,6 +1093,7 @@ fn validate_action_references(
                             .asset(id)
                             .is_some_and(|a| a.kind == AssetKind::Audio),
                         Reference::Clip => model.is_none() && !clips.contains(id),
+                        Reference::Variable => crate::variables::get(project, id).is_none(),
                         _ => false,
                     }
             });
@@ -1119,6 +1124,74 @@ mod tests {
         assert_eq!(p, q);
         assert_eq!(q.scenes[0].entities[0].id, id);
         validate_project(&q).unwrap();
+    }
+    #[test]
+    fn game_variables_are_optional_typed_and_named_apart() {
+        use crate::variables::{GameVariable, MAX_TEXT, MAX_VARIABLES};
+        let mut p = Project::new("Variáveis");
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("variables").is_none(), "{json}");
+        let variable = |name: &str, value: Value| GameVariable {
+            id: new_id(),
+            name: name.into(),
+            value,
+            persistent: false,
+        };
+        p.variables = vec![
+            variable("Moedas", Value::Number(0.)),
+            variable("Saída", Value::Vector3([0., 1., 0.])),
+        ];
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["variables"][0]["persistent"], false);
+        let loaded: Project = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(loaded, p);
+        // persistent may be left out; unknown fields may not.
+        let mut short = json.clone();
+        short["variables"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("persistent");
+        let loaded: Project = serde_json::from_value(short).unwrap();
+        assert!(!loaded.variables[0].persistent);
+        let mut unknown = json;
+        unknown["variables"][0]["scope"] = "cena".into();
+        assert!(serde_json::from_value::<Project>(unknown).is_err());
+
+        let refused = |change: &dyn Fn(&mut Project)| {
+            let mut broken = p.clone();
+            change(&mut broken);
+            validate_project(&broken).unwrap_err()
+        };
+        let error = refused(&|p| p.variables[1].value = Value::Object(None));
+        assert!(
+            error.contains("Saída") && error.contains("objetos"),
+            "{error}"
+        );
+        let error = refused(&|p| p.variables[1].value = Value::Surface(None));
+        assert!(error.contains("superfícies"), "{error}");
+        let error = refused(&|p| p.variables[1].name = " moedas ".into());
+        assert!(
+            error.contains("duas variáveis do jogo chamadas moedas"),
+            "{error}"
+        );
+        let error = refused(&|p| p.variables[1].name = "  ".into());
+        assert!(error.contains("nome"), "{error}");
+        // Reports write a key's value as "name · key".
+        let error = refused(&|p| p.variables[1].name = "Moedas · Fase".into());
+        assert!(error.contains("não pode ter ·"), "{error}");
+        let error = refused(&|p| p.variables[1].id = p.scenes[0].id.clone());
+        assert!(error.contains("Identificador"), "{error}");
+        let error = refused(&|p| p.variables[0].value = Value::Number(f64::INFINITY));
+        assert!(error.contains("finito"), "{error}");
+        let error = refused(&|p| p.variables[0].value = Value::Text("a".repeat(MAX_TEXT + 1)));
+        assert!(error.contains("4096 bytes"), "{error}");
+        let error = refused(&|p| {
+            p.variables = (0..=MAX_VARIABLES)
+                .map(|i| variable(&format!("V{i}"), Value::Bool(false)))
+                .collect();
+        });
+        assert!(error.contains("256"), "{error}");
     }
     #[test]
     fn cycles_are_rejected_and_world_is_preserved() {

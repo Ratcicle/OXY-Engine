@@ -4,7 +4,8 @@
 //! - Per run: survives `change_scene` and dies with the `Runtime` (Parar, a new player run).
 //!   The clock (`time`), activation serials, the host pause, logs and traces with their
 //!   counters, the host queues (`sounds`, `scene_starts`, `recording`) and `run`, the
-//!   `RunState` that new run-wide state goes into. `stop` resets `run`.
+//!   `RunState` (draws, copy counts, game variables) that new run-wide state goes into. `stop`
+//!   resets `run`.
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
@@ -151,7 +152,7 @@ struct BodyState {
     grounded: bool,
 }
 /// Run-lifetime state: `change_scene` keeps it and `stop` resets it. The home of the seeded
-/// draws and the spawn counters, and later of game variables, music and volumes, and the
+/// draws, the spawn counters and the game variables, and later of music and volumes, and the
 /// game-clock offset. The counts of an object made during the run go with it (see
 /// `Runtime::forget_copies`).
 #[derive(Debug, Default)]
@@ -164,6 +165,23 @@ pub(crate) struct RunState {
     /// Copies made so far by each (owner, Criar cópia node), which name the IDs of the next
     /// one (see `spawn_ids`). The seed plays no part.
     spawns: BTreeMap<(Id, Id), u64>,
+    /// The game variables' values by (variable, key): the empty key is the variable's own
+    /// value, which starts at the declared one; a key never written reads the declared value.
+    variables: BTreeMap<(Id, String), Value>,
+}
+impl RunState {
+    /// A run's start: the draws from `seed`, every variable at its declared value.
+    fn new(project: &Project, seed: u64) -> Self {
+        Self {
+            seed,
+            variables: project
+                .variables
+                .iter()
+                .map(|v| ((v.id.clone(), String::new()), v.value.clone()))
+                .collect(),
+            ..Default::default()
+        }
+    }
 }
 /// How a host starts a [`Runtime`]. The default is [`Runtime::new`].
 #[derive(Clone, Debug, Default)]
@@ -291,10 +309,8 @@ impl Runtime {
             area_hits: HashMap::new(),
             serial: 0,
             stopped: false,
-            run: RunState {
-                seed: options.seed,
-                ..Default::default()
-            },
+            // Before the scene start logic, which may read the variables.
+            run: RunState::new(project, options.seed),
         };
         runtime.initialize_character_states()?;
         runtime.begin_camera_input(&InputFrame::default());
@@ -441,7 +457,7 @@ impl Runtime {
         self.bodies.clear();
         self.characters = Default::default();
         self.cameras = Default::default();
-        self.run = RunState::default();
+        self.run = RunState::new(&self.source, 0);
     }
     pub fn click(&mut self, entity: &str) {
         if !self.paused && !self.stopped {
@@ -1223,7 +1239,7 @@ impl Runtime {
                 return Ok(());
             }
             _ => {
-                if !self.math_action(&graph, node, &mut context, budget)? {
+                if !self.game_action(&graph, node, &mut context, budget)? {
                     return Err(format!("Operação {} não é executável", node.operation));
                 }
             }

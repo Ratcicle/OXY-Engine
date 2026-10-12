@@ -56,6 +56,12 @@ impl Topic {
             "action.scene" => {
                 "Crie a cena de destino no projeto e escolha-a no parâmetro do nó. Para reiniciar a cena em que o objeto está, ligue a saída Cena de Cena atual à entrada Cena; para abrir a cena guardada num atributo de texto, ligue Ler atributo à entrada Cena."
             }
+            "variable.get" => {
+                "Crie a variável em Variáveis do jogo, na barra da Lógica, e escolha-a no nó. Ligue Valor a uma entrada do tipo da variável; sozinho, o nó não inicia um comportamento."
+            }
+            "variable.set" => {
+                "Crie a variável em Variáveis do jogo, na barra da Lógica, e escolha-a no nó. Conecte uma saída de execução à entrada Executar e forneça um Novo valor do tipo da variável."
+            }
             "scene.current" => {
                 "Não precisa de configuração. Ligue Cena à entrada Cena de Mudar de cena, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
             }

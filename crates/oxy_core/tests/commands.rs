@@ -2095,3 +2095,183 @@ fn a_copied_scene_reference_leaves_the_wiring_hint_to_the_nodes_with_the_input()
         "{warning}"
     );
 }
+
+#[test]
+fn game_variables_are_created_updated_and_deleted_by_command() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_variable", "name": " Moedas ", "value": 0},
+        {"op": "create_variable", "name": "Fase atual", "value": "Início", "persistent": true},
+        {"op": "create_variable", "name": "Ligado", "value": false},
+        {"op": "create_variable", "name": "Saída", "value": {"Vector3": [0, 1, 0]}},
+        {"op": "create_entity", "kind": {"type": "group"}, "name": "Contador"},
+        {"op": "add_node", "entity": "$4", "operation": "variable.set",
+         "params": {"variable": "moedas", "key": "Fase 1", "value": 5}},
+        {"op": "add_node", "entity": "$4", "operation": "variable.get",
+         "params": {"variable": "$1"}},
+    ]));
+    assert_eq!(commands[0].label(), "Criar variável do jogo");
+    let before = command::batch_warnings(&project);
+    let applied = command::apply(&mut project, &scene, &commands).unwrap();
+    let id = |index: usize| applied[index].created[0].clone();
+    let (coins, stage, entity, set) = (id(0), id(1), id(4), id(5));
+    let declared: Vec<_> = project
+        .variables
+        .iter()
+        .map(|v| (v.id.clone(), v.name.as_str(), v.value.clone(), v.persistent))
+        .collect();
+    assert_eq!(
+        declared,
+        [
+            (coins.clone(), "Moedas", Value::Number(0.), false),
+            (
+                stage.clone(),
+                "Fase atual",
+                Value::Text("Início".into()),
+                true
+            ),
+            (id(2), "Ligado", Value::Bool(false), false),
+            (id(3), "Saída", Value::Vector3([0., 1., 0.]), false),
+        ]
+    );
+    // Nodes keep the ID, whether given by name or by ID.
+    let nodes = &project
+        .scene(&scene)
+        .unwrap()
+        .entity(&entity)
+        .unwrap()
+        .graph
+        .nodes;
+    assert_eq!(nodes[0].text("variable"), coins);
+    assert_eq!(nodes[0].text("key"), "Fase 1");
+    assert_eq!(nodes[1].text("variable"), stage);
+    // The answer names what was created.
+    let report = command::report(&project, &applied, &before);
+    assert_eq!(report["created"]["0"][0]["name"], "Moedas");
+    assert!(report.get("warnings").is_none(), "{report}");
+
+    for (command, expected) in [
+        (
+            json!({"op": "create_variable", "name": "MOEDAS", "value": 1}),
+            "Já existe uma variável do jogo chamada \"Moedas\"",
+        ),
+        (
+            json!({"op": "create_variable", "name": " ", "value": 1}),
+            "nome",
+        ),
+        (
+            json!({"op": "create_variable", "name": "Moedas · Fase", "value": 1}),
+            "não pode ter ·",
+        ),
+        (
+            json!({"op": "create_variable", "name": "Alvo", "value": {"Object": null}}),
+            "não guarda objetos",
+        ),
+        (
+            json!({"op": "create_variable", "name": "Ponto", "value": [1, 2, 3]}),
+            "como {\"Vector3\":[1,2,3]}",
+        ),
+        (
+            json!({"op": "update_variable", "variable": "Moedas", "value": "dez"}),
+            "como {\"Number\":1}",
+        ),
+        (
+            json!({"op": "update_variable", "variable": "Ligado", "name": "fase ATUAL"}),
+            "Já existe",
+        ),
+        (
+            json!({"op": "update_variable", "variable": "Vidas", "value": 3}),
+            "A variável do jogo \"Vidas\" não existe no projeto. Variáveis: Moedas, Fase atual, \
+             Ligado, Saída",
+        ),
+        (
+            json!({"op": "delete_variable", "variable": "moedas"}),
+            "Cena 3D → Contador → nó Alterar variável do jogo",
+        ),
+        (
+            json!({"op": "add_node", "entity": entity, "operation": "variable.get",
+                   "params": {"variable": "Vidas"}}),
+            "não existe no projeto",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+
+    // A plain value is read as the variable's type; a tagged one may change the type.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "update_variable", "variable": "moedas", "value": 10, "persistent": true},
+            {"op": "update_variable", "variable": "Ligado", "name": "Aceso", "value": true},
+            {"op": "update_variable", "variable": stage, "value": {"Number": 1}},
+        ])),
+    )
+    .unwrap();
+    let coins_now = oxy_core::variables::get(&project, &coins).unwrap();
+    assert_eq!(
+        (&coins_now.value, coins_now.persistent),
+        (&Value::Number(10.), true)
+    );
+    assert_eq!(project.variables[2].name, "Aceso");
+    assert_eq!(project.variables[2].value, Value::Bool(true));
+    assert_eq!(project.variables[1].value, Value::Number(1.));
+
+    let summary = query::project_summary(&project);
+    assert_eq!(
+        summary["variables"][0],
+        json!({"id": coins, "name": "Moedas", "type": "Number", "value": {"Number": 10.0},
+               "persistent": true,
+               "used_by": [{"entity": entity, "name": "Contador", "role": "variable.set"}]})
+    );
+    assert_eq!(summary["variables"][3]["type"], "Vector3");
+
+    // A constant of another type than the variable's is warned: the game would stop there.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(
+            json!([{"op": "set_node_params", "entity": entity, "node": set,
+                        "params": {"value": "cinco"}}]),
+        ),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].as_str().unwrap().contains(
+            "o value é texto, mas a variável do jogo Moedas guarda número; no jogo, o nó para \
+             com erro"
+        ),
+        "{warnings:?}"
+    );
+    // A value from a port is known only in the game.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": entity, "operation": "value.number"},
+            {"op": "connect", "entity": entity, "from_node": "$0", "from_port": "value",
+             "to_node": set, "to_port": "value"},
+        ])),
+    )
+    .unwrap();
+    assert!(command::warnings(&project).is_empty());
+
+    // Unused, a variable can go.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "remove_node", "entity": entity, "node": set},
+            {"op": "delete_variable", "variable": "Moedas"},
+        ])),
+    )
+    .unwrap();
+    assert!(oxy_core::variables::get(&project, &coins).is_none());
+    assert_eq!(project.variables.len(), 3);
+    assert!(validate_project(&project).is_ok());
+}
