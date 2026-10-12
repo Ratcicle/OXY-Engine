@@ -496,7 +496,7 @@ impl Scene {
 }
 /// Apply a coordinate-origin change to a copied root and every track targeting it,
 /// including clips owned by a descendant. Child-local tracks do not change.
-fn translate_entity_and_tracks(entities: &mut [Entity], target: &str, delta: [f32; 3]) {
+pub fn translate_entity_and_tracks(entities: &mut [Entity], target: &str, delta: [f32; 3]) {
     let delta = Vec3::from(delta);
     for entity in entities {
         if entity.id == target {

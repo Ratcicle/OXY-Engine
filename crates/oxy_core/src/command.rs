@@ -7,14 +7,17 @@
 //! such as `"$0"` in a later command stands for the first ID created by command 0 (see
 //! [`Placeholder`]).
 use crate::{
+    animation::{AnimationEvent, Clip, Interpolation, Keyframe, Track},
     authoring::{self, ComponentKind},
+    character::MovementProfile,
     document::*,
     editing,
     graph::{self, Edge, Node},
     input_actions::{self, every_entity},
-    movement_presets::{self, MovementPreset},
+    movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
     surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace},
 };
+use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -61,7 +64,59 @@ pub enum EntityKind {
     /// Ready-made assembly with components, pieces and logic (3D scenes only).
     Preset {
         preset: Preset,
+        /// Platform: how far it goes from its position, in metres (default [4, 0, 0]).
+        #[serde(default)]
+        travel: Option<[f32; 3]>,
+        /// Platform: seconds for the way there and back (default 4).
+        #[serde(default)]
+        period: Option<f32>,
+        /// Characters: the camera that follows the player (default create).
+        #[serde(default)]
+        camera: Option<PresetCamera>,
     },
+}
+
+/// A keyframe of [`Command::SetClip`]. The channels left out are the target's rest transform,
+/// and the target's pivot is kept.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeySpec {
+    /// Seconds from the start of the clip, 0 to its duration.
+    pub time: f32,
+    /// Local position.
+    #[serde(default)]
+    pub position: Option<[f32; 3]>,
+    /// Local rotation in degrees.
+    #[serde(default)]
+    pub rotation: Option<[f32; 3]>,
+    #[serde(default)]
+    pub scale: Option<[f32; 3]>,
+    /// How the clip goes on to the next keyframe (default linear).
+    #[serde(default)]
+    pub interpolation: Option<KeyInterpolation>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyInterpolation {
+    Linear,
+    /// Keeps this keyframe until the next one.
+    Hold,
+}
+/// The keyframes of one object in [`Command::SetClip`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackSpec {
+    /// `"self"` (the default) for the clip's object, or the ID of a piece under it.
+    #[serde(default)]
+    pub target: Option<Id>,
+    pub keyframes: Vec<KeySpec>,
+}
+/// A marker of [`Command::SetClip`]: `event.animation` nodes start at it by name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarkerSpec {
+    pub time: f32,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,10 +160,49 @@ pub enum Command {
         scene: Option<Id>,
         ids: Vec<Id>,
     },
+    /// Copies the objects `count` times (default 1); copy k moves k × `offset` from the
+    /// original, relative to its parent (default [0.5, 0, 0]). Keyframes that animate a copied
+    /// object move with it.
     DuplicateEntities {
         #[serde(default)]
         scene: Option<Id>,
         ids: Vec<Id>,
+        #[serde(default)]
+        offset: Option<[f32; 3]>,
+        #[serde(default)]
+        count: Option<usize>,
+    },
+    /// Copies objects of `scene`, with everything under them, to `to_scene` (under `parent`,
+    /// or at its root), keeping their place in the world. To another scene, their references
+    /// must stay inside the copy.
+    CopyEntities {
+        #[serde(default)]
+        scene: Option<Id>,
+        ids: Vec<Id>,
+        to_scene: Id,
+        #[serde(default)]
+        parent: Option<Id>,
+    },
+    /// Saves an object and everything under it as a model asset that any scene can place.
+    SaveModel {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        /// Default: the object's name.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Places a copy of a model (its ID or name). Position is relative to the parent.
+    PlaceModel {
+        #[serde(default)]
+        scene: Option<Id>,
+        model: Id,
+        #[serde(default)]
+        parent: Option<Id>,
+        #[serde(default)]
+        position: Option<[f32; 3]>,
+        #[serde(default)]
+        name: Option<String>,
     },
     RenameEntity {
         #[serde(default)]
@@ -124,7 +218,9 @@ pub enum Command {
         #[serde(default)]
         parent: Option<Id>,
     },
-    /// Local transform. Rotation is in degrees.
+    /// Local transform. Rotation is in degrees. With `move_tracks`, the keyframes that animate
+    /// the object follow it ([`editing::carry_tracks`]); by default they do when its own
+    /// animations move it, as a moving platform's do.
     SetTransform {
         #[serde(default)]
         scene: Option<Id>,
@@ -135,6 +231,32 @@ pub enum Command {
         rotation: Option<[f32; 3]>,
         #[serde(default)]
         scale: Option<[f32; 3]>,
+        #[serde(default)]
+        move_tracks: Option<bool>,
+    },
+    /// Creates an animation of `entity`, or replaces its animation `clip` (ID or name) keeping
+    /// the ID that logic nodes use.
+    SetClip {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        #[serde(default)]
+        clip: Option<Id>,
+        name: String,
+        /// Seconds.
+        duration: f32,
+        #[serde(default)]
+        looping: bool,
+        tracks: Vec<TrackSpec>,
+        #[serde(default)]
+        events: Vec<MarkerSpec>,
+    },
+    /// Refused while an `action.animation` node plays the clip.
+    DeleteClip {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        clip: Id,
     },
     SetVisible {
         #[serde(default)]
@@ -174,6 +296,14 @@ pub enum Command {
         scene: Option<Id>,
         entity: Id,
         component: ComponentKind,
+    },
+    /// Writes a movement profile's values into a 3D character (see
+    /// [`crate::character::PROFILE_FIELDS`]); they stay editable.
+    ApplyMovementProfile {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        profile: MovementProfile,
     },
     /// JSON merge patch (RFC 7386) over the object's document form, for fields without a
     /// dedicated command. The ID cannot change.
@@ -303,14 +433,20 @@ impl Command {
             Self::CreateEntity { .. } => "Criar objeto",
             Self::DeleteEntities { .. } => "Excluir objetos",
             Self::DuplicateEntities { .. } => "Duplicar objetos",
+            Self::CopyEntities { .. } => "Copiar objetos para outra cena",
+            Self::SaveModel { .. } => "Salvar modelo",
+            Self::PlaceModel { .. } => "Colocar modelo",
             Self::RenameEntity { .. } => "Renomear objeto",
             Self::SetParent { .. } => "Mudar pai",
             Self::SetTransform { .. } => "Transformar objeto",
+            Self::SetClip { .. } => "Definir animação",
+            Self::DeleteClip { .. } => "Excluir animação",
             Self::SetVisible { .. } => "Mudar visibilidade",
             Self::SetMaterial { .. } => "Mudar material",
             Self::SetAttribute { .. } => "Mudar atributo",
             Self::AddComponent { .. } => "Adicionar componente",
             Self::RemoveComponent { .. } => "Remover componente",
+            Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
             Self::AddNode { .. } => "Adicionar nó",
             Self::RemoveNode { .. } => "Remover nó",
@@ -418,6 +554,9 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
         found(&e.id, &e.name);
         for node in &e.graph.nodes {
             found(&node.id, &node.operation);
+        }
+        for clip in &e.clips {
+            found(&clip.id, &clip.name);
         }
     }
     for id in project.input_bindings.keys() {
@@ -739,11 +878,67 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             }
             Ok(vec![])
         }
-        C::DuplicateEntities { scene, ids } => {
+        C::DuplicateEntities {
+            scene,
+            ids,
+            offset,
+            count,
+        } => {
             let id = scene_id(project, scene, default)?;
             let scene = scene_mut(project, &id);
             check_entities(scene, ids)?;
-            editing::duplicate_selection(scene, ids)
+            editing::duplicate_repeated(
+                scene,
+                ids,
+                offset.unwrap_or(editing::DUPLICATE_OFFSET),
+                count.unwrap_or(1),
+            )
+        }
+        C::CopyEntities {
+            scene,
+            ids,
+            to_scene,
+            parent,
+        } => {
+            let from = scene_id(project, scene, default)?;
+            let to = scene_id(project, &Some(to_scene.clone()), default)?;
+            copy_entities(project, &from, ids, &to, parent.as_ref())
+        }
+        C::SaveModel {
+            scene,
+            entity,
+            name,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let source = project.scene(&id).unwrap();
+            check_entities(source, std::slice::from_ref(entity))?;
+            let name = match name {
+                Some(name) if name.trim().is_empty() => {
+                    return Err("Informe um nome para o modelo".into());
+                }
+                Some(name) => name.trim().to_owned(),
+                None => source.entity(entity).unwrap().name.clone(),
+            };
+            let pieces: HashSet<Id> = source.descendants(entity).into_iter().collect();
+            refuse_outside(source, &pieces, "do modelo")?;
+            Ok(vec![project.save_model(&id, entity, name)?])
+        }
+        C::PlaceModel {
+            scene,
+            model,
+            parent,
+            position,
+            name,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            place_model(
+                project,
+                &id,
+                model,
+                parent.as_ref(),
+                *position,
+                name.as_deref(),
+            )
         }
         C::RenameEntity {
             scene,
@@ -772,9 +967,12 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             position,
             rotation,
             scale,
+            move_tracks,
         } => {
             let id = scene_id(project, scene, default)?;
-            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let scene = scene_mut(project, &id);
+            let e = entity_mut(scene, entity)?;
+            let before = e.transform.clone();
             if let Some(p) = position {
                 finite(p, "Posição")?;
                 e.transform.position = *p;
@@ -790,6 +988,60 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
                 }
                 e.transform.scale = *s;
             }
+            let after = e.transform.clone();
+            if move_tracks.unwrap_or_else(|| editing::animates_itself(e)) && after != before {
+                editing::carry_tracks(&mut scene.entities, entity, &before, &after);
+            }
+            Ok(vec![])
+        }
+        C::SetClip {
+            scene,
+            entity,
+            clip,
+            name,
+            duration,
+            looping,
+            tracks,
+            events,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            set_clip(
+                scene_mut(project, &id),
+                entity,
+                clip.as_deref(),
+                ClipSpec {
+                    name,
+                    duration: *duration,
+                    looping: *looping,
+                    tracks,
+                    events,
+                },
+            )
+        }
+        C::DeleteClip {
+            scene,
+            entity,
+            clip,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let owner = project
+                .scene(&id)
+                .unwrap()
+                .entity(entity)
+                .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?;
+            let index = find_clip(owner, clip)?;
+            let found = &owner.clips[index];
+            let uses = clip_uses(project, &found.id);
+            if !uses.is_empty() {
+                return Err(format!(
+                    "Altere estes nós antes de excluir a animação {}:\n{}",
+                    found.name,
+                    uses.join("\n")
+                ));
+            }
+            entity_mut(scene_mut(project, &id), entity)?
+                .clips
+                .remove(index);
             Ok(vec![])
         }
         C::SetVisible {
@@ -875,6 +1127,22 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
         } => {
             let id = scene_id(project, scene, default)?;
             authoring::remove(entity_mut(scene_mut(project, &id), entity)?, *component)?;
+            Ok(vec![])
+        }
+        C::ApplyMovementProfile {
+            scene,
+            entity,
+            profile,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let name = e.name.clone();
+            e.character3d
+                .as_mut()
+                .ok_or_else(|| {
+                    format!("{name} não é um personagem 3D: adicione o componente character antes")
+                })?
+                .apply_profile(*profile);
             Ok(vec![])
         }
         C::UpdateEntity {
@@ -1196,7 +1464,28 @@ fn create_entity(
     }
     let name = name.map(str::trim).filter(|n| !n.is_empty());
     let mut entity = match kind {
-        EntityKind::Preset { preset } => {
+        EntityKind::Preset {
+            preset,
+            travel,
+            period,
+            camera,
+        } => {
+            let platform = *preset == Preset::Platform;
+            if !platform && (travel.is_some() || period.is_some()) {
+                return Err("travel e period valem só para o preset platform".into());
+            }
+            if platform && camera.is_some() {
+                return Err("camera vale só para os presets first_person e third_person".into());
+            }
+            if let Some(travel) = travel {
+                finite(travel, "travel")?;
+            }
+            let defaults = PresetOptions::default();
+            let options = PresetOptions {
+                travel: travel.map_or(defaults.travel, Vec3::from),
+                period: period.unwrap_or(defaults.period),
+                camera: camera.unwrap_or_default(),
+            };
             let preset = match preset {
                 Preset::FirstPerson => MovementPreset::FirstPerson,
                 Preset::ThirdPerson => MovementPreset::ThirdPerson,
@@ -1204,7 +1493,8 @@ fn create_entity(
             };
             let at = position.unwrap_or([0., 0.02, 0.]);
             let before = scene_mut(project, scene).entities.len();
-            let id = movement_presets::create(project, scene, preset, glam::Vec3::from(at))?;
+            let id =
+                movement_presets::create_with(project, scene, preset, Vec3::from(at), options)?;
             let e = entity_mut(scene_mut(project, scene), &id)?;
             if let Some(name) = name {
                 e.name = name.into();
@@ -1220,11 +1510,7 @@ fn create_entity(
         }
         EntityKind::Group => Entity::new(name.unwrap_or("Grupo"), None),
         EntityKind::Shape { shape } => {
-            let two_d = matches!(
-                shape,
-                Primitive::Rectangle | Primitive::Circle | Primitive::Sprite
-            );
-            if two_d != (scene_kind == SceneKind::TwoD) {
+            if flat(*shape) != (scene_kind == SceneKind::TwoD) {
                 return Err(format!(
                     "A forma {shape:?} não pertence a uma cena {}",
                     if scene_kind == SceneKind::TwoD {
@@ -1264,6 +1550,440 @@ fn create_entity(
     let id = entity.id.clone();
     scene_mut(project, scene).entities.push(entity);
     Ok(vec![id])
+}
+
+/// Whether the shape belongs to 2D scenes.
+fn flat(shape: Primitive) -> bool {
+    matches!(
+        shape,
+        Primitive::Rectangle | Primitive::Circle | Primitive::Sprite
+    )
+}
+
+/// Shapes go only to scenes of their kind, as create_entity requires; validation checks the
+/// components.
+fn check_kind(entities: &[Entity], kind: SceneKind, scene: &str) -> Result<(), String> {
+    let wanted = kind == SceneKind::TwoD;
+    for e in entities {
+        let two_d = match (e.primitive, &e.mesh) {
+            (Some(shape), _) => flat(shape),
+            (None, Some(_)) => false,
+            (None, None) => continue,
+        };
+        if two_d != wanted {
+            let [is, scene_is] = if two_d { ["2D", "3D"] } else { ["3D", "2D"] };
+            return Err(format!(
+                "{} é uma forma {is}, e a cena {scene} é {scene_is}",
+                e.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses to take `pieces` out of `scene`, into a model or another scene, while they point to
+/// objects or animations left behind, which would not exist where they go. `what` completes
+/// "fora": "do modelo", "da cópia".
+fn refuse_outside(scene: &Scene, pieces: &HashSet<Id>, what: &str) -> Result<(), String> {
+    let named = |id: &str| {
+        scene
+            .entity(id)
+            .map_or_else(|| id.to_owned(), |e| format!("{} ({id})", e.name))
+    };
+    let taken: Vec<&Entity> = scene
+        .entities
+        .iter()
+        .filter(|e| pieces.contains(&e.id))
+        .collect();
+    let clips: HashSet<&str> = taken
+        .iter()
+        .flat_map(|e| e.clips.iter().map(|clip| clip.id.as_str()))
+        .collect();
+    let mut found = Vec::new();
+    for e in taken {
+        // What the object points to: (where, target).
+        let mut links: Vec<(String, &str)> = Vec::new();
+        for (key, value) in &e.attributes {
+            if let Some(target) = value.object() {
+                links.push((format!("atributo {key}"), target));
+            }
+        }
+        if let Some(target) = e.ui.as_ref().and_then(|ui| ui.binding_object.as_deref()) {
+            links.push(("vínculo da interface".into(), target));
+        }
+        if let Some(rig) = &e.camera_rig {
+            if let Some(target) = rig.target.as_deref() {
+                links.push(("alvo da câmera".into(), target));
+            }
+            for hidden in &rig.hidden {
+                links.push(("peça oculta pela câmera".into(), hidden));
+            }
+        }
+        for node in &e.graph.nodes {
+            for (key, value) in &node.params {
+                if let Some(target) = value.object() {
+                    links.push((format!("nó {} ({key})", node.operation), target));
+                }
+            }
+            let clip = node.text("clip");
+            if node.operation == "action.animation" && !clip.is_empty() && !clips.contains(clip) {
+                found.push(format!(
+                    "{} → nó action.animation → animação de outro objeto ({clip})",
+                    e.name
+                ));
+            }
+        }
+        for clip in &e.clips {
+            for track in &clip.tracks {
+                links.push((format!("animação {}", clip.name), &track.target));
+            }
+        }
+        for (link, target) in links {
+            if !pieces.contains(target) {
+                found.push(format!("{} → {link} → {}", e.name, named(target)));
+            }
+        }
+    }
+    if found.is_empty() {
+        return Ok(());
+    }
+    let more = found.len().saturating_sub(10);
+    found.truncate(10);
+    if more > 0 {
+        found.push(format!("… e mais {more}"));
+    }
+    Err(format!(
+        "Estas referências apontam para fora {what}; leve junto os objetos e animações \
+         que elas usam ou tire as referências antes:\n{}",
+        found.join("\n")
+    ))
+}
+
+/// Copies `ids` of the scene `from`, with everything under them, to the scene `to`. The copied
+/// roots go under `parent` (or to the root of `to`) keeping their world transform, and the
+/// keyframes that animate them follow. Answers the new roots, in order.
+fn copy_entities(
+    project: &mut Project,
+    from: &str,
+    ids: &[Id],
+    to: &str,
+    parent: Option<&Id>,
+) -> Result<Vec<Id>, String> {
+    let source = project.scene(from).unwrap();
+    let destination = project.scene(to).unwrap();
+    check_entities(source, ids)?;
+    if let Some(parent) = parent
+        && destination.entity(parent).is_none()
+    {
+        return Err(format!(
+            "Objeto {parent} não existe na cena {}",
+            destination.name
+        ));
+    }
+    let roots = editing::selection_roots(source, ids);
+    let copied: HashSet<Id> = roots.iter().flat_map(|id| source.descendants(id)).collect();
+    if from != to {
+        refuse_outside(source, &copied, "da cópia")?;
+    }
+    let mut copies: Vec<Entity> = source
+        .entities
+        .iter()
+        .filter(|e| copied.contains(&e.id))
+        .cloned()
+        .collect();
+    check_kind(&copies, destination.kind, &destination.name)?;
+    let parent_world = match parent {
+        Some(parent) => destination.world_matrix(parent)?,
+        None => Mat4::IDENTITY,
+    };
+    if parent_world.determinant().abs() < 1e-8 {
+        return Err("A transformação do pai de destino não pode ser invertida".into());
+    }
+    let worlds = roots
+        .iter()
+        .map(|id| source.world_matrix(id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
+    remap_entities(&mut copies, &map)?;
+    for (root, world) in roots.iter().zip(worlds) {
+        let id = &map[root];
+        let entity = copies.iter_mut().find(|e| e.id == *id).unwrap();
+        let before = entity.transform.clone();
+        let local = parent_world.inverse() * world;
+        // An unchanged local transform stays exact, without the rounding of the matrices.
+        let after = if before.matrix().abs_diff_eq(local, 1e-6) {
+            before.clone()
+        } else {
+            let transform = Transform::from_matrix(local, before.pivot);
+            if !transform.finite() || !transform.matrix().abs_diff_eq(local, 0.0001) {
+                return Err(format!(
+                    "{} ficaria deformado sob o pai de destino (cisalhamento); escolha outro \
+                     pai ou ajuste a escala não uniforme dele",
+                    entity.name
+                ));
+            }
+            transform
+        };
+        entity.parent = parent.cloned();
+        entity.transform = after.clone();
+        editing::carry_tracks(&mut copies, id, &before, &after);
+    }
+    let created = roots.iter().map(|root| map[root].clone()).collect();
+    scene_mut(project, to).entities.extend(copies);
+    Ok(created)
+}
+
+/// A model asset by ID or, when no asset has that ID, by name (ignoring case).
+fn find_model(project: &Project, model: &str) -> Result<Id, String> {
+    if let Some(asset) = project.asset(model) {
+        return if asset.kind == AssetKind::Model && asset.model.is_some() {
+            Ok(asset.id.clone())
+        } else {
+            Err(format!("O recurso {} não é um modelo", asset.name))
+        };
+    }
+    let wanted = model.trim().to_lowercase();
+    let named: Vec<&Asset> = project
+        .assets
+        .iter()
+        .filter(|a| a.kind == AssetKind::Model && a.name.trim().to_lowercase() == wanted)
+        .collect();
+    match named.as_slice() {
+        [one] => Ok(one.id.clone()),
+        [] => Err(format!("Modelo {model} não existe no projeto")),
+        many => Err(format!(
+            "{} modelos se chamam \"{}\"; use o ID",
+            many.len(),
+            model.trim()
+        )),
+    }
+}
+
+/// Places a copy of `model` (ID or name) in `scene`, its root under `parent` at `position`.
+/// Answers every piece, the root first.
+fn place_model(
+    project: &mut Project,
+    scene: &str,
+    model: &str,
+    parent: Option<&Id>,
+    position: Option<[f32; 3]>,
+    name: Option<&str>,
+) -> Result<Vec<Id>, String> {
+    let asset = find_model(project, model)?;
+    let target = project.scene(scene).unwrap();
+    if let Some(parent) = parent {
+        check_entities(target, std::slice::from_ref(parent))?;
+    }
+    if let Some(p) = position {
+        finite(&p, "Posição")?;
+    }
+    if name.is_some_and(|n| n.trim().is_empty()) {
+        return Err("Informe um nome para o objeto".into());
+    }
+    let pieces = project
+        .asset(&asset)
+        .and_then(|a| a.model.as_deref())
+        .unwrap_or_default();
+    check_kind(pieces, target.kind, &target.name)?;
+    let before = target.entities.len();
+    let root = project.instantiate_model(&asset, scene)?;
+    let placed = &mut scene_mut(project, scene).entities[before..];
+    let index = placed
+        .iter()
+        .position(|e| e.id == root)
+        .ok_or("Modelo sem raiz")?;
+    if let Some(p) = position {
+        let rest = placed[index].transform.clone();
+        let mut moved = rest.clone();
+        moved.position = p;
+        placed[index].transform = moved.clone();
+        editing::carry_tracks(placed, &root, &rest, &moved);
+    }
+    let e = &mut placed[index];
+    e.parent = parent.cloned();
+    if let Some(name) = name {
+        e.name = name.trim().into();
+    }
+    let mut created: Vec<Id> = placed.iter().map(|e| e.id.clone()).collect();
+    created.sort_by_key(|piece| *piece != root);
+    Ok(created)
+}
+
+/// The index of `entity`'s animation `clip`, by ID or, failing that, by name (ignoring case).
+fn find_clip(entity: &Entity, clip: &str) -> Result<usize, String> {
+    let wanted = clip.trim().to_lowercase();
+    entity
+        .clips
+        .iter()
+        .position(|c| c.id == clip)
+        .or_else(|| {
+            entity
+                .clips
+                .iter()
+                .position(|c| c.name.trim().to_lowercase() == wanted)
+        })
+        .ok_or_else(|| format!("{} não tem a animação {clip}", entity.name))
+}
+
+/// The logic nodes that play the animation `id`, in scenes and models.
+fn clip_uses(project: &Project, id: &str) -> Vec<String> {
+    every_entity(project)
+        .flat_map(|(scope, e)| {
+            e.graph
+                .nodes
+                .iter()
+                .filter(|n| n.operation == "action.animation" && n.text("clip") == id)
+                .map(move |n| format!("{scope} → {} → Reproduzir animação ({})", e.name, n.id))
+        })
+        .collect()
+}
+
+/// What [`Command::SetClip`] asks for, besides where.
+struct ClipSpec<'a> {
+    name: &'a str,
+    duration: f32,
+    looping: bool,
+    tracks: &'a [TrackSpec],
+    events: &'a [MarkerSpec],
+}
+
+/// Builds the animation `spec` of `owner`, or replaces its animation `replaced` (ID or name)
+/// keeping the ID. Answers the new animation's ID, or nothing when it replaced one.
+fn set_clip(
+    scene: &mut Scene,
+    owner: &str,
+    replaced: Option<&str>,
+    spec: ClipSpec,
+) -> Result<Vec<Id>, String> {
+    let entity = scene
+        .entity(owner)
+        .ok_or_else(|| format!("Objeto {owner} não existe nesta cena"))?;
+    let name = spec.name.trim();
+    if name.is_empty() {
+        return Err("Informe um nome para a animação".into());
+    }
+    if !spec.duration.is_finite() || spec.duration <= 0. {
+        return Err("A duração da animação precisa ser um número de segundos maior que 0".into());
+    }
+    let index = replaced.map(|clip| find_clip(entity, clip)).transpose()?;
+    if let Some((_, other)) = entity.clips.iter().enumerate().find(|(i, clip)| {
+        Some(*i) != index && clip.name.trim().to_lowercase() == name.to_lowercase()
+    }) {
+        return Err(format!(
+            "{} já tem uma animação chamada \"{name}\" ({}); para substituí-la, informe clip",
+            entity.name, other.id
+        ));
+    }
+    let pieces: HashSet<Id> = scene.descendants(owner).into_iter().collect();
+    let mut clip = Clip {
+        id: index.map_or_else(new_id, |i| entity.clips[i].id.clone()),
+        name: name.into(),
+        duration: spec.duration,
+        looping: spec.looping,
+        tracks: Vec::new(),
+        events: Vec::new(),
+    };
+    for track in spec.tracks {
+        let target = match track.target.as_deref() {
+            None | Some("self") => owner,
+            Some(id) => id,
+        };
+        let piece = scene
+            .entity(target)
+            .filter(|_| pieces.contains(target))
+            .ok_or_else(|| {
+                format!(
+                    "Uma trilha anima o próprio objeto (\"self\") ou uma peça dentro de {}; \
+                     {target} não é",
+                    entity.name
+                )
+            })?;
+        if clip.tracks.iter().any(|t| t.target == target) {
+            return Err(format!(
+                "Duas trilhas animam {}; junte os quadros-chave numa trilha só",
+                piece.name
+            ));
+        }
+        if track.keyframes.is_empty() {
+            return Err(format!("A trilha de {} não tem quadros-chave", piece.name));
+        }
+        let mut keyframes = Vec::with_capacity(track.keyframes.len());
+        for key in &track.keyframes {
+            check_time(key.time, spec.duration, "Quadro-chave")?;
+            // Channels left out keep the rest pose, and the pivot stays the piece's.
+            let mut transform = piece.transform.clone();
+            if let Some(p) = key.position {
+                finite(&p, "Posição do quadro-chave")?;
+                transform.position = p;
+            }
+            if let Some(r) = key.rotation {
+                finite(&r, "Rotação do quadro-chave")?;
+                transform.rotation = r.map(f32::to_radians);
+            }
+            if let Some(s) = key.scale {
+                finite(&s, "Escala do quadro-chave")?;
+                if s.iter().any(|v| v.abs() < 0.0001) {
+                    return Err("Escala não pode ser zero".into());
+                }
+                transform.scale = s;
+            }
+            keyframes.push(Keyframe {
+                time: key.time,
+                transform,
+                interpolation: match key.interpolation {
+                    Some(KeyInterpolation::Hold) => Interpolation::Hold,
+                    _ => Interpolation::Linear,
+                },
+            });
+        }
+        keyframes.sort_by(|a, b| a.time.total_cmp(&b.time));
+        if let Some(pair) = keyframes
+            .windows(2)
+            .find(|pair| pair[0].time >= pair[1].time)
+        {
+            return Err(format!(
+                "A trilha de {} tem dois quadros-chave no tempo {} s",
+                piece.name, pair[1].time
+            ));
+        }
+        clip.tracks.push(Track {
+            target: target.into(),
+            keyframes,
+        });
+    }
+    for event in spec.events {
+        check_time(event.time, spec.duration, "Marcador")?;
+        if event.name.trim().is_empty() {
+            return Err("Informe o nome do marcador".into());
+        }
+        clip.events.push(AnimationEvent {
+            time: event.time,
+            name: event.name.trim().into(),
+        });
+    }
+    clip.events.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let id = clip.id.clone();
+    let clips = &mut scene.entity_mut(owner).unwrap().clips;
+    match index {
+        Some(i) => {
+            clips[i] = clip;
+            Ok(vec![])
+        }
+        None => {
+            clips.push(clip);
+            Ok(vec![id])
+        }
+    }
+}
+
+fn check_time(time: f32, duration: f32, what: &str) -> Result<(), String> {
+    if time.is_finite() && (0. ..=duration).contains(&time) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what} em {time} s fica fora da animação, que dura {duration} s"
+        ))
+    }
 }
 
 fn shape_label(shape: Primitive) -> &'static str {

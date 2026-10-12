@@ -110,8 +110,11 @@ operation's defaults (see oxy_catalog), and edges are text such as \
 and convex/triangle collision geometry come as counts. graph=full and geometry=full give them as \
 stored, the form update_entity patches.";
 const CATALOG_DESCRIPTION: &str = "Catalog of logic nodes, components, shapes, interface \
-elements, presets, surface presets, the keys input actions can use (input_keys) and the value \
-format. By default the nodes are brief (operation, label, category, description) and categories \
+elements, presets [{id, description, creates, params}] (creates lists the pieces in the order \
+create_entity answers them; params are the preset's options), movement_profiles [{id, label, \
+values}] (what apply_movement_profile writes), surface presets, the keys input actions can use \
+(input_keys) and the value format. By default the nodes are brief (operation, label, category, \
+description) and categories \
 lists their categories; then ask for the nodes you will use with operations or category to get \
 their ports with types and parameters with defaults (only those nodes come back). A parameter \
 with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
@@ -402,11 +405,31 @@ rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
 - create_entity {kind, name?, parent?, position?: [x,y,z]} where kind is {type: group} | \
 {type: shape, shape: Cube|Sphere|Cylinder|Plane|Pyramid|Cone|Tube (3D) or Rectangle|Circle|Sprite \
 (2D)} | {type: camera} | {type: ui, element: Text|Image|Button|Bar} | {type: preset, preset: \
-first_person|third_person|platform} (3D only)
-- delete_entities {ids}; duplicate_entities {ids} (one copy per root, in order); rename_entity \
-{entity, name}; set_parent {ids, parent?} (keeps world transform)
-- set_transform {entity, position?, rotation? (degrees), scale?}; set_visible {entity, visible}; \
+first_person|third_person|platform, camera?: create|reuse|none (characters; default create), \
+travel?: [x,y,z] metres and period?: seconds (platform; default [4,0,0] and 4)} (3D only; \
+oxy_catalog presets says what each creates)
+- delete_entities {ids}; duplicate_entities {ids, offset?: [x,y,z], count?: 1-100}: copy k moves \
+k × offset (default [0.5,0,0]) from the original, relative to its parent, and the answer lists \
+every copy's root, copy after copy (one per root in order); rename_entity {entity, name}; \
+set_parent {ids, parent?} (keeps world transform)
+- copy_entities {ids, to_scene, parent?}: copies objects of `scene`, with everything under them, \
+to another scene, keeping their place in the world; answers the copies' roots. Refused while they \
+point to objects or animations left behind (copy those too)
+- save_model {entity, name?}: the object and everything under it become a model asset (answers \
+its ID); place_model {model: ID or name, parent?, position?, name?}: places a copy in `scene`, \
+answering every piece, its root first. Reuse a player rig, HUD or puzzle across levels this way
+- set_transform {entity, position?, rotation? (degrees), scale?, move_tracks?}: keyframes that \
+animate the object follow it (a moved platform keeps its path around its new place) when \
+move_tracks is true; by default when its own animations move it. set_visible {entity, visible}; \
 set_material {entity, color?: [r,g,b,a] 0-1, texture?: asset ID, clear_texture?}
+- set_clip {entity, clip?, name, duration (s), looping?, tracks: [{target?: \"self\" (default) or \
+the ID of a piece under entity, keyframes: [{time, position?, rotation? (degrees), scale?, \
+interpolation?: linear|hold}]}], events?: [{time, name}]}: creates an animation of entity \
+(answers its ID) or replaces its animation `clip` (ID or name), keeping the ID logic uses. \
+Keyframes are local transforms; channels left out are the target's current ones. Play it with an \
+action.animation node (param clip). delete_clip {entity, clip}, refused while a node plays it
+- apply_movement_profile {entity, profile: direct|parkour|chained}: writes the profile's values \
+(oxy_catalog movement_profiles) into a 3D character; they stay editable
 - set_attribute {entity, name, value?} (no value removes); values are tagged, e.g. {\"Number\": 3}
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}
@@ -426,7 +449,7 @@ speed_multiplier?, conveyor?: [x,y,z] m/s, conveyor_space?: World|Local}; update
 {surface, and the same fields but preset}; delete_surface {surface}, refused while used. Assign \
 a surface with update_entity: physics3d.surface or character3d.body.surface.
 Project, scene, input action and surface commands take no `scene`; the others accept it, and \
-the tool's `scene` fills it when absent.";
+the tool's `scene` fills it when absent (for copy_entities, the scene copied from).";
 
 const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
 the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
@@ -1374,6 +1397,14 @@ mod tests {
         for command in [
             json!({"op": "create_entity", "kind": {"type": "group"}, "scene": "s"}),
             json!({"op": "add_node", "entity": "e", "operation": "event.input", "scene": "s"}),
+            json!({"op": "copy_entities", "ids": ["e"], "to_scene": "t", "scene": "s"}),
+            json!({"op": "save_model", "entity": "e", "scene": "s"}),
+            json!({"op": "place_model", "model": "m", "scene": "s"}),
+            json!({"op": "set_clip", "entity": "e", "name": "A", "duration": 1, "tracks": [],
+                   "scene": "s"}),
+            json!({"op": "delete_clip", "entity": "e", "clip": "c", "scene": "s"}),
+            json!({"op": "apply_movement_profile", "entity": "e", "profile": "parkour",
+                   "scene": "s"}),
         ] {
             command::parse(&command).unwrap();
         }
@@ -1495,6 +1526,116 @@ mod tests {
                 .unwrap()
                 .contains(&json!("Space"))
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_reuse_objects_across_levels_and_author_moving_platforms() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-reuse-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Fases", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // The tool's scene reaches every command but create_scene; for copy_entities it is the
+        // scene copied from.
+        let applied = call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+                {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+                 "travel": [0.0, 0.0, -3.0], "period": 3.0}, "position": [0.0, 1.0, 0.0]},
+                {"op": "set_transform", "entity": "$1", "position": [5.0, 1.0, 0.0]},
+                {"op": "duplicate_entities", "ids": ["$1"], "offset": [0.0, 0.0, -8.0],
+                 "count": 2},
+                {"op": "copy_entities", "ids": ["$3.1"], "to_scene": "$0"},
+                {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"}},
+                {"op": "apply_movement_profile", "entity": "$5", "profile": "parkour"},
+                // The preset's camera sits beside the player: a group takes both.
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Jogador padrão"},
+                {"op": "set_parent", "ids": ["$5", "$5.2"], "parent": "$7"},
+                {"op": "save_model", "entity": "$7"},
+                {"op": "place_model", "scene": "$0", "model": "Jogador padrão",
+                 "position": [0.0, 0.0, 4.0]},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Porta"},
+                {"op": "set_clip", "entity": "$11", "name": "Abrir", "duration": 1.0,
+                 "tracks": [{"keyframes": [{"time": 0.0},
+                                           {"time": 1.0, "rotation": [0.0, 80.0, 0.0]}]}]},
+            ]}),
+        )
+        .unwrap();
+        let created = &applied["created"];
+        assert_eq!(created["3"].as_array().unwrap().len(), 2);
+        assert_eq!(created["3"][1]["name"], "Plataforma móvel (cópia 2)");
+        assert_eq!(created["9"][0]["name"], "Jogador padrão");
+        assert_eq!(
+            created["10"].as_array().unwrap().len(),
+            10,
+            "every piece of the rig"
+        );
+        assert_eq!(created["12"][0]["name"], "Abrir");
+        let level = created["0"][0]["id"].as_str().unwrap().to_owned();
+        let saved = persistence::load_project(&file).unwrap();
+        let copy = saved
+            .scene(&level)
+            .unwrap()
+            .entity(created["4"][0]["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(copy.transform.position, [5., 1., -16.]);
+        let keys: Vec<[f32; 3]> = copy.clips[0].tracks[0]
+            .keyframes
+            .iter()
+            .map(|k| k.transform.position)
+            .collect();
+        assert_eq!(keys, [[5., 1., -16.], [5., 1., -19.], [5., 1., -16.]]);
+        let level = saved.scene(&level).unwrap();
+        let placed: Vec<&Entity> = created["10"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|piece| level.entity(piece["id"].as_str().unwrap()).unwrap())
+            .collect();
+        assert_eq!(placed[0].transform.position, [0., 0., 4.]);
+        let player = placed.iter().find(|e| e.character3d.is_some()).unwrap();
+        assert_eq!(player.character3d.as_ref().unwrap().air_acceleration, 20.);
+        let camera = placed.iter().find(|e| e.camera_rig.is_some()).unwrap();
+        assert_eq!(
+            camera.camera_rig.as_ref().unwrap().target.as_ref(),
+            Some(&player.id),
+            "the placed camera follows the placed player"
+        );
+
+        // The catalog says what presets make and what profiles write.
+        let catalog = call("oxy_catalog", json!({})).unwrap();
+        assert_eq!(catalog["presets"][2]["id"], "platform");
+        assert!(catalog["presets"][0]["creates"].is_array());
+        assert_eq!(catalog["movement_profiles"][1]["id"], "parkour");
+        for text in [
+            "copy_entities",
+            "save_model",
+            "place_model",
+            "set_clip",
+            "delete_clip",
+            "move_tracks",
+            "apply_movement_profile",
+            "count?",
+            "camera?: create|reuse|none",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(CATALOG_DESCRIPTION.contains("movement_profiles"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

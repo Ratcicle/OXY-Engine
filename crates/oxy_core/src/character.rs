@@ -31,12 +31,53 @@ pub enum JumpMode {
     Manual,
     Automatic,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Ready-made movement values; see [`CharacterConfig::apply_profile`]. In JSON (commands and
+/// the `character.profile` node) they are `direct`, `parkour` and `chained`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MovementProfile {
     Direct,
     Parkour,
+    #[serde(rename = "chained")]
     ChainedJumps,
 }
+impl MovementProfile {
+    pub const ALL: [Self; 3] = [Self::Direct, Self::Parkour, Self::ChainedJumps];
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Parkour => "parkour",
+            Self::ChainedJumps => "chained",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Direct => "Direto",
+            Self::Parkour => "Parkour",
+            Self::ChainedJumps => "Saltos encadeados",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|profile| profile.id() == id)
+    }
+}
+/// What [`CharacterConfig::apply_profile`] writes, by the names of the character's fields.
+pub const PROFILE_FIELDS: [&str; 14] = [
+    "speed",
+    "sprint_speed",
+    "crouch_speed",
+    "ground_acceleration",
+    "ground_braking",
+    "ground_friction",
+    "air_acceleration",
+    "air_projected_limit",
+    "air_resistance",
+    "horizontal_limit",
+    "jump_retention",
+    "landing_retention",
+    "slide_enabled",
+    "jump_mode",
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CameraMode {
     FirstPerson,

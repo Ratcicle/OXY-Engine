@@ -1,6 +1,6 @@
 //! Reversible editing rules, independent of widgets and runtime input.
 use crate::document::*;
-use glam::{Mat4, Vec3};
+use glam::{EulerRot, Mat4, Vec3};
 use std::collections::{HashMap, HashSet};
 
 /// Creates only the requested first scene, without demonstration gameplay.
@@ -221,37 +221,155 @@ pub fn group_selection(scene: &mut Scene, ids: &[Id]) -> Result<Id, String> {
     Ok(id)
 }
 
+/// Where the editor's Duplicate puts a copy: half a metre along X from the original.
+pub const DUPLICATE_OFFSET: [f32; 3] = [0.5, 0., 0.];
+/// Copies made by one repeated duplicate at most.
+pub const MAX_DUPLICATES: usize = 100;
+
 pub fn duplicate_selection(scene: &mut Scene, ids: &[Id]) -> Result<Vec<Id>, String> {
+    duplicate_repeated(scene, ids, DUPLICATE_OFFSET, 1)
+}
+
+/// Duplicates the selection `count` times, copy k (from 1) moved by k × `offset` from the
+/// original in its parent's space, keyframes that animate it included. Answers the new roots,
+/// copy after copy: with two roots, the first copy of each, then the second of each…
+pub fn duplicate_repeated(
+    scene: &mut Scene,
+    ids: &[Id],
+    offset: [f32; 3],
+    count: usize,
+) -> Result<Vec<Id>, String> {
+    if !offset.iter().all(|v| v.is_finite()) {
+        return Err("O deslocamento das cópias precisa de números finitos.".into());
+    }
+    if !(1..=MAX_DUPLICATES).contains(&count) {
+        return Err(format!(
+            "O número de cópias deve estar entre 1 e {MAX_DUPLICATES}."
+        ));
+    }
     let roots = selection_roots(scene, ids);
     let all: HashSet<_> = roots.iter().flat_map(|id| scene.descendants(id)).collect();
-    let mut copies: Vec<_> = scene
+    let originals: Vec<_> = scene
         .entities
         .iter()
         .filter(|e| all.contains(&e.id))
         .cloned()
         .collect();
-    let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
-    remap_entities(&mut copies, &map)?;
-    let new_roots: Vec<_> = roots.iter().map(|id| map[id].clone()).collect();
-    for root in &new_roots {
-        for entity in &mut copies {
-            if entity.id == *root {
-                entity.name.push_str(" (cópia)");
-                entity.transform.position[0] += 0.5;
+    let mut created = Vec::with_capacity(roots.len() * count);
+    for copy in 1..=count {
+        let mut copies = originals.clone();
+        let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
+        remap_entities(&mut copies, &map)?;
+        let delta = Vec3::from(offset) * copy as f32;
+        for root in roots.iter().map(|id| &map[id]) {
+            if let Some(entity) = copies.iter_mut().find(|e| e.id == *root) {
+                if count == 1 {
+                    entity.name.push_str(" (cópia)");
+                } else {
+                    entity.name.push_str(&format!(" (cópia {copy})"));
+                }
             }
-            for clip in &mut entity.clips {
-                for track in &mut clip.tracks {
-                    if track.target == *root {
-                        for key in &mut track.keyframes {
-                            key.transform.position[0] += 0.5;
-                        }
+            translate_entity_and_tracks(&mut copies, root, delta.to_array());
+            created.push(root.clone());
+        }
+        scene.entities.extend(copies);
+    }
+    Ok(created)
+}
+
+/// Whether the object's own animations move it, as the moving platform's does. Moving such an
+/// object carries its keyframes along (see [`follow_tracks`]), or the game would put it back on
+/// the path it was animated on.
+pub fn animates_itself(entity: &Entity) -> bool {
+    entity
+        .clips
+        .iter()
+        .any(|clip| clip.tracks.iter().any(|track| track.target == entity.id))
+}
+
+/// Keyframes are local transforms, like the object's own. When its rest transform goes from
+/// `before` to `after`, every track that animates `target` (in any clip of `entities`) moves
+/// the same way, so the animation plays where the object now is: positions turn with the
+/// change of rotation around the old position and follow the new one, rotations turn with it
+/// and scales grow by the same factor. Rotations and scales stay as they were when those of
+/// the object did not change, and a keyframe at the old rest pose lands exactly on the new.
+pub fn carry_tracks(entities: &mut [Entity], target: &str, before: &Transform, after: &Transform) {
+    let turn = (before.rotation != after.rotation)
+        .then(|| (after.quaternion() * before.quaternion().inverse()).normalize());
+    let resized = (before.scale != after.scale)
+        .then(|| Vec3::from(after.scale) / Vec3::from(before.scale))
+        .filter(|factor| factor.is_finite());
+    for entity in entities {
+        for clip in &mut entity.clips {
+            for track in clip.tracks.iter_mut().filter(|t| t.target == target) {
+                for key in &mut track.keyframes {
+                    let key = &mut key.transform;
+                    let offset = Vec3::from(key.position) - Vec3::from(before.position);
+                    let offset = turn.map_or(offset, |turn| turn * offset);
+                    key.position = (Vec3::from(after.position) + offset).to_array();
+                    if let Some(turn) = turn {
+                        key.rotation = if key.rotation == before.rotation {
+                            after.rotation
+                        } else {
+                            turned(turn, key)
+                        };
+                    }
+                    if let Some(factor) = resized {
+                        key.scale = if key.scale == before.scale {
+                            after.scale
+                        } else {
+                            (Vec3::from(key.scale) * factor).to_array()
+                        };
                     }
                 }
             }
         }
     }
-    scene.entities.extend(copies);
-    Ok(new_roots)
+}
+
+/// The keyframe's rotation turned by `turn`, as XYZ angles whose quaternion keeps its sign:
+/// the keyframe keeps its full turns (one at 360° turned by 30° reads 390°, not 30°), and two
+/// keyframes keep the quaternion product that interpolation goes by.
+fn turned(turn: glam::Quat, key: &Transform) -> [f32; 3] {
+    let rotation = turn * key.quaternion();
+    let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
+    let mut angles = [x, y, z];
+    let read = Transform {
+        rotation: angles,
+        ..Default::default()
+    };
+    if read.quaternion().dot(rotation) < 0. {
+        // A full turn more flips the sign back; on the axis the keyframe winds most around,
+        // so a keyframe at 360° reads near 360°.
+        let axis = (0..3)
+            .max_by(|a, b| key.rotation[*a].abs().total_cmp(&key.rotation[*b].abs()))
+            .unwrap_or(0);
+        angles[axis] += std::f32::consts::TAU;
+    }
+    angles
+}
+
+/// After the rest transform of `id` changed from `before`, carries the keyframes along when
+/// the object animates itself ([`animates_itself`]). The editor's panels, gizmos and
+/// [`transform_selection`] go through here, as `set_transform` does by default.
+pub fn follow_tracks(scene: &mut Scene, id: &str, before: &Transform) {
+    let Some(entity) = scene.entity(id) else {
+        return;
+    };
+    if entity.transform == *before || !animates_itself(entity) {
+        return;
+    }
+    let after = entity.transform.clone();
+    carry_tracks(&mut scene.entities, id, before, &after);
+}
+
+/// Sets the local transform of `id`, carrying its keyframes when it animates itself.
+pub fn set_local_transform(scene: &mut Scene, id: &str, transform: Transform) {
+    let Some(entity) = scene.entity_mut(id) else {
+        return;
+    };
+    let before = std::mem::replace(&mut entity.transform, transform);
+    follow_tracks(scene, id, &before);
 }
 
 /// Apply a world-space transform to selection roots as one atomic operation.
@@ -276,7 +394,7 @@ pub fn transform_selection(scene: &mut Scene, ids: &[Id], delta: Mat4) -> Result
         transforms.push((id, transform));
     }
     for (id, transform) in transforms {
-        scene.entity_mut(&id).unwrap().transform = transform;
+        set_local_transform(scene, &id, transform);
     }
     Ok(())
 }
@@ -393,6 +511,45 @@ mod tests {
         let copies = duplicate_selection(&mut s, &[g, a]).unwrap();
         assert_eq!(copies.len(), 1);
         assert_eq!(s.descendants(&copies[0]).len(), 3);
+    }
+    #[test]
+    fn a_turned_spin_keeps_turning_the_same_way() {
+        use crate::animation::{Clip, Interpolation, Keyframe, sample_track};
+        let mut s = Scene::new("Giro", SceneKind::ThreeD);
+        let mut wheel = Entity::new("Roda", Some(Primitive::Cylinder));
+        let id = wheel.id.clone();
+        let mut clip = Clip::new("Girar");
+        // A full turn in thirds.
+        for (time, degrees) in [(0., 0f32), (1., 120.), (2., 240.), (3., 360.)] {
+            let mut pose = wheel.transform.clone();
+            pose.rotation[1] = degrees.to_radians();
+            clip.insert_key(
+                &id,
+                Keyframe {
+                    time,
+                    transform: pose,
+                    interpolation: Interpolation::Linear,
+                },
+            );
+        }
+        let original = clip.tracks[0].clone();
+        wheel.clips.push(clip);
+        s.entities.push(wheel);
+        let mut turned = s.entity(&id).unwrap().transform.clone();
+        turned.rotation = [0., 30f32.to_radians(), 0.];
+        let turn = turned.quaternion();
+        set_local_transform(&mut s, &id, turned.clone());
+        let track = &s.entity(&id).unwrap().clips[0].tracks[0];
+        assert_eq!(track.keyframes[0].transform.rotation, turned.rotation);
+        assert!((track.keyframes[3].transform.rotation[1] - 390f32.to_radians()).abs() < 1e-5);
+        for time in [0.25, 0.5, 1.25, 1.5, 2.5, 2.75] {
+            let expected = turn * sample_track(&original, time).unwrap().quaternion();
+            let got = sample_track(track, time).unwrap().quaternion();
+            assert!(
+                got.dot(expected).abs() > 0.9999,
+                "{time}: {got:?} / {expected:?}"
+            );
+        }
     }
     #[test]
     fn rename_keeps_id_and_texture_unlink_keeps_asset() {

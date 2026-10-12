@@ -445,6 +445,8 @@ impl Editor {
             };
             entity = current;
         }
+        // The transform before this panel's edits: keyframes follow from it.
+        let rest = entity.transform.clone();
         card(ui, ("transform", &id), "Transformação", None, None, |ui| {
             let mut global = self.view.view_global;
             crate::widgets::segmented(ui, &mut global, &[(false, "Local"), (true, "Global")]);
@@ -813,6 +815,7 @@ impl Editor {
         if let Some(original) = self.scene_mut().entity_mut(&id) {
             *original = entity;
         }
+        editing::follow_tracks(self.scene_mut(), &id, &rest);
         if let Some(pivot) = requested_pivot
             && self.structural_ready()
             && let Err(e) = oxy_core::spatial::move_pivot(self.scene_mut(), &id, Vec3::from(pivot))

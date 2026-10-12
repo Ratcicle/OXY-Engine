@@ -8,11 +8,44 @@ use crate::{
     surface::*,
 };
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug)]
 pub enum MovementPreset {
     FirstPerson,
     ThirdPerson,
     Platform,
+}
+/// The camera a character assembly gets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresetCamera {
+    /// A new "Câmera principal" that follows the player, active when the scene has no active
+    /// camera.
+    #[default]
+    Create,
+    /// The scene's active camera (or its first one) follows the player instead.
+    Reuse,
+    /// No camera follows the player.
+    None,
+}
+/// Choices of an assembly beyond its kind and position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresetOptions {
+    /// Platform: how far it goes from where it is placed, in metres, before coming back.
+    pub travel: Vec3,
+    /// Platform: seconds for the way there and back.
+    pub period: f32,
+    /// Characters.
+    pub camera: PresetCamera,
+}
+impl Default for PresetOptions {
+    fn default() -> Self {
+        Self {
+            travel: Vec3::X * 4.,
+            period: 4.,
+            camera: PresetCamera::Create,
+        }
+    }
 }
 pub fn create(
     project: &mut Project,
@@ -20,10 +53,53 @@ pub fn create(
     preset: MovementPreset,
     position: Vec3,
 ) -> Result<Id, String> {
+    create_with(
+        project,
+        scene_id,
+        preset,
+        position,
+        PresetOptions::default(),
+    )
+}
+pub fn create_with(
+    project: &mut Project,
+    scene_id: &str,
+    preset: MovementPreset,
+    position: Vec3,
+    options: PresetOptions,
+) -> Result<Id, String> {
     let scene = project.scene(scene_id).ok_or("Cena ausente")?;
     if scene.kind != SceneKind::ThreeD || !position.is_finite() {
         return Err("Esta montagem exige uma cena 3D e posição válida.".into());
     }
+    if !options.travel.is_finite() {
+        return Err("O percurso da plataforma precisa de números finitos.".into());
+    }
+    if !options.period.is_finite() || options.period <= 0. {
+        return Err(
+            "O período da plataforma precisa ser um número de segundos maior que 0.".into(),
+        );
+    }
+    // Checked before anything changes: the camera to follow the player, when reused.
+    let reused = match options.camera {
+        PresetCamera::Reuse if !matches!(preset, MovementPreset::Platform) => {
+            let camera = scene
+                .entities
+                .iter()
+                .find(|e| e.camera.as_ref().is_some_and(|c| c.active))
+                .or_else(|| scene.entities.iter().find(|e| e.camera.is_some()))
+                .ok_or("A cena não tem câmera para reaproveitar; use camera: create")?;
+            if let Some(target) = camera.camera_rig.as_ref().and_then(|r| r.target.as_ref()) {
+                let name = scene.entity(target).map_or(target.as_str(), |e| &e.name);
+                return Err(format!(
+                    "A câmera {} já segue {name}; use camera: create ou none",
+                    camera.name
+                ));
+            }
+            Some(camera.id.clone())
+        }
+        _ => None,
+    };
     let has_camera = scene
         .entities
         .iter()
@@ -53,16 +129,17 @@ pub fn create(
             ..Default::default()
         });
         let mut clip = Clip::new("Translação de ida e volta");
-        clip.duration = 4.;
+        let period = options.period;
+        clip.duration = period;
         clip.looping = true;
         clip.tracks.push(Track {
             target: id.clone(),
-            keyframes: [(0., 0.), (2., 4.), (4., 0.)]
+            keyframes: [(0., 0.), (period * 0.5, 1.), (period, 0.)]
                 .into_iter()
-                .map(|(time, x)| Keyframe {
+                .map(|(time, along)| Keyframe {
                     time,
                     transform: Transform {
-                        position: (position + Vec3::X * x).to_array(),
+                        position: (position + options.travel * along).to_array(),
                         ..Default::default()
                     },
                     interpolation: Interpolation::Linear,
@@ -91,25 +168,44 @@ pub fn create(
     let mut visual = Entity::new("Aparência editável", None);
     visual.parent = Some(id.clone());
     let visual_id = visual.id.clone();
-    let mut camera = Entity::new("Câmera principal", None);
-    camera.transform.position = (position + Vec3::Y * 1.6).to_array();
-    camera.camera = Some(Camera {
-        active: !has_camera,
-        ..Default::default()
-    });
-    let rig = CameraRig {
-        target: Some(id.clone()),
-        mode: if matches!(preset, MovementPreset::FirstPerson) {
-            CameraMode::FirstPerson
-        } else {
-            CameraMode::ThirdPerson
-        },
-        hidden: vec![visual_id.clone()],
-        ..Default::default()
+    let mode = if matches!(preset, MovementPreset::FirstPerson) {
+        CameraMode::FirstPerson
+    } else {
+        CameraMode::ThirdPerson
     };
-    crate::input_actions::ensure_camera(project, &rig);
-    camera.camera_rig = Some(rig);
-    let mut pieces = vec![root, visual, camera];
+    let mut pieces = vec![root, visual];
+    if let Some(camera) = reused {
+        let camera = project
+            .scene_mut(scene_id)
+            .and_then(|scene| scene.entity_mut(&camera))
+            .ok_or("Câmera ausente")?;
+        let mut rig = camera.camera_rig.clone().unwrap_or_default();
+        rig.target = Some(id.clone());
+        rig.mode = mode;
+        rig.hidden = vec![visual_id.clone()];
+        camera.camera_rig = Some(rig.clone());
+        // A camera taken because the scene had no active one becomes the active camera.
+        if let Some(settings) = &mut camera.camera {
+            settings.active = true;
+        }
+        crate::input_actions::ensure_camera(project, &rig);
+    } else if options.camera == PresetCamera::Create {
+        let mut camera = Entity::new("Câmera principal", None);
+        camera.transform.position = (position + Vec3::Y * 1.6).to_array();
+        camera.camera = Some(Camera {
+            active: !has_camera,
+            ..Default::default()
+        });
+        let rig = CameraRig {
+            target: Some(id.clone()),
+            mode,
+            hidden: vec![visual_id.clone()],
+            ..Default::default()
+        };
+        crate::input_actions::ensure_camera(project, &rig);
+        camera.camera_rig = Some(rig);
+        pieces.push(camera);
+    }
     for (name, position, dimensions, color, primitive) in [
         (
             "Tronco",

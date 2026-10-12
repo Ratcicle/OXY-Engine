@@ -81,12 +81,8 @@ impl Runtime {
             "character.profile" => {
                 let id = target(self, budget)?;
                 let allowed = boolean(self, "allow_limit", budget)?;
-                let profile = match node.text("profile") {
-                    "direct" => MovementProfile::Direct,
-                    "parkour" => MovementProfile::Parkour,
-                    "chained" => MovementProfile::ChainedJumps,
-                    _ => return Err("Perfil desconhecido".into()),
-                };
+                let profile =
+                    MovementProfile::from_id(node.text("profile")).ok_or("Perfil desconhecido")?;
                 self.apply_movement_profile(&id, profile, allowed)?;
             }
             "character.parameter" => {

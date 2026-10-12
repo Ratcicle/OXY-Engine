@@ -52,8 +52,8 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
 | `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
-| `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets e as teclas que as ações de entrada aceitam |
-| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações, ações de entrada, superfícies físicas…) |
+| `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets (o que cada um cria e as opções), perfis de movimento (com os valores) e as teclas que as ações de entrada aceitam |
+| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações, ações de entrada, superfícies físicas, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo e os objetos observados |
 | `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
@@ -91,7 +91,13 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 
 **Busca** (`oxy_find`): devolve `{objects, total}` e `next_offset` quando há mais, com `offset` e `limit` (50 por padrão).
 
-**Catálogo** (`oxy_catalog`): sem opções, os nós vêm resumidos (operação, nome, categoria e descrição), com a lista de categorias em `categories`. Para montar a lógica, o agente pede os nós que vai usar com `operations` (por exemplo `["event.input", "character."]`, em que o ponto final pega todas as operações que começam assim) ou `category`, e recebe só esses nós, com portas e parâmetros. Um parâmetro de valores fixos (o modo de uma ação de entrada, o operador de uma conta, o tipo de evento do personagem…) traz a lista em `choices`, com o valor e o nome de cada opção, e `ref` diz o que um parâmetro aponta: uma cena, um áudio, uma animação, um objeto, um atributo, uma ação de entrada, uma superfície ou um marcador. Sem opções, o catálogo traz também as teclas que as ações de entrada aceitam (`input_keys`) e os presets de superfície. Com os dois, as operações pedidas precisam ser da categoria; uma que existe em outra categoria é recusada com o nome da categoria dela, e não como desconhecida. `brief` escolhe o formato, e `offset` e `limit` leem os nós por partes.
+**Catálogo** (`oxy_catalog`): sem opções, os nós vêm resumidos (operação, nome, categoria e descrição), com a lista de categorias em `categories`. Para montar a lógica, o agente pede os nós que vai usar com `operations` (por exemplo `["event.input", "character."]`, em que o ponto final pega todas as operações que começam assim) ou `category`, e recebe só esses nós, com portas e parâmetros. Um parâmetro de valores fixos (o modo de uma ação de entrada, o operador de uma conta, o tipo de evento do personagem…) traz a lista em `choices`, com o valor e o nome de cada opção, e `ref` diz o que um parâmetro aponta: uma cena, um áudio, uma animação, um objeto, um atributo, uma ação de entrada, uma superfície ou um marcador. Com os dois, as operações pedidas precisam ser da categoria; uma que existe em outra categoria é recusada com o nome da categoria dela, e não como desconhecida. `brief` escolhe o formato, e `offset` e `limit` leem os nós por partes.
+
+Sem opções, o catálogo traz também:
+- `input_keys`: as teclas que as ações de entrada aceitam;
+- `surface_presets`: os presets de superfície;
+- `presets`: cada preset do `create_entity` com `id`, `description` (para que serve: `platform` é uma plataforma móvel, e não um personagem de jogo de plataforma), `creates` (as peças que ele cria, na ordem em que o lote as devolve, com a forma, os componentes, o pai e as animações) e `params` (as opções, com o valor padrão);
+- `movement_profiles`: os perfis Direto, Parkour e Saltos encadeados, com `id` (`direct`, `parkour` ou `chained`), `label` e `values`, os 14 valores que o perfil escreve no personagem.
 
 **Projeto** (`oxy_project`):
 - `input_actions`: cada ação de entrada com `id`, `name`, `key` e `used_by`, os objetos que a usam (`{entity, name, role}`, em que `role` é o componente, como `character` ou `controller2d`, ou a operação do nó, como `event.input`).
@@ -99,7 +105,7 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 - `used_by` lista até 10 objetos; quando há mais, `used_by_total` diz quantos são.
 - `collision_groups`: os nomes dos grupos de colisão, `{bit, name}`, em que `bit` é o bit da categoria e da máscara dos colisores. Vêm os três grupos com nome padrão e os que o projeto nomeou; os outros se chamam `Grupo N`, com N = bit + 1. Por enquanto só se leem; os nomes se mudam no editor.
 
-**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções; o `oxy_scene` devolve até 100 objetos por vez, contando os filhos; e o `oxy_project` lista as ações de entrada como `[{id, name, key, used_by}]`, em vez de um mapa de ID para tecla.
+**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções e descreve os presets (`presets` passou de uma lista de nomes para uma lista de objetos, com o nome em `id`); o `oxy_scene` devolve até 100 objetos por vez, contando os filhos; e o `oxy_project` lista as ações de entrada como `[{id, name, key, used_by}]`, em vez de um mapa de ID para tecla.
 
 ## Comandos do `oxy_apply`
 
@@ -111,7 +117,8 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 
 **IDs criados no mesmo lote.** Num comando, um texto que é inteiro `"$N"` vale o primeiro ID criado pelo comando N, e `"$N.M"`, o M-ésimo (os dois contam do 0):
 - Um preset devolve todas as peças, a raiz primeiro: com o comando 0 criando um jogador em primeira pessoa, `"$0"` é o jogador e `"$0.2"`, a câmera.
-- `duplicate_entities` devolve uma cópia por objeto, na ordem: `"$3.1"` é a segunda cópia.
+- `duplicate_entities` devolve uma cópia por objeto, na ordem: `"$3.1"` é a segunda cópia. Com `count`, devolve todas as cópias, uma rodada depois da outra.
+- `place_model` devolve todas as peças do modelo colocado, a raiz primeiro; `copy_entities`, uma cópia por objeto; `set_clip`, o ID da animação nova; `save_model`, o ID do modelo.
 - Os marcadores valem em qualquer lugar do comando, inclusive dentro do `patch` do `update_entity` e dos `params` dos nós.
 - Só o texto inteiro conta: `"$10 de bônus"` continua sendo texto. Para escrever o próprio texto `"$5"`, use `"$$5"`.
 - Um marcador que não aponta para um ID criado antes no lote é recusado, com a dica do `$$`.
@@ -134,11 +141,29 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 
 Os comandos de ações de entrada e de superfícies valem para o projeto todo e, como os de cena, não recebem `scene`.
 
+**Reaproveitar entre fases.**
+- `duplicate_entities {ids, offset?, count?}` faz `count` cópias (de 1 a 100; 1 por padrão). A cópia k fica a k × `offset` do original, em relação ao pai (`[0.5, 0, 0]` por padrão, como no editor), e as animações que movem o objeto vão junto. Uma fileira de plataformas a cada 4 m é um comando só: `{"op": "duplicate_entities", "ids": ["$0"], "offset": [4, 0, 0], "count": 10}` põe 10 cópias depois da original. Com mais de uma cópia, os nomes ganham o número: `Plataforma (cópia 3)`.
+- `copy_entities {ids, to_scene, parent?}` copia objetos, com tudo o que está dentro deles, da cena `scene` (a do comando ou a da ferramenta) para `to_scene`, na raiz ou dentro de `parent`. Eles ficam no mesmo lugar do mundo. Para outra cena, as referências precisam ficar dentro da cópia: um atributo, um vínculo da interface, uma câmera, um nó ou uma animação que aponta para um objeto que não vai junto faz o comando ser recusado, com a lista do que falta. Copie esses objetos junto.
+- `save_model {entity, name?}` guarda o objeto e tudo o que está dentro dele como um modelo, um recurso do projeto (o nome padrão é o do objeto), com a mesma regra das referências. `place_model {model, parent?, position?, name?}` coloca uma cópia do modelo na cena, pelo ID ou pelo nome do modelo, com a raiz em `position` (em relação ao pai). As referências internas (lógica, câmera, animações) apontam para as peças colocadas.
+- O jogador dos presets tem a câmera ao lado, e não dentro dele. Para levar o jogador com a câmera para outra fase, agrupe os dois (`create_entity` de um grupo e `set_parent`) e salve o grupo como modelo. A interface e a lógica de um cronômetro vão do mesmo jeito: num grupo, com os objetos que elas usam.
+
+**Plataformas móveis e animações.**
+- O preset `platform` aceita `travel` (quanto a plataforma anda a partir de onde é posta, em metros; `[4, 0, 0]` por padrão) e `period` (segundos da ida e da volta; 4 por padrão). Ele cria uma animação comum, em loop, que um nó toca quando a cena começa.
+- `set_transform` move junto os quadros-chave do objeto quando as animações dele mesmo o movem, como as de uma plataforma móvel. Assim, a plataforma movida continua indo e voltando a partir do lugar novo; na 0.5.0, o jogo a devolvia ao percurso antigo. Um giro gira o percurso em volta do lugar do objeto, e uma escala muda a escala dos quadros-chave, sem mudar o percurso. `move_tracks: false` deixa os quadros-chave como estão; `move_tracks: true` também move as trilhas que outras animações têm para o objeto (a peça de um boneco, por exemplo). O editor segue a mesma regra ao mover, girar ou escalar o objeto pelas alças ou pelas Propriedades, fora da aba Animação.
+- `set_clip {entity, clip?, name, duration, looping?, tracks, events?}` cria uma animação do objeto ou substitui a animação `clip` (pelo ID ou pelo nome), mantendo o ID que os nós usam. Cada trilha anima o próprio objeto (`target` ausente ou `"self"`) ou uma peça dentro dele, com quadros-chave `{time, position?, rotation?, scale?, interpolation?}`: transformações locais, com a rotação em graus e `interpolation` `linear` (padrão) ou `hold` (fica parado até o próximo). O que o quadro-chave não diz vem da transformação atual do alvo, e o pivô dele é mantido. `events` são marcadores `{time, name}`, que o nó `event.animation` usa pelo nome. Para tocar a animação, use o nó `action.animation` com o ID dela em `clip`.
+- `delete_clip {entity, clip}` exclui uma animação; é recusado enquanto um nó `action.animation` a toca, com a lista desses nós.
+
+**Presets e perfis de movimento.**
+- Os presets de personagem (`first_person` e `third_person`) aceitam `camera`: `create` (padrão) cria a Câmera principal; `reuse` faz a câmera ativa da cena (ou a primeira) seguir o novo jogador, sem criar outra; `none` não põe câmera nenhuma. `reuse` é recusado se a cena não tem câmera ou se a câmera já segue outro objeto. Sem a Câmera principal, as peças seguintes sobem uma posição na resposta.
+- `apply_movement_profile {entity, profile}` aplica um perfil de movimento (`direct`, `parkour` ou `chained`) a um personagem 3D, como o botão do editor: os valores listados no catálogo são escritos no personagem e continuam editáveis.
+
 **Mudanças em relação à 0.5.0:**
 - O `oxy_apply` responde `{created, warnings}` em vez de `{applied: [{op, created}]}`.
 - Os marcadores também valem dentro do `patch`. Um texto que é inteiro `"$N"` passou a ser marcador também no primeiro comando do lote, onde é recusado; para o texto em si, use `"$$N"`.
 - Um preset devolve todas as peças, não só a raiz.
 - `add_node` e `set_node_params` recusam valores fora das opções.
+- `set_transform` move junto os quadros-chave dos objetos que as próprias animações movem, como as plataformas móveis (`move_tracks: false` mantém o comportamento antigo). O editor faz o mesmo.
+- `duplicate_entities` sem `count` nem `offset` continua fazendo uma cópia a 0,5 m em X.
 
 ## Testes com `oxy_simulate`
 
@@ -187,5 +212,5 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 - **Imagem do jogo:** não desenha a interface do jogo (textos, botões e barras). Ela vem descrita em `ui`.
 - **Simulação:** nem sempre é determinística. Objetos criados durante o jogo (`action.spawn`) recebem IDs novos a cada execução. Isso fica para a 0.6.
 - **Importação:** o agente ainda não importa PNG/WAV; use **Importar** na Biblioteca.
-- **Pintura e animação:** pintura e quadros-chave de animação ainda não têm comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas.
+- **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.
 - **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo.

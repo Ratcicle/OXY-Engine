@@ -963,11 +963,101 @@ pub fn catalog() -> Json {
             "3d": ["Cube", "Sphere", "Cylinder", "Plane", "Pyramid", "Cone", "Tube"],
         },
         "ui_elements": ["Text", "Image", "Button", "Bar"],
-        "presets": ["first_person", "third_person", "platform"],
+        "presets": presets(),
+        "movement_profiles": movement_profiles(),
         "surface_presets": ["common", "ice", "mud", "conveyor"],
         "input_keys": input_actions::keys().collect::<Vec<_>>(),
         "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}.",
     })
+}
+
+/// The assemblies of create_entity's `{type: preset}`: what each is for, the pieces it creates
+/// (built for real, so the list follows the presets; in the order the command answers them,
+/// "$N.M" being piece M) and its options.
+fn presets() -> Json {
+    use crate::movement_presets::{self, MovementPreset};
+    let camera = json!({"camera": {
+        "default": "create",
+        "choices": [
+            {"value": "create", "label": "Cria a Câmera principal, que segue o jogador; ela fica ativa se a cena não tiver outra câmera ativa"},
+            {"value": "reuse", "label": "A câmera ativa da cena (ou a primeira) passa a seguir o jogador, e a Câmera principal não é criada; recusado se a cena não tem câmera ou se ela já segue outro objeto"},
+            {"value": "none", "label": "Nenhuma câmera segue o jogador, e a Câmera principal não é criada"},
+        ],
+    }});
+    [
+        (
+            "first_person",
+            MovementPreset::FirstPerson,
+            "Jogador 3D em primeira pessoa: personagem com corpo de movimento e as ações de andar, pular, correr e agachar, uma aparência editável que a câmera esconde em primeira pessoa e uma câmera na altura dos olhos.",
+            camera.clone(),
+        ),
+        (
+            "third_person",
+            MovementPreset::ThirdPerson,
+            "Jogador 3D em terceira pessoa: o mesmo personagem, com a câmera atrás dele, a uma distância que encurta diante de paredes.",
+            camera,
+        ),
+        (
+            "platform",
+            MovementPreset::Platform,
+            "Plataforma móvel (não é um personagem): um bloco sólido de 3 × 0,4 × 3 m que vai e volta sem parar a partir de onde é posto, levando junto o que estiver em cima. O percurso é uma animação comum, editável com set_clip; set_transform move a plataforma com o percurso.",
+            json!({
+                "travel": {"default": [4., 0., 0.], "description": "Quanto a plataforma anda a partir de onde é posta, em metros, antes de voltar."},
+                "period": {"default": 4., "description": "Segundos da ida e da volta."},
+            }),
+        ),
+    ]
+    .into_iter()
+    .map(|(id, preset, description, params)| {
+        let mut project = crate::editing::blank_project("Catálogo", SceneKind::ThreeD)
+            .expect("project name is not empty");
+        let scene = project.start_scene.clone();
+        let pieces = movement_presets::create(&mut project, &scene, preset, Vec3::ZERO)
+            .map(|_| project.scenes[0].entities.as_slice())
+            .unwrap_or_default();
+        let name = |id: &str| pieces.iter().find(|e| e.id == id).map(|e| e.name.as_str());
+        let creates: Vec<String> = pieces
+            .iter()
+            .map(|e| {
+                // The shape and the components; a piece with neither groups others.
+                let mut what: Vec<String> =
+                    e.primitive.map(|shape| format!("{shape:?}")).into_iter().collect();
+                what.extend(components(e).into_iter().map(str::to_owned));
+                if what.is_empty() {
+                    what.push("group".into());
+                }
+                let mut text = format!("{} ({})", e.name, what.join(", "));
+                if let Some(parent) = e.parent.as_deref().and_then(name) {
+                    text.push_str(&format!(", em {parent}"));
+                }
+                for clip in &e.clips {
+                    text.push_str(&format!(", animação {}", clip.name));
+                }
+                text
+            })
+            .collect();
+        json!({"id": id, "description": description, "creates": creates, "params": params})
+    })
+    .collect()
+}
+
+/// The movement profiles apply_movement_profile and the `character.profile` node write, with
+/// the values they set.
+fn movement_profiles() -> Json {
+    use crate::character::{CharacterConfig, MovementProfile, PROFILE_FIELDS};
+    MovementProfile::ALL
+        .into_iter()
+        .map(|profile| {
+            let mut config = CharacterConfig::default();
+            config.apply_profile(profile);
+            let config = serde_json::to_value(config).unwrap_or_default();
+            let values: Map<String, Json> = PROFILE_FIELDS
+                .iter()
+                .map(|field| ((*field).to_owned(), config[*field].clone()))
+                .collect();
+            json!({"id": profile.id(), "label": profile.label(), "values": values})
+        })
+        .collect()
 }
 
 /// Options of `catalog_with`.
