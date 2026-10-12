@@ -111,6 +111,8 @@ pub struct Runtime {
     pub logs: Vec<String>,
     pub traces: Vec<NodeTrace>,
     pub sounds: Vec<SoundRequest>,
+    /// Scenes started by `change_scene` (reloads included), oldest first, until a host takes them.
+    pub scene_starts: Vec<Id>,
     pub time: f64,
     source: Project,
     accumulator: f32,
@@ -154,6 +156,7 @@ impl Runtime {
             logs: Vec::new(),
             traces: Vec::new(),
             sounds: Vec::new(),
+            scene_starts: Vec::new(),
             time: 0.0,
             source: project.clone(),
             accumulator: 0.0,
@@ -1063,6 +1066,10 @@ impl Runtime {
             .scene_mut(id)
             .ok_or("Cena de destino não existe")? = scene;
         self.scene_id = id.into();
+        self.scene_starts.push(id.into());
+        if self.scene_starts.len() > 64 {
+            self.scene_starts.drain(..32);
+        }
         self.input_timeline = Default::default();
         self.characters = Default::default();
         self.cameras = Default::default();
@@ -1090,6 +1097,10 @@ impl Runtime {
     }
     pub fn collider_box(&self, id: &str) -> Option<Aabb> {
         collider_box(self.scene(), id)
+    }
+    /// Trigger areas and the objects inside them after the last fixed step, as (area, other).
+    pub fn area_overlaps(&self) -> impl Iterator<Item = (&Id, &Id)> + '_ {
+        self.overlap_pairs.iter().map(|(area, other)| (area, other))
     }
     fn move_controllers(&mut self, input: &InputFrame) {
         let controllers: Vec<_> = self
@@ -1477,6 +1488,12 @@ mod tests {
         let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
         runtime.change_scene(&next_id).unwrap();
         assert_eq!(runtime.pending_tasks(), 0);
+        // Hosts that never take the scene starts keep a bounded list.
+        for _ in 0..100 {
+            runtime.change_scene(&next_id).unwrap();
+        }
+        assert!(runtime.scene_starts.len() <= 64);
+        assert!(runtime.scene_starts.iter().all(|id| *id == next_id));
     }
     #[test]
     fn controller_falls_lands_and_jump_does_not_tunnel() {

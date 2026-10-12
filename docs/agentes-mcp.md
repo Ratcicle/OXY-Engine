@@ -55,17 +55,39 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_catalog` | Nós da lógica (portas, parâmetros, descrições), componentes, formas e presets |
 | `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações…) |
 | `oxy_validate` | Valida o projeto com as regras de salvar |
-| `oxy_simulate` | Roda o jogo sem janela por um tempo, com entradas programadas, e relata logs, ações, sons, trocas de cena e objetos observados |
+| `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera e os objetos observados |
 | `oxy_screenshot` | Imagem da vista do editor (ao vivo) ou da câmera do jogo |
 | `oxy_select`, `oxy_frame` | Ao vivo: seleciona e enquadra objetos para você ver do que o agente fala |
 | `oxy_undo`, `oxy_redo` | Ao vivo: desfaz ou refaz o último passo |
 
 As descrições das ferramentas estão em inglês, para os agentes. As mensagens e erros do editor continuam em português.
 
+## Testes com `oxy_simulate`
+
+O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no editor nem no histórico.
+
+- **Entradas programadas** (`inputs`): ações de entrada com horário. Continuam valendo depois de uma troca de cena ou de reiniciar a cena, e uma tecla segurada continua segurada.
+- **Preparar o teste** (`setup` e `spawn`):
+  - `setup` aplica comandos do `oxy_apply` só na cópia, por exemplo um objeto de teste ou outro valor de atributo. Os comandos sem cena usam a cena inicial.
+  - `spawn` coloca um objeto, como o jogador, numa posição do mundo (e virado para um lado) antes de começar.
+  - Os IDs criados no `setup` valem como `"$0"`, `"$1"`… no resto do pedido, e o relatório os lista em `setup`.
+- **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, um objeto que some ou um evento (pulo, aterrissagem, entrada numa área…). `seconds` vira o limite, e `stopped_at` diz o que parou o teste e quando.
+- **Objetos observados** (`watch`): posição, rotação e escala no mundo, visibilidade e atributos (todos, alguns ou nenhum). Para personagens 3D, também velocidade, chão, postura, apoio e direção do olhar.
+- **Relatório:**
+  - trocas de cena, com `reload` quando a cena reinicia;
+  - logs com o nome do objeto e o nó que os gerou;
+  - um resumo das ações da lógica: cada ação de cada objeto aparece uma vez, com quantas vezes rodou e quando;
+  - sons;
+  - eventos de movimento (pulo, aterrissagem, saída do chão, contato lateral, superfície, postura) e de áreas (entrada e saída);
+  - a câmera do jogo no fim.
+
+**Resumo das ações.** A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça. `actions: "all"` lista cada ação com o horário, como antes. Na 0.5.0 a lista completa era o padrão. Cada lista do relatório guarda as 300 entradas mais recentes, e `truncated` conta o que ficou de fora.
+
 ## Limites desta versão
 
 - **Imagem do jogo:** não inclui a interface do jogo (textos, botões e barras desenhados por cima da cena).
 - **Simulação:** nem sempre é determinística. Objetos criados durante o jogo (`action.spawn`) recebem IDs novos a cada execução. Isso fica para a 0.6.
+- **Eventos na troca de cena:** no passo em que a cena muda, os eventos de movimento e de área da cena anterior não aparecem em `events`. A ação que trocou a cena aparece no resumo das ações.
 - **Importação:** o agente ainda não importa PNG/WAV; use **Importar** na Biblioteca.
 - **Pintura e animação:** pintura e quadros-chave de animação ainda não têm comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas.
 - **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo.

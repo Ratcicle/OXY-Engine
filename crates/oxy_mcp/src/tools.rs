@@ -109,19 +109,73 @@ pub fn definitions() -> Json {
         ),
         tool(
             "oxy_simulate",
-            "Runs the game without a window for a simulated time, on a copy of the project, and \
-             reports logs, logic actions that ran, sounds, scene changes and the world position, \
-             visibility and attributes of watched objects. Inputs use the project's input action \
-             names (see oxy_project). Set screenshot=true to also get the game camera view at the end.",
+            SIMULATE_DESCRIPTION,
             json!({"project": project, "scene": scene,
-                   "seconds": {"type": "number", "description": "Simulated seconds (max 600)."},
+                   "seconds": {"type": "number", "description":
+                       "Simulated seconds (max 600); the upper bound when `until` is set."},
                    "inputs": {"type": "array", "items": {"type": "object"}, "description":
                        "Timed inputs: {type: press|release, at, action}, {type: movement|look, at, \
-                        value: [x, y]}, {type: click, at, entity}."},
-                   "watch": {"type": "array", "items": {"type": "string"},
-                             "description": "Object IDs to report."},
+                        value: [x, y]}, {type: click, at, entity}. They survive scene changes and \
+                        reloads; a key held across one stays held."},
+                   "watch": {"type": "array", "items": {"anyOf": [
+                       {"type": "string"},
+                       {"type": "object", "properties": {
+                           "id": {"type": "string"},
+                           "fields": {"type": "array", "items": {"type": "string", "enum":
+                               ["position", "rotation", "scale", "visible", "attributes", "character"]}},
+                           "attributes": {"anyOf": [{"type": "boolean"},
+                               {"type": "array", "items": {"type": "string"}}]}},
+                        "required": ["id"]}]},
+                       "description": "Objects to report: an ID, or {id, fields?, attributes?}. \
+                        fields defaults to position, visible and attributes (world position, XYZ \
+                        rotation in degrees, world scale); character adds velocity, speed, \
+                        grounded, posture, sliding, sprinting, support {id, name, surface} and yaw, \
+                        look_yaw and pitch in degrees for 3D characters. attributes: false leaves \
+                        them out, a list keeps only those names."},
                    "samples": {"type": "integer", "description":
                        "Evenly spaced samples of watched objects, the last being the final state."},
+                   "actions": {"type": "string", "enum": ["none", "summary", "all"], "description":
+                       "Logic actions that ran. summary (default): one entry per object and action \
+                        with count, first and last time. all: every action with its time, the most \
+                        recent 300."},
+                   "actions_filter": {"type": "object", "properties": {
+                       "objects": {"type": "array", "items": {"type": "string"}},
+                       "operations": {"type": "array", "items": {"type": "string"}},
+                       "exclude_operations": {"type": "array", "items": {"type": "string"}}},
+                       "description": "Keep only actions of these objects / operations. \
+                        exclude_operations defaults to [\"event.step\"] unless operations is \
+                        given: an excluded event also hides the actions only it starts (per-step \
+                        logic and timers). Pass [] to see everything."},
+                   "setup": {"type": "array", "items": {"type": "object"}, "description":
+                       "oxy_apply commands applied to the in-memory copy before the run, never to \
+                        the project; commands without a scene use the start scene. The IDs they \
+                        create are \"$N\" (\"$N.M\" for the M-th) in watch, inputs, spawn, \
+                        until and actions_filter, and the report lists them under setup."},
+                   "spawn": {"type": "object", "properties": {
+                       "entity": {"type": "string"},
+                       "position": {"type": "array", "items": {"type": "number"}},
+                       "yaw": {"type": "number", "description": "Degrees around the vertical axis."}},
+                       "required": ["entity", "position"],
+                       "description": "Places an object of the start scene at a world position \
+                        (and yaw) on the copy before the run, e.g. the player at a section."},
+                   "until": {"type": "object", "properties": {
+                       "scene_change": {"anyOf": [{"type": "boolean"}, {"type": "string"}],
+                           "description": "true: any scene start, reloads included; or a scene ID."},
+                       "log_contains": {"type": "string"},
+                       "attribute": {"type": "object", "properties": {
+                           "entity": {"type": "string"}, "name": {"type": "string"},
+                           "op": {"type": "string", "enum": ["==", "!=", "<", "<=", ">", ">="]},
+                           "value": {"description": "Number, boolean, text or a tagged value."}},
+                           "required": ["entity", "name", "op", "value"]},
+                       "entity_absent": {"type": "string", "description":
+                           "Stops once this object of the start scene no longer exists."},
+                       "event": {"type": "object", "properties": {
+                           "kind": {"type": "string", "enum": ["jump", "land", "leave", "side",
+                               "surface", "posture", "area_enter", "area_exit"]},
+                           "object": {"type": "string", "description": "Either side of the event."}},
+                           "required": ["kind"]}},
+                       "description": "Stops at the first moment any condition holds; the report \
+                        says which in stopped_at {time, reason, detail}."},
                    "screenshot": {"type": "boolean"}}),
             json!(["seconds"])
         ),
@@ -190,6 +244,17 @@ oxy_entity) for fields without a dedicated command
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
 to_node, to_port}
 Every command except the project/scene ones accepts `scene`; the tool's `scene` fills it when absent.";
+
+const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
+the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
+when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
+sounds, movement and area events {time, kind: jump|land|leave|side|surface|posture|area_enter|\
+area_exit, object, other?}, the game camera at the end {active, mode, position, forward, fov} and \
+the watched objects. Inputs use the project's input action names (see oxy_project). To test one \
+section without editing the project, use setup (commands on the copy), spawn (place the player) \
+and until (stop when something happens). Lists keep the most recent 300 entries and `truncated` \
+counts what was dropped. Times are seconds rounded to 0.1 ms. Set screenshot=true to also get the \
+game camera view at the end.";
 
 /// Scene-level commands that do not take a default scene.
 const PROJECT_OPS: [&str; 6] = [
@@ -430,17 +495,49 @@ impl Tools {
         args: &Json,
         seconds: f64,
     ) -> Result<headless::SimulationRequest, String> {
+        // Optional arguments: absent or null gives the default.
+        let arg = |key: &str| args.get(key).filter(|v| !v.is_null()).cloned();
+        let invalid = |what: &'static str| move |e: serde_json::Error| format!("{what}: {e}");
         Ok(headless::SimulationRequest {
             scene: text_arg(args, "scene"),
             seconds,
-            inputs: serde_json::from_value(args.get("inputs").cloned().unwrap_or(json!([])))
-                .map_err(|e| format!("Entradas inválidas: {e}"))?,
-            watch: serde_json::from_value(args.get("watch").cloned().unwrap_or(json!([])))
-                .map_err(|e| format!("Objetos observados inválidos: {e}"))?,
+            inputs: arg("inputs")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Entradas inválidas"))?
+                .unwrap_or_default(),
+            watch: arg("watch")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Objetos observados inválidos"))?
+                .unwrap_or_default(),
             samples: args["samples"]
                 .as_u64()
                 .unwrap_or(0)
                 .min(u64::from(u32::MAX)) as u32,
+            setup: arg("setup")
+                .map(|commands| command::parse(&commands))
+                .transpose()
+                .map_err(|e| format!("Preparação (setup): {e}"))?
+                .unwrap_or_default(),
+            spawn: arg("spawn")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("spawn inválido"))?,
+            until: arg("until")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Condições de parada (until) inválidas"))?,
+            actions: arg("actions")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Modo de ações inválido"))?
+                .unwrap_or_default(),
+            actions_filter: arg("actions_filter")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Filtro de ações inválido"))?
+                .unwrap_or_default(),
         })
     }
 

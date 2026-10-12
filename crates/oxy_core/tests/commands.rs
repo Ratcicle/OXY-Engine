@@ -217,12 +217,10 @@ fn headless_simulation_reports_logs_actions_and_watched_objects() {
         "{:?}",
         report.logs
     );
-    assert!(
-        report
-            .actions
-            .iter()
-            .any(|a| a.text.starts_with("Caixa · "))
-    );
+    let Some(headless::Actions::Summary(actions)) = &report.actions else {
+        panic!("actions are summarized by default: {:?}", report.actions);
+    };
+    assert!(actions.iter().any(|a| a.text.starts_with("Caixa · ")));
     let samples = &report.watched[0].samples;
     assert_eq!(samples.len(), 4);
     assert_eq!(samples.last().unwrap().position, Some([1., 2., 3.]));

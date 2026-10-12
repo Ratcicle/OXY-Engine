@@ -274,4 +274,106 @@ mod tests {
         assert!(error.contains("Nada foi alterado"), "{error}");
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn simulation_setup_and_spawn_never_touch_the_project_file() {
+        use oxy_core::{document::SceneKind, editing, persistence};
+        let simulate = tools::definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_simulate")
+            .cloned()
+            .unwrap();
+        for option in [
+            "setup",
+            "spawn",
+            "until",
+            "actions",
+            "actions_filter",
+            "watch",
+        ] {
+            assert!(
+                simulate["inputSchema"]["properties"].get(option).is_some(),
+                "{option}"
+            );
+        }
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-sim-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Simulação", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let saved = std::fs::read(&file).unwrap();
+        let mut tools = tools::Tools::default();
+        let project_arg = dir.display().to_string();
+        let output = tools
+            .call(
+                "oxy_simulate",
+                &json!({"project": project_arg, "seconds": 5.0,
+                    "setup": [
+                        {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                         "name": "Teste"},
+                        {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                        {"op": "add_node", "entity": "$0", "operation": "control.wait",
+                         "params": {"seconds": {"Number": 0.25}}},
+                        {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                         "params": {"message": {"Text": "pronto"}}},
+                        {"op": "connect", "entity": "$0", "from_node": "$1", "from_port": "exec",
+                         "to_node": "$2", "to_port": "exec"},
+                        {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+                         "to_node": "$3", "to_port": "exec"},
+                    ],
+                    "spawn": {"entity": "$0", "position": [1.0, 2.0, 3.0]},
+                    "watch": [{"id": "$0", "fields": ["position"]}],
+                    "until": {"log_contains": "pronto"}}),
+            )
+            .unwrap();
+        let report: Json = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "log_contains", "{report}");
+        assert!((report["stopped_at"]["time"].as_f64().unwrap() - 0.25).abs() < 0.05);
+        assert_eq!(report["logs"][0]["text"], "pronto");
+        assert_eq!(report["logs"][0]["object"]["name"], "Teste");
+        assert_eq!(report["setup"].as_array().unwrap().len(), 6);
+        let position = &report["watched"][0]["samples"][0]["position"];
+        for (axis, expected) in [1.0, 2.0, 3.0].into_iter().enumerate() {
+            assert!(
+                (position[axis].as_f64().unwrap() - expected).abs() < 1e-4,
+                "{position}"
+            );
+        }
+        assert!(
+            report["actions"][0]["count"].is_number(),
+            "summary by default"
+        );
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            saved,
+            "setup changes only the copy"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no backup either"
+        );
+        for (args, expected) in [
+            (
+                json!({"setup": [{"op": "voar"}]}),
+                "Preparação (setup): Comando 1",
+            ),
+            (
+                json!({"watch": [{"id": "x", "campos": []}]}),
+                "Objetos observados inválidos",
+            ),
+            (json!({"until": {"cena": true}}), "until"),
+            (json!({"actions": "tudo"}), "Modo de ações inválido"),
+            (json!({"spawn": {"entity": "x"}}), "spawn inválido"),
+        ] {
+            let mut args = args;
+            args["project"] = json!(project_arg);
+            args["seconds"] = json!(1.0);
+            let error = tools.call("oxy_simulate", &args).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
