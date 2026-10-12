@@ -302,6 +302,21 @@ pub fn import_asset(
         AssetKind::Audio => validate_wav(&bytes).map_err(PersistenceError::InvalidAudio)?,
         AssetKind::Model => {}
     }
+    let name = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Asset importado".into());
+    store_asset(project, root, &bytes, name, kind)
+}
+/// Writes PNG or WAV bytes, already checked, to the project's assets folder under a new name
+/// and adds the asset as `name`.
+pub(crate) fn store_asset(
+    project: &mut Project,
+    root: &Path,
+    bytes: &[u8],
+    name: String,
+    kind: AssetKind,
+) -> Result<Id, PersistenceError> {
     let id = new_id();
     let extension = if kind == AssetKind::Texture {
         "png"
@@ -311,11 +326,7 @@ pub fn import_asset(
     let relative = format!("assets/{id}.{extension}");
     fs::create_dir_all(root)?;
     let target = resolve_asset_path(root, &relative)?;
-    safe_write(&target, &bytes)?;
-    let name = source
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Asset importado".into());
+    safe_write(&target, bytes)?;
     project.assets.push(Asset {
         id: id.clone(),
         name,
@@ -459,7 +470,7 @@ fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceEr
     }
     Ok(())
 }
-fn validate_wav(bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn validate_wav(bytes: &[u8]) -> Result<(), String> {
     let reader = hound::WavReader::new(std::io::Cursor::new(bytes))
         .map_err(|e| format!("WAV inválido: {e}"))?;
     let spec = reader.spec();

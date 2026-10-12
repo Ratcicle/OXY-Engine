@@ -579,7 +579,8 @@ fn value_text(value: &Value) -> String {
 
 /// Splits the runtime's log lines that name an object and a logic node: "[object / node]
 /// message" from a diagnostic message and "Objeto object / nó node: error" from a failure.
-fn node_line(line: &str) -> Option<(&str, &str, &str)> {
+/// The editor's console feed for agents splits them the same way.
+pub fn node_line(line: &str) -> Option<(&str, &str, &str)> {
     if let Some(rest) = line.strip_prefix('[') {
         let (head, message) = rest.split_once("] ")?;
         let (object, node) = head.split_once(" / ")?;

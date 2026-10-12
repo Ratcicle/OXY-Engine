@@ -206,7 +206,7 @@ pub fn rename(project: &mut Project, id: &str, name: &str) -> Result<(), String>
     project.input_labels.insert(id.into(), name.trim().into());
     Ok(())
 }
-/// One object that uses a project item (an input action or a physics surface).
+/// One object that uses a project item (an input action, a physics surface or an asset).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Use {
     /// Name of the scene, or of the model, that holds the object.
@@ -216,7 +216,7 @@ pub struct Use {
     pub entity: Id,
     pub name: String,
     /// What uses the item: a component (controller2d, character, camera_control,
-    /// collider3d), a node operation, or "attribute <name>".
+    /// collider3d), a node operation, "attribute <name>", or for assets material, ui or model.
     pub role: String,
 }
 

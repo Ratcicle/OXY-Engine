@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod asset_import;
 pub mod audio;
 pub mod authoring;
 pub mod broadphase;

@@ -12,7 +12,7 @@ use crate::{
     spatial, surface,
 };
 use glam::{EulerRot, Quat, Vec3};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -127,7 +127,7 @@ impl Page {
     }
 }
 
-/// Uses of an input action or surface listed in the summary; more are only counted.
+/// Uses of an input action, surface or asset listed in the summary; more are only counted.
 const USES_LISTED: usize = 10;
 
 /// `used_by` with the first uses, plus `used_by_total` when some are left out.
@@ -185,11 +185,19 @@ pub fn project_summary(project: &Project) -> Json {
             "kind": kind_name(s.kind),
             "objects": s.entities.len(),
         })).collect::<Vec<_>>(),
-        "assets": project.assets.iter().map(|a| json!({
-            "id": a.id,
-            "name": a.name,
-            "kind": format!("{:?}", a.kind),
-        })).collect::<Vec<_>>(),
+        "assets": project.assets.iter().map(|a| {
+            let mut asset = json!({
+                "id": a.id,
+                "name": a.name,
+                "kind": format!("{:?}", a.kind),
+            });
+            // Models live in the project file; images and sounds in the project folder.
+            if !a.path.is_empty() {
+                asset["path"] = json!(a.path);
+            }
+            uses_json(&mut asset, crate::editing::asset_uses(project, &a.id));
+            asset
+        }).collect::<Vec<_>>(),
         "input_actions": actions,
         "surfaces": surfaces,
         "collision_groups": groups,
@@ -1203,4 +1211,46 @@ pub fn catalog_with(query: &CatalogQuery) -> Result<Json, String> {
     result.insert("nodes".into(), Json::Array(nodes));
     result.extend(about);
     Ok(Json::Object(result))
+}
+
+/// Where a line of the editor's console comes from, as the live console read names it: the
+/// editor, an agent's edits, the game's logs or the logic actions that ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsoleOrigin {
+    Editor,
+    Agente,
+    Jogo,
+    Logica,
+}
+
+/// Lines a console read answers when `limit` is absent.
+pub const CONSOLE_LIMIT: usize = 50;
+
+/// Options of the live console read: the lines after `since`, of `origins` (every origin when
+/// empty), the most recent `limit` of them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsoleQuery {
+    pub since: Option<u64>,
+    pub origins: Vec<ConsoleOrigin>,
+    pub limit: usize,
+}
+impl ConsoleQuery {
+    /// From the arguments `since`, `limit` and `origin` (one origin or a list).
+    pub fn parse(args: &Json) -> Result<Self, String> {
+        let origins = match args.get("origin") {
+            Some(Json::String(_)) => arg(args, "origin")?.into_iter().collect(),
+            _ => arg(args, "origin")?.unwrap_or_default(),
+        };
+        Ok(Self {
+            since: arg(args, "since")?,
+            origins,
+            limit: arg(args, "limit")?.unwrap_or(CONSOLE_LIMIT),
+        })
+    }
+    /// Whether a line of `origin` numbered `seq` is asked for, before the limit.
+    pub fn wants(&self, seq: u64, origin: ConsoleOrigin) -> bool {
+        self.since.is_none_or(|since| seq > since)
+            && (self.origins.is_empty() || self.origins.contains(&origin))
+    }
 }

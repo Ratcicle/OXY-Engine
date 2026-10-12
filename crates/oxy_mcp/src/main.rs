@@ -21,10 +21,12 @@ floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they r
 lists come in pages (limit, offset, next_offset), oxy_entity \
 summarizes logic and geometry unless asked in full, and world positions and boxes (oxy_scene \
 fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
-(atomic batches, validated with the editor's own rules). When the project is open in the editor \
-your edits appear live and the person can undo them; you never save there, the person does. \
-After changes, check them with oxy_simulate and oxy_screenshot. Messages from the engine are in \
-Portuguese; answer the person in their language.";
+(atomic batches, validated with the editor's own rules) and oxy_import (PNG and WAV files the \
+person points you to). When the project is open in the editor your edits appear live and the \
+person can undo them; you never save there, the person does. After changes, check them with \
+oxy_simulate and oxy_screenshot; when the person tested the game in the editor, oxy_console has \
+what that test logged. Messages from the engine are in Portuguese; answer the person in their \
+language.";
 
 fn handle(tools: &mut tools::Tools, request: &Json) -> Option<Json> {
     let id = request.get("id").cloned()?;
@@ -137,7 +139,7 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(
-            names.contains(&"oxy_apply".to_owned()) && names.len() == 14,
+            names.contains(&"oxy_apply".to_owned()) && names.len() == 16,
             "{names:?}"
         );
         let call = handle(
@@ -237,6 +239,28 @@ mod tests {
         );
         let found = echo("oxy_find", json!({"text": "porta", "offset": 2}));
         assert_eq!(found["params"], json!({"text": "porta", "offset": 2}));
+        // The console and imports reach the editor, which reads the file itself; the project
+        // argument does not.
+        let console = echo(
+            "oxy_console",
+            json!({"since": 7, "origin": ["jogo", "logica"]}),
+        );
+        assert_eq!(console["method"], "console");
+        assert_eq!(
+            console["params"],
+            json!({"since": 7, "origin": ["jogo", "logica"], "limit": null})
+        );
+        let image = std::env::temp_dir().join("placa.png").display().to_string();
+        let import = echo(
+            "oxy_import",
+            json!({"project": "C:/ao-vivo/project.oxy.json", "path": image, "apply_to": "e",
+                   "scene": "cena-1"}),
+        );
+        assert_eq!(import["method"], "import");
+        assert_eq!(
+            import["params"],
+            json!({"path": image, "apply_to": "e", "scene": "cena-1"})
+        );
         let error = tools
             .call("oxy_entity", &json!({"id": "a", "geometry": "toda"}))
             .unwrap_err();

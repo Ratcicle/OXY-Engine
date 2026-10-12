@@ -481,46 +481,63 @@ pub fn transform_selection(scene: &mut Scene, ids: &[Id], delta: Mat4) -> Result
     Ok(())
 }
 
-pub fn asset_references(project: &Project, asset: &str) -> Vec<String> {
+/// Objects of the scenes and models that use an asset, with the part that uses it: role
+/// `material`, `ui` (the image of an interface element), `model` (a placed model) or the
+/// operation of a node naming it.
+pub fn asset_uses(project: &Project, asset: &str) -> Vec<crate::input_actions::Use> {
     let mut found = Vec::new();
-    let scopes = project
-        .scenes
-        .iter()
-        .map(|s| (s.name.as_str(), s.entities.as_slice()))
-        .chain(
-            project
-                .assets
-                .iter()
-                .filter_map(|a| a.model.as_deref().map(|m| (a.name.as_str(), m))),
-        );
-    for (scope, entities) in scopes {
-        for entity in entities {
-            if entity.material.texture.as_deref() == Some(asset) {
-                found.push(format!("{scope} → {}: material", entity.name));
-            }
-            if entity.ui.as_ref().and_then(|u| u.texture.as_deref()) == Some(asset) {
-                found.push(format!("{scope} → {}: imagem da interface", entity.name));
-            }
-            if entity.model_source.as_deref() == Some(asset) {
-                found.push(format!("{scope} → {}: modelo", entity.name));
-            }
-            for node in &entity.graph.nodes {
-                if node
-                    .params
-                    .values()
-                    .any(|v| matches!(v, Value::Text(id) if id == asset))
-                {
-                    let definitions = crate::graph::registry();
-                    let label = definitions
-                        .iter()
-                        .find(|d| d.id == node.operation)
-                        .map_or("não reconhecida", |d| d.label);
-                    found.push(format!("{scope} → {}: ação {label}", entity.name));
-                }
+    for (scope, entity) in crate::input_actions::every_entity(project) {
+        let mut add = |role: &str| {
+            found.push(crate::input_actions::Use {
+                scope: scope.into(),
+                entity: entity.id.clone(),
+                name: entity.name.clone(),
+                role: role.into(),
+            })
+        };
+        if entity.material.texture.as_deref() == Some(asset) {
+            add("material");
+        }
+        if entity.ui.as_ref().and_then(|u| u.texture.as_deref()) == Some(asset) {
+            add("ui");
+        }
+        if entity.model_source.as_deref() == Some(asset) {
+            add("model");
+        }
+        for node in &entity.graph.nodes {
+            if node
+                .params
+                .values()
+                .any(|v| matches!(v, Value::Text(id) if id == asset))
+            {
+                add(&node.operation);
             }
         }
     }
     found
+}
+
+/// [`asset_uses`] as the editor lists them: "Scope → Object: use".
+pub fn asset_references(project: &Project, asset: &str) -> Vec<String> {
+    let definitions = crate::graph::registry();
+    asset_uses(project, asset)
+        .into_iter()
+        .map(|found| {
+            let what = match found.role.as_str() {
+                "material" => "material".to_owned(),
+                "ui" => "imagem da interface".to_owned(),
+                "model" => "modelo".to_owned(),
+                operation => format!(
+                    "ação {}",
+                    definitions
+                        .iter()
+                        .find(|d| d.id == operation)
+                        .map_or("não reconhecida", |d| d.label)
+                ),
+            };
+            format!("{} → {}: {what}", found.scope, found.name)
+        })
+        .collect()
 }
 
 pub fn remove_asset(project: &mut Project, asset: &str) -> Result<(), String> {

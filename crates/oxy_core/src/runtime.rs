@@ -137,6 +137,10 @@ pub struct Runtime {
     pub paused: bool,
     pub logs: Vec<String>,
     pub traces: Vec<NodeTrace>,
+    /// Lines ever added to `logs` and `traces`, those dropped or taken included: a host that
+    /// reads them across frames finds the new ones with [`Runtime::logs_written`].
+    logs_written: u64,
+    traces_written: u64,
     pub sounds: Vec<SoundRequest>,
     /// Scenes started by `change_scene` (reloads included), oldest first, until a host takes them.
     pub scene_starts: Vec<Id>,
@@ -195,6 +199,8 @@ impl Runtime {
             paused: false,
             logs: Vec::new(),
             traces: Vec::new(),
+            logs_written: 0,
+            traces_written: 0,
             sounds: Vec::new(),
             scene_starts: Vec::new(),
             recording,
@@ -434,7 +440,17 @@ impl Runtime {
     ) -> Result<(), String> {
         self.input_timeline.push(event, self.time)
     }
+    /// Log lines written since the runtime started; the last `logs.len()` of them are in
+    /// `logs`.
+    pub fn logs_written(&self) -> u64 {
+        self.logs_written
+    }
+    /// Node traces written since the runtime started; the last `traces.len()` are in `traces`.
+    pub fn traces_written(&self) -> u64 {
+        self.traces_written
+    }
     fn log(&mut self, message: String) {
+        self.logs_written += 1;
         self.logs.push(message);
         if self.logs.len() > 500 {
             self.logs.drain(..100);
@@ -856,6 +872,7 @@ impl Runtime {
         };
         let node = graph.node(&task.node).ok_or("Nó não encontrado")?;
         let mut context = task.context;
+        self.traces_written += 1;
         self.traces.push(NodeTrace {
             object: task.owner.clone(),
             node: node.id.clone(),

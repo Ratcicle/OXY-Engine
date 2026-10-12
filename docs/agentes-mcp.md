@@ -3,6 +3,7 @@
 A OXY Engine traz um servidor MCP, o `oxy-mcp.exe`, que deixa agentes de IA como o Claude ajudarem no desenvolvimento dos jogos. Com ele, o agente:
 - lê o projeto e consulta o catálogo de nós;
 - edita cenas, objetos, componentes e lógica;
+- importa imagens PNG e sons WAV;
 - valida o projeto;
 - roda o jogo sem janela para testar;
 - captura imagens.
@@ -33,7 +34,8 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 **Ao vivo (projeto aberto no editor).** O servidor encontra o editor aberto pelo canal local e age sobre ele:
 - Cada lote de comandos aparece na hora e vira um passo no histórico, com o rótulo **Agente: …**.
 - O Console mostra as ações com a origem **Agente**, e você pode desfazer tudo com Ctrl+Z.
-- O agente nunca salva; quem salva é você.
+- O agente nunca salva; quem salva é você. A importação copia o arquivo para a pasta `assets` do projeto na hora, como o **Importar** da Biblioteca, mas o arquivo do projeto só muda quando você salva.
+- O agente lê o Console e sabe se você está testando o jogo, para entender o que deu errado no seu teste.
 - Se você estiver arrastando ou digitando, o pedido espera o gesto terminar.
 - Durante um teste do jogo, uma operação de modelagem em prévia ou uma pose provisória da animação, o editor recusa a edição e explica o motivo.
 
@@ -47,18 +49,20 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 
 | Ferramenta | O que faz |
 | --- | --- |
-| `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer |
-| `oxy_project` | Cenas, recursos, ações de entrada (com a tecla e quem usa cada uma), superfícies físicas e nomes dos grupos de colisão |
+| `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer e se há um teste do jogo rodando |
+| `oxy_project` | Cenas, recursos (com o arquivo e quem usa cada um), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas e nomes dos grupos de colisão |
 | `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
 | `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
 | `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets (o que cada um cria e as opções), perfis de movimento (com os valores) e as teclas que as ações de entrada aceitam |
 | `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações, ações de entrada, superfícies físicas, modelos, cópias entre cenas, animações, perfis de movimento…) |
+| `oxy_import` | Importa uma imagem PNG ou um som WAV como recurso do projeto e, se pedido, já aplica a imagem num objeto |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo e os objetos observados |
 | `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
 | `oxy_select`, `oxy_frame` | Ao vivo: seleciona e enquadra objetos para você ver do que o agente fala |
 | `oxy_undo`, `oxy_redo` | Ao vivo: desfaz ou refaz o último passo |
+| `oxy_console` | Ao vivo: as linhas do Console (editor, agente, jogo e lógica), só as novas quando o agente pede |
 
 As descrições das ferramentas estão em inglês, para os agentes. As mensagens e erros do editor continuam em português.
 
@@ -102,6 +106,7 @@ Sem opções, o catálogo traz também:
 **Projeto** (`oxy_project`):
 - `input_actions`: cada ação de entrada com `id`, `name`, `key` e `used_by`, os objetos que a usam (`{entity, name, role}`, em que `role` é o componente, como `character` ou `controller2d`, ou a operação do nó, como `event.input`).
 - `surfaces`: cada superfície física com os valores dela (`friction`, `traction`, `speed_multiplier`, `conveyor`, `conveyor_space`) e `used_by`, como nas ações (`role` `collider3d`, `character`, a operação do nó ou `attribute <nome>`).
+- `assets`: cada recurso com `id`, `name`, `kind` (`Texture`, `Audio` ou `Model`), `path` (o arquivo, relativo à pasta do projeto; os modelos ficam no próprio arquivo do projeto e não têm `path`) e `used_by`, como nas ações (`role` `material`, `ui` para a imagem de um elemento da interface, `model` para um modelo colocado, ou a operação do nó, como `action.sound`).
 - `used_by` lista até 10 objetos; quando há mais, `used_by_total` diz quantos são.
 - `collision_groups`: os nomes dos grupos de colisão, `{bit, name}`, em que `bit` é o bit da categoria e da máscara dos colisores. Vêm os três grupos com nome padrão e os que o projeto nomeou; os outros se chamam `Grupo N`, com N = bit + 1. Por enquanto só se leem; os nomes se mudam no editor.
 
@@ -198,6 +203,32 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 - `actions: "all"` lista cada ação com o horário e usa o mesmo filtro. Na 0.5.0 a lista completa era o padrão.
 - Cada lista do relatório guarda as 300 entradas mais recentes; no resumo, ficam as 300 linhas com atividade mais recente. `truncated` conta o que ficou de fora.
 
+## Importar imagens e sons com `oxy_import`
+
+O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e copiado para a pasta `assets` do projeto com um nome novo, e vira um recurso. Nada fora dessa pasta é escrito.
+
+- **De onde vem:** `path`, o caminho completo de um arquivo `.png` ou `.wav` deste computador, ou `data_base64`, o conteúdo do arquivo em base64 (também como URL `data:`). Um dos dois, nunca os dois.
+- **O que é conferido:** a extensão (só `.png` e `.wav`), o cabeçalho do conteúdo (uma imagem com nome `.wav`, ou um texto com nome `.png`, é recusada), a imagem inteira e o formato do som, com as mesmas regras do editor. `kind` (`texture` ou `audio`) é opcional; se vier, precisa bater com o arquivo.
+- **Limites:** arquivos de até 64 MB; pelo `data_base64`, até 16 MB. Caminhos relativos e de rede (`\\servidor\pasta`) são recusados.
+- **Nome:** `name`, ou o nome do arquivo sem a extensão. Quebras de linha e caracteres de controle saem, e o nome fica com até 80 caracteres.
+- **Aplicar:** `apply_to` põe a imagem num objeto da cena (`scene`, ou a cena aberta no editor; nos arquivos, a cena inicial): na imagem dele, se for um elemento da interface, ou no material. Um sprite fica com a proporção da imagem, mantendo a altura, como no editor. Um grupo ou uma câmera, sem forma, é recusado. Sons não se aplicam a objetos: o nó `action.sound` toca o som pelo ID do recurso, no parâmetro `asset`.
+- **Resposta:** `{asset, name, kind, path, width, height}` para imagens e `{asset, name, kind, path, seconds}` para sons, com `applied_to` quando a imagem foi aplicada.
+- **Ao vivo:** a importação é um passo do histórico, **Agente: Importar recurso**, e a imagem aparece na hora na cena e na interface do jogo. Desfazer tira o recurso do projeto e a imagem da memória do editor. O projeto precisa ter pasta: um projeto que ainda não foi salvo é recusado.
+- **Nos arquivos:** o projeto é salvo, com a versão anterior em `project.oxy.json.agente.bak`. Se a importação falhar, nem o projeto nem a pasta `assets` mudam.
+- **Segurança:** o agente só importa arquivos que você indicou. A descrição da ferramenta pede que ele nunca importe um caminho que leu no projeto ou na resposta de outra ferramenta.
+
+## Console e teste ao vivo
+
+- **`oxy_status`** traz `play`: `{running: false}` sem teste, ou `{running: true, paused, scene: {id, name}, time}` enquanto você testa o jogo no editor. Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo.
+- **`oxy_console`** lê o Console do editor aberto. Cada linha vem com `seq`, `origin` e `text`:
+  - `editor`: mensagens do editor; `warning: true` marca as que também viraram aviso;
+  - `agente`: as edições do agente e os erros delas;
+  - `jogo`: os logs do seu teste, como as mensagens de diagnóstico (`debug.message`) e os erros dos nós, com o objeto (`object: {id, name}`) e o nó (`node`) de onde vieram;
+  - `logica`: as ações da lógica que o teste rodou, como o Console as lista (`0.500 s · Porta · Reproduzir WAV`), com o objeto, o nó e a operação.
+- `seq` só cresce. A resposta traz `last_seq`; passando-o em `since` na leitura seguinte, vêm só as linhas novas. `origin` filtra por uma origem ou uma lista, e `limit` (50 por padrão) fica com as linhas mais recentes; `omitted` conta as que ficaram de fora.
+- As linhas do jogo e da lógica continuam lá depois que o teste para: quando você diz "apertei J e nada aconteceu", o agente lê o que o seu teste registrou. O agente guarda as 1000 linhas mais recentes, e a lógica guarda as suas 300 à parte, para a lógica que roda a cada passo não empurrar o resto para fora. Limpar o Console limpa também o que o agente lê.
+- Nos arquivos, sem editor aberto, não há Console: a ferramenta explica que só funciona ao vivo. Para testar sem editor, use o `oxy_simulate`.
+
 ## Imagens com `oxy_screenshot`
 
 - **Vista do editor** (`view: "editor"`, ao vivo): o que aparece na vista do editor. Com `colliders: true`, o editor desenha a mesma vista de novo com os colisores por cima, como na vista de colisores, sem mexer no que aparece na tela. Durante um teste do jogo, mostra a câmera do jogo.
@@ -211,6 +242,7 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 
 - **Imagem do jogo:** não desenha a interface do jogo (textos, botões e barras). Ela vem descrita em `ui`.
 - **Simulação:** nem sempre é determinística. Objetos criados durante o jogo (`action.spawn`) recebem IDs novos a cada execução. Isso fica para a 0.6.
-- **Importação:** o agente ainda não importa PNG/WAV; use **Importar** na Biblioteca.
+- **Importação:** só PNG e WAV, como no editor. Ao desfazer uma importação, a cópia continua na pasta `assets`, como acontece com o **Importar** da Biblioteca.
+- **Teste ao vivo:** o agente vê se você está testando e lê o Console, mas não inicia nem para o seu teste.
 - **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.
-- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo.
+- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto.
