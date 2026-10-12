@@ -8,6 +8,7 @@ use oxy_core::{
     headless::{self, Actions, EventKind, SimulationReport, SimulationRequest},
     physics3d::{Collider3d, CollisionShape},
     runtime::{FIXED_DT, InputFrame, MAX_STEPS, Runtime},
+    surface::{PlatformMode, TranslationPlatform},
 };
 use serde_json::json;
 
@@ -922,6 +923,184 @@ fn an_area_that_turns_off_its_collider_reports_no_exit() {
         "{:?}",
         report.events
     );
+}
+
+#[test]
+fn a_3d_area_that_turns_off_its_collider_reports_no_exit() {
+    // The 2D case above with a 3D area around a 3D character standing still.
+    let mut project = course();
+    let goal = project.scenes[0].entity_mut(GOAL).unwrap();
+    let enter = node(goal, "event.area_enter", &[]);
+    let off = node(
+        goal,
+        "action.component",
+        &[
+            ("component", text("collider")),
+            ("enabled", Value::Bool(false)),
+        ],
+    );
+    let wait = node(goal, "control.wait", &[("seconds", Value::Number(0.5))]);
+    let on = node(
+        goal,
+        "action.component",
+        &[
+            ("component", text("collider")),
+            ("enabled", Value::Bool(true)),
+        ],
+    );
+    link(goal, &enter, &off);
+    link(goal, &off, &wait);
+    link(goal, &wait, &on);
+    let exit = node(goal, "event.area_exit", &[]);
+    let left = node(goal, "debug.message", &[("message", text("saiu"))]);
+    link(goal, &exit, &left);
+    // Another area, away from the character, keeps the detection going pair by pair while
+    // Meta is off.
+    let mut far = Entity::new("Longe", None);
+    far.transform.position = [10., 1., 0.];
+    far.physics3d = project.scenes[0].entity(GOAL).unwrap().physics3d.clone();
+    project.scenes[0].entities.push(far);
+    let report = run(
+        &project,
+        json!({"seconds": 1.2, "until": {"event": {"kind": "area_exit", "object": GOAL}}}),
+    );
+    assert!(report.stopped_at.is_none(), "{:?}", report.stopped_at);
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+    assert_eq!(
+        area_events(&report),
+        vec![
+            (
+                EventKind::AreaEnter,
+                "Corredor".to_owned(),
+                "Meta".to_owned()
+            );
+            3
+        ],
+        "{:?}",
+        report.events
+    );
+    let entries: Vec<f64> = report
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::AreaEnter)
+        .map(|e| e.time)
+        .collect();
+    assert!(near(entries[1], 0.5 + 1. / 60.), "{entries:?}");
+}
+
+#[test]
+fn turning_off_the_3d_collider_under_a_character_drops_it() {
+    let mut project = course();
+    let floor = &mut project.scenes[0].entities[0];
+    let start = node(floor, "event.scene_start", &[]);
+    let wait = node(floor, "control.wait", &[("seconds", Value::Number(0.5))]);
+    let off = node(
+        floor,
+        "action.component",
+        &[
+            ("component", text("collider")),
+            ("enabled", Value::Bool(false)),
+        ],
+    );
+    link(floor, &start, &wait);
+    link(floor, &wait, &off);
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "samples": 1,
+               "watch": [{"id": BODY, "fields": ["position", "character"]}]}),
+    );
+    let leave = report
+        .events
+        .iter()
+        .find(|e| e.kind == EventKind::Leave && e.object.id == BODY)
+        .unwrap_or_else(|| panic!("{:?}", report.events));
+    assert!(near(leave.time, 0.5), "{leave:?}");
+    let last = report.watched[0].samples.last().unwrap();
+    assert!(last.position.unwrap()[1] < -1., "{last:?}");
+    let character = last.character.as_ref().unwrap();
+    assert!(
+        !character.grounded && character.support.is_none(),
+        "{character:?}"
+    );
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+}
+
+#[test]
+fn a_moving_platform_stops_and_resumes_without_launching_its_passenger() {
+    let mut project = course();
+    for (action, key) in [("parar", "P"), ("seguir", "O")] {
+        project.input_bindings.insert(action.into(), key.into());
+    }
+    let mut lift = Entity::new("Plataforma", Some(Primitive::Cube));
+    lift.dimensions = [4., 0.5, 4.];
+    lift.transform.position = [20., 0.75, 0.];
+    lift.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: lift.dimensions,
+        },
+        ..Default::default()
+    });
+    lift.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Velocity,
+        velocity: [1., 0., 0.],
+        ..Default::default()
+    });
+    for (action, enabled) in [("parar", false), ("seguir", true)] {
+        let input = node(&mut lift, "event.input", &[("action", text(action))]);
+        let switch = node(
+            &mut lift,
+            "action.component",
+            &[
+                ("component", text("platform")),
+                ("enabled", Value::Bool(enabled)),
+            ],
+        );
+        link(&mut lift, &input, &switch);
+    }
+    let lift_id = lift.id.clone();
+    let scene = &mut project.scenes[0];
+    scene.entities.push(lift);
+    scene.entity_mut(BODY).unwrap().transform.position = [20., 1.02, 0.];
+    let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    for _ in 0..60 {
+        runtime.advance(FIXED_DT, &InputFrame::default());
+    }
+    // How far the platform and its passenger went in one step, pressing `action`.
+    let mut step = |action: Option<&str>| {
+        let x = |runtime: &Runtime| {
+            (
+                runtime.scene().entity(&lift_id).unwrap().transform.position[0],
+                runtime.character_state(BODY).unwrap().position.x,
+            )
+        };
+        let before = x(&runtime);
+        let input = InputFrame {
+            pressed: action.into_iter().map(str::to_owned).collect(),
+            ..Default::default()
+        };
+        runtime.advance(FIXED_DT, &input);
+        let after = x(&runtime);
+        let state = runtime.character_state(BODY).unwrap();
+        assert!(state.grounded, "{state:?}");
+        assert_eq!(state.support.as_ref().unwrap().object, lift_id);
+        // No launch: standing still on the platform, whatever it does.
+        assert!(state.velocity.length() < 1e-3, "{state:?}");
+        (after.0 - before.0, after.1 - before.1)
+    };
+    let close = |(platform, passenger): (f32, f32), expected: f32| {
+        (platform - expected).abs() < 1e-4 && (passenger - expected).abs() < 1e-4
+    };
+    assert!(close(step(None), FIXED_DT));
+    // Stopped in the step the logic runs, before anything moves.
+    assert!(close(step(Some("parar")), 0.));
+    for _ in 0..10 {
+        assert!(close(step(None), 0.));
+    }
+    // Back on, it carries the passenger one ordinary step at once.
+    let resumed = step(Some("seguir"));
+    assert!(close(resumed, FIXED_DT), "{resumed:?}");
+    assert!(close(step(None), FIXED_DT));
+    assert!(runtime.logs.is_empty(), "{:?}", runtime.logs);
 }
 
 #[test]

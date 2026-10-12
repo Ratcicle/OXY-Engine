@@ -15,12 +15,13 @@ pub const INPUT_MODES: [(&str, &str); 3] = [
     ("released", "Soltar"),
 ];
 /// Parts of an object that Ativar / desativar componente switches.
-pub const COMPONENTS: [(&str, &str); 5] = [
-    ("collider", "Colisão / área"),
+pub const COMPONENTS: [(&str, &str); 6] = [
+    ("collider", "Colisão / área (2D e 3D)"),
     ("controller", "Controlador de movimento"),
     ("visible", "Visibilidade"),
     ("behavior", "Comportamento visual"),
     ("animation", "Reprodução da animação"),
+    ("platform", "Plataforma móvel"),
 ];
 pub const COMPARISONS: [(&str, &str); 6] = [
     ("==", "Igual · A = B"),
@@ -214,7 +215,9 @@ pub fn description(operation: &str) -> &'static str {
         "action.sound" => "Reproduz um áudio WAV do projeto no volume configurado.",
         "action.spawn" => "Cria uma cópia da hierarquia do objeto durante o jogo.",
         "action.remove" => "Remove o objeto e seus descendentes durante o jogo.",
-        "action.component" => "Ativa ou desativa o componente escolhido do objeto.",
+        "action.component" => {
+            "Ativa ou desativa o componente escolhido do objeto: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel."
+        }
         "action.scene" => "Encerra a cena atual e abre a cena de destino no jogo.",
         "control.sequence" => "Executa as saídas 1, 2 e 3 nessa ordem.",
         "control.wait" => "Continua após o tempo indicado, sem interromper o jogo ou o editor.",

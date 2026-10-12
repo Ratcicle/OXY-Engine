@@ -274,8 +274,8 @@ impl From<Holder<'_>> for String {
     }
 }
 
-/// Every object of the scenes and models, with the scene or model holding it.
-pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (Holder<'_>, &Entity)> {
+/// Every scene and model, with its objects.
+pub(crate) fn every_holder(project: &Project) -> impl Iterator<Item = (Holder<'_>, &[Entity])> {
     project
         .scenes
         .iter()
@@ -293,7 +293,11 @@ pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (Holder<'_
             };
             a.model.as_deref().map(|m| (scope, m))
         }))
-        .flat_map(|(scope, entities)| entities.iter().map(move |e| (scope, e)))
+}
+
+/// Every object of the scenes and models, with the scene or model holding it.
+pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (Holder<'_>, &Entity)> {
+    every_holder(project).flat_map(|(scope, entities)| entities.iter().map(move |e| (scope, e)))
 }
 
 /// Where the action `id` is used, in each object's order: 2D controller, 3D character, logic

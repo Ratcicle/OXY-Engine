@@ -424,6 +424,76 @@ fn sensor_activation_survives_waits_but_ended_history_and_removed_handles_do_not
 }
 
 #[test]
+fn an_area_turned_off_and_on_within_a_step_is_entered_afresh_in_a_new_activation() {
+    use oxy_core::graph::{Edge, Node};
+    let mut p = flying_project();
+    p.input_bindings.insert("alternar".into(), "T".into());
+    p.scenes[0]
+        .entity_mut(BODY)
+        .unwrap()
+        .attributes
+        .insert("Vida".into(), Value::Number(100.));
+    // One hit per activation of the area; "alternar" turns it off and back on at once.
+    let mut area = sensor("occupied", [0., 3., 0.], [2., 4., 2.]);
+    let enter = Node::new("event.area_enter", [0.; 2]);
+    let mut damage = Node::new("action.damage", [200., 0.]);
+    damage
+        .params
+        .insert("attribute".into(), Value::Text("Vida".into()));
+    damage.params.insert("amount".into(), Value::Number(1.));
+    let mut toggle = Node::new("event.input", [0., 200.]);
+    toggle
+        .params
+        .insert("action".into(), Value::Text("alternar".into()));
+    let mut off = Node::new("action.component", [200., 200.]);
+    off.params.insert("enabled".into(), Value::Bool(false));
+    let on = Node::new("action.component", [400., 200.]);
+    for (from, output, to, input) in [
+        (&enter, "exec", &damage, "exec"),
+        (&enter, "context", &damage, "target"),
+        (&toggle, "exec", &off, "exec"),
+        (&off, "exec", &on, "exec"),
+    ] {
+        area.graph.edges.push(Edge {
+            from_node: from.id.clone(),
+            from_port: output.into(),
+            to_node: to.id.clone(),
+            to_port: input.into(),
+        });
+    }
+    area.graph.nodes = vec![enter, damage, toggle, off, on];
+    p.scenes[0].entities.push(area);
+    let mut rt = runtime(&p);
+    let life = |rt: &Runtime| rt.scene().entity(BODY).unwrap().attributes["Vida"].clone();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert_eq!(rt.sensor_events().len(), 1, "{:?}", rt.sensor_events());
+    assert_eq!(life(&rt), Value::Number(99.));
+    for _ in 0..5 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+        assert!(rt.sensor_events().is_empty(), "{:?}", rt.sensor_events());
+    }
+    rt.advance(
+        FIXED_DT,
+        &InputFrame {
+            pressed: ["alternar".into()].into(),
+            ..Default::default()
+        },
+    );
+    let events = rt.sensor_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(
+        events[0].entered && events[0].area == "occupied",
+        "{events:?}"
+    );
+    // The entry is in a new activation: the hit once per activation lands again.
+    assert_eq!(life(&rt), Value::Number(98.));
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(rt.sensor_events().is_empty(), "{:?}", rt.sensor_events());
+    assert_eq!(life(&rt), Value::Number(98.));
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
 fn exit_node_also_works_for_legacy_2d_without_creating_3d_world() {
     use oxy_core::graph::{Edge, Node};
     let mut p = Project::new("Área 2D");

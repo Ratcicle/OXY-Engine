@@ -1141,13 +1141,27 @@ impl Runtime {
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let enabled = node.boolean("enabled", true);
                 match node.text("component") {
+                    // The 2D box and the 3D collider or area alike; an old document may have both.
                     "collider" => {
-                        let collider = self.entity_mut(&target).ok_or("Objeto ausente")?.collider.as_mut().ok_or("Objeto não tem colisor")?;
-                        let activation = enabled && !collider.enabled;
-                        collider.enabled = enabled;
-                        if activation {
+                        let entity = self.entity_mut(&target).ok_or("Objeto ausente")?;
+                        if entity.collider.is_none() && entity.physics3d.is_none() {
+                            return Err("Objeto não tem colisor nem área".into());
+                        }
+                        let was = entity.collider.as_ref().is_some_and(|c| c.enabled)
+                            || entity.physics3d.as_ref().is_some_and(|c| c.enabled);
+                        if let Some(collider) = &mut entity.collider {
+                            collider.enabled = enabled;
+                        }
+                        if let Some(collider) = &mut entity.physics3d {
+                            collider.enabled = enabled;
+                        }
+                        // Turned back on, an area starts a new activation that whoever is inside
+                        // enters afresh, even when it was off only within this step. Turned off,
+                        // its occupancy ends without an exit.
+                        if enabled && !was {
                             self.activate_area(&target);
                             self.overlap_pairs.retain(|(area, _)| area != &target);
+                            self.characters.forget_area(&target);
                         }
                         if !enabled {
                             self.area_activations.remove(&target); self.area_hits.remove(&target);
@@ -1160,7 +1174,8 @@ impl Runtime {
                         if enabled { self.disabled_behaviors.remove(&target); } else { self.disabled_behaviors.insert(target.clone()); self.waiting.retain(|task| task.owner != target); }
                     }
                     "animation" => { if let Some(player) = self.animations.get_mut(&target) { player.playing = enabled; } }
-                    _ => return Err("Componente desconhecido; use collider/controller/visible/behavior/animation".into()),
+                    "platform" => self.entity_mut(&target).ok_or("Objeto ausente")?.platform.as_mut().ok_or("Objeto não tem plataforma móvel")?.enabled = enabled,
+                    _ => return Err("Componente desconhecido; use collider/controller/visible/behavior/animation/platform".into()),
                 }
             }
             "action.scene" => {

@@ -214,7 +214,7 @@ pub fn project_summary(project: &Project) -> Json {
 }
 
 /// The project checked with the rules of saving: `valid`, the `error` that blocks saving when
-/// there is one, and `warnings` when the game would ignore something (see
+/// there is one, and `warnings` when the game would ignore or stop on something (see
 /// [`crate::command::warnings`]).
 pub fn validation(project: &Project) -> Json {
     let mut result = match validate_project(project) {

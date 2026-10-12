@@ -307,6 +307,77 @@ fn physical_query_node_matches_native_and_space_has_real_contact() {
 }
 
 #[test]
+fn a_query_right_after_logic_turns_a_collider_off_does_not_hit_it() {
+    let (mut p, id) = fixture();
+    p.input_bindings.insert("consultar".into(), "Q".into());
+    // In one run of the logic: a ray at the floor, the floor off, the ray again, the floor on,
+    // the ray once more.
+    let input = node(
+        "event.input",
+        &[("action", Value::Text("consultar".into()))],
+    );
+    let switch = |enabled| {
+        node(
+            "action.component",
+            &[
+                ("target", Value::Object(Some("floor".into()))),
+                ("enabled", Value::Bool(enabled)),
+            ],
+        )
+    };
+    let (off, on) = (switch(false), switch(true));
+    let e = p.scenes[0].entity_mut(&id).unwrap();
+    e.graph.nodes = vec![input.clone(), off.clone(), on.clone()];
+    let mut previous = input;
+    for (attribute, then) in [
+        ("Antes", Some(off)),
+        ("Desligado", Some(on)),
+        ("Religado", None),
+    ] {
+        let query = node(
+            "query.ray",
+            &[
+                ("origin", Value::Vector3([4., 5., 0.])),
+                ("direction", Value::Vector3([0., -1., 0.])),
+            ],
+        );
+        let write = set(attribute);
+        e.attributes.insert(attribute.into(), Value::Bool(false));
+        wire(&mut e.graph, &previous, "exec", &query, "exec");
+        wire(&mut e.graph, &query, "exec", &write, "exec");
+        wire(&mut e.graph, &query, "hit", &write, "value");
+        previous = write.clone();
+        if let Some(then) = then {
+            wire(&mut e.graph, &write, "exec", &then, "exec");
+            previous = then;
+        }
+        e.graph.nodes.extend([query, write]);
+    }
+    validate_project(&p).unwrap();
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    ticks(&mut r, 10);
+    assert!(r.physics_world().is_some());
+    r.advance(
+        FIXED_DT,
+        &InputFrame {
+            pressed: ["consultar".into()].into(),
+            ..Default::default()
+        },
+    );
+    let attributes = &r.scene().entity(&id).unwrap().attributes;
+    assert_eq!(
+        [
+            &attributes["Antes"],
+            &attributes["Desligado"],
+            &attributes["Religado"]
+        ],
+        [&Value::Bool(true), &Value::Bool(false), &Value::Bool(true)]
+    );
+    assert!(r.character_state(&id).unwrap().grounded);
+    clean(&r);
+}
+
+#[test]
 fn connected_null_object_does_not_fall_back_to_graph_owner() {
     let (mut p, id) = fixture();
     let start = node("event.scene_start", &[]);

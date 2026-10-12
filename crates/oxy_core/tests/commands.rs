@@ -334,6 +334,16 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
     for allowed in ["/", "%", "min", "max"] {
         command::apply(&mut project, &scene, &set(allowed)).unwrap();
     }
+    // Logic switches moving platforms too.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": entity, "operation": "action.component",
+                     "params": {"component": {"Text": "platform"}}}),
+        ),
+    )
+    .unwrap();
 
     // The editor reads the same lists from the core.
     assert_eq!(
@@ -370,6 +380,14 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
     assert_eq!(
         param("event.input", "mode")["choices"][1],
         json!({"value": "held", "label": "Manter"})
+    );
+    assert_eq!(
+        param("action.component", "component")["choices"][0],
+        json!({"value": "collider", "label": "Colisão / área (2D e 3D)"})
+    );
+    assert_eq!(
+        param("action.component", "component")["choices"][5],
+        json!({"value": "platform", "label": "Plataforma móvel"})
     );
     assert_eq!(param("event.input", "action")["ref"], "input_action");
     assert!(param("event.input", "action").get("choices").is_none());
@@ -1011,6 +1029,85 @@ fn the_report_names_what_each_command_created_and_the_warnings_it_added() {
             .any(|w| w.as_str().unwrap().contains("Escape é reservada")),
         "{validation}"
     );
+}
+
+#[test]
+fn a_component_switch_aimed_at_an_object_without_it_is_warned() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Alavanca"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Ponte"},
+            {"op": "add_node", "entity": "$0", "operation": "action.component",
+             "params": {"target": {"Object": "$1"}, "component": "collider"}},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("Alavanca → nó action.component")
+            && warning.contains("Ponte não tem colisor nem área"),
+        "{warning}"
+    );
+    let lever = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let bridge = report["created"]["1"][0]["id"].as_str().unwrap().to_owned();
+    let node = report["created"]["2"][0]["id"].as_str().unwrap().to_owned();
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "set_node_params", "entity": lever, "node": node,
+                      "params": {"component": "platform"}}),
+        ),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("Ponte não tem plataforma móvel"),
+        "{warnings:?}"
+    );
+    // A moving platform brings its 3D collider, so both choices find what they switch.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "add_component", "entity": bridge, "component": "platform"})),
+    )
+    .unwrap();
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "set_node_params", "entity": lever, "node": node,
+                      "params": {"component": "collider"}}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+
+    // A target that comes through the port is only known in the game.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "set_node_params", "entity": lever, "node": node,
+             "params": {"component": "controller"}},
+            {"op": "add_node", "entity": lever, "operation": "value.object",
+             "params": {"value": {"Object": bridge}}},
+            {"op": "connect", "entity": lever, "from_node": "$1", "from_port": "value",
+             "to_node": node, "to_port": "target"},
+        ])),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
 }
 
 #[test]

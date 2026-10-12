@@ -13,7 +13,7 @@ use crate::{
     document::*,
     editing,
     graph::{self, Edge, Node, OperationDef, PortType, Reference},
-    input_actions::{self, every_entity},
+    input_actions::{self, every_entity, every_holder},
     movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
     physics3d::CollisionShape,
     spatial,
@@ -848,9 +848,10 @@ fn names_of<'a>(project: &Project, wanted: &HashSet<&'a str>) -> HashMap<&'a str
 /// A batch's result for agents: `created` maps the index of each command that created
 /// something to the IDs it created, in order (a preset's root first), with their names (a
 /// node's is its operation; what a later command removed keeps the name it was created
-/// with); `warnings`, present when the batch added any, lists what the game will ignore
-/// without failing, the action names and keys it left shared (see [`batch_warnings`]) and
-/// what its commands left that the game takes otherwise than it may seem (see [`Check`]);
+/// with); `warnings`, present when the batch added any, lists what the game will ignore or
+/// stop on (see [`warnings`]), the action names and keys it left shared (see
+/// [`batch_warnings`]) and what its commands left that the game takes otherwise than it may
+/// seem (see [`Check`]);
 /// `before` are the project's [`batch_warnings`] before the batch, which are not repeated (a
 /// shared name or key comes back only when the batch added an action to it).
 pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Json {
@@ -895,8 +896,8 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
     result
 }
 
-/// Something the game will ignore without failing, or that a batch should hear about; see
-/// [`batch_warnings`].
+/// Something the game will ignore or stop on, though it saves, or that a batch should hear
+/// about; see [`batch_warnings`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warning {
     /// What it is about, by IDs and values only, so renaming an object does not make it new:
@@ -906,11 +907,12 @@ pub struct Warning {
     pub message: String,
 }
 
-/// What the game will ignore without failing, so validation lets it through: input actions
+/// What the game will ignore or stop on, though validation lets it through: input actions
 /// bound to keys the game does not read (or keeps, Escape and F3), logic nodes that name an
 /// input action the project does not have (or name it instead of giving its ID, as nodes
-/// stored before commands kept the ID), and fixed-choice parameters holding another value
-/// (set by update_entity or by hand).
+/// stored before commands kept the ID), fixed-choice parameters holding another value (set by
+/// update_entity or by hand), and switches of a component aimed at an object that lacks it,
+/// which stop with an error in the game.
 pub fn warnings(project: &Project) -> Vec<Warning> {
     let mut found = Vec::new();
     for (id, key) in &project.input_bindings {
@@ -979,6 +981,48 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
                 found.push(Warning {
                     about: vec![format!("choice {} {error}", node.id)],
                     message: format!("{}: {error}", place()),
+                });
+            }
+        }
+    }
+    // Only a target in the parameter is known here; one from a port is known in the game.
+    for (scope, entities) in every_holder(project) {
+        for e in entities {
+            for node in e
+                .graph
+                .nodes
+                .iter()
+                .filter(|n| n.operation == "action.component")
+            {
+                let Some(Value::Object(Some(target))) = node.params.get("target") else {
+                    continue;
+                };
+                let Some(object) = entities.iter().find(|o| o.id == *target) else {
+                    continue;
+                };
+                if e.graph
+                    .edges
+                    .iter()
+                    .any(|edge| edge.to_node == node.id && edge.to_port == "target")
+                {
+                    continue;
+                }
+                let component = node.text("component");
+                let lacks = match component {
+                    "collider" if object.collider.is_none() && object.physics3d.is_none() => {
+                        "colisor nem área"
+                    }
+                    "controller" if object.controller.is_none() => "controlador",
+                    "platform" if object.platform.is_none() => "plataforma móvel",
+                    _ => continue,
+                };
+                found.push(Warning {
+                    about: vec![format!("component {} {component} {target}", node.id)],
+                    message: format!(
+                        "{scope} → {} → nó {} ({}): {} não tem {lacks}, e no jogo o nó para \
+                         com erro",
+                        e.name, node.operation, node.id, object.name
+                    ),
                 });
             }
         }

@@ -273,9 +273,11 @@ pub fn definitions() -> Json {
         tool(
             "oxy_validate",
             "Validates the whole project with the same rules used when saving: {valid, error?, \
-             warnings?}. warnings lists what the game would ignore without failing: logic nodes \
-             naming an input action the project lacks, keys the game does not read and \
-             parameters outside their choices (empty included).",
+             warnings?}. warnings lists what saves but the game would ignore or stop on: logic \
+             nodes naming an input action the project lacks, keys the game does not read, \
+             parameters outside their choices (empty included) and action.component nodes \
+             whose target parameter names an object lacking the part they switch (the node \
+             stops with an error in the game).",
             json!({"project": project}),
             json!([])
         ),
@@ -462,9 +464,11 @@ project.oxy.json.schema-N.….backup.json). The answer is {created, \
 warnings?}: created maps the index of each command that created something to [{id, name}] \
 (every piece of a preset, its root first; a node's name is its operation; what a later command \
 removed keeps the name it was created with), and warnings lists what the batch left that the \
-game will ignore or take otherwise than it may seem: a node naming an input action the project \
-lacks, two actions on one key (the game fires both), a box collider left at an object's old \
-dimensions, logic copied to another scene that still opens the scene it came from.
+game will ignore, stop on or take otherwise than it may seem: a node naming an input action the \
+project lacks, two actions on one key (the game fires both), an action.component whose target \
+parameter names an object lacking the part it switches (the node stops with an error), a box \
+collider left at an object's old dimensions, logic copied to another scene that still opens the \
+scene it came from.
 Placeholders: in later commands, a whole string \"$N\" is the first ID created by command N \
 (0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included; \"$$N\" is the \
 text \"$N\" itself. Other text with '$', such as \"$10 de bônus\", stays as it is.
@@ -1667,6 +1671,22 @@ mod tests {
         assert!(APPLY_DESCRIPTION.contains("name two actions share comes back in warnings"));
         assert!(!APPLY_DESCRIPTION.contains("names are unique"));
         assert!(INPUTS.contains("by ID or name"));
+        // Warnings cover a node that stops with an error, not only what the game ignores.
+        let validate = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_validate")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for description in [validate.as_str(), APPLY_DESCRIPTION] {
+            assert!(
+                description.contains("stop on") && description.contains("action.component"),
+                "{description}"
+            );
+        }
     }
 
     #[test]

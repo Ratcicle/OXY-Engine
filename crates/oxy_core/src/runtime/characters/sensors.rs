@@ -93,6 +93,10 @@ impl Characters {
             world.flush();
         }
     }
+    /// Forgets who is inside the area `id`: they enter it afresh at the next detection.
+    pub(in crate::runtime) fn forget_area(&mut self, id: &str) {
+        self.sensor_pairs.retain(|(area, _)| area != id);
+    }
     fn detect_sensors(&mut self, scene: &Scene) -> Result<(), String> {
         self.sensor_events.clear();
         let Some(world) = &self.world else {
