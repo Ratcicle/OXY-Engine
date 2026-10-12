@@ -413,7 +413,8 @@ k × offset (default [0.5,0,0]) from the original, relative to its parent, and t
 every copy's root, copy after copy (one per root in order); rename_entity {entity, name}; \
 set_parent {ids, parent?} (keeps world transform)
 - copy_entities {ids, to_scene, parent?}: copies objects of `scene`, with everything under them, \
-to another scene, keeping their place in the world; answers the copies' roots. Refused while they \
+to another scene, keeping their place in the world and the world path of the animations that \
+move them, under a scaled or turned parent too; answers the copies' roots. Refused while they \
 point to objects or animations left behind (copy those too)
 - save_model {entity, name?}: the object and everything under it become a model asset (answers \
 its ID); place_model {model: ID or name, parent?, position?, name?}: places a copy in `scene`, \

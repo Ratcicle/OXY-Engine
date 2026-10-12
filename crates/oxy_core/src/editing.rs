@@ -1,6 +1,6 @@
 //! Reversible editing rules, independent of widgets and runtime input.
 use crate::document::*;
-use glam::{EulerRot, Mat4, Vec3};
+use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::{HashMap, HashSet};
 
 /// Creates only the requested first scene, without demonstration gameplay.
@@ -291,11 +291,14 @@ pub fn animates_itself(entity: &Entity) -> bool {
 /// `before` to `after`, every track that animates `target` (in any clip of `entities`) moves
 /// the same way, so the animation plays where the object now is: positions turn with the
 /// change of rotation around the old position and follow the new one, rotations turn with it
-/// and scales grow by the same factor. Rotations and scales stay as they were when those of
-/// the object did not change, and a keyframe at the old rest pose lands exactly on the new.
+/// (read near their own angles, see [`angles_near`]) and scales grow by the same factor.
+/// Rotations and scales stay as they were when those of the object did not change, and a
+/// keyframe at the old rest pose lands exactly on the new. An edit keeps the path's length;
+/// a copy under another parent changes space with [`rebase_tracks`] instead.
 pub fn carry_tracks(entities: &mut [Entity], target: &str, before: &Transform, after: &Transform) {
     let turn = (before.rotation != after.rotation)
         .then(|| (after.quaternion() * before.quaternion().inverse()).normalize());
+    let change = std::array::from_fn(|i| after.rotation[i] - before.rotation[i]);
     let resized = (before.scale != after.scale)
         .then(|| Vec3::from(after.scale) / Vec3::from(before.scale))
         .filter(|factor| factor.is_finite());
@@ -311,7 +314,7 @@ pub fn carry_tracks(entities: &mut [Entity], target: &str, before: &Transform, a
                         key.rotation = if key.rotation == before.rotation {
                             after.rotation
                         } else {
-                            turned(turn, key)
+                            angles_near(turn * key.quaternion(), offset_angles(key, change))
                         };
                     }
                     if let Some(factor) = resized {
@@ -327,26 +330,105 @@ pub fn carry_tracks(entities: &mut [Entity], target: &str, before: &Transform, a
     }
 }
 
-/// The keyframe's rotation turned by `turn`, as XYZ angles whose quaternion keeps its sign:
-/// the keyframe keeps its full turns (one at 360° turned by 30° reads 390°, not 30°), and two
-/// keyframes keep the quaternion product that interpolation goes by.
-fn turned(turn: glam::Quat, key: &Transform) -> [f32; 3] {
-    let rotation = turn * key.quaternion();
+/// The keyframe's angles moved by `change`, where its turned rotation is expected to read.
+fn offset_angles(key: &Transform, change: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| key.rotation[i] + change[i])
+}
+
+/// The XYZ angles of `rotation` that read closest to `near`. A rotation has two sets of angles,
+/// (x, y, z) and (x + 180°, 180° − y, z + 180°), each axis give or take full turns, and plain
+/// Euler angles keep Y within ±90°: a keyframe at 120° turned by 30° would read
+/// [180°, 30°, 180°] and one at -360° would read 30°. Near the expected angles they read 150°
+/// and -330°, keeping the turns and the winding that the timeline and `oxy_entity` show. The
+/// game turns the same either way, interpolation taking the short path between keyframes.
+pub fn angles_near(rotation: Quat, near: [f32; 3]) -> [f32; 3] {
+    use std::f32::consts::{PI, TAU};
     let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
-    let mut angles = [x, y, z];
-    let read = Transform {
-        rotation: angles,
-        ..Default::default()
+    let wound = |angles: [f32; 3]| -> [f32; 3] {
+        std::array::from_fn(|i| angles[i] + TAU * ((near[i] - angles[i]) / TAU).round())
     };
-    if read.quaternion().dot(rotation) < 0. {
-        // A full turn more flips the sign back; on the axis the keyframe winds most around,
-        // so a keyframe at 360° reads near 360°.
-        let axis = (0..3)
-            .max_by(|a, b| key.rotation[*a].abs().total_cmp(&key.rotation[*b].abs()))
-            .unwrap_or(0);
-        angles[axis] += std::f32::consts::TAU;
+    let distance =
+        |angles: &[f32; 3]| -> f32 { angles.iter().zip(near).map(|(a, b)| (a - b).powi(2)).sum() };
+    let first = wound([x, y, z]);
+    let second = wound([x + PI, PI - y, z + PI]);
+    if distance(&second) < distance(&first) {
+        second
+    } else {
+        first
     }
-    angles
+}
+
+/// Keyframes are local to the parent, like the object's own transform. When a copy of
+/// `target` goes under another parent, `change` taking the old parent's space to the new one
+/// (the new parent's world matrix inverted, times the old one's) and its rest transform going
+/// from `before` to `after`, every track that animates it (in any clip of `entities`) changes
+/// space the same way and the copy plays the same path in the world: under a parent twice as
+/// big the path is half as long. [`carry_tracks`] is for an edit of the object itself, which
+/// keeps the path's length. Keyframe parts equal to the old rest pose land exactly on the new
+/// one. Refused, with nothing changed, when a keyframe would need shear in the new space.
+pub fn rebase_tracks(
+    entities: &mut [Entity],
+    target: &str,
+    change: Mat4,
+    before: &Transform,
+    after: &Transform,
+) -> Result<(), String> {
+    let rebased = entities
+        .iter()
+        .flat_map(|e| &e.clips)
+        .flat_map(|c| &c.tracks)
+        .filter(|t| t.target == target)
+        .flat_map(|t| &t.keyframes)
+        .map(|key| rebased(&key.transform, change, before, after))
+        .collect::<Result<Vec<_>, _>>()?;
+    let keys = entities
+        .iter_mut()
+        .flat_map(|e| &mut e.clips)
+        .flat_map(|c| &mut c.tracks)
+        .filter(|t| t.target == target)
+        .flat_map(|t| &mut t.keyframes);
+    for (key, transform) in keys.zip(rebased) {
+        key.transform = transform;
+    }
+    Ok(())
+}
+
+/// One keyframe of [`rebase_tracks`] under the new parent.
+fn rebased(
+    key: &Transform,
+    change: Mat4,
+    before: &Transform,
+    after: &Transform,
+) -> Result<Transform, String> {
+    // The game poses the object around its own pivot, whatever the keyframe stored.
+    let posed = |t: &Transform| Transform {
+        pivot: before.pivot,
+        ..t.clone()
+    };
+    let matrix = change * posed(key).matrix();
+    let found = Transform::from_matrix(matrix, before.pivot);
+    let mut next = key.clone();
+    next.position = if key.position == before.position {
+        after.position
+    } else {
+        found.position
+    };
+    next.rotation = if key.rotation == before.rotation {
+        after.rotation
+    } else {
+        let turned = std::array::from_fn(|i| after.rotation[i] - before.rotation[i]);
+        angles_near(found.quaternion(), offset_angles(key, turned))
+    };
+    next.scale = if key.scale == before.scale {
+        after.scale
+    } else {
+        found.scale
+    };
+    let check = posed(&next);
+    if !check.finite() || !check.matrix().abs_diff_eq(matrix, 0.0001) {
+        return Err("Um quadro-chave ficaria deformado no novo pai (cisalhamento)".into());
+    }
+    Ok(next)
 }
 
 /// After the rest transform of `id` changed from `before`, carries the keyframes along when
@@ -549,6 +631,37 @@ mod tests {
                 got.dot(expected).abs() > 0.9999,
                 "{time}: {got:?} / {expected:?}"
             );
+        }
+    }
+    #[test]
+    fn angles_near_keep_the_rotation_and_read_the_expected_set() {
+        let degrees = [-200f32, -90., -30., 0., 45., 120., 180., 390.];
+        let quaternion = |rotation| {
+            Transform {
+                rotation,
+                ..Default::default()
+            }
+            .quaternion()
+        };
+        for x in degrees {
+            for y in degrees {
+                for z in degrees {
+                    let angles = [x, y, z].map(f32::to_radians);
+                    let rotation = quaternion(angles);
+                    let read = angles_near(rotation, angles);
+                    assert!(
+                        quaternion(read).dot(rotation).abs() > 0.99999,
+                        "{x} {y} {z}"
+                    );
+                    // Away from Y at ±90°, where X and Z share one axis, the angles come back.
+                    if y != -90. {
+                        assert!(
+                            read.iter().zip(angles).all(|(a, b)| (a - b).abs() < 1e-3),
+                            "{x} {y} {z}: {read:?}"
+                        );
+                    }
+                }
+            }
         }
     }
     #[test]

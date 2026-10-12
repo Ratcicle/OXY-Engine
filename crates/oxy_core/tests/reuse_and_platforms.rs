@@ -601,6 +601,179 @@ fn copies_go_to_another_level_keeping_their_place_and_their_references() {
     assert!(error.contains("não existe na cena Fase 2"), "{error}");
 }
 
+/// World matrices of the poses that the keyframes of the object's first track give it.
+fn world_keys(project: &Project, scene: &str, id: &str) -> Vec<glam::Mat4> {
+    let level = project.scene(scene).unwrap();
+    let e = level.entity(id).unwrap();
+    let parent = e
+        .parent
+        .as_deref()
+        .map_or(glam::Mat4::IDENTITY, |p| level.world_matrix(p).unwrap());
+    e.clips[0].tracks[0]
+        .keyframes
+        .iter()
+        .map(|k| {
+            let pose = Transform {
+                pivot: e.transform.pivot,
+                ..k.transform.clone()
+            };
+            parent * pose.matrix()
+        })
+        .collect()
+}
+
+fn same_world_path(project: &Project, (from, original): (&str, &str), (to, copy): (&str, &str)) {
+    let expected = world_keys(project, from, original);
+    let got = world_keys(project, to, copy);
+    assert_eq!(expected.len(), got.len());
+    for (a, b) in expected.iter().zip(&got) {
+        assert!(a.abs_diff_eq(*b, 1e-4), "{a:?}\n{b:?}");
+    }
+}
+
+#[test]
+fn copies_under_scaled_or_turned_parents_keep_the_world_path() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    let applied = apply(
+        &mut project,
+        &first,
+        json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Setor",
+             "position": [5.0, 0.0, 0.0]},
+            {"op": "set_transform", "entity": "$1", "scale": [2.0, 2.0, 2.0],
+             "rotation": [0.0, 60.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform"},
+             "parent": "$1", "position": [1.0, 0.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cylinder"}, "name": "Roda",
+             "parent": "$1", "position": [0.0, 0.0, 2.0]},
+            {"op": "set_clip", "entity": "$4", "name": "Girar", "duration": 3.0, "looping": true,
+             "tracks": [{"keyframes": [{"time": 0.0},
+                                       {"time": 1.0, "rotation": [0.0, 120.0, 0.0]},
+                                       {"time": 2.0, "rotation": [0.0, 240.0, 0.0]},
+                                       {"time": 3.0, "rotation": [0.0, 360.0, 0.0]}]}]},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform"},
+             "position": [0.0, 1.0, 0.0]},
+            {"op": "create_entity", "scene": "$0", "kind": {"type": "group"}, "name": "Ala",
+             "position": [0.0, 3.0, 0.0]},
+            {"op": "set_transform", "scene": "$0", "entity": "$7", "scale": [0.5, 0.5, 0.5],
+             "rotation": [0.0, 0.0, 45.0]},
+            {"op": "create_entity", "scene": "$0", "kind": {"type": "group"}, "name": "Esticado"},
+            {"op": "set_transform", "scene": "$0", "entity": "$9", "scale": [2.0, 1.0, 1.0]},
+        ]),
+    );
+    let second = applied[0].created[0].clone();
+    let inner = applied[3].created[0].clone();
+    let wheel = applied[4].created[0].clone();
+    let outer = applied[6].created[0].clone();
+    let wing = applied[7].created[0].clone();
+    let stretched = applied[9].created[0].clone();
+    let copied = apply(
+        &mut project,
+        &first,
+        json!([
+            {"op": "copy_entities", "ids": [inner], "to_scene": second},
+            {"op": "copy_entities", "ids": [outer], "to_scene": second, "parent": wing},
+            {"op": "copy_entities", "ids": [wheel], "to_scene": second, "parent": wing},
+            {"op": "copy_entities", "ids": [wheel], "to_scene": second},
+            {"op": "copy_entities", "ids": [outer], "to_scene": second, "parent": stretched},
+        ]),
+    );
+    let copy = |i: usize| copied[i].created[0].clone();
+    // Out of a group twice as big: the path is twice as long in the copy's own space, 8 m.
+    same_world_path(&project, (&first, &inner), (&second, &copy(0)));
+    let keys = key_positions(&project, &second, &copy(0));
+    let length = glam::Vec3::from(keys[1]).distance(glam::Vec3::from(keys[0]));
+    assert!((length - 8.).abs() < 1e-4, "{keys:?}");
+    // Into a group half as big and turned, or stretched along X: the same 4 m in the world.
+    same_world_path(&project, (&first, &outer), (&second, &copy(1)));
+    same_world_path(&project, (&first, &outer), (&second, &copy(4)));
+    // A turntable turns with its parent's space and keeps reading its own turns.
+    same_world_path(&project, (&first, &wheel), (&second, &copy(2)));
+    same_world_path(&project, (&first, &wheel), (&second, &copy(3)));
+    let level = project.scene(&second).unwrap();
+    let turned = level.entity(&copy(3)).unwrap();
+    let read = |r: [f32; 3]| r.map(f32::to_degrees);
+    assert!(near(read(turned.transform.rotation), [0., 60., 0.]));
+    for (key, y) in turned.clips[0].tracks[0]
+        .keyframes
+        .iter()
+        .zip([60., 180., 300., 420.])
+    {
+        let angles = read(key.transform.rotation);
+        assert!(
+            angles
+                .iter()
+                .zip([0., y, 0.])
+                .all(|(a, b)| (a - b).abs() < 1e-3),
+            "{angles:?}"
+        );
+    }
+    validate_project(&project).unwrap();
+
+    // A turning keyframe under a stretched parent would need shear: refused, nothing copied.
+    let top = apply(
+        &mut project,
+        &first,
+        json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cylinder"}, "name": "Pião"},
+            {"op": "set_clip", "entity": "$0", "name": "Girar", "duration": 1.0,
+             "tracks": [{"keyframes": [{"time": 0.0},
+                                       {"time": 1.0, "rotation": [0.0, 120.0, 0.0]}]}]},
+        ]),
+    )[0]
+    .created[0]
+        .clone();
+    let error = refused(
+        &mut project,
+        &first,
+        json!({"op": "copy_entities", "ids": [top], "to_scene": second, "parent": stretched}),
+    );
+    assert!(
+        error.contains("A animação de Pião") && error.contains("cisalhamento"),
+        "{error}"
+    );
+}
+
+#[test]
+fn turned_keyframes_read_their_own_angles_turned() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let wheel = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cylinder"}},
+            {"op": "set_clip", "entity": "$0", "name": "Girar", "duration": 5.0,
+             "tracks": [{"keyframes": [{"time": 0.0},
+                                       {"time": 1.0, "rotation": [0.0, 120.0, 0.0]},
+                                       {"time": 2.0, "rotation": [0.0, 240.0, 0.0]},
+                                       {"time": 3.0, "rotation": [0.0, 360.0, 0.0]},
+                                       {"time": 4.0, "rotation": [0.0, -360.0, 0.0]},
+                                       {"time": 5.0, "rotation": [0.0, 720.0, 0.0]}]}]},
+            {"op": "set_transform", "entity": "$0", "rotation": [0.0, 30.0, 0.0]},
+        ]),
+    )[0]
+    .created[0]
+        .clone();
+    let keys = &entity(&project, &scene, &wheel).clips[0].tracks[0].keyframes;
+    let expected = [30., 150., 270., 390., -330., 750.];
+    for (key, y) in keys.iter().zip(expected) {
+        let angles = key.transform.rotation.map(f32::to_degrees);
+        assert!(
+            angles
+                .iter()
+                .zip([0., y, 0.])
+                .all(|(a, b)| (a - b).abs() < 1e-3),
+            "{y}: {angles:?}"
+        );
+    }
+    // Ten more degrees on a keyframe now turn it ten degrees more, the way it reads.
+    let mut key = keys[1].transform.clone();
+    key.rotation[1] += 10f32.to_radians();
+    let turned = glam::Quat::from_rotation_y(160f32.to_radians());
+    assert!(key.quaternion().dot(turned).abs() > 0.99999);
+}
+
 #[test]
 fn models_are_saved_and_placed_in_any_level() {
     let (mut project, first) = project(SceneKind::ThreeD);

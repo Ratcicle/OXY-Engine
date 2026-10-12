@@ -173,8 +173,8 @@ pub enum Command {
         count: Option<usize>,
     },
     /// Copies objects of `scene`, with everything under them, to `to_scene` (under `parent`,
-    /// or at its root), keeping their place in the world. To another scene, their references
-    /// must stay inside the copy.
+    /// or at its root), keeping their place in the world and the world path of the animations
+    /// that move them. To another scene, their references must stay inside the copy.
     CopyEntities {
         #[serde(default)]
         scene: Option<Id>,
@@ -1661,7 +1661,8 @@ fn refuse_outside(scene: &Scene, pieces: &HashSet<Id>, what: &str) -> Result<(),
 
 /// Copies `ids` of the scene `from`, with everything under them, to the scene `to`. The copied
 /// roots go under `parent` (or to the root of `to`) keeping their world transform, and the
-/// keyframes that animate them follow. Answers the new roots, in order.
+/// keyframes that animate them change parent space with them, so they play the same path in
+/// the world ([`editing::rebase_tracks`]). Answers the new roots, in order.
 fn copy_entities(
     project: &mut Project,
     from: &str,
@@ -1699,34 +1700,49 @@ fn copy_entities(
     if parent_world.determinant().abs() < 1e-8 {
         return Err("A transformação do pai de destino não pode ser invertida".into());
     }
-    let worlds = roots
+    // Each root's old parent space, which the copy leaves for the destination's.
+    let spaces = roots
         .iter()
-        .map(|id| source.world_matrix(id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|id| {
+            let parent = source.entity(id).and_then(|e| e.parent.as_deref());
+            Ok(match parent {
+                Some(parent) => source.world_matrix(parent)?,
+                None => Mat4::IDENTITY,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
     remap_entities(&mut copies, &map)?;
-    for (root, world) in roots.iter().zip(worlds) {
+    for (root, space) in roots.iter().zip(spaces) {
         let id = &map[root];
         let entity = copies.iter_mut().find(|e| e.id == *id).unwrap();
+        let name = entity.name.clone();
         let before = entity.transform.clone();
-        let local = parent_world.inverse() * world;
-        // An unchanged local transform stays exact, without the rounding of the matrices.
-        let after = if before.matrix().abs_diff_eq(local, 1e-6) {
-            before.clone()
-        } else {
-            let transform = Transform::from_matrix(local, before.pivot);
-            if !transform.finite() || !transform.matrix().abs_diff_eq(local, 0.0001) {
-                return Err(format!(
-                    "{} ficaria deformado sob o pai de destino (cisalhamento); escolha outro \
-                     pai ou ajuste a escala não uniforme dele",
-                    entity.name
-                ));
-            }
-            transform
-        };
+        let change = parent_world.inverse() * space;
+        let local = change * before.matrix();
+        // An unchanged local transform stays exact, without the rounding of the matrices, and
+        // so do the keyframes that animate it.
+        if before.matrix().abs_diff_eq(local, 1e-6) {
+            entity.parent = parent.cloned();
+            continue;
+        }
+        let mut after = Transform::from_matrix(local, before.pivot);
+        after.rotation = editing::angles_near(after.quaternion(), before.rotation);
+        if !after.finite() || !after.matrix().abs_diff_eq(local, 0.0001) {
+            return Err(format!(
+                "{name} ficaria deformado sob o pai de destino (cisalhamento); escolha outro \
+                 pai ou ajuste a escala não uniforme dele"
+            ));
+        }
         entity.parent = parent.cloned();
         entity.transform = after.clone();
-        editing::carry_tracks(&mut copies, id, &before, &after);
+        // A change of parent space, not an edit: the path scales and turns with the space.
+        editing::rebase_tracks(&mut copies, id, change, &before, &after).map_err(|_| {
+            format!(
+                "A animação de {name} ficaria deformada sob o pai de destino (cisalhamento); \
+                 escolha outro pai ou ajuste a escala não uniforme dele"
+            )
+        })?;
     }
     let created = roots.iter().map(|root| map[root].clone()).collect();
     scene_mut(project, to).entities.extend(copies);
