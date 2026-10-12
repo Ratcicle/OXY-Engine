@@ -1,41 +1,5 @@
 //! Typed native movement operations. Parameters are editable defaults, never demo rules.
 use super::*;
-fn op(
-    id: &'static str,
-    label: &'static str,
-    category: &'static str,
-    action: bool,
-    params: Vec<ParamDef>,
-    outputs: Vec<PortDef>,
-) -> OperationDef {
-    let mut inputs: Vec<_> = params
-        .iter()
-        .filter(|p| !matches!(p.default, Value::Text(_)))
-        .map(|p| port(p.id, p.label, value_type(&p.default)))
-        .collect();
-    let mut outputs = outputs;
-    if action {
-        inputs.insert(0, port("exec", "Executar", PortType::Exec));
-        outputs.insert(0, port("exec", "Continuar", PortType::Exec));
-    }
-    OperationDef {
-        id,
-        label,
-        category,
-        inputs,
-        outputs,
-        params,
-    }
-}
-fn target() -> ParamDef {
-    param("target", "Objeto", Value::Object(None))
-}
-fn v3(id: &'static str, label: &'static str, value: [f32; 3]) -> ParamDef {
-    param(id, label, Value::Vector3(value))
-}
-fn flag(id: &'static str, label: &'static str, value: bool) -> ParamDef {
-    param(id, label, Value::Bool(value))
-}
 fn state_ports() -> Vec<PortDef> {
     use PortType::*;
     vec![

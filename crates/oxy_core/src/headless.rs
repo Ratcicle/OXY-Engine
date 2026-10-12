@@ -668,6 +668,18 @@ fn log_entry(lookup: Lookup, traces: &[NodeTrace], time: f64, line: &str) -> Log
     entry
 }
 
+/// Whether running a node of `operation` opens another scene: an action that names the scene
+/// to open, as Mudar de cena does.
+fn changes_scene(operation: &str) -> bool {
+    graph::definition(operation).is_some_and(|def| {
+        def.inputs.iter().any(|port| port.kind == PortType::Exec)
+            && def
+                .params
+                .iter()
+                .any(|param| graph::reference(def.id, param) == Some(graph::Reference::Scene))
+    })
+}
+
 /// Nodes of `graph` that run only because of the given event operations: those events and
 /// every node their execution flow reaches that no other event reaches.
 fn reached_only_from(graph: &Graph, events: &[String]) -> HashSet<Id> {
@@ -986,7 +998,7 @@ impl Recorder<'_> {
         }
         // A scene change always shows, even from a chain an excluded event starts (a reset
         // on falling, checked every step), so each scene start has an action that explains it.
-        if !self.exclude_events.is_empty() && trace.operation != "action.scene" {
+        if !self.exclude_events.is_empty() && !changes_scene(&trace.operation) {
             if !self.excluded_nodes.contains_key(&trace.object) {
                 let nodes = self
                     .lookup(runtime)

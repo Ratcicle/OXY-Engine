@@ -1,5 +1,8 @@
 //! Reversible editing rules, independent of widgets and runtime input.
-use crate::document::*;
+use crate::{
+    document::*,
+    graph::{self, Reference},
+};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::{HashMap, HashSet};
 
@@ -39,24 +42,24 @@ pub fn duplicate_scene(project: &mut Project, id: &str) -> Result<Id, String> {
     Ok(new_scene)
 }
 
+/// The logic nodes of the scenes and models that name the scene `id`, as "Scope → Object →
+/// node label".
 pub fn scene_references(project: &Project, id: &str) -> Vec<String> {
-    project
-        .scenes
-        .iter()
-        .map(|s| (s.name.as_str(), s.entities.as_slice()))
-        .chain(
-            project
-                .assets
+    crate::input_actions::every_entity(project)
+        .flat_map(|(scope, e)| {
+            e.graph
+                .nodes
                 .iter()
-                .filter_map(|a| a.model.as_deref().map(|m| (a.name.as_str(), m))),
-        )
-        .flat_map(|(scope, entities)| {
-            entities.iter().flat_map(move |e| {
-                e.graph.nodes.iter().filter(move |n| {
-                    n.operation == "action.scene"
-                        && matches!(n.params.get("scene"), Some(Value::Text(target)) if target==id)
-                }).map(move |_| format!("{scope} → {} → Mudar de cena", e.name))
-            })
+                .filter(move |n| {
+                    graph::node_references(n).any(|(_, reference, value)| {
+                        reference == Reference::Scene
+                            && matches!(value, Value::Text(target) if target == id)
+                    })
+                })
+                .filter_map(move |n| {
+                    let label = graph::definition(&n.operation)?.label;
+                    Some(format!("{scope} → {} → {label}", e.name))
+                })
         })
         .collect()
 }

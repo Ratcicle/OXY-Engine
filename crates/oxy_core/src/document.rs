@@ -1,6 +1,9 @@
 //! Versioned editor documents. Units are metres, +Y is up, +Z faces the viewer.
 //! Euler angles are radians in XYZ order. Transforms use an explicit local pivot.
-use crate::{animation::Clip, graph::Graph};
+use crate::{
+    animation::Clip,
+    graph::{Graph, Reference, node_references},
+};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -877,7 +880,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
                 return Err(format!("Identificador de objeto duplicado: {}", e.name));
             }
         }
-        validate_action_references(project, scene)?;
+        validate_action_references(project, &scene.entities, None)?;
     }
     for asset in &project.assets {
         if let Some(model) = &asset.model {
@@ -887,7 +890,8 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
                 kind: SceneKind::ThreeD,
                 entities: model.clone(),
             };
-            validate_scene(&scene, &assets)?
+            validate_scene(&scene, &assets)?;
+            validate_action_references(project, model, Some(&asset.name))?;
         }
     }
     Ok(())
@@ -1034,35 +1038,37 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     }
     Ok(())
 }
-fn validate_action_references(project: &Project, scene: &Scene) -> Result<(), String> {
-    let clips: HashSet<_> = scene
-        .entities
+/// The scenes, audios and clips named by the logic of `entities`, a scene's objects or the
+/// pieces of the model named `model`. Clips are checked in scenes only: a model may name the
+/// clip of an object it is placed with, such as the visitor of its area.
+fn validate_action_references(
+    project: &Project,
+    entities: &[Entity],
+    model: Option<&str>,
+) -> Result<(), String> {
+    let clips: HashSet<_> = entities
         .iter()
         .flat_map(|e| e.clips.iter().map(|clip| clip.id.as_str()))
         .collect();
-    for e in &scene.entities {
+    for e in entities {
         for node in &e.graph.nodes {
-            let missing = match node.operation.as_str() {
-                "action.scene" => {
-                    let id = node.text("scene");
-                    !id.is_empty() && project.scene(id).is_none()
-                }
-                "action.sound" => {
-                    let id = node.text("asset");
-                    !id.is_empty()
-                        && !project
+            let missing = node_references(node).any(|(param, reference, _)| {
+                let id = node.text(param.id);
+                !id.is_empty()
+                    && match reference {
+                        Reference::Scene => project.scene(id).is_none(),
+                        Reference::Audio => !project
                             .asset(id)
-                            .is_some_and(|a| a.kind == AssetKind::Audio)
-                }
-                "action.animation" => {
-                    let id = node.text("clip");
-                    !id.is_empty() && !clips.contains(id)
-                }
-                _ => false,
-            };
+                            .is_some_and(|a| a.kind == AssetKind::Audio),
+                        Reference::Clip => model.is_none() && !clips.contains(id),
+                        _ => false,
+                    }
+            });
             if missing {
+                // A piece exists only in its model: the scenes do not show it.
+                let holder = model.map_or(String::new(), |name| format!("modelo {name}, "));
                 return Err(format!(
-                    "Referência quebrada: objeto {}, nó {} ({})",
+                    "Referência quebrada: {holder}objeto {}, nó {} ({})",
                     e.name, node.id, node.operation
                 ));
             }

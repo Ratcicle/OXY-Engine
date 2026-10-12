@@ -699,12 +699,12 @@ enum Check {
         entity: Id,
         size: [f32; 3],
     },
-    /// copy_entities copied into `scene` the action.scene nodes `nodes` ([object, node]),
-    /// which open `from`, the scene the copies came from.
+    /// copy_entities copied into `scene` the nodes `nodes` ([object, node, parameter]) whose
+    /// scene parameter names `from`, the scene the copies came from, such as action.scene.
     SceneBack {
         scene: Id,
         from: Id,
-        nodes: Vec<(Id, Id)>,
+        nodes: Vec<(Id, Id, &'static str)>,
     },
 }
 impl Check {
@@ -733,17 +733,25 @@ impl Check {
             }
             Self::SceneBack { scene, from, nodes } => {
                 let to = project.scene(scene)?;
+                let mut params: Vec<&str> = Vec::new();
                 let listed: Vec<String> = nodes
                     .iter()
-                    .filter_map(|(entity, node)| {
+                    .filter_map(|(entity, node, param)| {
                         let e = to.entity(entity)?;
-                        e.graph
+                        let n = e
+                            .graph
                             .nodes
                             .iter()
-                            .find(|n| n.id == *node && n.text("scene") == from)
-                            // The copy's ID, which set_node_params takes: the answer gives only
-                            // the copied roots.
-                            .map(|n| format!("{} ({}) → nó action.scene ({})", e.name, e.id, n.id))
+                            .find(|n| n.id == *node && n.text(param) == from)?;
+                        if !params.contains(param) {
+                            params.push(param);
+                        }
+                        // The copy's ID, which set_node_params takes: the answer gives only
+                        // the copied roots.
+                        Some(format!(
+                            "{} ({}) → nó {} ({})",
+                            e.name, e.id, n.operation, n.id
+                        ))
                     })
                     .collect();
                 if listed.is_empty() {
@@ -753,8 +761,9 @@ impl Check {
                 Some(format!(
                     "estes nós copiados para {} ainda abrem {source}, a cena de onde vieram; \
                      para que abram a cena nova (reiniciar a fase, por exemplo), use \
-                     set_node_params com scene {{\"Text\": \"{}\"}}: {}",
+                     set_node_params com {} {{\"Text\": \"{}\"}}: {}",
                     to.name,
+                    params.join("/"),
                     to.id,
                     listed.join("; ")
                 ))
@@ -918,10 +927,13 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
     for (scope, e) in every_entity(project) {
         for node in &e.graph.nodes {
             let place = || format!("{scope} → {} → nó {} ({})", e.name, node.operation, node.id);
-            let action = node.text("action");
-            if matches!(node.operation.as_str(), "event.input" | "input.read")
-                && !project.input_bindings.contains_key(action)
-            {
+            let actions = graph::node_references(node)
+                .filter(|(_, reference, _)| *reference == Reference::InputAction)
+                .map(|(param, ..)| node.text(param.id));
+            for action in actions {
+                if project.input_bindings.contains_key(action) {
+                    continue;
+                }
                 // The game reads only IDs: a name the project knows is still never pressed.
                 let message = match input_actions::find_named(project, action) {
                     Ok(Some(id)) => format!(
@@ -1379,16 +1391,19 @@ fn apply_one(
             let roots = copy_entities(project, &from, ids, &to, parent.as_ref())?;
             // Logic that opens the scene it came from, such as a restart, still opens it.
             let target = project.scene(&to).unwrap();
-            let nodes: Vec<(Id, Id)> = roots
+            let back = from.as_str();
+            let nodes: Vec<(Id, Id, &str)> = roots
                 .iter()
                 .flat_map(|root| target.descendants(root))
                 .filter_map(|id| target.entity(&id))
                 .flat_map(|e| {
-                    e.graph
-                        .nodes
-                        .iter()
-                        .filter(|n| n.operation == "action.scene" && n.text("scene") == from)
-                        .map(|n| (e.id.clone(), n.id.clone()))
+                    e.graph.nodes.iter().flat_map(move |n| {
+                        graph::node_references(n)
+                            .filter(move |(param, reference, _)| {
+                                *reference == Reference::Scene && n.text(param.id) == back
+                            })
+                            .map(move |(param, ..)| (e.id.clone(), n.id.clone(), param.id))
+                    })
                 })
                 .collect();
             if from != to && !nodes.is_empty() {
@@ -2198,12 +2213,14 @@ fn refuse_outside(scene: &Scene, pieces: &HashSet<Id>, what: &str) -> Result<(),
                     links.push((format!("nó {} ({key})", node.operation), target));
                 }
             }
-            let clip = node.text("clip");
-            if node.operation == "action.animation" && !clip.is_empty() && !clips.contains(clip) {
-                found.push(format!(
-                    "{} → nó action.animation → animação de outro objeto ({clip})",
-                    e.name
-                ));
+            for (param, reference, _) in graph::node_references(node) {
+                let clip = node.text(param.id);
+                if reference == Reference::Clip && !clip.is_empty() && !clips.contains(clip) {
+                    found.push(format!(
+                        "{} → nó {} → animação de outro objeto ({clip})",
+                        e.name, node.operation
+                    ));
+                }
             }
         }
         for clip in &e.clips {
@@ -2432,15 +2449,22 @@ fn find_clip(entity: &Entity, clip: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("{} não tem a animação {clip}", entity.name))
 }
 
-/// The logic nodes that play the animation `id`, in scenes and models.
+/// The logic nodes that name the animation `id`, in scenes and models.
 fn clip_uses(project: &Project, id: &str) -> Vec<String> {
     every_entity(project)
         .flat_map(|(scope, e)| {
             e.graph
                 .nodes
                 .iter()
-                .filter(|n| n.operation == "action.animation" && n.text("clip") == id)
-                .map(move |n| format!("{scope} → {} → Reproduzir animação ({})", e.name, n.id))
+                .filter(|n| {
+                    graph::node_references(n).any(|(param, reference, _)| {
+                        reference == Reference::Clip && n.text(param.id) == id
+                    })
+                })
+                .filter_map(move |n| {
+                    let label = graph::definition(&n.operation)?.label;
+                    Some(format!("{scope} → {} → {label} ({})", e.name, n.id))
+                })
         })
         .collect()
 }

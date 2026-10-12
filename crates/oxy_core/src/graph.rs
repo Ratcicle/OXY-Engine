@@ -110,6 +110,33 @@ pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
     })
 }
 
+/// The parameters of `node` that name something of the project ([`reference`]), in registry
+/// order, with what they name. Integrity checks go through here, so a new node that names a
+/// scene, an audio, a clip or an input action needs only its line in [`reference`].
+pub fn node_references(
+    node: &Node,
+) -> impl Iterator<Item = (&'static ParamDef, Reference, &Value)> {
+    definition(&node.operation)
+        .into_iter()
+        .flat_map(|def| def.params.iter().map(move |param| (def.id, param)))
+        .filter_map(move |(operation, param)| {
+            Some((
+                param,
+                reference(operation, param)?,
+                node.params.get(param.id)?,
+            ))
+        })
+}
+
+/// The registry entry of `operation`.
+pub fn definition(operation: &str) -> Option<&'static OperationDef> {
+    static INDEX: std::sync::OnceLock<HashMap<&str, &OperationDef>> = std::sync::OnceLock::new();
+    INDEX
+        .get_or_init(|| registry().iter().map(|def| (def.id, def)).collect())
+        .get(operation)
+        .copied()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortType {
     Exec,
@@ -276,6 +303,45 @@ fn text(id: &'static str, label: &'static str, value: &str) -> ParamDef {
 fn number(id: &'static str, label: &'static str, value: f64) -> ParamDef {
     param(id, label, Value::Number(value))
 }
+fn v3(id: &'static str, label: &'static str, value: [f32; 3]) -> ParamDef {
+    param(id, label, Value::Vector3(value))
+}
+fn flag(id: &'static str, label: &'static str, value: bool) -> ParamDef {
+    param(id, label, Value::Bool(value))
+}
+/// The object a node acts on or reads (empty: the node's own object).
+fn target() -> ParamDef {
+    param("target", "Objeto", Value::Object(None))
+}
+/// An operation whose non-text parameters are also input ports of the same ID; an action
+/// gets the Executar input and the Continuar output first.
+fn op(
+    id: &'static str,
+    label: &'static str,
+    category: &'static str,
+    action: bool,
+    params: Vec<ParamDef>,
+    outputs: Vec<PortDef>,
+) -> OperationDef {
+    let mut inputs: Vec<_> = params
+        .iter()
+        .filter(|p| !matches!(p.default, Value::Text(_)))
+        .map(|p| port(p.id, p.label, value_type(&p.default)))
+        .collect();
+    let mut outputs = outputs;
+    if action {
+        inputs.insert(0, port("exec", "Executar", PortType::Exec));
+        outputs.insert(0, port("exec", "Continuar", PortType::Exec));
+    }
+    OperationDef {
+        id,
+        label,
+        category,
+        inputs,
+        outputs,
+        params,
+    }
+}
 
 pub fn registry() -> &'static [OperationDef] {
     static REGISTRY: std::sync::OnceLock<Vec<OperationDef>> = std::sync::OnceLock::new();
@@ -342,10 +408,7 @@ fn build_registry() -> Vec<OperationDef> {
         category: "Dados",
         inputs: vec![port("target", "Objeto (vazio = este)", Object)],
         outputs: vec![port("value", "Valor", Any)],
-        params: vec![
-            param("target", "Objeto", Value::Object(None)),
-            text("attribute", "Atributo", "Vida"),
-        ],
+        params: vec![target(), text("attribute", "Atributo", "Vida")],
     });
     result.push(OperationDef {
         id: "math.binary",
@@ -392,7 +455,6 @@ fn build_registry() -> Vec<OperationDef> {
             port("target", "Objeto (vazio = este)", Object),
         ]
     };
-    let self_param = || param("target", "Objeto", Value::Object(None));
     result.push(OperationDef {
         id: "attribute.set",
         label: "Alterar atributo",
@@ -404,7 +466,7 @@ fn build_registry() -> Vec<OperationDef> {
         },
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("attribute", "Atributo", "Vida"),
             number("value", "Novo valor", 100.0),
         ],
@@ -420,7 +482,7 @@ fn build_registry() -> Vec<OperationDef> {
         },
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("attribute", "Atributo numérico", "Vida"),
             number("amount", "Quantidade", 10.0),
             param("once", "Uma vez por ativação/alvo", Value::Bool(true)),
@@ -433,7 +495,7 @@ fn build_registry() -> Vec<OperationDef> {
         inputs: exec_target(),
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("clip", "Animação", ""),
             param("restart", "Reiniciar", Value::Bool(true)),
         ],
@@ -459,7 +521,7 @@ fn build_registry() -> Vec<OperationDef> {
             port("created", "Objeto criado", Object),
         ],
         params: vec![
-            self_param(),
+            target(),
             number("x", "Deslocamento X", 0.0),
             number("y", "Deslocamento Y", 0.0),
             number("z", "Deslocamento Z", 0.0),
@@ -471,7 +533,7 @@ fn build_registry() -> Vec<OperationDef> {
         category: "Ações",
         inputs: exec_target(),
         outputs: exec(),
-        params: vec![self_param()],
+        params: vec![target()],
     });
     result.push(OperationDef {
         id: "action.component",
@@ -480,7 +542,7 @@ fn build_registry() -> Vec<OperationDef> {
         inputs: exec_target(),
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("component", "Componente", "collider"),
             param("enabled", "Ativo", Value::Bool(true)),
         ],

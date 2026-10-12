@@ -1,5 +1,8 @@
 //! Stable input identities and editable display names, independent of native keys/UI.
-use crate::document::*;
+use crate::{
+    document::*,
+    graph::{self, Reference},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -314,9 +317,9 @@ pub fn uses(project: &Project, id: &str) -> Vec<Use> {
             add("character");
         }
         for node in &entity.graph.nodes {
-            if matches!(node.operation.as_str(), "event.input" | "input.read")
-                && node.text("action") == id
-            {
+            if graph::node_references(node).any(|(param, reference, _)| {
+                reference == Reference::InputAction && node.text(param.id) == id
+            }) {
                 add(&node.operation);
             }
         }
@@ -335,11 +338,13 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
         .into_iter()
         .map(|found| {
             let role = match found.role.as_str() {
-                "controller2d" => "controlador",
-                "character" => "personagem 3D",
-                "camera_control" => "câmera de personagem",
-                "input.read" => "nó Ler ação de entrada",
-                _ => "nó Ação de entrada",
+                "controller2d" => "controlador".to_owned(),
+                "character" => "personagem 3D".to_owned(),
+                "camera_control" => "câmera de personagem".to_owned(),
+                operation => format!(
+                    "nó {}",
+                    graph::definition(operation).map_or("Ação de entrada", |d| d.label)
+                ),
             };
             format!("{} → {} → {role}", found.scope, found.name)
         })
