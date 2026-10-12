@@ -1,6 +1,7 @@
 //! Live agent channel in the real editor: a client finds the editor through its discovery
-//! file, edits the open project, reads it back, captures the viewport, is refused while the
-//! game is running, and undoes its own step.
+//! file, edits the open project, reads it back, captures the viewport (with the collider view
+//! too, also while the game runs), is refused edits while the game is running, and undoes its
+//! own step.
 use super::*;
 use oxy_core::document::Value;
 use serde_json::{Value as Json, json};
@@ -122,6 +123,7 @@ impl NativeQa {
                             ),
                             ("find", json!({"text": "grupo do agente"})),
                             ("screenshot", json!({})),
+                            ("screenshot", json!({"colliders": true})),
                             (
                                 "apply",
                                 json!({"commands": [{"op": "rename_entity",
@@ -177,6 +179,17 @@ impl NativeQa {
                 if shot["png_base64"].as_str().is_none_or(|s| s.len() < 1000) {
                     return Err("Captura da vista vazia".into());
                 }
+                let colliders = get("screenshot", 1)??;
+                if colliders["colliders"] != true
+                    || colliders["view"] != "editor_viewport"
+                    || [&colliders["width"], &colliders["height"]]
+                        != [&shot["width"], &shot["height"]]
+                {
+                    return Err(format!("Captura com colisores inesperada: {colliders:?}"));
+                }
+                if colliders["png_base64"] == shot["png_base64"] {
+                    return Err("A captura com colisores não desenhou os colisores".into());
+                }
                 let error = get("apply", 1)?
                     .err()
                     .ok_or("Comando inválido foi aceito")?;
@@ -198,11 +211,14 @@ impl NativeQa {
                 std::thread::spawn(move || {
                     client(
                         dir,
-                        vec![(
-                            "apply",
-                            json!({"commands": [{"op": "create_entity",
-                                "kind": {"type": "group"}}]}),
-                        )],
+                        vec![
+                            (
+                                "apply",
+                                json!({"commands": [{"op": "create_entity",
+                                    "kind": {"type": "group"}}]}),
+                            ),
+                            ("screenshot", json!({"colliders": true})),
+                        ],
                     )
                 });
             }
@@ -215,6 +231,18 @@ impl NativeQa {
                     .ok_or("Edição durante o teste foi aceita")?;
                 if !error.contains("teste") {
                     return Err(format!("Recusa sem motivo claro: {error}"));
+                }
+                let shot = answers
+                    .iter()
+                    .find(|(m, _)| m == "screenshot")
+                    .ok_or("Sem resposta para screenshot")?
+                    .1
+                    .clone()?;
+                if shot["view"] != "game"
+                    || shot["colliders"] != true
+                    || shot["png_base64"].as_str().is_none_or(|s| s.len() < 1000)
+                {
+                    return Err("Captura do jogo com colisores falhou".into());
                 }
             }
             "agent_undo" => {
@@ -298,7 +326,7 @@ fn native_agents_live_channel() {
                 Action::Screenshot("agent-connected.png"),
                 Action::Click("Jogar"),
                 Action::Check("agent_while_playing"),
-                Action::Wait(60),
+                Action::Wait(90),
                 Action::Check("agent_refused_while_playing"),
                 Action::Click("Parar"),
                 Action::Check("agent_undo"),

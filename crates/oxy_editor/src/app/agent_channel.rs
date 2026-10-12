@@ -260,7 +260,7 @@ impl Editor {
                 break;
             }
             let request = self.agents.as_mut().unwrap().queue.pop_front().unwrap();
-            let result = self.agent_request(&request.method, &request.params);
+            let result = self.agent_request(ctx, &request.method, &request.params);
             let _ = request.reply.send(result);
         }
     }
@@ -276,7 +276,12 @@ impl Editor {
             .map(str::to_owned)
             .unwrap_or_else(|| self.scene_id.clone()))
     }
-    fn agent_request(&mut self, method: &str, params: &Json) -> Result<Json, String> {
+    fn agent_request(
+        &mut self,
+        ctx: &egui::Context,
+        method: &str,
+        params: &Json,
+    ) -> Result<Json, String> {
         let text = |key: &str| {
             params[key]
                 .as_str()
@@ -361,13 +366,19 @@ impl Editor {
             }
             "screenshot" => {
                 self.agent_scene(params)?;
-                let (pixels, size) = self.renderer.read_pixels(&self.render_state)?;
+                let colliders = params["colliders"].as_bool() == Some(true);
+                let (pixels, size) = if colliders {
+                    self.agent_capture_colliders(ctx.pixels_per_point())?
+                } else {
+                    self.renderer.read_pixels(&self.render_state)?
+                };
                 let png = oxy_render::offscreen::encode_png(pixels, size)?;
                 Ok(json!({
                     "png_base64": oxy_core::encoding::base64(&png),
                     "width": size[0],
                     "height": size[1],
                     "view": if self.showing_game() { "game" } else { "editor_viewport" },
+                    "colliders": colliders,
                 }))
             }
             "frame" => {
@@ -377,5 +388,54 @@ impl Editor {
             }
             other => Err(format!("Pedido desconhecido: {other}")),
         }
+    }
+    /// The view on screen drawn again with the collider view on top, as with the debug view
+    /// on: the game camera while the game runs, the editor camera otherwise (without the
+    /// Studio's modeling marks). The frame shown to the person is not touched.
+    fn agent_capture_colliders(
+        &mut self,
+        pixels_per_point: f32,
+    ) -> Result<(Vec<u8>, [u32; 2]), String> {
+        use oxy_render::offscreen::ColliderOverlay;
+        let size = self.renderer.target_size();
+        let root = self.root();
+        let show_disabled = self.view.show_disabled_colliders;
+        if self.showing_game()
+            && let Some(runtime) = &self.play.runtime
+        {
+            self.renderer.show_grid = false;
+            return self.renderer.capture(
+                &self.render_state,
+                &self.state.project,
+                runtime.scene(),
+                &root,
+                &CameraState::for_runtime(runtime),
+                size,
+                None,
+                Some(ColliderOverlay {
+                    selected: &[],
+                    show_disabled,
+                    runtime_world: runtime.physics_world(),
+                    pixels_per_point,
+                }),
+            );
+        }
+        let scene = self.view_scene();
+        self.renderer.show_grid = self.view.grid;
+        self.renderer.capture(
+            &self.render_state,
+            &self.state.project,
+            &scene,
+            &root,
+            &self.camera,
+            size,
+            self.selected.clone(),
+            Some(ColliderOverlay {
+                selected: &self.selection.ids,
+                show_disabled,
+                runtime_world: None,
+                pixels_per_point,
+            }),
+        )
     }
 }

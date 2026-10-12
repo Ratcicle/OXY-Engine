@@ -1,6 +1,7 @@
 //! Runs a game without a window for a simulated time and reports what happened: scene
-//! changes, logs, logic actions, sounds, movement and area events, the game camera and the
-//! state of watched objects. Used by the MCP server so an agent can test a change, and by tests.
+//! changes, logs, logic actions, sounds, movement and area events, the game camera, the game
+//! interface and the state of watched objects. Used by the MCP server so an agent can test a
+//! change, and by tests.
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -11,6 +12,7 @@ use crate::{
     character::{CameraMode, CharacterState, MovementEvent, Posture},
     command::{self, Applied, Command},
     document::*,
+    game_ui::{self, UiState},
     graph::{self, Edge, Graph, PortType},
     input_timeline::{InputChange, InputTimeline, TimedInput},
     runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime},
@@ -27,6 +29,8 @@ use std::{
 pub const MAX_SECONDS: f64 = 600.;
 /// Most entries one report list keeps; older ones are dropped and counted in `truncated`.
 pub const MAX_ENTRIES: usize = 300;
+/// Game view the interface is laid out in when a request gives no size, in pixels.
+pub const VIEW_SIZE: [u32; 2] = [960, 540];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -320,6 +324,16 @@ pub struct SimulationRequest {
     pub actions: ActionsMode,
     #[serde(default)]
     pub actions_filter: ActionFilter,
+    /// Size in pixels of the game view that lays out `ui` (16 to 4096 a side); `VIEW_SIZE`
+    /// when absent.
+    #[serde(default)]
+    pub view_size: Option<[u32; 2]>,
+    /// Reports the game interface at the end; on unless `false`.
+    #[serde(default = "on")]
+    pub ui: bool,
+}
+fn on() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -473,6 +487,9 @@ pub struct SimulationReport {
     /// The game camera at the end.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraReport>,
+    /// The game interface at the end, in drawing order (the topmost last).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ui: Vec<UiState>,
     pub watched: Vec<Watched>,
     /// Entries dropped per list because it reached `MAX_ENTRIES`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -484,8 +501,9 @@ fn rounded(time: f64) -> f64 {
     (time * 10_000.).round() / 10_000.
 }
 
-/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th.
-fn resolve(id: &str, applied: &[Applied]) -> Result<Id, String> {
+/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th; other
+/// text is an ID as it is.
+pub fn resolve(id: &str, applied: &[Applied]) -> Result<Id, String> {
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     let Some(rest) = id.strip_prefix('$') else {
         return Ok(id.into());
@@ -1368,6 +1386,10 @@ pub fn run(
     if request.samples > 120 {
         return Err("No máximo 120 amostras".into());
     }
+    let view_size = request.view_size.unwrap_or(VIEW_SIZE);
+    if view_size.iter().any(|v| !(16..=4096).contains(v)) {
+        return Err("A vista do jogo deve ter entre 16 e 4096 pixels de lado".into());
+    }
     // Setup and spawn change only this copy.
     let mut copy = Cow::Borrowed(project);
     let default_scene = request
@@ -1512,6 +1534,7 @@ pub fn run(
         sounds: Vec::new(),
         events: Vec::new(),
         camera: None,
+        ui: Vec::new(),
         watched: watches
             .iter()
             .map(|(watch, name)| Watched {
@@ -1562,6 +1585,19 @@ pub fn run(
             .push(sample(recorder.lookup(&runtime), watch));
     }
     report.camera = camera(&runtime);
+    if request.ui {
+        report.ui = game_ui::ui_state(
+            runtime.project(),
+            runtime.scene(),
+            view_size.map(|side| side as f32),
+        );
+        // The topmost elements stay.
+        let extra = report.ui.len().saturating_sub(MAX_ENTRIES);
+        if extra > 0 {
+            report.ui.drain(..extra);
+            report.truncated.insert("ui", extra);
+        }
+    }
     recorder.finish(&mut report);
     report.final_scene = runtime.scene_id().to_owned();
     Ok((report, runtime))

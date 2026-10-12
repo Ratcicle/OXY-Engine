@@ -3,7 +3,10 @@ use egui::{
     Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
     Vec2,
 };
-use oxy_core::document::{Id, Project, Scene, UiAnchor, UiElement, UiKind, Value};
+use oxy_core::{
+    document::{Id, Project, Scene, UiElement, UiKind},
+    game_ui,
+};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -123,10 +126,8 @@ impl GameUi {
             let element = entity.ui.as_ref().unwrap();
             let rect = element_rect(element, viewport);
             let color = rgba(element.color);
-            let value = view
-                .entity(element.binding_object.as_deref().unwrap_or(&entity.id))
-                .and_then(|bound| bound.attributes.get(&element.binding_attribute));
-            let text = display_text(element, value, scene, &project.surfaces);
+            let value = game_ui::bound_value(&view, entity, element);
+            let text = game_ui::shown_text(element, value, scene, &project.surfaces);
             let texture = element.texture.as_deref().and_then(|id| {
                 if !self.textures.contains_key(id) && !self.failed.iter().any(|failed| failed == id)
                 {
@@ -244,8 +245,7 @@ impl GameUi {
                     }
                 }
                 UiKind::Bar => {
-                    let current = value.and_then(Value::number).unwrap_or(0.);
-                    let fraction = (current / element.max_value.max(0.0001)).clamp(0., 1.) as f32;
+                    let fraction = game_ui::bar_fraction(element, value) as f32;
                     painter.rect_filled(rect, 4., Color32::from_rgb(24, 28, 34));
                     painter.rect_filled(
                         Rect::from_min_size(
@@ -261,15 +261,10 @@ impl GameUi {
                         Stroke::new(1., Color32::from_gray(110)),
                         StrokeKind::Inside,
                     );
-                    let label = if text.is_empty() {
-                        format!("{current:.0} / {:.0}", element.max_value)
-                    } else {
-                        text
-                    };
                     painter.text(
                         rect.center(),
                         Align2::CENTER_CENTER,
-                        label,
+                        text,
                         FontId::proportional((rect.height() * 0.55).clamp(11., 22.)),
                         Color32::WHITE,
                     );
@@ -280,23 +275,16 @@ impl GameUi {
     }
 }
 
+/// `oxy_core::game_ui::element_rect` on an egui rectangle.
 pub fn element_rect(element: &UiElement, viewport: Rect) -> Rect {
-    let size = Vec2::new(element.size[0].max(1.), element.size[1].max(1.));
-    let offset = Vec2::from(element.position);
-    let min = match element.anchor {
-        UiAnchor::TopLeft => viewport.min + offset,
-        UiAnchor::TopRight => Pos2::new(
-            viewport.max.x - size.x - offset.x,
-            viewport.min.y + offset.y,
-        ),
-        UiAnchor::BottomLeft => Pos2::new(
-            viewport.min.x + offset.x,
-            viewport.max.y - size.y - offset.y,
-        ),
-        UiAnchor::BottomRight => viewport.max - size - offset,
-        UiAnchor::Center => viewport.center() - size * 0.5 + offset,
-    };
-    Rect::from_min_size(min, size)
+    let rect = game_ui::element_rect(
+        element,
+        game_ui::ScreenRect {
+            min: viewport.min.into(),
+            max: viewport.max.into(),
+        },
+    );
+    Rect::from_min_max(rect.min.into(), rect.max.into())
 }
 
 /// Editor selection for the overlay, using the very same anchors and layer ordering as drawing.
@@ -318,54 +306,6 @@ pub fn pick_ui(scene: &Scene, viewport: Rect, pointer: Pos2) -> Option<Id> {
         .map(|entity| entity.id.clone())
 }
 
-fn display_text(
-    element: &UiElement,
-    value: Option<&Value>,
-    scene: &Scene,
-    surfaces: &[oxy_core::surface::SurfaceMaterial],
-) -> String {
-    let Some(value) = value else {
-        return element.text.clone();
-    };
-    let value = match value {
-        Value::Number(number) => {
-            if number.fract() == 0. {
-                format!("{number:.0}")
-            } else {
-                format!("{number:.2}")
-            }
-        }
-        Value::Text(text) => text.clone(),
-        Value::Bool(value) => {
-            if *value {
-                "sim".into()
-            } else {
-                "não".into()
-            }
-        }
-        Value::Object(Some(id)) => scene
-            .entity(id)
-            .map_or_else(|| "objeto ausente".into(), |entity| entity.name.clone()),
-        Value::Object(None) => "nenhum".into(),
-        Value::Vector2([x, y]) => format!("({x:.2}; {y:.2})"),
-        Value::Vector3([x, y, z]) => format!("({x:.2}; {y:.2}; {z:.2})"),
-        Value::Surface(id) => id
-            .as_ref()
-            .and_then(|id| surfaces.iter().find(|s| &s.id == id))
-            .map_or_else(|| "sem superfície".into(), |s| s.name.clone()),
-    };
-    if element.text.contains("{value}") || element.text.contains("{valor}") {
-        element
-            .text
-            .replace("{value}", &value)
-            .replace("{valor}", &value)
-    } else if element.text.is_empty() {
-        value
-    } else {
-        format!("{} {value}", element.text)
-    }
-}
-
 fn fit_image(rect: Rect, size: Vec2) -> Rect {
     let scale = (rect.width() / size.x.max(1.)).min(rect.height() / size.y.max(1.));
     Rect::from_center_size(rect.center(), size * scale)
@@ -385,45 +325,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn object_binding_follows_live_names_and_never_displays_raw_identifiers() {
-        use oxy_core::document::Entity;
-        let mut project = Project::new("Referência na interface");
-        let scene = &mut project.scenes[0];
-        let target = Entity::new("Alvo de treino", None);
-        let target_id = target.id.clone();
-        let value = Value::Object(Some(target_id.clone()));
-        scene.entities.push(target);
-        let element = UiElement {
-            text: "Selecionado: {valor}".into(),
-            ..Default::default()
-        };
-        assert_eq!(
-            display_text(&element, Some(&value), scene, &[]),
-            "Selecionado: Alvo de treino"
-        );
-        scene.entity_mut(&target_id).unwrap().name = "Alvo renomeado".into();
-        assert_eq!(
-            display_text(&element, Some(&value), scene, &[]),
-            "Selecionado: Alvo renomeado"
-        );
-        assert_eq!(
-            value,
-            Value::Object(Some(target_id.clone())),
-            "The persisted reference remains stable after renaming"
-        );
-        scene.entities.clear();
-        let missing = display_text(&element, Some(&value), scene, &[]);
-        assert_eq!(missing, "Selecionado: objeto ausente");
-        assert!(!missing.contains(&target_id));
-        assert_eq!(
-            display_text(&element, Some(&Value::Object(None)), scene, &[]),
-            "Selecionado: nenhum"
-        );
-    }
-
-    #[test]
     fn portuguese_attribute_binding_and_unsaved_pixels_survive_first_game_draw() {
-        use oxy_core::document::Entity;
+        use oxy_core::{
+            document::{Entity, Value},
+            game_ui::display_text,
+        };
         let element = UiElement {
             text: "Vida {valor}".into(),
             ..Default::default()
@@ -491,6 +397,7 @@ mod tests {
 
     #[test]
     fn right_anchor_keeps_margin_on_resize() {
+        use oxy_core::document::UiAnchor;
         let element = UiElement {
             anchor: UiAnchor::TopRight,
             position: [12., 8.],

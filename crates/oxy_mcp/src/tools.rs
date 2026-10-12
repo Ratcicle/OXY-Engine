@@ -1,7 +1,14 @@
 //! MCP tools. Each call targets either an open editor (live: edits appear at once, are
 //! undoable, and the person saves) or, when no editor has the project open, the project files.
 use crate::editors::{self, LiveEditor};
-use oxy_core::{command, document::*, encoding, headless, persistence, query, runtime::Runtime};
+use glam::Vec3;
+use oxy_core::{
+    command::{self, Applied},
+    document::*,
+    encoding, headless, persistence, query,
+    runtime::Runtime,
+};
+use oxy_render::{CameraState, offscreen::ShotView};
 use serde_json::{Value as Json, json};
 use std::{
     collections::HashMap,
@@ -41,12 +48,23 @@ project's start scene (files).";
 /// The game always starts in the start scene, live too, unlike the editing tools.
 const START_SCENE: &str = "Optional scene the game starts in. Defaults to the project's start \
 scene, also live (not the scene open in the editor); setup commands without a scene use it too.";
+const INPUTS: &str = "Timed inputs at simulated second `at`: {type: press|release, at, action} \
+with the project's input action names (see oxy_project); {type: movement, at, value: [right, \
+forward]}, each -1 to 1, held until the next movement; {type: look, at, value: [x, y]}, a mouse \
+displacement applied once: each unit turns the camera by its sensitivity (camera control, 0.12 \
+degrees by default), +x turns right and +y looks down unless the camera inverts an axis; {type: \
+click, at, entity}. They survive scene changes and reloads; a key held across one stays held.";
+const COLLIDERS: &str = "Draws colliders (green) and sensor areas (yellow) over the image, \
+invisible objects' too, as the editor's collider view does.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
     let project = json!({"type": "string", "description": PROJECT});
     let scene = json!({"type": "string", "description": SCENE});
     let start_scene = json!({"type": "string", "description": START_SCENE});
+    let inputs = json!({"type": "array", "items": {"type": "object"}, "description": INPUTS});
+    let colliders = json!({"type": "boolean", "description": COLLIDERS});
+    let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
     let tool = |name: &str, description: &str, properties: Json, required: Json| {
         json!({
             "name": name,
@@ -117,10 +135,7 @@ pub fn definitions() -> Json {
             json!({"project": project, "scene": start_scene,
                    "seconds": {"type": "number", "description":
                        "Simulated seconds (max 600); the upper bound when `until` is set."},
-                   "inputs": {"type": "array", "items": {"type": "object"}, "description":
-                       "Timed inputs: {type: press|release, at, action}, {type: movement|look, at, \
-                        value: [x, y]}, {type: click, at, entity}. They survive scene changes and \
-                        reloads; a key held across one stays held."},
+                   "inputs": inputs,
                    "watch": {"type": "array", "items": {"anyOf": [
                        {"type": "string"},
                        {"type": "object", "properties": {
@@ -187,18 +202,46 @@ pub fn definitions() -> Json {
                            "required": ["kind"]}},
                        "description": "Stops at the first moment any condition holds; the report \
                         says which in stopped_at {time, reason, detail}."},
-                   "screenshot": {"type": "boolean"}}),
+                   "ui": {"type": "boolean", "description":
+                       "Reports the game interface at the end (default true): ui, in drawing order \
+                        (the topmost last), [{id, name, kind: Text|Image|Button|Bar, visible, rect: \
+                        [x, y, width, height] in pixels of the game view from its top-left corner, \
+                        text as shown with bound values, fraction (bars, 0-1), clickable (a visible \
+                        button inside the view)}]."},
+                   "width": {"type": "integer", "description":
+                       "Game view width in pixels, 16-4096 (default 960): the screenshot and the ui \
+                        rectangles."},
+                   "height": {"type": "integer", "description":
+                       "Game view height in pixels, 16-4096 (default 540)."},
+                   "screenshot": {"type": "boolean", "description":
+                       "Also returns the game camera view at the end, as oxy_screenshot view=game."},
+                   "colliders": colliders}),
             json!(["seconds"])
         ),
         tool(
             "oxy_screenshot",
-            "PNG image. view=editor (live only, the default there): the editor viewport as the \
-             person sees it. view=game: the game camera after `seconds` of simulation (0 = start), \
-             without the game interface overlay.",
+            SCREENSHOT_DESCRIPTION,
             json!({"project": project, "scene": start_scene,
-                   "view": {"type": "string", "enum": ["editor", "game"]},
-                   "seconds": {"type": "number"},
-                   "width": {"type": "integer"}, "height": {"type": "integer"}}),
+                   "view": {"type": "string", "enum": ["editor", "game", "free", "top", "side"],
+                       "description": "editor by default live, game on files."},
+                   "seconds": {"type": "number", "description":
+                       "Simulated seconds before the capture, max 600 (default 0: the first frame). \
+                        Every view but editor."},
+                   "inputs": inputs,
+                   "colliders": colliders,
+                   "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
+                       "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                   "target": {"description": "view=free: the point looked at, [x, y, z], or an \
+                       object ID (the center of its shape, or its position without one; \"$N\" \
+                       from setup too).",
+                       "anyOf": [point, {"type": "string"}]},
+                   "fov": {"type": "number", "description":
+                       "view=free: vertical field of view in degrees, 10-150 (default 60)."},
+                   "ids": {"type": "array", "items": {"type": "string"}, "description":
+                       "view=top|side: objects framed, with their children (default: every \
+                        object with a shape, hidden ones too)."},
+                   "width": {"type": "integer", "description": "16-4096 pixels (default 960)."},
+                   "height": {"type": "integer", "description": "16-4096 pixels (default 540)."}}),
             json!([])
         ),
         tool(
@@ -261,12 +304,25 @@ the project (nothing is saved or changed) and reports what happened: scene chang
 when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
 sounds, movement and area events {time, kind: jump|land|leave|side|surface|posture|area_enter|\
 area_exit, object, other?} as the game fires them (also when its logic then removes the objects \
-involved or changes scene), the game camera at the end {active, mode, position, forward, fov} and \
-the watched objects. Inputs use the project's input action names (see oxy_project). To test one \
+involved or changes scene), the game camera at the end {active, mode, position, forward, fov}, \
+the game interface at the end (ui: texts with their values, bars, buttons) and the watched \
+objects. Inputs use the project's input action names (see oxy_project). To test one \
 section without editing the project, use setup (commands on the copy), spawn (place the player) \
 and until (stop when something happens). Lists keep the most recent 300 entries and `truncated` \
 counts what was dropped. Times are seconds rounded to 0.1 ms. Set screenshot=true to also get the \
 game camera view at the end.";
+
+const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
+the editor viewport as the person sees it, with the collider view when colliders is set. Every \
+other view first runs the game on an in-memory copy for `seconds`, with inputs (and setup, spawn \
+and until as in oxy_simulate), then captures: game (the default on files) through the game \
+camera, and lists the game interface as ui like oxy_simulate, since the image leaves out texts, \
+buttons and bars; free through a perspective camera at eye looking at target (3D scenes); top \
+and side through orthographic views framing ids: top straight down with -Z up and +X right, \
+side level along -Z, or along -X when the framed part is deeper (Z) than wide (X), so the long \
+side spans the image. In 2D scenes top and side both show the scene plane. The text gives the \
+time, the scene and the camera used (position, forward, and fov or the visible width and \
+height in metres).";
 
 /// Scene-level commands that do not take a default scene.
 const PROJECT_OPS: [&str; 6] = [
@@ -280,6 +336,146 @@ const PROJECT_OPS: [&str; 6] = [
 
 fn text_arg(args: &Json, key: &str) -> Option<String> {
     args[key].as_str().map(str::to_owned)
+}
+
+/// The game view size asked for, `headless::VIEW_SIZE` when absent.
+fn view_size(args: &Json) -> [u32; 2] {
+    let side = |key: &str, default: u32| {
+        args[key]
+            .as_u64()
+            .map_or(default, |v| v.min(u64::from(u32::MAX)) as u32)
+    };
+    [
+        side("width", headless::VIEW_SIZE[0]),
+        side("height", headless::VIEW_SIZE[1]),
+    ]
+}
+
+/// A short number for reports: f32 noise such as 0.4000000059604645 would hide the value.
+fn short(value: f32) -> f64 {
+    (f64::from(value) * 10_000.).round() / 10_000.
+}
+fn short3(value: Vec3) -> [f64; 3] {
+    value.to_array().map(short)
+}
+
+/// Where oxy_screenshot looks from, as asked; object IDs wait for the run.
+#[derive(Debug, PartialEq)]
+enum Shot {
+    Game,
+    Free {
+        eye: [f32; 3],
+        target: Aim,
+        fov: f32,
+    },
+    Top(Vec<String>),
+    Side(Vec<String>),
+}
+#[derive(Debug, PartialEq)]
+enum Aim {
+    Point([f32; 3]),
+    Object(String),
+}
+
+impl Shot {
+    fn parse(view: &str, args: &Json) -> Result<Self, String> {
+        let point = |key: &str| -> Result<Option<[f32; 3]>, String> {
+            match &args[key] {
+                Json::Null => Ok(None),
+                value => serde_json::from_value(value.clone())
+                    .map(Some)
+                    .map_err(|_| format!("{key} precisa ser [x, y, z]")),
+            }
+        };
+        let ids = || -> Result<Vec<String>, String> {
+            match &args["ids"] {
+                Json::Null => Ok(Vec::new()),
+                value => serde_json::from_value(value.clone())
+                    .map_err(|_| "ids precisa ser uma lista de IDs".to_owned()),
+            }
+        };
+        match view {
+            "game" => Ok(Self::Game),
+            "free" => {
+                let eye = point("eye")?.ok_or("view=free precisa de eye: [x, y, z]")?;
+                let target = match &args["target"] {
+                    Json::String(id) => Aim::Object(id.clone()),
+                    Json::Null => {
+                        return Err(
+                            "view=free precisa de target: [x, y, z] ou o ID de um objeto".into(),
+                        );
+                    }
+                    _ => Aim::Point(point("target")?.unwrap_or_default()),
+                };
+                let fov = match &args["fov"] {
+                    Json::Null => 60.,
+                    value => value.as_f64().ok_or("fov precisa ser um número")? as f32,
+                };
+                Ok(Self::Free { eye, target, fov })
+            }
+            "top" => Ok(Self::Top(ids()?)),
+            "side" => Ok(Self::Side(ids()?)),
+            other => Err(format!("Vista desconhecida: {other}")),
+        }
+    }
+
+    /// The camera of the capture, with IDs (`"$N"` from setup too) found in the running scene.
+    fn resolve(self, runtime: &Runtime, setup: &[Applied]) -> Result<ShotView, String> {
+        let scene = runtime.scene();
+        let ids = |ids: Vec<String>| {
+            ids.iter()
+                .map(|id| headless::resolve(id, setup))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let framed = |ids: Vec<Id>| oxy_render::offscreen::framed_bounds(scene, &ids);
+        Ok(match self {
+            Self::Game => ShotView::Game,
+            Self::Free { eye, target, fov } => {
+                let target = match target {
+                    Aim::Point(point) => Vec3::from(point),
+                    Aim::Object(id) => {
+                        let id = headless::resolve(&id, setup)?;
+                        match framed(vec![id.clone()]) {
+                            Ok(bounds) => (bounds.min + bounds.max) * 0.5,
+                            // Groups and cameras are aimed at by their position.
+                            Err(_) => scene
+                                .world_matrix(&id)
+                                .map_err(|_| {
+                                    format!("Objeto {id} não existe na cena {}", scene.name)
+                                })?
+                                .w_axis
+                                .truncate(),
+                        }
+                    }
+                };
+                ShotView::Free {
+                    eye: Vec3::from(eye),
+                    target,
+                    fov,
+                }
+            }
+            Self::Top(list) => ShotView::Top(framed(ids(list)?)?),
+            Self::Side(list) => ShotView::Side(framed(ids(list)?)?),
+        })
+    }
+}
+
+/// The camera a capture used, for the agent to read the image with.
+fn camera_text(camera: &CameraState, size: [u32; 2]) -> Json {
+    let mut text = json!({
+        "position": short3(camera.eye()),
+        "forward": short3(camera.forward()),
+    });
+    if camera.kind == SceneKind::TwoD {
+        let height = camera.orthographic_size * 2.;
+        text["projection"] = json!("orthographic");
+        text["height"] = json!(short(height));
+        text["width"] = json!(short(height * size[0] as f32 / size[1].max(1) as f32));
+    } else {
+        text["projection"] = json!("perspective");
+        text["fov"] = json!(short(camera.fov));
+    }
+    text
 }
 
 impl Tools {
@@ -550,6 +746,8 @@ impl Tools {
                 .transpose()
                 .map_err(invalid("Filtro de ações inválido"))?
                 .unwrap_or_default(),
+            view_size: Some(view_size(args)),
+            ui: args["ui"].as_bool().unwrap_or(true),
         })
     }
 
@@ -560,7 +758,9 @@ impl Tools {
         let (project, root) = self.document(&target)?;
         let (report, mut runtime) = headless::run(&project, &request)?;
         let image = if args["screenshot"].as_bool() == Some(true) {
-            Some(self.game_png(&mut runtime, root.as_deref(), args)?)
+            let (png, _) =
+                self.render_view(&mut runtime, root.as_deref(), args, &ShotView::Game)?;
+            Some(png)
         } else {
             None
         };
@@ -578,43 +778,70 @@ impl Tools {
                 "game".into()
             }
         });
-        match (view.as_str(), &target) {
-            ("editor", Target::Live(port)) => {
-                let shot = self.live(*port, "screenshot", json!({}))?;
-                Ok(Output {
-                    text: format!(
-                        "Vista do editor, {}×{} ({}).",
-                        shot["width"], shot["height"], shot["view"]
-                    ),
-                    image: shot["png_base64"].as_str().map(str::to_owned),
-                })
-            }
-            ("editor", Target::File(_)) => Err(
-                "A vista do editor só existe com o projeto aberto no editor; use view=game.".into(),
-            ),
-            ("game", _) => {
-                let seconds = args["seconds"].as_f64().unwrap_or(0.).max(1. / 60.);
-                let request = Self::simulation_request(args, seconds)?;
-                let (project, root) = self.document(&target)?;
-                let (_, mut runtime) = headless::run(&project, &request)?;
-                let image = self.game_png(&mut runtime, root.as_deref(), args)?;
-                Ok(Output {
-                    text: format!("Vista da câmera do jogo após {seconds:.2} s."),
-                    image: Some(image),
-                })
-            }
-            (other, _) => Err(format!("Vista desconhecida: {other}")),
+        let colliders = args["colliders"].as_bool() == Some(true);
+        if view == "editor" {
+            let Target::Live(port) = target else {
+                return Err(
+                    "A vista do editor só existe com o projeto aberto no editor; use view=game."
+                        .into(),
+                );
+            };
+            let shot = self.live(port, "screenshot", json!({"colliders": colliders}))?;
+            return Ok(Output {
+                text: format!(
+                    "Vista do editor, {}×{} ({}){}.",
+                    shot["width"],
+                    shot["height"],
+                    shot["view"],
+                    if shot["colliders"] == true {
+                        ", com colisores"
+                    } else {
+                        ""
+                    }
+                ),
+                image: shot["png_base64"].as_str().map(str::to_owned),
+            });
         }
+        let shot = Shot::parse(&view, args)?;
+        let seconds = args["seconds"].as_f64().unwrap_or(0.).max(1. / 60.);
+        let mut request = Self::simulation_request(args, seconds)?;
+        // Only the game camera shows the interface.
+        request.ui &= shot == Shot::Game;
+        let (project, root) = self.document(&target)?;
+        let (report, mut runtime) = headless::run(&project, &request)?;
+        let shot = shot.resolve(&runtime, &report.setup)?;
+        let (image, camera) = self.render_view(&mut runtime, root.as_deref(), args, &shot)?;
+        let mut text = json!({
+            "view": view,
+            "time": (runtime.time * 10_000.).round() / 10_000.,
+            "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
+            "camera": match &report.camera {
+                Some(game) if shot == ShotView::Game => {
+                    serde_json::to_value(game).map_err(|e| e.to_string())?
+                }
+                _ => camera_text(&camera, view_size(args)),
+            },
+            "colliders": colliders,
+        });
+        if let Some(stopped) = &report.stopped_at {
+            text["stopped_at"] = serde_json::to_value(stopped).map_err(|e| e.to_string())?;
+        }
+        if !report.ui.is_empty() {
+            text["ui"] = serde_json::to_value(&report.ui).map_err(|e| e.to_string())?;
+        }
+        let mut output = Output::json(text);
+        output.image = Some(image);
+        Ok(output)
     }
 
-    fn game_png(
+    /// PNG (base64) of the running game through `view`, and the camera used.
+    fn render_view(
         &mut self,
         runtime: &mut Runtime,
         root: Option<&Path>,
         args: &Json,
-    ) -> Result<String, String> {
-        let width = args["width"].as_u64().unwrap_or(960) as u32;
-        let height = args["height"].as_u64().unwrap_or(540) as u32;
+        view: &ShotView,
+    ) -> Result<(String, CameraState), String> {
         if self.gpu.is_none() {
             let rs = oxy_render::offscreen::headless_state()?;
             let renderer = oxy_render::Renderer::new(&rs);
@@ -622,8 +849,278 @@ impl Tools {
         }
         let (rs, renderer) = self.gpu.as_mut().unwrap();
         let root = root.map_or_else(std::env::temp_dir, Path::to_owned);
-        let png =
-            oxy_render::offscreen::game_view_png(rs, renderer, runtime, &root, [width, height])?;
-        Ok(encoding::base64(&png))
+        let (png, camera) = oxy_render::offscreen::view_png(
+            rs,
+            renderer,
+            runtime,
+            &root,
+            view_size(args),
+            view,
+            args["colliders"].as_bool() == Some(true),
+        )?;
+        Ok((encoding::base64(&png), camera))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxy_core::{editing, persistence};
+
+    fn schema(tool: &str) -> Json {
+        definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == tool)
+            .unwrap()["inputSchema"]["properties"]
+            .clone()
+    }
+
+    #[test]
+    fn screenshot_and_simulate_document_views_inputs_and_the_interface() {
+        let shot = schema("oxy_screenshot");
+        assert_eq!(
+            shot["view"]["enum"],
+            json!(["editor", "game", "free", "top", "side"])
+        );
+        for option in [
+            "seconds",
+            "inputs",
+            "colliders",
+            "eye",
+            "target",
+            "fov",
+            "ids",
+            "width",
+            "height",
+        ] {
+            assert!(shot[option]["description"].is_string(), "{option}");
+        }
+        let simulate = schema("oxy_simulate");
+        for option in ["ui", "width", "height", "screenshot", "colliders"] {
+            assert!(simulate[option]["description"].is_string(), "{option}");
+        }
+        // Look units and signs, and the same inputs in both tools.
+        let inputs = shot["inputs"]["description"].as_str().unwrap();
+        assert!(inputs.contains("sensitivity") && inputs.contains("+x turns right"));
+        assert!(inputs.contains("+y looks down"));
+        assert_eq!(shot["inputs"], simulate["inputs"]);
+        assert!(SIMULATE_DESCRIPTION.contains("game interface"));
+    }
+
+    #[test]
+    fn screenshot_views_are_parsed_before_the_run() {
+        let parse = |view: &str, args: Json| Shot::parse(view, &args);
+        assert_eq!(parse("game", json!({})), Ok(Shot::Game));
+        assert_eq!(
+            parse("free", json!({"eye": [1, 2, 3], "target": "$0", "fov": 40})),
+            Ok(Shot::Free {
+                eye: [1., 2., 3.],
+                target: Aim::Object("$0".into()),
+                fov: 40.,
+            })
+        );
+        assert_eq!(
+            parse("free", json!({"eye": [0, 5, 5], "target": [0, 0, 0]})),
+            Ok(Shot::Free {
+                eye: [0., 5., 5.],
+                target: Aim::Point([0.; 3]),
+                fov: 60.,
+            })
+        );
+        assert_eq!(
+            parse("top", json!({"ids": ["a", "b"]})),
+            Ok(Shot::Top(vec!["a".into(), "b".into()]))
+        );
+        assert_eq!(parse("side", json!({})), Ok(Shot::Side(Vec::new())));
+        for (view, args, expected) in [
+            ("free", json!({"target": [0, 0, 0]}), "eye"),
+            ("free", json!({"eye": [0, 1]}), "eye precisa"),
+            ("free", json!({"eye": [0, 1, 2]}), "target"),
+            (
+                "free",
+                json!({"eye": [0, 1, 2], "target": [1, 1, 1], "fov": "largo"}),
+                "fov",
+            ),
+            ("top", json!({"ids": "a"}), "ids"),
+            ("perto", json!({}), "Vista desconhecida"),
+        ] {
+            let error = parse(view, args).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn screenshot_targets_and_framing_find_objects_created_by_setup() {
+        let mut project = editing::blank_project("Vistas", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        let setup = command::parse(&json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+             "name": "Alvo", "position": [4.0, 1.0, -6.0]},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Grupo",
+             "position": [-3.0, 2.0, 0.0]},
+        ]))
+        .unwrap();
+        let applied = command::apply(&mut project, &start, &setup).unwrap();
+        let runtime = Runtime::new(&project, &start).unwrap();
+        let free = |target: Aim| {
+            Shot::Free {
+                eye: [0., 5., 5.],
+                target,
+                fov: 60.,
+            }
+            .resolve(&runtime, &applied)
+        };
+        let ShotView::Free { target, .. } = free(Aim::Object("$0".into())).unwrap() else {
+            panic!("free view expected");
+        };
+        assert!(target.abs_diff_eq(Vec3::new(4., 1., -6.), 1e-4), "{target}");
+        let ShotView::Free { target, .. } = free(Aim::Object("$1".into())).unwrap() else {
+            panic!("free view expected");
+        };
+        assert!(
+            target.abs_diff_eq(Vec3::new(-3., 2., 0.), 1e-4),
+            "a group by its position"
+        );
+        assert!(
+            free(Aim::Object("fantasma".into()))
+                .unwrap_err()
+                .contains("fantasma")
+        );
+        assert!(free(Aim::Object("$5".into())).unwrap_err().contains("$5"));
+        let ShotView::Top(bounds) = Shot::Top(vec!["$0".into()])
+            .resolve(&runtime, &applied)
+            .unwrap()
+        else {
+            panic!("top view expected");
+        };
+        assert!(
+            ((bounds.min + bounds.max) * 0.5).abs_diff_eq(Vec3::new(4., 1., -6.), 1e-4),
+            "{bounds:?}"
+        );
+        assert!(
+            Shot::Side(vec!["$1".into()])
+                .resolve(&runtime, &applied)
+                .unwrap_err()
+                .contains("forma"),
+            "a group alone has nothing to frame"
+        );
+    }
+
+    #[test]
+    fn simulate_reports_the_interface_in_the_view_size_asked() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-ui-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Interface", SceneKind::ThreeD).unwrap();
+        let mut timer = Entity::new("Cronômetro", None);
+        timer.attributes.insert("tempo".into(), Value::Number(3.));
+        timer.ui = Some(UiElement {
+            text: "Tempo: {value}".into(),
+            anchor: UiAnchor::BottomRight,
+            binding_attribute: "tempo".into(),
+            ..Default::default()
+        });
+        project.scenes[0].entities.push(timer);
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let report = |extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg, "seconds": 0.1});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            Tools::default()
+                .call("oxy_simulate", &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let default = report(json!({})).unwrap();
+        assert_eq!(default["ui"][0]["text"], "Tempo: 3");
+        assert_eq!(default["ui"][0]["rect"], json!([756.0, 480.0, 180.0, 36.0]));
+        let small = report(json!({"width": 640, "height": 360})).unwrap();
+        assert_eq!(small["ui"][0]["rect"], json!([436.0, 300.0, 180.0, 36.0]));
+        assert!(report(json!({"ui": false})).unwrap().get("ui").is_none());
+        let error = report(json!({"width": 5})).unwrap_err();
+        assert!(error.contains("16 e 4096"), "{error}");
+        // A bad camera fails before anything runs.
+        let error = Tools::default()
+            .call(
+                "oxy_screenshot",
+                &json!({"project": project_arg, "view": "free", "eye": [0, 1, 2]}),
+            )
+            .unwrap_err();
+        assert!(error.contains("target"), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The whole capture on files, with a real GPU: the game view lists the interface, the
+    /// free and top views report their camera, and the collider view changes the image.
+    #[test]
+    #[ignore = "Requires a native WGPU adapter; run explicitly for graphics validation"]
+    fn native_screenshot_views_on_files() {
+        use oxy_core::physics3d::{Collider3d, CollisionShape};
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-shot-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Capturas", SceneKind::ThreeD).unwrap();
+        let mut floor = Entity::new("Chão", Some(Primitive::Cube));
+        floor.dimensions = [20., 1., 20.];
+        floor.transform.position = [0., -0.5, 0.];
+        floor.physics3d = Some(Collider3d {
+            shape: CollisionShape::Box {
+                size: floor.dimensions,
+            },
+            ..Default::default()
+        });
+        // Invisible: only the collider view shows it.
+        let mut checkpoint = Entity::new("Ponto de controle", None);
+        checkpoint.transform.position = [3., 1., 3.];
+        checkpoint.physics3d = Some(Collider3d {
+            shape: CollisionShape::Box { size: [2.; 3] },
+            sensor: true,
+            ..Default::default()
+        });
+        let mut label = Entity::new("Placar", None);
+        label.ui = Some(UiElement {
+            text: "Pontos".into(),
+            ..Default::default()
+        });
+        project.scenes[0]
+            .entities
+            .extend([floor, checkpoint, label]);
+        persistence::save_project(&file, &project).unwrap();
+        let mut tools = Tools::default();
+        let project_arg = dir.display().to_string();
+        let mut shot = |args: Json| {
+            let mut all = json!({"project": project_arg, "width": 320, "height": 240});
+            all.as_object_mut()
+                .unwrap()
+                .extend(args.as_object().unwrap().clone());
+            let output = tools.call("oxy_screenshot", &all).unwrap();
+            let text: Json = serde_json::from_str(&output.text).unwrap();
+            (text, output.image.unwrap())
+        };
+        let (game, _) = shot(json!({}));
+        assert_eq!(game["view"], "game");
+        assert_eq!(game["ui"][0]["text"], "Pontos");
+        assert_eq!(game["colliders"], false);
+        let (top, plain) = shot(json!({"view": "top"}));
+        assert_eq!(top["camera"]["projection"], "orthographic");
+        assert!(
+            top.get("ui").is_none(),
+            "only the game view lists the interface"
+        );
+        let (_, with) = shot(json!({"view": "top", "colliders": true}));
+        assert_ne!(
+            plain, with,
+            "the collider view draws the invisible checkpoint"
+        );
+        let (free, _) = shot(json!({"view": "free", "eye": [10, 8, 10],
+                                    "target": [0, 0, 0], "fov": 45}));
+        assert_eq!(free["camera"]["projection"], "perspective");
+        assert_eq!(free["camera"]["fov"], 45.0);
+        assert_eq!(free["camera"]["position"], json!([10.0, 8.0, 10.0]));
+        let (side, _) = shot(json!({"view": "side", "seconds": 0.5}));
+        assert_eq!(side["time"], 0.5);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

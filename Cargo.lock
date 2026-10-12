@@ -2320,6 +2320,7 @@ dependencies = [
 name = "oxy_mcp"
 version = "0.4.2"
 dependencies = [
+ "glam 0.30.9",
  "oxy_core",
  "oxy_render",
  "serde_json",

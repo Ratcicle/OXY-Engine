@@ -136,6 +136,8 @@ pub struct Renderer {
     pub show_grid: bool,
     debug_colliders: bool,
     physics_debug: std::cell::RefCell<Option<oxy_core::physics3d::PhysicsWorld>>,
+    /// Draws the collider view on captures; created by the first one that asks for it.
+    capture_painter: Option<offscreen::CapturePainter>,
 }
 
 impl Renderer {
@@ -237,6 +239,7 @@ impl Renderer {
             show_grid: true,
             debug_colliders: false,
             physics_debug: Default::default(),
+            capture_painter: None,
         }
     }
 

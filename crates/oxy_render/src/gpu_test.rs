@@ -596,3 +596,94 @@ fn native_gpu_editable_mesh_equivalence() {
     assert_eq!(renderer.stats().triangles, 0);
     assert!(renderer.take_errors().is_empty());
 }
+
+#[test]
+#[ignore = "Requires a native WGPU adapter; run explicitly for graphics validation"]
+fn native_gpu_capture_collider_view_and_free_cameras() {
+    use crate::offscreen::{ShotView, framed_bounds, headless_state, view_png};
+    use oxy_core::physics3d::{Collider3d, CollisionShape};
+    let rs = headless_state().expect("Native WGPU adapter");
+    let mut renderer = Renderer::new(&rs);
+    let mut project = Project::new("Captura");
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::ThreeD;
+    let mut floor = Entity::new("Chão", Some(Primitive::Cube));
+    floor.dimensions = [10., 1., 10.];
+    floor.transform.position = [0., -0.5, 0.];
+    floor.material.color = [0.2, 0.2, 0.8, 1.];
+    floor.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: floor.dimensions,
+        },
+        ..Default::default()
+    });
+    // An invisible checkpoint: only the collider view shows it.
+    let mut checkpoint = Entity::new("Ponto de controle", None);
+    checkpoint.transform.position = [2., 1., 2.];
+    checkpoint.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box { size: [2.; 3] },
+        sensor: true,
+        ..Default::default()
+    });
+    scene.entities = vec![floor, checkpoint];
+    let mut runtime = oxy_core::runtime::Runtime::new(&project, &project.start_scene).unwrap();
+    // What the editor shows must survive a capture.
+    renderer.render(
+        &rs,
+        &project,
+        &project.scenes[0],
+        Path::new(""),
+        &CameraState::for_scene(&project.scenes[0]),
+        [64, 48],
+        None,
+        false,
+    );
+    let shown = read_pixels(&renderer, &rs);
+    let bounds = framed_bounds(runtime.scene(), &[]).unwrap();
+    let decode = |png: &[u8]| image::load_from_memory(png).unwrap().to_rgba8();
+    let mut shot = |view: &ShotView, colliders: bool| {
+        let (png, camera) = view_png(
+            &rs,
+            &mut renderer,
+            &mut runtime,
+            Path::new(""),
+            [320, 240],
+            view,
+            colliders,
+        )
+        .unwrap();
+        (decode(&png), camera)
+    };
+    let (plain, camera) = shot(&ShotView::Top(bounds), false);
+    assert_eq!(camera.kind, SceneKind::TwoD, "orthographic top view");
+    let (with, _) = shot(&ShotView::Top(bounds), true);
+    assert_eq!(plain.dimensions(), (320, 240));
+    let count = |image: &image::RgbaImage, test: fn(&[u8]) -> bool| {
+        image.pixels().filter(|p| test(&p.0)).count()
+    };
+    let yellow: fn(&[u8]) -> bool = |p| p[0] > 200 && p[1] > 200 && p[2] < 90;
+    let green: fn(&[u8]) -> bool = |p| p[1] > 200 && p[0] < 180 && p[2] < 180;
+    let blue: fn(&[u8]) -> bool = |p| p[2] > p[0] + 40 && p[2] > p[1] + 40;
+    assert_eq!(count(&plain, yellow), 0);
+    assert_eq!(count(&plain, green), 0);
+    assert!(count(&with, yellow) > 20, "sensor outline");
+    assert!(count(&with, green) > 20, "solid collider outline");
+    assert!(
+        blue(&plain.get_pixel(160, 120).0),
+        "the floor fills the top view"
+    );
+    let (free, camera) = shot(
+        &ShotView::Free {
+            eye: Vec3::new(8., 6., 8.),
+            target: Vec3::ZERO,
+            fov: 60.,
+        },
+        false,
+    );
+    assert_eq!(camera.kind, SceneKind::ThreeD);
+    assert!(blue(&free.get_pixel(160, 120).0), "looking at the floor");
+    assert!(!blue(&free.get_pixel(160, 2).0), "background above it");
+    assert_eq!(renderer.target_size(), [64, 48]);
+    assert_eq!(read_pixels(&renderer, &rs), shown);
+    assert!(renderer.take_errors().is_empty());
+}

@@ -1,5 +1,6 @@
 //! The headless simulation used by agents: inputs across scene changes, the readable report,
-//! movement and camera detail, and setup, spawn and stop conditions on the copy.
+//! movement and camera detail, setup, spawn and stop conditions on the copy, and the game
+//! interface at the end.
 use oxy_core::{
     character::{CameraRig, CharacterConfig},
     document::*,
@@ -965,4 +966,101 @@ fn until_compares_attributes_with_values_of_their_type() {
         .unwrap_err();
         assert!(error.contains(expected), "{error}");
     }
+}
+
+/// A health bar anchored bottom right that logic lowers after 0.2 s, and a pause button
+/// hidden through its parent.
+fn hud() -> Project {
+    let mut project = Project::new("Interface");
+    let mut player = Entity::new("Jogador", None);
+    player.attributes.insert("vida".into(), Value::Number(100.));
+    let start = node(&mut player, "event.scene_start", &[]);
+    let wait = node(
+        &mut player,
+        "control.wait",
+        &[("seconds", Value::Number(0.2))],
+    );
+    let hurt = node(
+        &mut player,
+        "attribute.set",
+        &[("attribute", text("vida")), ("value", Value::Number(40.))],
+    );
+    link(&mut player, &start, &wait);
+    link(&mut player, &wait, &hurt);
+    let mut bar = Entity::new("Vida", None);
+    bar.ui = Some(UiElement {
+        kind: UiKind::Bar,
+        text: "Vida {value}".into(),
+        anchor: UiAnchor::BottomRight,
+        binding_object: Some(player.id.clone()),
+        binding_attribute: "vida".into(),
+        max_value: 100.,
+        ..Default::default()
+    });
+    let mut pause = Entity::new("Pausa", None);
+    pause.visible = false;
+    let mut resume = Entity::new("Continuar", None);
+    resume.parent = Some(pause.id.clone());
+    resume.ui = Some(UiElement {
+        kind: UiKind::Button,
+        text: "Continuar".into(),
+        ..Default::default()
+    });
+    project.scenes[0]
+        .entities
+        .extend([player, bar, pause, resume]);
+    project
+}
+
+#[test]
+fn the_report_lays_out_the_game_interface_at_the_end() {
+    let project = hud();
+    let report = run(&project, json!({"seconds": 0.5}));
+    let ui = serde_json::to_value(&report.ui).unwrap();
+    assert_eq!(ui.as_array().unwrap().len(), 2, "{ui}");
+    assert_eq!(ui[0]["name"], "Vida");
+    assert_eq!(ui[0]["kind"], "Bar");
+    assert_eq!(ui[0]["text"], "Vida 40", "the value the logic set");
+    assert_eq!(ui[0]["fraction"], 0.4);
+    assert_eq!(
+        ui[0]["rect"],
+        json!([756., 480., 180., 36.]),
+        "960x540 view"
+    );
+    assert_eq!(ui[0]["visible"], true);
+    assert_eq!(ui[1]["name"], "Continuar");
+    assert_eq!(ui[1]["visible"], false);
+    assert_eq!(ui[1]["clickable"], false);
+    assert!(ui[1].get("fraction").is_none());
+
+    let early = run(&project, json!({"seconds": 0.1}));
+    assert_eq!(early.ui[0].text.as_deref(), Some("Vida 100"));
+    assert_eq!(early.ui[0].fraction, Some(1.));
+    let wide = run(&project, json!({"seconds": 0.1, "view_size": [1920, 1080]}));
+    assert_eq!(wide.ui[0].rect, [1716., 1020., 180., 36.]);
+    let without = run(&project, json!({"seconds": 0.1, "ui": false}));
+    assert!(without.ui.is_empty());
+    assert!(serde_json::to_value(&without).unwrap().get("ui").is_none());
+    let error = headless::simulate(
+        &project,
+        &request(json!({"seconds": 0.1, "view_size": [8, 540]})),
+    )
+    .unwrap_err();
+    assert!(error.contains("16 e 4096"), "{error}");
+}
+
+#[test]
+fn the_interface_reported_is_the_final_scene_one() {
+    let (mut project, level) = menu_and_level();
+    let mut title = Entity::new("Título", None);
+    title.ui = Some(UiElement {
+        text: "Menu principal".into(),
+        ..Default::default()
+    });
+    project.scenes[0].entities.push(title);
+    let menu = run(&project, json!({"seconds": 0.5}));
+    assert_eq!(menu.ui[0].text.as_deref(), Some("Menu principal"));
+    let played = run(&project, json!({"seconds": 1.5}));
+    assert_eq!(played.final_scene, level);
+    assert!(played.ui.is_empty(), "the level has no interface");
 }

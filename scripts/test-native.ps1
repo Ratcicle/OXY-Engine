@@ -39,7 +39,9 @@ if (!$GraphicsOnly) {
 $checks += @(
     @('oxy_render','native_gpu_depth_texture_and_resize'),
     @('oxy_render','native_gpu_editable_mesh_equivalence'),
-    @('oxy_render','native_gpu_component_overlay_depth_and_cache')
+    @('oxy_render','native_gpu_component_overlay_depth_and_cache'),
+    @('oxy_render','native_gpu_capture_collider_view_and_free_cameras'),
+    @('oxy_mcp','native_screenshot_views_on_files')
 )
 $started = !$From
 $completed = 0
