@@ -2,7 +2,7 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
-## Não lançado
+## 0.5.0 — 2026-10-12
 
 - **Agentes de IA (MCP):** o novo `oxy-mcp.exe` é um servidor MCP para agentes como o Claude. Pelas ferramentas, o agente lê o projeto (resumo, árvore da cena, objeto, busca, catálogo de nós e componentes), edita por lotes atômicos de comandos, valida, roda o jogo sem janela com entradas programadas e captura a vista do editor ou da câmera do jogo. Com o projeto aberto e **Permitir agentes de IA** ligado nas Preferências (desligado por padrão), as mudanças aparecem ao vivo, entram no histórico como **Agente: …**, aparecem no Console com a origem Agente e podem ser desfeitas; o agente não salva. Sem editor aberto, ele edita os arquivos e guarda a versão anterior. Veja [`docs/agentes-mcp.md`](docs/agentes-mcp.md).
 - **Camada de comandos:** edições descritas como dados, aplicadas em lote atômico e validadas com as regras de salvar, no `oxy_core`. A regra de quais componentes cabem em cada objeto e as descrições dos nós passaram do editor para o `oxy_core`, compartilhadas pelo painel e pelos comandos.
