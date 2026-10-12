@@ -1340,6 +1340,7 @@ impl eframe::App for Editor {
             || self.scene_dialog.is_some()
             || self.pending.is_some()
             || self.logic_ui.inputs
+            || self.logic_ui.variables_open()
             || self.logic_ui.guide;
         if dialog_open && self.play.capture {
             self.pause();

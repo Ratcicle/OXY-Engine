@@ -20,6 +20,7 @@ if (!$GraphicsOnly) {
         @('oxy_editor','native_movement_scale_v030'),
         @('oxy_player','native_player_movement_v030'),
         @('oxy_editor','native_input_guide_workflow'),
+        @('oxy_editor','native_game_variables_workflow'),
         @('oxy_editor','native_mesh_foundation_workflow'),
         @('oxy_editor','native_direct_modeling_v021_workflow'),
         @('oxy_editor','native_basic_modeling_workflow'),

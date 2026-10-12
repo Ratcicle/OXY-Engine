@@ -1,7 +1,9 @@
 //! Human-readable choices preserve stable identifiers in graph parameters.
 use oxy_core::document::{AssetKind, Id, Project, Scene, Value};
 use oxy_core::graph::{Node, OperationDef, ParamDef, Reference, reference};
+use oxy_core::variables::{self, GameVariable};
 use std::collections::{BTreeMap, BTreeSet};
+use std::mem::discriminant;
 
 pub fn value_editor(
     ui: &mut egui::Ui,
@@ -165,6 +167,25 @@ pub(super) fn connected_choice(operation: &OperationDef, param: &ParamDef) -> Op
     .then(|| format!("Usando a entrada {}", input.label))
 }
 
+/// A game variable in its picker: "Nome · Tipo".
+fn variable_choice(variable: &GameVariable) -> String {
+    format!(
+        "{} · {}",
+        variable.name,
+        oxy_core::graph::value_type(&variable.value).label()
+    )
+}
+
+/// The game variable `node` names, when the project has it.
+fn named_variable<'a>(node: &Node, project: &'a Project) -> Option<&'a GameVariable> {
+    let operation = oxy_core::graph::definition(&node.operation)?;
+    operation
+        .params
+        .iter()
+        .find(|param| reference(operation.id, param) == Some(Reference::Variable))
+        .and_then(|param| variables::get(project, node.text(param.id)))
+}
+
 fn number_text(value: f64) -> String {
     let text = format!("{value:.3}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
@@ -246,6 +267,8 @@ pub(super) fn param_summary(
                     ),
                     None => "ação removida".into(),
                 },
+                Some(Reference::Variable) => variables::get(context.project, text)
+                    .map_or_else(|| "variável removida".into(), |v| v.name.clone()),
                 _ => text.clone(),
             }
         }
@@ -377,6 +400,29 @@ pub(super) fn parameter_editor(
                 named_choice(ui, selected, &choices, salt.clone());
                 specialized = true;
             }
+            Some(Reference::Variable) => {
+                let choices: Vec<_> = context
+                    .project
+                    .variables
+                    .iter()
+                    .map(|variable| (variable.id.clone(), variable_choice(variable)))
+                    .collect();
+                // On a node that writes the variable, the new value takes its type, as
+                // Alterar atributo does.
+                if named_choice(ui, selected, &choices, salt.clone())
+                    && let Some(variable) = variables::get(context.project, selected)
+                    && node
+                        .params
+                        .get("value")
+                        .is_some_and(|value| discriminant(value) != discriminant(&variable.value))
+                {
+                    node.params.insert("value".into(), variable.value.clone());
+                }
+                if choices.is_empty() {
+                    ui.small("Crie variáveis em Variáveis do jogo, na barra da Lógica.");
+                }
+                specialized = true;
+            }
             Some(Reference::Marker) => {
                 let markers: BTreeSet<_> = context
                     .scene
@@ -448,7 +494,11 @@ pub(super) fn parameter_editor(
         }
     }
     if !specialized {
-        if context.any_type {
+        // The new value of a chosen game variable has the variable's type: no other type to
+        // pick, unless it was given another one.
+        let variable = named_variable(node, context.project).filter(|_| param.id == "value");
+        let follows = variable.is_some_and(|v| discriminant(&v.value) == discriminant(&value));
+        if context.any_type && !follows {
             let kind = match value {
                 Value::Number(_) => 0,
                 Value::Text(_) => 1,
@@ -497,6 +547,16 @@ pub(super) fn parameter_editor(
                     6 => Value::Surface(None),
                     _ => Value::Object(None),
                 };
+            }
+            if let Some(variable) = variable {
+                ui.colored_label(
+                    crate::theme::ERROR,
+                    format!(
+                        "{} guarda {}: escolha esse tipo.",
+                        variable.name,
+                        variables::kind(&variable.value)
+                    ),
+                );
             }
         }
         value_editor(

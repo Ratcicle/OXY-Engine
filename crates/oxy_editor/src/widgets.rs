@@ -1034,7 +1034,7 @@ pub fn primary_button(ui: &mut Ui, text: &str, enabled: bool) -> Response {
 }
 
 /// Framed neutral button, such as Cancelar.
-pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
+pub fn secondary_button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
     ui.add(
         egui::Button::new(text)
             .fill(theme::BG_RAISED)

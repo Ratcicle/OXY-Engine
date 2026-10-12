@@ -69,6 +69,7 @@ pub enum Icon {
     Flow,
     Game,
     Keyboard,
+    Variables,
     Book,
     Check,
     Minus,
@@ -885,6 +886,31 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 p.circle_filled(at(x, 0.42), 0.9, color);
             }
             line(at(0.3, 0.62), at(0.7, 0.62));
+        }
+        Icon::Variables => {
+            // Curly braces on a 16-unit grid; the right one mirrors the left.
+            let left = [
+                (5.5, 2.5),
+                (4.3, 2.8),
+                (3.7, 3.5),
+                (3.5, 4.5),
+                (3.5, 6.1),
+                (3.1, 7.3),
+                (2.1, 8.),
+                (3.1, 8.7),
+                (3.5, 9.9),
+                (3.5, 11.5),
+                (3.7, 12.5),
+                (4.3, 13.2),
+                (5.5, 13.5),
+            ];
+            for mirrored in [false, true] {
+                let points = left
+                    .iter()
+                    .map(|&(x, y)| at(if mirrored { 16. - x } else { x } / 16., y / 16.))
+                    .collect();
+                p.add(egui::Shape::line(points, Stroke::new(1.3, color)));
+            }
         }
         Icon::Book => {
             p.add(egui::Shape::closed_line(

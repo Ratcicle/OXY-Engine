@@ -2085,8 +2085,9 @@ mod tests {
         }
     }
 
-    /// Every parameter that names a scene, an audio, a clip or an input action, by the core's
-    /// reference(), is picked by name and never typed, and the node body shows that name.
+    /// Every parameter that names a scene, an audio, a clip, an input action or a game
+    /// variable, by the core's reference(), is picked by name and never typed, and the node
+    /// body shows that name.
     #[test]
     fn every_reference_parameter_gets_a_picker_and_never_a_text_field() {
         let mut project = Project::new("Referências do catálogo");
@@ -2107,6 +2108,8 @@ mod tests {
             kind: AssetKind::Audio,
             model: None,
         });
+        let variable_id =
+            oxy_core::variables::create(&mut project, "Moedas", Value::Number(0.), false).unwrap();
         let context = ParameterContext {
             objects: &[],
             project: &project,
@@ -2159,6 +2162,12 @@ mod tests {
                     Some(Reference::InputAction) => {
                         ("Atacar · J", "atacar", "Atacar (J)", "ação removida")
                     }
+                    Some(Reference::Variable) => (
+                        "Moedas · Número",
+                        variable_id.as_str(),
+                        "Moedas",
+                        "variável removida",
+                    ),
                     _ => continue,
                 };
                 let name = format!("{}.{}", op.id, param.id);
@@ -2205,8 +2214,114 @@ mod tests {
             "action.animation.clip",
             "event.input.action",
             "input.read.action",
+            "variable.get.variable",
+            "variable.set.variable",
         ] {
             assert!(covered.iter().any(|name| name == known), "{known}");
+        }
+    }
+
+    /// Choosing a game variable on Alterar variável do jogo gives Novo valor the variable's
+    /// type, which then needs no type picker; a value of another type keeps it, with the
+    /// reason. Chave stays a plain text parameter.
+    #[test]
+    fn a_chosen_variable_gives_the_new_value_its_type() {
+        let mut project = Project::new("Variáveis");
+        let start = oxy_core::variables::create(
+            &mut project,
+            "Saída",
+            Value::Vector3([0., 1.5, 0.]),
+            false,
+        )
+        .unwrap();
+        let title =
+            oxy_core::variables::create(&mut project, "Título", Value::Text("Olá".into()), true)
+                .unwrap();
+        let op = registry()
+            .iter()
+            .find(|op| op.id == "variable.set")
+            .unwrap();
+        let param = |key: &str| op.params.iter().find(|param| param.id == key).unwrap();
+        let context = ParameterContext {
+            objects: &[],
+            project: &project,
+            scene: &project.scenes[0],
+            owner: None,
+            target_connected: false,
+            any_type: false,
+        };
+        let new_value = ParameterContext {
+            any_type: true,
+            ..context
+        };
+        let ctx = themed();
+        let mut node = Node::new("variable.set", [0.0; 2]);
+        assert_eq!(node.params["value"], Value::Number(0.));
+        // Without a variable, Novo valor offers every type.
+        let output = parameter_frame(&ctx, &mut node, param("value"), &new_value, vec![]);
+        assert!(rendered_text(&output, "Número").is_some());
+        for (label, id, value) in [
+            ("Saída · Vetor3", &start, Value::Vector3([0., 1.5, 0.])),
+            ("Título · Texto", &title, Value::Text("Olá".into())),
+        ] {
+            let output = parameter_frame(&ctx, &mut node, param("variable"), &context, vec![]);
+            let button = rendered_text(&output, "Escolha…")
+                .or_else(|| rendered_text(&output, "Saída · Vetor3"))
+                .unwrap();
+            click_parameter(&ctx, &mut node, param("variable"), &context, button);
+            let output = parameter_frame(&ctx, &mut node, param("variable"), &context, vec![]);
+            let choice = text_center(&output, label);
+            click_parameter(&ctx, &mut node, param("variable"), &context, choice);
+            assert_eq!(node.params["variable"], Value::Text(id.clone()), "{label}");
+            assert_eq!(node.params["value"], value, "{label}");
+            let output = parameter_frame(&ctx, &mut node, param("value"), &new_value, vec![]);
+            for kind in ["Número", "Texto", "Vetor3"] {
+                assert!(rendered_text(&output, kind).is_none(), "{label}: {kind}");
+            }
+        }
+        assert_eq!(
+            param_summary(&node, param("variable"), &context).as_deref(),
+            Some("Título")
+        );
+        // A value of another type, as an agent could leave it: the picker stays, with why.
+        node.params.insert("value".into(), Value::Number(3.));
+        let output = parameter_frame(&ctx, &mut node, param("value"), &new_value, vec![]);
+        assert!(rendered_text(&output, "Número").is_some());
+        assert!(rendered_text(&output, "Título guarda texto: escolha esse tipo.").is_some());
+        // A value that already has the variable's type stays.
+        let mut kept = Node::new("variable.set", [0.0; 2]);
+        kept.params
+            .insert("value".into(), Value::Vector3([1., 2., 3.]));
+        let output = parameter_frame(&ctx, &mut kept, param("variable"), &context, vec![]);
+        let button = text_center(&output, "Escolha…");
+        click_parameter(&ctx, &mut kept, param("variable"), &context, button);
+        let output = parameter_frame(&ctx, &mut kept, param("variable"), &context, vec![]);
+        let choice = text_center(&output, "Saída · Vetor3");
+        click_parameter(&ctx, &mut kept, param("variable"), &context, choice);
+        assert_eq!(kept.params["variable"], Value::Text(start.clone()));
+        assert_eq!(kept.params["value"], Value::Vector3([1., 2., 3.]));
+        // Ler variável do jogo has no new value. On both nodes, Chave is typed like any text.
+        assert!(
+            !Node::new("variable.get", [0.0; 2])
+                .params
+                .contains_key("value")
+        );
+        let text_fields =
+            |ctx: &egui::Context| ctx.data(|data| data.count::<egui::text_edit::TextEditState>());
+        for operation in ["variable.get", "variable.set"] {
+            let definition = registry().iter().find(|op| op.id == operation).unwrap();
+            let key = definition.params.iter().find(|p| p.id == "key").unwrap();
+            assert_eq!(reference(operation, key), None, "{operation}");
+            let ctx = themed();
+            let mut node = Node::new(operation, [0.0; 2]);
+            assert_eq!(text_fields(&ctx), 0, "{operation}");
+            parameter_frame(&ctx, &mut node, key, &context, vec![]);
+            assert!(text_fields(&ctx) > 0, "{operation}");
+            assert_eq!(
+                param_summary(&node, key, &context).as_deref(),
+                Some("—"),
+                "{operation}"
+            );
         }
     }
 

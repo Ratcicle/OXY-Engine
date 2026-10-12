@@ -21,6 +21,7 @@ mod portable;
 mod recipes;
 mod spatial;
 mod ux;
+mod variables;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use oxy_core::document::{Id, SceneKind, new_id};
 use std::{
@@ -666,6 +667,9 @@ impl NativeQa {
         }
         if label.starts_with("agent_") {
             return self.check_agents(label);
+        }
+        if label.starts_with("var_") {
+            return self.check_variables(label);
         }
         let ensure = |condition: bool, message: &str| {
             if condition {
