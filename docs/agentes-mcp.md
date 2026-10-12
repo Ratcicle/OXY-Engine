@@ -183,13 +183,13 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
   - `setup` aplica comandos do `oxy_apply` só na cópia, por exemplo um objeto de teste ou outro valor de atributo. Os comandos sem cena usam a cena em que o teste começa: a de `scene` ou, sem ela, a cena inicial do projeto. Ao vivo também é assim; o `oxy_apply`, ao contrário, usa a cena aberta no editor.
   - `spawn` coloca um objeto, como o jogador, numa posição do mundo (e virado para um lado) antes de começar.
   - Os IDs criados no `setup` valem como `"$0"`, `"$1"`… (`"$0.1"` para o segundo ID do comando 0) no resto do pedido, e o relatório os lista em `setup`.
-- **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, um objeto que some ou um evento (pulo, aterrissagem, entrada numa área…). `seconds` vira o limite, e `stopped_at` diz o que parou o teste e quando. O valor comparado precisa ser do tipo do atributo; num atributo de objeto ou de superfície, o texto é o ID (vale `"$0"`).
-- **Objetos observados** (`watch`): posição, rotação e escala no mundo, visibilidade e atributos (todos, alguns ou nenhum). Para personagens 3D, também velocidade, chão, postura, apoio e direção do olhar. As amostras (`samples`) ficam espaçadas ao longo de `seconds`, então um teste que o `until` para cedo traz menos amostras.
+- **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, um objeto que some ou um evento (pulo, aterrissagem, entrada numa área…). `seconds` vira o limite, e `stopped_at` diz o que parou o teste (`reason`) e quando, com o que aconteceu em palavras em `detail`, como `Jogador aterrissou em Pouso`; quando é um evento, `kind` traz o tipo dele (`land`, `jump`…), como em `events`. O valor comparado precisa ser do tipo do atributo; num atributo de objeto ou de superfície, o texto é o ID (vale `"$0"`).
+- **Objetos observados** (`watch`): posição, rotação e escala no mundo, visibilidade e atributos (todos, alguns ou nenhum). Para personagens 3D, também velocidade, chão, postura, apoio e direção do olhar. As amostras (`samples`) são exatamente as pedidas, a última com o estado final, e ficam espaçadas ao longo de `seconds`, no máximo uma por passo de 1/60 s. Um teste que o `until` para cedo traz menos amostras.
 - **Relatório:**
   - trocas de cena, com `reload` quando a cena reinicia;
-  - logs com o nome do objeto e o nó que os gerou;
+  - logs com o nome do objeto e o nó que os gerou. Os avisos de movimento nomeiam o personagem: `Personagem Jogador: Apoio em Elevador liberado sem herdar velocidade…` aparece só quando uma plataforma que gira, muda de escala ou salta de posição deixa alguém sem apoio, não a cada início de cena;
   - um resumo das ações da lógica: cada ação aparece uma vez por nome de objeto, com quantas vezes rodou e quando;
-  - sons;
+  - sons, inclusive os pedidos no mesmo passo de uma troca de cena, como um som tocado logo antes de reiniciar a fase (o jogo também os toca). Cada passo guarda até 16 pedidos de som; um log avisa quando passa disso;
   - eventos de movimento (pulo, aterrissagem, saída do chão, contato lateral, superfície, postura) e de áreas (entrada e saída);
   - a câmera do jogo no fim;
   - a interface do jogo no fim (`ui`), na ordem em que é desenhada: cada elemento com o tipo, se está visível, o retângulo na vista do jogo, o texto como aparece (com o valor ligado, como `Tempo: 12.50`), o quanto uma barra está cheia (`fraction`) e se um botão dá para clicar. O retângulo é medido numa vista de `width` × `height` pixels (960×540 por padrão). `ui: false` deixa a interface fora do relatório.
@@ -202,6 +202,8 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 - `actions` passou a ser um resumo por padrão (veja abaixo); a lista completa vem com `actions: "all"`.
 - As amostras de `watch` só trazem os campos pedidos em `fields`, e a rotação no mundo é lida como no `oxy_scene` (um objeto girado 120° lê `[0, 120, 0]`, não `[180, 60, 180]`).
 - `oxy_simulate` e `oxy_screenshot` recusam `width` e `height` fora de 16–4096, e o texto do `oxy_screenshot` nas vistas do jogo passou a ser JSON (tempo, cena e câmera usada).
+- `samples` traz exatamente o número pedido; antes, quando os passos não se dividiam igualmente, vinha uma amostra a mais.
+- O `detail` de um `stopped_at` por evento passou de `land de Jogador (Pouso)` para `Jogador aterrissou em Pouso`, e o tipo do evento ganhou o campo `kind`.
 
 **Resumo das ações.**
 - A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça (`actions_filter: {exclude_operations: []}`).
@@ -240,7 +242,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 ## Imagens com `oxy_screenshot`
 
 - **Vista do editor** (`view: "editor"`, ao vivo): o que aparece na vista do editor. Com `colliders: true`, o editor desenha a mesma vista de novo com os colisores por cima, como na vista de colisores, sem mexer no que aparece na tela. Durante um teste do jogo, mostra a câmera do jogo.
-- **Câmera do jogo** (`view: "game"`, o padrão nos arquivos): roda o jogo numa cópia por `seconds` (0 é o primeiro quadro), com as mesmas `inputs`, `setup`, `spawn` e `until` do `oxy_simulate`, e captura pela câmera do jogo. O texto traz a interface do jogo em `ui`, como no `oxy_simulate`.
+- **Câmera do jogo** (`view: "game"`, o padrão nos arquivos): roda o jogo numa cópia por `seconds` (0 é o primeiro quadro), com as mesmas `inputs`, `setup`, `spawn` e `until` do `oxy_simulate`, e captura pela câmera do jogo. O texto traz a interface do jogo em `ui`, como no `oxy_simulate`; `ui: false` a deixa de fora, o que encurta a resposta em capturas repetidas.
 - **Câmera livre** (`view: "free"`): uma câmera em `eye` olhando para `target`, que é um ponto ou o ID de um objeto (o centro da forma dele ou, sem forma, a posição), com `fov` em graus (60 por padrão). Só em cenas 3D.
 - **De cima e de lado** (`view: "top"` e `view: "side"`): vistas ortográficas, sem perspectiva, que enquadram os objetos de `ids` e seus filhos, ou tudo o que tem forma. De cima, o -Z fica para cima na imagem. De lado, a câmera olha ao longo do -Z ou, quando a parte enquadrada é mais funda (Z) do que larga (X), ao longo do -X, para o lado comprido ocupar a imagem. Em cenas 2D, as duas mostram o plano da cena.
 - **Colisores** (`colliders: true`): desenha os colisores sólidos em verde e as áreas em amarelo, inclusive de objetos invisíveis, como pontos de controle.

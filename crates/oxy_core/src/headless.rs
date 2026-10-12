@@ -308,9 +308,9 @@ pub struct SimulationRequest {
     /// Objects reported in every sample.
     #[serde(default)]
     pub watch: Vec<Watch>,
-    /// Evenly spaced samples of the watched objects, the last one being the final state
-    /// (0 or 1 report only the final state; at most 120). They are spaced across `seconds`, so
-    /// a run that `until` stops early reports fewer.
+    /// Evenly spaced samples of the watched objects, exactly this many, the last one being the
+    /// final state (0 or 1 report only the final state; at most 120, and at most one per step).
+    /// They are spaced across `seconds`, so a run that `until` stops early reports fewer.
     #[serde(default)]
     pub samples: u32,
     /// Commands applied to the copy before the run, as in a batch; commands without a scene
@@ -468,6 +468,10 @@ pub struct StoppedAt {
     pub time: f64,
     /// The `until` condition that held.
     pub reason: &'static str,
+    /// The event that met an `event` condition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<EventKind>,
+    /// What happened, in words.
     pub detail: String,
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -1296,8 +1300,14 @@ impl Stop {
         })
     }
 
-    /// The first condition that holds now, as (reason, detail).
-    fn check(&self, runtime: &Runtime, happened: &Happened) -> Option<(&'static str, String)> {
+    /// The first condition that holds now.
+    fn check(&self, runtime: &Runtime, happened: &Happened) -> Option<StoppedAt> {
+        let stopped = |reason, detail| StoppedAt {
+            time: rounded(runtime.time),
+            reason,
+            kind: None,
+            detail,
+        };
         if let Some(target) = &self.scene
             && let Some(scene) = happened
                 .scenes
@@ -1308,12 +1318,12 @@ impl Stop {
                 .project()
                 .scene(scene)
                 .map_or(scene.as_str(), |s| &s.name);
-            return Some(("scene_change", format!("Cena {name} iniciou")));
+            return Some(stopped("scene_change", format!("Cena {name} iniciou")));
         }
         if let Some(text) = &self.log
             && let Some(line) = happened.logs.iter().find(|l| l.contains(text.as_str()))
         {
-            return Some(("log_contains", line.clone()));
+            return Some(stopped("log_contains", line.clone()));
         }
         if let Some((condition, name)) = &self.attribute
             && let Some(value) = runtime
@@ -1322,7 +1332,7 @@ impl Stop {
                 .and_then(|e| e.attributes.get(&condition.name))
             && condition.op.holds(value, &condition.value)
         {
-            return Some((
+            return Some(stopped(
                 "attribute",
                 format!(
                     "{name}.{} {} {} (valor {})",
@@ -1336,7 +1346,10 @@ impl Stop {
         if let Some((id, name)) = &self.absent
             && runtime.scene().entity(id).is_none()
         {
-            return Some(("entity_absent", format!("{name} não existe mais na cena")));
+            return Some(stopped(
+                "entity_absent",
+                format!("{name} não existe mais na cena"),
+            ));
         }
         if let Some((kind, object)) = &self.event
             && let Some(event) = happened.events.iter().find(|e| {
@@ -1346,17 +1359,37 @@ impl Stop {
                     })
             })
         {
-            let kind = serde_json::to_value(event.kind)
-                .ok()
-                .and_then(|k| k.as_str().map(str::to_owned))
-                .unwrap_or_default();
-            let other = event
-                .other
-                .as_ref()
-                .map_or_else(String::new, |o| format!(" ({})", o.name));
-            return Some(("event", format!("{kind} de {}{other}", event.object.name)));
+            return Some(StoppedAt {
+                kind: Some(event.kind),
+                ..stopped("event", event_detail(event))
+            });
         }
         None
+    }
+}
+
+/// A movement or area event in words, e.g. "Jogador aterrissou em Pouso".
+fn event_detail(event: &GameEvent) -> String {
+    let object = &event.object.name;
+    let other = event.other.as_ref().map(|o| o.name.as_str());
+    match (event.kind, other) {
+        (EventKind::Jump, _) => format!("{object} pulou"),
+        (EventKind::Land, Some(other)) => format!("{object} aterrissou em {other}"),
+        (EventKind::Land, None) => format!("{object} aterrissou"),
+        (EventKind::Leave, _) => format!("{object} perdeu o apoio"),
+        (EventKind::Side, Some(other)) => format!("{object} encostou de lado em {other}"),
+        (EventKind::Side, None) => format!("{object} encostou de lado"),
+        (EventKind::Surface, _) => match &event.surface {
+            Some(surface) => format!("{object} passou para a superfície {}", surface.name),
+            None => format!("{object} ficou sem superfície"),
+        },
+        (EventKind::Posture, _) => match event.posture {
+            Some("crouched") => format!("{object} agachou"),
+            Some("sliding") => format!("{object} começou a deslizar"),
+            _ => format!("{object} ficou em pé"),
+        },
+        (EventKind::AreaEnter, _) => format!("{object} entrou em {}", other.unwrap_or("uma área")),
+        (EventKind::AreaExit, _) => format!("{object} saiu de {}", other.unwrap_or("uma área")),
     }
 }
 
@@ -1546,7 +1579,11 @@ pub fn run(
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
-    let every = (request.samples > 0).then(|| (steps / request.samples as usize).max(1));
+    // Sample k of n is taken at the step nearest k/n of the run, the last one being the final
+    // state; with fewer steps than samples, every step has one.
+    let samples = request.samples.max(1) as usize;
+    let due = |k: usize| (k * steps + samples / 2) / samples;
+    let mut next_sample = 1;
     let mut clicks = clicks.into_iter().peekable();
     // What the scene start logic did happens at time 0.
     let started = recorder.collect(&mut runtime);
@@ -1565,7 +1602,10 @@ pub fn run(
             if stopped.is_some() {
                 break;
             }
-            if every.is_some_and(|every| step % every == 0) && step != steps {
+            while next_sample < samples && due(next_sample) < step {
+                next_sample += 1;
+            }
+            if next_sample < samples && due(next_sample) == step && step != steps {
                 for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
                     watched
                         .samples
@@ -1574,11 +1614,7 @@ pub fn run(
             }
         }
     }
-    report.stopped_at = stopped.map(|(reason, detail)| StoppedAt {
-        time: rounded(runtime.time),
-        reason,
-        detail,
-    });
+    report.stopped_at = stopped;
     for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
         watched
             .samples

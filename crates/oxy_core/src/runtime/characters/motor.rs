@@ -173,9 +173,12 @@ impl MotorContext<'_> {
         // must not grant a jump or suspend gravity. The solver handles snapping.
         Ok(best.filter(|hit| hit.distance <= lift + motion.margin + 0.02))
     }
-    fn support(&self, hit: QueryHit) -> Option<Support> {
+    /// The support `hit` gives; none on a platform that turned, scaled or jumped this step,
+    /// which is noted in `dropped`.
+    fn support(&self, hit: QueryHit, dropped: &mut Option<Id>) -> Option<Support> {
         let platform = self.platforms.get(&hit.object);
         if platform.is_some_and(|p| p.discontinuous) {
+            *dropped = Some(hit.object);
             return None;
         }
         let mut velocity = platform.map_or(Vec3::ZERO, |p| p.velocity);
@@ -207,6 +210,8 @@ impl MotorContext<'_> {
         input: MotorInput,
     ) -> Result<MotorStep, String> {
         let mut out = MotorStep::default();
+        // A platform under the feet that cannot carry anyone this step.
+        let mut dropped = None;
         let config = self.config;
         let dt = self.dt;
         let was_grounded = state.grounded;
@@ -338,12 +343,14 @@ impl MotorContext<'_> {
                             .as_ref()
                             .is_some_and(|c| c.body.enabled)
                 });
-            if !exists
-                || self
-                    .platforms
-                    .get(&support.object)
-                    .is_some_and(|p| p.discontinuous)
-            {
+            let discontinuous = self
+                .platforms
+                .get(&support.object)
+                .is_some_and(|p| p.discontinuous);
+            if discontinuous {
+                dropped = Some(support.object.clone());
+            }
+            if !exists || discontinuous {
                 state.support = None;
                 state.grounded = false;
             } else {
@@ -356,13 +363,16 @@ impl MotorContext<'_> {
                     .get(&support.object)
                     .map_or(Vec3::ZERO, |p| p.velocity);
                 let fresh = self
-                    .support(QueryHit {
-                        object: support.object.clone(),
-                        point: support.point,
-                        normal: support.normal,
-                        surface: support.surface.clone(),
-                        ..Default::default()
-                    })
+                    .support(
+                        QueryHit {
+                            object: support.object.clone(),
+                            point: support.point,
+                            normal: support.normal,
+                            surface: support.surface.clone(),
+                            ..Default::default()
+                        },
+                        &mut dropped,
+                    )
                     .unwrap();
                 let carry = base + (fresh.velocity - platform_velocity) * dt;
                 if carry.length_squared() > 1e-12 {
@@ -432,7 +442,7 @@ impl MotorContext<'_> {
         if state.grounded {
             let contact = self.probe(state.position, &motion, previous_support.as_deref())?;
             state.grounded = contact.is_some();
-            state.support = contact.and_then(|hit| self.support(hit));
+            state.support = contact.and_then(|hit| self.support(hit, &mut dropped));
         }
         if was_grounded && !state.grounded && !state.jump_consumed {
             state.coyote_until = self.time + f64::from(config.coyote_ms) * 0.001;
@@ -549,7 +559,7 @@ impl MotorContext<'_> {
         // on almost-flat contacts. Walkability comes from our support normal.
         state.support = if !ascending {
             self.probe(state.position, &motion, previous_support.as_deref())?
-                .and_then(|hit| self.support(hit))
+                .and_then(|hit| self.support(hit, &mut dropped))
         } else {
             None
         };
@@ -627,6 +637,16 @@ impl MotorContext<'_> {
         }
         if !state.position.is_finite() || !state.velocity.is_finite() {
             return Err("Estado de movimento não finito; verifique forças e dimensões.".into());
+        }
+        if let Some(platform) = dropped {
+            let name = self
+                .evaluation
+                .index
+                .position(&platform)
+                .map_or(platform.as_str(), |i| self.scene.entities[i].name.as_str());
+            out.warning = Some(format!(
+                "Apoio em {name} liberado sem herdar velocidade, porque a plataforma girou, mudou de escala ou saltou de posição."
+            ));
         }
         Ok(out)
     }

@@ -22,6 +22,10 @@ pub use movement_nodes::{SceneQuery, SceneQueryShape};
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
 pub const MAX_NODE_WORK: usize = 1024;
+/// Sound requests waiting for the host at most; later ones are dropped, with one log line.
+/// A scene that restarts itself as it starts runs until the work budget in one update, and
+/// a host that never takes the requests would keep them all.
+pub const MAX_PENDING_SOUNDS: usize = 16;
 
 #[derive(Clone, Debug, Default)]
 pub struct InputFrame {
@@ -141,7 +145,11 @@ pub struct Runtime {
     /// reads them across frames finds the new ones with [`Runtime::logs_written`].
     logs_written: u64,
     traces_written: u64,
+    /// Sounds requested since the host last took them, scene changes included: a sound
+    /// played right before a restart is heard.
     pub sounds: Vec<SoundRequest>,
+    /// A request was dropped since the host last took them (see [`MAX_PENDING_SOUNDS`]).
+    sounds_dropped: bool,
     /// Scenes started by `change_scene` (reloads included), oldest first, until a host takes them.
     pub scene_starts: Vec<Id>,
     /// Off unless the runtime was created with `recorded`.
@@ -202,6 +210,7 @@ impl Runtime {
             logs_written: 0,
             traces_written: 0,
             sounds: Vec::new(),
+            sounds_dropped: false,
             scene_starts: Vec::new(),
             recording,
             time: 0.0,
@@ -996,10 +1005,17 @@ impl Runtime {
                 if asset.kind != crate::document::AssetKind::Audio {
                     return Err("Asset selecionado não é áudio".into());
                 }
-                self.sounds.push(SoundRequest {
-                    asset: asset.id.clone(),
-                    volume: node.number("volume", 1.0).clamp(0.0, 1.0) as f32,
-                });
+                if self.sounds.len() < MAX_PENDING_SOUNDS {
+                    self.sounds_dropped = false;
+                    self.sounds.push(SoundRequest {
+                        asset: asset.id.clone(),
+                        volume: node.number("volume", 1.0).clamp(0.0, 1.0) as f32,
+                    });
+                } else if !std::mem::replace(&mut self.sounds_dropped, true) {
+                    self.log(format!(
+                        "Limite de {MAX_PENDING_SOUNDS} sons por atualização atingido; os demais foram ignorados."
+                    ));
+                }
             }
             "action.spawn" => {
                 let template = self.target(&graph, node, &context, budget, 0)?;
@@ -1164,7 +1180,8 @@ impl Runtime {
         self.area_hits.clear();
         self.pending_pressed.clear();
         self.pending_released.clear();
-        self.sounds.clear();
+        // Sounds already requested still play ("play a sound, then restart"): the host takes
+        // them after the step. MAX_PENDING_SOUNDS bounds a scene that restarts as it starts.
         self.physics_dirty = true;
         self.step_input = InputFrame::default();
         self.query_work = 0;

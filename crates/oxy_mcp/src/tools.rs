@@ -297,9 +297,9 @@ pub fn definitions() -> Json {
                         look_yaw and pitch in degrees for 3D characters. attributes: false leaves \
                         them out, a list keeps only those names."},
                    "samples": {"type": "integer", "description":
-                       "Samples of watched objects (max 120), the last being the final state. They \
-                        are spaced evenly across `seconds`, so a run that until stops early returns \
-                        fewer."},
+                       "Samples of watched objects (max 120, at most one per 1/60 s step), exactly \
+                        this many, the last being the final state. They are spaced evenly across \
+                        `seconds`, so a run that until stops early returns fewer."},
                    "actions": {"type": "string", "enum": ["none", "summary", "all"], "description":
                        "Logic actions that ran. summary (default): one line per object name and \
                         action with count, first and last time (objects sharing a name, such as \
@@ -346,7 +346,8 @@ pub fn definitions() -> Json {
                            "object": {"type": "string", "description": "Either side of the event."}},
                            "required": ["kind"]}},
                        "description": "Stops at the first moment any condition holds; the report \
-                        says which in stopped_at {time, reason, detail}."},
+                        says which in stopped_at {time, reason, kind (the event's, for event), \
+                        detail (what happened, in words)}."},
                    "ui": {"type": "boolean", "description":
                        "Reports the game interface at the end (default true): ui, in drawing order \
                         (the topmost last), [{id, name, kind: Text|Image|Button|Bar, visible, rect: \
@@ -392,6 +393,9 @@ pub fn definitions() -> Json {
                    "ids": {"type": "array", "items": {"type": "string"}, "description":
                        "view=top|side: objects framed, with their children (default: every \
                         object with a shape, hidden ones too)."},
+                   "ui": {"type": "boolean", "description":
+                       "view=game: lists the game interface in the text as ui, like oxy_simulate \
+                        (default true); false leaves it out, e.g. for repeated captures."},
                    "width": {"type": "integer", "description": "16-4096 pixels (default 960)."},
                    "height": {"type": "integer", "description": "16-4096 pixels (default 540)."}}),
             json!([])
@@ -548,10 +552,10 @@ the editor viewport as the person sees it, with the collider view when colliders
 other view first runs the game on an in-memory copy for `seconds`, with inputs (and setup, spawn \
 and until as in oxy_simulate), then captures: game (the default on files) through the game \
 camera, and lists the game interface as ui like oxy_simulate, since the image leaves out texts, \
-buttons and bars; free through a perspective camera at eye looking at target (3D scenes); top \
-and side through orthographic views framing ids: top straight down with -Z up and +X right, \
-side level along -Z, or along -X when the framed part is deeper (Z) than wide (X), so the long \
-side spans the image. In 2D scenes top and side both show the scene plane. The text gives the \
+buttons and bars (ui: false leaves the list out); free through a perspective camera at eye \
+looking at target (3D scenes); top and side through orthographic views framing ids: top \
+straight down with -Z up and +X right, side level along -Z, or along -X when the framed part is \
+deeper (Z) than wide (X), so the long side spans the image. In 2D scenes top and side both show the scene plane. The text gives the \
 time, the scene and the camera used (position, forward, and fov or the visible width and \
 height in metres).";
 
@@ -1207,11 +1211,13 @@ mod tests {
             "target",
             "fov",
             "ids",
+            "ui",
             "width",
             "height",
         ] {
             assert!(shot[option]["description"].is_string(), "{option}");
         }
+        assert!(SCREENSHOT_DESCRIPTION.contains("ui: false"));
         let simulate = schema("oxy_simulate");
         for option in ["ui", "width", "height", "screenshot", "colliders"] {
             assert!(simulate[option]["description"].is_string(), "{option}");
@@ -1965,6 +1971,8 @@ mod tests {
         assert_eq!(game["view"], "game");
         assert_eq!(game["ui"][0]["text"], "Pontos");
         assert_eq!(game["colliders"], false);
+        let (quiet, _) = shot(json!({"ui": false}));
+        assert!(quiet.get("ui").is_none(), "ui: false leaves the list out");
         let (top, plain) = shot(json!({"view": "top"}));
         assert_eq!(top["camera"]["projection"], "orthographic");
         assert!(

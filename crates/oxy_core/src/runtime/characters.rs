@@ -104,13 +104,10 @@ impl Characters {
         #[cfg(feature = "profiling")]
         let prepare_started = std::time::Instant::now();
         let mut evaluation = SceneEvaluation::new(scene)?;
+        // A platform that turns, scales or jumps is reported by the characters it drops
+        // (motor), not on its own: with nobody on it, nothing goes wrong.
         self.platforms =
             platforms::advance(scene, &mut evaluation, &self.platforms, &self.looped, dt)?;
-        for (id, platform) in &self.platforms {
-            if platform.discontinuous {
-                self.warnings.push((id.clone(),"Plataforma com rotação, escala alterada ou salto de posição: apoio liberado sem herdar velocidade.".into()));
-            }
-        }
         self.ignored_tracks.retain(|(owner, clip, target)| {
             evaluation
                 .index

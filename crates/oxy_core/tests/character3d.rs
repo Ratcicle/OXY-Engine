@@ -706,13 +706,70 @@ fn platform_discontinuity_detaches_without_launch_and_diagnostics_are_bounded() 
         !s.grounded && s.velocity.x.abs() < 0.001 && (s.position.x - before.x).abs() < 0.01,
         "{s:?}"
     );
-    assert!(!rt.logs.is_empty());
+    // The character it dropped reports it, naming the platform.
+    assert_eq!(
+        rt.logs,
+        [format!(
+            "Personagem {BODY}: Apoio em Chão liberado sem herdar velocidade, porque a \
+             plataforma girou, mudou de escala ou saltou de posição."
+        )]
+    );
     for _ in 0..10 {
         rt.scene_mut().entities[0].transform.rotation[1] += 0.2;
         rt.advance(FIXED_DT, &InputFrame::default());
     }
     assert_eq!(rt.logs.len(), 1);
     assert!(rt.character_state(BODY).unwrap().velocity.length() < 10.);
+}
+
+#[test]
+fn a_platform_that_turns_with_nobody_on_it_reports_nothing() {
+    use oxy_core::surface::*;
+    let mut project = fixture();
+    let mut wheel = Entity::new("Roda", None);
+    wheel.id = "wheel".into();
+    wheel.transform.position = [10., 0.5, 0.];
+    wheel.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [2., 0.2, 2.],
+        },
+        ..Default::default()
+    });
+    wheel.platform = Some(TranslationPlatform::default());
+    project.scenes[0].entities.push(wheel);
+    // "reiniciar" restarts the scene: each start is checked too.
+    let mut restart = oxy_core::graph::Node::new("event.input", [0.; 2]);
+    restart
+        .params
+        .insert("action".into(), Value::Text("reiniciar".into()));
+    let mut change = oxy_core::graph::Node::new("action.scene", [0.; 2]);
+    change
+        .params
+        .insert("scene".into(), Value::Text(project.start_scene.clone()));
+    let body = project.scenes[0].entity_mut(BODY).unwrap();
+    body.graph.edges.push(oxy_core::graph::Edge {
+        from_node: restart.id.clone(),
+        from_port: "exec".into(),
+        to_node: change.id.clone(),
+        to_port: "exec".into(),
+    });
+    body.graph.nodes = vec![restart, change];
+    let mut rt = runtime(&project);
+    for round in 0..2 {
+        settle(&mut rt);
+        for _ in 0..10 {
+            let wheel = rt.scene_mut().entity_mut("wheel").unwrap();
+            wheel.transform.rotation[1] += 0.2;
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        assert!(rt.logs.is_empty(), "round {round}: {:?}", rt.logs);
+        let press = InputFrame {
+            pressed: ["reiniciar".to_owned()].into(),
+            ..Default::default()
+        };
+        rt.advance(FIXED_DT, &press);
+    }
+    assert_eq!(rt.scene_starts.len(), 2);
 }
 
 #[test]

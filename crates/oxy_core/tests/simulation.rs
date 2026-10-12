@@ -7,6 +7,7 @@ use oxy_core::{
     graph::{Edge, Node},
     headless::{self, Actions, EventKind, SimulationReport, SimulationRequest},
     physics3d::{Collider3d, CollisionShape},
+    runtime::{FIXED_DT, InputFrame, MAX_PENDING_SOUNDS, Runtime},
 };
 use serde_json::json;
 
@@ -149,6 +150,98 @@ fn inputs_survive_scene_changes_and_reloads_are_reported() {
     );
     let stopped = stop.stopped_at.unwrap();
     assert!(stopped.reason == "log_contains" && near(stopped.time, 2.0));
+}
+
+/// A 2D scene where "reiniciar" plays "Bip" and then restarts the scene; with `on_start`, the
+/// scene does the same as it starts, so it restarts itself until the work budget runs out.
+fn beep_then_restart(on_start: bool) -> Project {
+    let mut project = Project::new("Som e reinício");
+    project
+        .input_bindings
+        .insert("reiniciar".into(), "R".into());
+    project.assets.push(Asset {
+        id: "00000000-0000-4000-8000-0000000000b1".into(),
+        name: "Bip".into(),
+        path: "assets/bip.wav".into(),
+        kind: AssetKind::Audio,
+        model: None,
+    });
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    let scene_id = scene.id.clone();
+    let mut control = Entity::new("Controle", None);
+    let event = if on_start {
+        node(&mut control, "event.scene_start", &[])
+    } else {
+        node(
+            &mut control,
+            "event.input",
+            &[("action", text("reiniciar"))],
+        )
+    };
+    let beep = node(
+        &mut control,
+        "action.sound",
+        &[("asset", text("00000000-0000-4000-8000-0000000000b1"))],
+    );
+    let restart = node(&mut control, "action.scene", &[("scene", text(&scene_id))]);
+    link(&mut control, &event, &beep);
+    link(&mut control, &beep, &restart);
+    scene.entities.push(control);
+    project
+}
+
+#[test]
+fn a_sound_played_right_before_a_scene_change_is_kept() {
+    // The hosts (editor, player) take the sounds after the step that changed scene.
+    let project = beep_then_restart(false);
+    let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    let press = InputFrame {
+        pressed: ["reiniciar".to_owned()].into(),
+        ..Default::default()
+    };
+    runtime.advance(FIXED_DT, &press);
+    assert_eq!(
+        runtime.scene_starts,
+        std::slice::from_ref(&project.start_scene)
+    );
+    let sounds = std::mem::take(&mut runtime.sounds);
+    assert_eq!(sounds.len(), 1, "the beep before the restart");
+    assert_eq!(sounds[0].asset, project.assets[0].id);
+    // And the report lists it.
+    let report = run(
+        &project,
+        json!({"seconds": 2.0, "inputs": [
+            {"type": "press", "at": 0.5, "action": "reiniciar"},
+            {"type": "release", "at": 0.6, "action": "reiniciar"},
+            {"type": "press", "at": 1.5, "action": "reiniciar"},
+        ]}),
+    );
+    assert_eq!(report.scene_changes.len(), 2);
+    let sounds: Vec<_> = report
+        .sounds
+        .iter()
+        .map(|s| (s.text.as_str(), s.time))
+        .collect();
+    assert_eq!(sounds.len(), 2, "{sounds:?}");
+    assert!(sounds.iter().all(|(name, _)| *name == "Bip"));
+    assert!(
+        near(sounds[0].1, 0.5) && near(sounds[1].1, 1.5),
+        "{sounds:?}"
+    );
+
+    // A scene that restarts as it starts, until the work budget runs out, keeps a bounded
+    // number of requests.
+    let project = beep_then_restart(true);
+    let runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    assert!(runtime.scene_starts.len() > MAX_PENDING_SOUNDS);
+    assert_eq!(runtime.sounds.len(), MAX_PENDING_SOUNDS);
+    let limit = format!("Limite de {MAX_PENDING_SOUNDS} sons");
+    assert!(
+        runtime.logs.iter().any(|l| l.contains(&limit)),
+        "{:?}",
+        runtime.logs
+    );
 }
 
 /// "Relógio" runs logic every step and greets at the start; "Quebrado" fails at the start.
@@ -329,6 +422,40 @@ fn watched_rotation_reads_like_the_queries_past_a_quarter_turn() {
     );
 }
 
+#[test]
+fn samples_are_as_many_as_asked_and_end_at_the_final_state() {
+    let (project, clock, _) = clock();
+    let times = |seconds: f64, samples: u32| -> Vec<f64> {
+        run(
+            &project,
+            json!({"seconds": seconds, "samples": samples, "watch": [clock]}),
+        )
+        .watched[0]
+            .samples
+            .iter()
+            .map(|s| s.time)
+            .collect()
+    };
+    // 60 and 240 steps are not multiples of 7 and 9: no extra sample before the last.
+    for (seconds, samples) in [(1., 7), (4., 9), (2., 120), (1., 60), (3., 4)] {
+        let times = times(seconds, samples);
+        assert_eq!(times.len(), samples as usize, "{seconds} s: {times:?}");
+        assert_eq!(*times.last().unwrap(), seconds);
+        let spacing = seconds / f64::from(samples);
+        for (k, time) in times.iter().enumerate() {
+            assert!(
+                // Half a step at most, plus the report's rounding to 0.1 ms.
+                (time - spacing * (k + 1) as f64).abs() <= 1. / 120. + 1e-4,
+                "sample {k} of {samples} in {seconds} s: {times:?}"
+            );
+        }
+    }
+    assert_eq!(times(1., 0), [1.]);
+    assert_eq!(times(1., 1), [1.]);
+    // Fewer steps than samples: one per step.
+    assert_eq!(times(0.05, 7), [0.0167, 0.0333, 0.05]);
+}
+
 const BODY: &str = "00000000-0000-4000-8000-000000000002";
 const GOAL: &str = "00000000-0000-4000-8000-000000000004";
 
@@ -439,7 +566,18 @@ fn movement_camera_and_area_events_are_reported() {
         stopped.reason == "event" && near(stopped.time, 0.5),
         "{stopped:?}"
     );
-    assert_eq!(stopped.detail, "jump de Corredor");
+    // The detail is in words; the kind stays as `until` and `events` name it.
+    assert_eq!(stopped.detail, "Corredor pulou");
+    let json = serde_json::to_value(&stopped).unwrap();
+    assert_eq!(json["kind"], "jump", "{json}");
+    let landed = run(
+        &project,
+        json!({"seconds": 2.0, "until": {"event": {"kind": "land", "object": BODY}}}),
+    )
+    .stopped_at
+    .unwrap();
+    assert_eq!(landed.detail, "Corredor aterrissou em Chão");
+    assert_eq!(landed.kind, Some(EventKind::Land));
 }
 
 #[test]
@@ -521,7 +659,7 @@ fn setup_and_spawn_change_only_the_copy_and_until_stops_early() {
     );
     let stopped = report.stopped_at.as_ref().unwrap();
     assert!(
-        stopped.reason == "attribute" && near(stopped.time, 0.5),
+        stopped.reason == "attribute" && near(stopped.time, 0.5) && stopped.kind.is_none(),
         "{stopped:?}"
     );
     assert!(
@@ -652,8 +790,8 @@ fn areas_that_remove_themselves_or_the_visitor_still_report_the_crossing() {
     );
     assert!(report.events.iter().all(|e| near(e.time, 1. / 60.)));
     for (object, detail) in [
-        (&coin_id, "area_enter de Caixa (Moeda)"),
-        (&player_id, "area_enter de Jogador (Lava)"),
+        (&coin_id, "Caixa entrou em Moeda"),
+        (&player_id, "Jogador entrou em Lava"),
     ] {
         let stop = run(
             &project,
@@ -661,7 +799,10 @@ fn areas_that_remove_themselves_or_the_visitor_still_report_the_crossing() {
         );
         let stopped = stop.stopped_at.expect("the crossing stops the run");
         assert!(near(stopped.time, 1. / 60.), "{stopped:?}");
-        assert_eq!(stopped.detail, detail);
+        assert_eq!(
+            (stopped.kind, stopped.detail.as_str()),
+            (Some(EventKind::AreaEnter), detail)
+        );
     }
 }
 
