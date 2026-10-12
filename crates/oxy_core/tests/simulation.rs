@@ -26,6 +26,15 @@ fn link(entity: &mut Entity, from: &str, to: &str) {
         to_port: "exec".into(),
     });
 }
+/// A data link, e.g. an event's "context" into an action's "target".
+fn wire(entity: &mut Entity, from: &str, from_port: &str, to: &str, to_port: &str) {
+    entity.graph.edges.push(Edge {
+        from_node: from.into(),
+        from_port: from_port.into(),
+        to_node: to.into(),
+        to_port: to_port.into(),
+    });
+}
 fn text(value: &str) -> Value {
     Value::Text(value.into())
 }
@@ -551,4 +560,409 @@ fn until_entity_absent_and_invalid_options_are_refused() {
         assert!(error.contains(expected), "{error}");
     }
     assert_eq!(project, before);
+}
+
+/// What the report shows of the area events in `report`, as (kind, object, other) names.
+fn area_events(report: &SimulationReport) -> Vec<(EventKind, String, String)> {
+    report
+        .events
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::AreaEnter | EventKind::AreaExit))
+        .map(|e| {
+            (
+                e.kind,
+                e.object.name.clone(),
+                e.other.as_ref().unwrap().name.clone(),
+            )
+        })
+        .collect()
+}
+fn trigger(name: &str, position: [f32; 3]) -> Entity {
+    let mut area = Entity::new(name, None);
+    area.transform.position = position;
+    area.collider = Some(Collider {
+        size: [2., 2., 1.],
+        is_trigger: true,
+        ..Default::default()
+    });
+    area
+}
+fn solid(name: &str, position: [f32; 3]) -> Entity {
+    let mut solid = Entity::new(name, Some(Primitive::Rectangle));
+    solid.transform.position = position;
+    solid.collider = Some(Collider::default());
+    solid
+}
+
+#[test]
+fn areas_that_remove_themselves_or_the_visitor_still_report_the_crossing() {
+    let mut project = Project::new("Coleta");
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    // A coin removes itself; lava removes whatever enters it.
+    let mut coin = trigger("Moeda", [0.; 3]);
+    let enter = node(&mut coin, "event.area_enter", &[]);
+    let remove = node(&mut coin, "action.remove", &[]);
+    link(&mut coin, &enter, &remove);
+    let mut lava = trigger("Lava", [10., 0., 0.]);
+    let enter = node(&mut lava, "event.area_enter", &[]);
+    let remove = node(&mut lava, "action.remove", &[]);
+    link(&mut lava, &enter, &remove);
+    wire(&mut lava, &enter, "context", &remove, "target");
+    let player = solid("Jogador", [10., 0., 0.]);
+    let (coin_id, player_id) = (coin.id.clone(), player.id.clone());
+    scene.entities = vec![coin, solid("Caixa", [0.; 3]), lava, player];
+    let report = run(&project, json!({"seconds": 1.0}));
+    let mut events = area_events(&report);
+    events.sort_by(|a, b| a.1.cmp(&b.1));
+    assert_eq!(
+        events,
+        [
+            (EventKind::AreaEnter, "Caixa".into(), "Moeda".into()),
+            (EventKind::AreaEnter, "Jogador".into(), "Lava".into()),
+        ]
+    );
+    assert!(report.events.iter().all(|e| near(e.time, 1. / 60.)));
+    for (object, detail) in [
+        (&coin_id, "area_enter de Caixa (Moeda)"),
+        (&player_id, "area_enter de Jogador (Lava)"),
+    ] {
+        let stop = run(
+            &project,
+            json!({"seconds": 1.0, "until": {"event": {"kind": "area_enter", "object": object}}}),
+        );
+        let stopped = stop.stopped_at.expect("the crossing stops the run");
+        assert!(near(stopped.time, 1. / 60.), "{stopped:?}");
+        assert_eq!(stopped.detail, detail);
+    }
+}
+
+#[test]
+fn a_3d_sensor_that_removes_itself_still_reports_the_entry() {
+    let mut project = course();
+    let goal = project.scenes[0].entity_mut(GOAL).unwrap();
+    let enter = node(goal, "event.area_enter", &[]);
+    let remove = node(goal, "action.remove", &[]);
+    link(goal, &enter, &remove);
+    let report = run(&project, json!({"seconds": 1.0}));
+    assert_eq!(
+        area_events(&report),
+        [(EventKind::AreaEnter, "Corredor".into(), "Meta".into())],
+        "{:?}",
+        report.events
+    );
+    let stop = run(
+        &project,
+        json!({"seconds": 1.0, "until": {"event": {"kind": "area_enter", "object": GOAL}}}),
+    );
+    let stopped = stop.stopped_at.expect("the entry stops the run");
+    assert!(stopped.time < 0.5, "{stopped:?}");
+}
+
+#[test]
+fn an_area_that_turns_off_its_collider_reports_no_exit() {
+    let mut project = Project::new("Interruptor");
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    // Turns itself off on entry and back on 0.5 s later; it logs every exit the game fires.
+    let mut zone = trigger("Zona", [0.; 3]);
+    let enter = node(&mut zone, "event.area_enter", &[]);
+    let off = node(
+        &mut zone,
+        "action.component",
+        &[
+            ("component", text("collider")),
+            ("enabled", Value::Bool(false)),
+        ],
+    );
+    let wait = node(
+        &mut zone,
+        "control.wait",
+        &[("seconds", Value::Number(0.5))],
+    );
+    let on = node(
+        &mut zone,
+        "action.component",
+        &[
+            ("component", text("collider")),
+            ("enabled", Value::Bool(true)),
+        ],
+    );
+    link(&mut zone, &enter, &off);
+    link(&mut zone, &off, &wait);
+    link(&mut zone, &wait, &on);
+    let exit = node(&mut zone, "event.area_exit", &[]);
+    let left = node(&mut zone, "debug.message", &[("message", text("saiu"))]);
+    link(&mut zone, &exit, &left);
+    let zone_id = zone.id.clone();
+    scene.entities = vec![zone, solid("Caixa", [0.; 3])];
+    let report = run(
+        &project,
+        json!({"seconds": 1.2, "until": {"event": {"kind": "area_exit", "object": zone_id}}}),
+    );
+    assert!(report.stopped_at.is_none(), "{:?}", report.stopped_at);
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+    // Turning the collider back on is a new entry, as the game fires it.
+    let events = area_events(&report);
+    assert_eq!(
+        events,
+        vec![(EventKind::AreaEnter, "Caixa".to_owned(), "Zona".to_owned()); 3],
+        "{:?}",
+        report.events
+    );
+    assert!(
+        near(report.events[1].time, 0.5 + 1. / 60.),
+        "{:?}",
+        report.events
+    );
+}
+
+#[test]
+fn area_events_survive_a_scene_change_in_the_same_step() {
+    let mut project = Project::new("Portal");
+    let next = Scene::new("Fase 2", SceneKind::TwoD);
+    let next_id = next.id.clone();
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    let mut portal = trigger("Portal", [0.; 3]);
+    let enter = node(&mut portal, "event.area_enter", &[]);
+    let travel = node(&mut portal, "action.scene", &[("scene", text(&next_id))]);
+    link(&mut portal, &enter, &travel);
+    let portal_id = portal.id.clone();
+    scene.entities = vec![portal, solid("Caixa", [0.; 3])];
+    project.scenes.push(next);
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "until": {"event": {"kind": "area_enter", "object": portal_id}}}),
+    );
+    assert_eq!(
+        area_events(&report),
+        [(EventKind::AreaEnter, "Caixa".into(), "Portal".into())]
+    );
+    assert_eq!(report.scene_changes.len(), 1);
+    assert_eq!(report.final_scene, next_id);
+    let stopped = report.stopped_at.unwrap();
+    assert!(
+        stopped.reason == "event" && near(stopped.time, 1. / 60.),
+        "{stopped:?}"
+    );
+}
+
+fn looks_like_id(text: &str) -> bool {
+    text.split([' ', '(', ')'])
+        .any(|word| word.len() == 36 && word.matches('-').count() == 4)
+}
+
+#[test]
+fn spawned_copies_removed_in_the_same_step_keep_names_and_the_summary_room() {
+    let mut project = Project::new("Arma");
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    let mut floor = solid("Chão", [0.; 3]);
+    floor.collider.as_mut().unwrap().size = [100., 1., 1.];
+    // A bullet spawned on the floor logs the hit and removes itself in the same step.
+    let mut bullet = trigger("Bala", [0., 10., 0.]);
+    bullet.collider.as_mut().unwrap().size = [0.2, 0.2, 1.];
+    let enter = node(&mut bullet, "event.area_enter", &[]);
+    let hit = node(
+        &mut bullet,
+        "debug.message",
+        &[("message", text("acertou"))],
+    );
+    let remove = node(&mut bullet, "action.remove", &[]);
+    link(&mut bullet, &enter, &hit);
+    link(&mut bullet, &hit, &remove);
+    // A trail copy removes itself on the next step, through per-step logic; the template
+    // turns its own logic off at the start.
+    let mut trail = Entity::new("Rastro", None);
+    trail.transform.position = [0., 20., 0.];
+    let start = node(&mut trail, "event.scene_start", &[]);
+    let off = node(
+        &mut trail,
+        "action.component",
+        &[
+            ("component", text("behavior")),
+            ("enabled", Value::Bool(false)),
+        ],
+    );
+    link(&mut trail, &start, &off);
+    let step = node(&mut trail, "event.step", &[]);
+    let gone = node(&mut trail, "action.remove", &[]);
+    link(&mut trail, &step, &gone);
+    let mut gun = Entity::new("Arma", None);
+    let fire = node(
+        &mut gun,
+        "event.input",
+        &[("action", text("gerar")), ("mode", text("held"))],
+    );
+    let shot = node(
+        &mut gun,
+        "action.spawn",
+        &[
+            ("target", Value::Object(Some(bullet.id.clone()))),
+            ("y", Value::Number(-10.)),
+        ],
+    );
+    let mark = node(
+        &mut gun,
+        "action.spawn",
+        &[("target", Value::Object(Some(trail.id.clone())))],
+    );
+    link(&mut gun, &fire, &shot);
+    link(&mut gun, &shot, &mark);
+    let mut end = Entity::new("Fim", None);
+    let done = node(&mut end, "event.input", &[("action", text("fim"))]);
+    let say = node(&mut end, "debug.message", &[("message", text("fim"))]);
+    link(&mut end, &done, &say);
+    scene.entities = vec![floor, bullet, trail, gun, end];
+    let inputs = json!([
+        {"type": "press", "at": 0.0, "action": "gerar"},
+        {"type": "release", "at": 3.5, "action": "gerar"},
+        {"type": "press", "at": 4.0, "action": "fim"},
+    ]);
+    let report = run(&project, json!({"seconds": 4.5, "inputs": inputs}));
+    let lines = summary(&report);
+    assert!(
+        !lines.iter().any(|(text, _)| looks_like_id(text)),
+        "{lines:?}"
+    );
+    let hits = lines
+        .iter()
+        .find(|(text, _)| text == "Bala (cópia) · Ao entrar na área")
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(hits.1 > 200, "{hits:?}");
+    assert!(
+        lines.contains(&("Fim · Mensagem de diagnóstico".into(), 1)),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|(text, _)| text.starts_with("Rastro (cópia)")),
+        "per-step logic of copies is left out too: {lines:?}"
+    );
+    assert!(report.truncated.is_empty(), "{:?}", report.truncated);
+    let hit = report.logs.iter().find(|l| l.text == "acertou").unwrap();
+    assert_eq!(hit.object.as_ref().unwrap().name, "Bala (cópia)");
+    assert_eq!(hit.node.as_ref().unwrap().operation, "debug.message");
+    assert!(
+        report.events.iter().all(|e| !looks_like_id(&e.object.name)
+            && e.other.as_ref().is_none_or(|o| !looks_like_id(&o.name))),
+        "{:?}",
+        report.events.first()
+    );
+
+    let all = run(
+        &project,
+        json!({"seconds": 1.0, "actions": "all", "inputs": inputs}),
+    );
+    let Some(Actions::All(actions)) = &all.actions else {
+        panic!("{:?}", all.actions);
+    };
+    assert!(actions.iter().all(|a| !looks_like_id(&a.text)));
+}
+
+#[test]
+fn a_scene_change_started_every_step_still_shows_in_the_summary() {
+    let mut project = Project::new("Menu");
+    project.scenes[0].kind = SceneKind::TwoD;
+    let level = Scene::new("Fase", SceneKind::TwoD);
+    let level_id = level.id.clone();
+    let mut menu = Entity::new("Menu", None);
+    let step = node(&mut menu, "event.step", &[]);
+    let wait = node(&mut menu, "control.wait", &[("seconds", Value::Number(1.))]);
+    let open = node(&mut menu, "action.scene", &[("scene", text(&level_id))]);
+    link(&mut menu, &step, &wait);
+    link(&mut menu, &wait, &open);
+    project.scenes[0].entities.push(menu);
+    project.scenes.push(level);
+    let report = run(&project, json!({"seconds": 2.0}));
+    assert_eq!(report.scene_changes.len(), 1);
+    let lines = summary(&report);
+    assert_eq!(lines, [("Menu · Mudar de cena".to_owned(), 1)]);
+    let all = run(&project, json!({"seconds": 2.0, "actions": "all"}));
+    let Some(Actions::All(actions)) = &all.actions else {
+        panic!("{:?}", all.actions);
+    };
+    assert_eq!(actions.len(), 1);
+    assert!(
+        actions[0].text == "Menu · Mudar de cena" && near(actions[0].time, 1. + 1. / 60.),
+        "{actions:?}"
+    );
+    // Listing the operation itself still leaves it out.
+    let hidden = run(
+        &project,
+        json!({"seconds": 2.0, "actions_filter": {"exclude_operations": ["action.scene"]}}),
+    );
+    assert!(
+        summary(&hidden)
+            .iter()
+            .all(|(text, _)| !text.contains("Mudar de cena"))
+    );
+}
+
+#[test]
+fn until_compares_attributes_with_values_of_their_type() {
+    let mut project = Project::new("Mira");
+    project.scenes[0].kind = SceneKind::TwoD;
+    let enemy = Entity::new("Inimigo", None);
+    let mut player = Entity::new("Jogador", None);
+    player.attributes.insert("alvo".into(), Value::Object(None));
+    player.attributes.insert("vida".into(), Value::Number(3.));
+    let start = node(&mut player, "event.scene_start", &[]);
+    let wait = node(
+        &mut player,
+        "control.wait",
+        &[("seconds", Value::Number(0.5))],
+    );
+    let aim = node(
+        &mut player,
+        "attribute.set",
+        &[
+            ("attribute", text("alvo")),
+            ("value", Value::Object(Some(enemy.id.clone()))),
+        ],
+    );
+    link(&mut player, &start, &wait);
+    link(&mut player, &wait, &aim);
+    let (enemy_id, player_id) = (enemy.id.clone(), player.id.clone());
+    project.scenes[0].entities = vec![enemy, player];
+    // An object attribute compared with the object's ID.
+    let report = run(
+        &project,
+        json!({"seconds": 2.0, "until": {"attribute":
+            {"entity": player_id, "name": "alvo", "op": "==", "value": enemy_id}}}),
+    );
+    let stopped = report.stopped_at.expect("the reference matches the ID");
+    assert!(
+        stopped.reason == "attribute" && near(stopped.time, 0.5),
+        "{stopped:?}"
+    );
+    assert!(
+        stopped.detail.contains("Jogador.alvo =="),
+        "{}",
+        stopped.detail
+    );
+    // A value of another type would never match, so it is refused.
+    for (value, expected) in [
+        (
+            json!({"entity": player_id, "name": "vida", "op": "==", "value": "0"}),
+            "o atributo vida de Jogador é número, mas o valor informado é texto",
+        ),
+        (
+            json!({"entity": player_id, "name": "alvo", "op": "!=", "value": true}),
+            "o atributo alvo de Jogador é objeto",
+        ),
+        (
+            json!({"entity": player_id, "name": "alvo", "op": "==", "value": "nada"}),
+            "until: objeto nada não existe",
+        ),
+    ] {
+        let error = headless::simulate(
+            &project,
+            &request(json!({"seconds": 1.0, "until": {"attribute": value}})),
+        )
+        .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
 }

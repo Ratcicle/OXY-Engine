@@ -38,11 +38,15 @@ const PROJECT: &str = "Optional path to the project folder or its project.oxy.js
 the single open editor that allows agents is used.";
 const SCENE: &str = "Optional scene ID. Defaults to the scene open in the editor (live) or the \
 project's start scene (files).";
+/// The game always starts in the start scene, live too, unlike the editing tools.
+const START_SCENE: &str = "Optional scene the game starts in. Defaults to the project's start \
+scene, also live (not the scene open in the editor); setup commands without a scene use it too.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
     let project = json!({"type": "string", "description": PROJECT});
     let scene = json!({"type": "string", "description": SCENE});
+    let start_scene = json!({"type": "string", "description": START_SCENE});
     let tool = |name: &str, description: &str, properties: Json, required: Json| {
         json!({
             "name": name,
@@ -110,7 +114,7 @@ pub fn definitions() -> Json {
         tool(
             "oxy_simulate",
             SIMULATE_DESCRIPTION,
-            json!({"project": project, "scene": scene,
+            json!({"project": project, "scene": start_scene,
                    "seconds": {"type": "number", "description":
                        "Simulated seconds (max 600); the upper bound when `until` is set."},
                    "inputs": {"type": "array", "items": {"type": "object"}, "description":
@@ -133,11 +137,15 @@ pub fn definitions() -> Json {
                         look_yaw and pitch in degrees for 3D characters. attributes: false leaves \
                         them out, a list keeps only those names."},
                    "samples": {"type": "integer", "description":
-                       "Evenly spaced samples of watched objects, the last being the final state."},
+                       "Samples of watched objects (max 120), the last being the final state. They \
+                        are spaced evenly across `seconds`, so a run that until stops early returns \
+                        fewer."},
                    "actions": {"type": "string", "enum": ["none", "summary", "all"], "description":
-                       "Logic actions that ran. summary (default): one entry per object and action \
-                        with count, first and last time. all: every action with its time, the most \
-                        recent 300."},
+                       "Logic actions that ran. summary (default): one line per object name and \
+                        action with count, first and last time (objects sharing a name, such as \
+                        spawned copies, share a line; the 300 lines most recently active stay). \
+                        all: every action with its time, the most recent 300. actions_filter \
+                        applies to both."},
                    "actions_filter": {"type": "object", "properties": {
                        "objects": {"type": "array", "items": {"type": "string"}},
                        "operations": {"type": "array", "items": {"type": "string"}},
@@ -145,7 +153,8 @@ pub fn definitions() -> Json {
                        "description": "Keep only actions of these objects / operations. \
                         exclude_operations defaults to [\"event.step\"] unless operations is \
                         given: an excluded event also hides the actions only it starts (per-step \
-                        logic and timers). Pass [] to see everything."},
+                        logic and timers), except action.scene, so every scene change has its \
+                        action. Pass [] to see everything."},
                    "setup": {"type": "array", "items": {"type": "object"}, "description":
                        "oxy_apply commands applied to the in-memory copy before the run, never to \
                         the project; commands without a scene use the start scene. The IDs they \
@@ -165,7 +174,9 @@ pub fn definitions() -> Json {
                        "attribute": {"type": "object", "properties": {
                            "entity": {"type": "string"}, "name": {"type": "string"},
                            "op": {"type": "string", "enum": ["==", "!=", "<", "<=", ">", ">="]},
-                           "value": {"description": "Number, boolean, text or a tagged value."}},
+                           "value": {"description": "Number, boolean, text or a tagged value, of \
+                               the attribute's type. For an object or surface attribute, a text \
+                               is its ID (\"$N\" allowed)."}},
                            "required": ["entity", "name", "op", "value"]},
                        "entity_absent": {"type": "string", "description":
                            "Stops once this object of the start scene no longer exists."},
@@ -184,7 +195,7 @@ pub fn definitions() -> Json {
             "PNG image. view=editor (live only, the default there): the editor viewport as the \
              person sees it. view=game: the game camera after `seconds` of simulation (0 = start), \
              without the game interface overlay.",
-            json!({"project": project, "scene": scene,
+            json!({"project": project, "scene": start_scene,
                    "view": {"type": "string", "enum": ["editor", "game"]},
                    "seconds": {"type": "number"},
                    "width": {"type": "integer"}, "height": {"type": "integer"}}),
@@ -249,7 +260,8 @@ const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memo
 the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
 when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
 sounds, movement and area events {time, kind: jump|land|leave|side|surface|posture|area_enter|\
-area_exit, object, other?}, the game camera at the end {active, mode, position, forward, fov} and \
+area_exit, object, other?} as the game fires them (also when its logic then removes the objects \
+involved or changes scene), the game camera at the end {active, mode, position, forward, fov} and \
 the watched objects. Inputs use the project's input action names (see oxy_project). To test one \
 section without editing the project, use setup (commands on the copy), spawn (place the player) \
 and until (stop when something happens). Lists keep the most recent 300 entries and `truncated` \

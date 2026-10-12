@@ -74,6 +74,33 @@ pub struct NodeTrace {
     pub operation: String,
     pub time: f64,
 }
+/// An area crossing as the runtime emits it, for 2D triggers and 3D sensors alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AreaCrossing {
+    pub area: Id,
+    pub other: Id,
+    pub entered: bool,
+}
+/// An object created by `action.spawn`, enough to name it and read its logic once it is gone.
+#[derive(Clone, Debug)]
+pub struct SpawnedObject {
+    pub id: Id,
+    pub name: String,
+    pub graph: crate::graph::Graph,
+}
+/// Kept only for a host that reports a run (see `Runtime::recorded`). The lists fill as things
+/// happen, so logic that later in the same step removes the objects involved or changes scene
+/// cannot erase them. The host takes them after each step.
+#[derive(Debug, Default)]
+pub struct Recording {
+    /// The crossings the runtime emits, in order. 2D exits are kept under the same rules even
+    /// when no logic listens for them (the runtime then skips emitting them).
+    pub crossings: Vec<AreaCrossing>,
+    /// Movement records of 3D characters, taken right after they move.
+    pub movements: Vec<crate::character::MovementRecord>,
+    /// Every object of each spawned copy.
+    pub spawned: Vec<SpawnedObject>,
+}
 #[derive(Clone, Debug)]
 struct Context {
     owner: Id,
@@ -113,6 +140,8 @@ pub struct Runtime {
     pub sounds: Vec<SoundRequest>,
     /// Scenes started by `change_scene` (reloads included), oldest first, until a host takes them.
     pub scene_starts: Vec<Id>,
+    /// Off unless the runtime was created with `recorded`.
+    pub recording: Option<Recording>,
     pub time: f64,
     source: Project,
     accumulator: f32,
@@ -143,6 +172,17 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(project: &Project, scene_id: &str) -> Result<Self, String> {
+        Self::start(project, scene_id, None)
+    }
+    /// `new` with a `Recording`, kept from the scene start logic on.
+    pub fn recorded(project: &Project, scene_id: &str) -> Result<Self, String> {
+        Self::start(project, scene_id, Some(Recording::default()))
+    }
+    fn start(
+        project: &Project,
+        scene_id: &str,
+        recording: Option<Recording>,
+    ) -> Result<Self, String> {
         validate_project(project)?;
         if project.scene(scene_id).is_none() {
             return Err("Cena solicitada não existe.".into());
@@ -157,6 +197,7 @@ impl Runtime {
             traces: Vec::new(),
             sounds: Vec::new(),
             scene_starts: Vec::new(),
+            recording,
             time: 0.0,
             source: project.clone(),
             accumulator: 0.0,
@@ -365,6 +406,12 @@ impl Runtime {
             || self.move_characters(&movement_input),
             |c, ns| c.movement_ns += ns,
         );
+        if let Some(mut recording) = self.recording.take() {
+            recording
+                .movements
+                .extend_from_slice(self.movement_records());
+            self.recording = Some(recording);
+        }
         if self.event_used("event.character") {
             for record in self.movement_records().to_vec() {
                 self.emit(RuntimeEvent::Movement(record));
@@ -951,6 +998,20 @@ impl Runtime {
                     node.number("z", 0.0) as f32,
                 );
                 let descendants: HashSet<_> = self.scene().descendants(&root).into_iter().collect();
+                if let Some(mut recording) = self.recording.take() {
+                    recording.spawned.extend(
+                        self.scene()
+                            .entities
+                            .iter()
+                            .filter(|entity| descendants.contains(&entity.id))
+                            .map(|entity| SpawnedObject {
+                                id: entity.id.clone(),
+                                name: entity.name.clone(),
+                                graph: entity.graph.clone(),
+                            }),
+                    );
+                    self.recording = Some(recording);
+                }
                 let entity = self.entity_mut(&root).unwrap();
                 entity.transform.position =
                     (Vec3::from(entity.transform.position) + delta).to_array();
@@ -1098,9 +1159,14 @@ impl Runtime {
     pub fn collider_box(&self, id: &str) -> Option<Aabb> {
         collider_box(self.scene(), id)
     }
-    /// Trigger areas and the objects inside them after the last fixed step, as (area, other).
-    pub fn area_overlaps(&self) -> impl Iterator<Item = (&Id, &Id)> + '_ {
-        self.overlap_pairs.iter().map(|(area, other)| (area, other))
+    fn record_crossing(&mut self, area: &str, other: &str, entered: bool) {
+        if let Some(recording) = &mut self.recording {
+            recording.crossings.push(AreaCrossing {
+                area: area.into(),
+                other: other.into(),
+                entered,
+            });
+        }
     }
     fn move_controllers(&mut self, input: &InputFrame) {
         let controllers: Vec<_> = self
@@ -1367,8 +1433,9 @@ impl Runtime {
             }
         }
         // Preserve pair state for future listeners, but do not compute a full
-        // difference of dense sets when no graph consumes exit events.
-        if self.event_used("event.area_exit") {
+        // difference of dense sets when no graph consumes exit events (or records them).
+        let listened = self.event_used("event.area_exit");
+        if listened || self.recording.is_some() {
             let mut exited: Vec<_> = self
                 .overlap_pairs
                 .difference(&pairs)
@@ -1395,6 +1462,18 @@ impl Runtime {
         }
         self.overlap_pairs = pairs;
         for event in events {
+            match &event {
+                RuntimeEvent::AreaEnter { area, other, .. } => {
+                    self.record_crossing(area, other, true);
+                }
+                RuntimeEvent::AreaExit { area, other, .. } => {
+                    self.record_crossing(area, other, false);
+                    if !listened {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
             self.emit(event);
         }
     }
@@ -1576,6 +1655,37 @@ mod tests {
         assert_eq!(
             runtime.scene().entity(&tid).unwrap().attributes["Vida"],
             Value::Number(80.0)
+        );
+    }
+    #[test]
+    fn recording_keeps_crossings_whose_objects_logic_removes() {
+        let mut project = Project::new("Gravação");
+        let mut coin = Entity::new("Moeda", None);
+        coin.collider = Some(Collider {
+            is_trigger: true,
+            ..Collider::default()
+        });
+        let event = Node::new("event.area_enter", [0.0; 2]);
+        let remove = Node::new("action.remove", [200.0, 0.0]);
+        connect(&mut coin.graph, &event, "exec", &remove, "exec");
+        coin.graph.nodes = vec![event, remove];
+        let mut target = Entity::new("Caixa", None);
+        target.collider = Some(Collider::default());
+        let (coin_id, target_id) = (coin.id.clone(), target.id.clone());
+        project.scenes[0].entities = vec![coin, target];
+        let mut plain = Runtime::new(&project, &project.start_scene).unwrap();
+        plain.advance(FIXED_DT, &InputFrame::default());
+        assert!(plain.recording.is_none(), "only hosts that ask record");
+        let mut runtime = Runtime::recorded(&project, &project.start_scene).unwrap();
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert!(runtime.scene().entity(&coin_id).is_none());
+        assert_eq!(
+            runtime.recording.as_ref().unwrap().crossings,
+            [AreaCrossing {
+                area: coin_id,
+                other: target_id,
+                entered: true,
+            }]
         );
     }
     #[test]

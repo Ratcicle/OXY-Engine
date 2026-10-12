@@ -215,6 +215,7 @@ impl Runtime {
                 .get(&crossing.area)
                 .copied()
                 .unwrap_or_else(|| self.activate_area(&crossing.area));
+            self.record_crossing(&crossing.area, &crossing.object, crossing.entered);
             self.emit(if crossing.entered {
                 RuntimeEvent::AreaEnter {
                     area: crossing.area.clone(),

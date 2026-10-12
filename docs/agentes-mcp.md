@@ -68,26 +68,32 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 
 - **Entradas programadas** (`inputs`): ações de entrada com horário. Continuam valendo depois de uma troca de cena ou de reiniciar a cena, e uma tecla segurada continua segurada.
 - **Preparar o teste** (`setup` e `spawn`):
-  - `setup` aplica comandos do `oxy_apply` só na cópia, por exemplo um objeto de teste ou outro valor de atributo. Os comandos sem cena usam a cena inicial.
+  - `setup` aplica comandos do `oxy_apply` só na cópia, por exemplo um objeto de teste ou outro valor de atributo. Os comandos sem cena usam a cena em que o teste começa: a de `scene` ou, sem ela, a cena inicial do projeto. Ao vivo também é assim; o `oxy_apply`, ao contrário, usa a cena aberta no editor.
   - `spawn` coloca um objeto, como o jogador, numa posição do mundo (e virado para um lado) antes de começar.
   - Os IDs criados no `setup` valem como `"$0"`, `"$1"`… no resto do pedido, e o relatório os lista em `setup`.
-- **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, um objeto que some ou um evento (pulo, aterrissagem, entrada numa área…). `seconds` vira o limite, e `stopped_at` diz o que parou o teste e quando.
-- **Objetos observados** (`watch`): posição, rotação e escala no mundo, visibilidade e atributos (todos, alguns ou nenhum). Para personagens 3D, também velocidade, chão, postura, apoio e direção do olhar.
+- **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, um objeto que some ou um evento (pulo, aterrissagem, entrada numa área…). `seconds` vira o limite, e `stopped_at` diz o que parou o teste e quando. O valor comparado precisa ser do tipo do atributo; num atributo de objeto ou de superfície, o texto é o ID (vale `"$0"`).
+- **Objetos observados** (`watch`): posição, rotação e escala no mundo, visibilidade e atributos (todos, alguns ou nenhum). Para personagens 3D, também velocidade, chão, postura, apoio e direção do olhar. As amostras (`samples`) ficam espaçadas ao longo de `seconds`, então um teste que o `until` para cedo traz menos amostras.
 - **Relatório:**
   - trocas de cena, com `reload` quando a cena reinicia;
   - logs com o nome do objeto e o nó que os gerou;
-  - um resumo das ações da lógica: cada ação de cada objeto aparece uma vez, com quantas vezes rodou e quando;
+  - um resumo das ações da lógica: cada ação aparece uma vez por nome de objeto, com quantas vezes rodou e quando;
   - sons;
   - eventos de movimento (pulo, aterrissagem, saída do chão, contato lateral, superfície, postura) e de áreas (entrada e saída);
   - a câmera do jogo no fim.
 
-**Resumo das ações.** A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça. `actions: "all"` lista cada ação com o horário, como antes. Na 0.5.0 a lista completa era o padrão. Cada lista do relatório guarda as 300 entradas mais recentes, e `truncated` conta o que ficou de fora.
+**Eventos.** Os eventos entram no relatório no momento em que o jogo os dispara. Por isso aparecem mesmo quando a lógica, no mesmo passo, remove a área ou o objeto (moedas, pontos de controle, zonas de morte) ou troca de cena. Uma área que desliga o próprio colisor não gera saída, como no jogo; ao ser religada, gera uma nova entrada.
+
+**Resumo das ações.**
+- A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça (`actions_filter: {exclude_operations: []}`).
+- A troca de cena (`action.scene`) sempre aparece, mesmo quando um `event.step` a dispara. Assim, cada troca de cena tem a ação que a explica.
+- Objetos com o mesmo nome dividem uma linha, como as cópias criadas durante o jogo (`Bala (cópia)`).
+- `actions: "all"` lista cada ação com o horário e usa o mesmo filtro. Na 0.5.0 a lista completa era o padrão.
+- Cada lista do relatório guarda as 300 entradas mais recentes; no resumo, ficam as 300 linhas com atividade mais recente. `truncated` conta o que ficou de fora.
 
 ## Limites desta versão
 
 - **Imagem do jogo:** não inclui a interface do jogo (textos, botões e barras desenhados por cima da cena).
 - **Simulação:** nem sempre é determinística. Objetos criados durante o jogo (`action.spawn`) recebem IDs novos a cada execução. Isso fica para a 0.6.
-- **Eventos na troca de cena:** no passo em que a cena muda, os eventos de movimento e de área da cena anterior não aparecem em `events`. A ação que trocou a cena aparece no resumo das ações.
 - **Importação:** o agente ainda não importa PNG/WAV; use **Importar** na Biblioteca.
 - **Pintura e animação:** pintura e quadros-chave de animação ainda não têm comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas.
 - **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo.

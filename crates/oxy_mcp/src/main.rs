@@ -298,6 +298,26 @@ mod tests {
                 "{option}"
             );
         }
+        // The game starts in the start scene, live too; editing tools default to the open one.
+        let scene_of = |tool: &str| {
+            tools::definitions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == tool)
+                .unwrap()["inputSchema"]["properties"]["scene"]["description"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        for tool in ["oxy_simulate", "oxy_screenshot"] {
+            let scene = scene_of(tool);
+            assert!(
+                scene.contains("start scene, also live") && scene.contains("setup"),
+                "{tool}: {scene}"
+            );
+        }
+        assert!(scene_of("oxy_apply").contains("open in the editor (live)"));
         let dir =
             std::env::temp_dir().join(format!("oxy-mcp-sim-{}", oxy_core::document::new_id()));
         let file = dir.join(persistence::PROJECT_FILE);

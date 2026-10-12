@@ -4,14 +4,16 @@
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
-//! drops the inputs still to come nor releases the keys being held.
+//! drops the inputs still to come nor releases the keys being held. Area crossings, movement
+//! events and spawned objects come from the runtime's `Recording`, taken when they happen, so
+//! logic that removes the objects involved in the same step cannot hide them.
 use crate::{
     character::{CameraMode, CharacterState, MovementEvent, Posture},
     command::{self, Applied, Command},
     document::*,
     graph::{self, Edge, Graph, PortType},
     input_timeline::{InputChange, InputTimeline, TimedInput},
-    runtime::{FIXED_DT, InputFrame, NodeTrace, Runtime},
+    runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime},
 };
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -71,7 +73,9 @@ impl InputEvent {
 #[serde(rename_all = "snake_case")]
 pub enum ActionsMode {
     None,
-    /// One entry per object and action, with count and first and last time.
+    /// One entry per object name and action, with count and first and last time: objects
+    /// that share a name, such as spawned copies, share a line. The `MAX_ENTRIES` lines most
+    /// recently active stay.
     #[default]
     Summary,
     /// Every action with its time, the most recent `MAX_ENTRIES`.
@@ -88,7 +92,8 @@ pub struct ActionFilter {
     #[serde(default)]
     pub operations: Vec<String>,
     /// Operations left out. An event operation also leaves out the actions that only it
-    /// starts. Absent: `event.step` (per-step logic and timers), unless `operations` is given.
+    /// starts, except scene changes (`action.scene`). Absent: `event.step` (per-step logic and
+    /// timers), unless `operations` is given.
     #[serde(default)]
     pub exclude_operations: Option<Vec<String>>,
 }
@@ -198,7 +203,8 @@ pub struct AttributeCondition {
     pub entity: Id,
     pub name: String,
     pub op: Comparison,
-    /// A plain number, boolean or text, or a tagged value such as `{"Number": 3}`.
+    /// A plain number, boolean or text, or a tagged value such as `{"Number": 3}`, of the
+    /// attribute's type. For an object or surface attribute, a text is the ID (`"$N"` too).
     #[serde(deserialize_with = "plain_or_tagged")]
     pub value: Value,
 }
@@ -297,7 +303,8 @@ pub struct SimulationRequest {
     #[serde(default)]
     pub watch: Vec<Watch>,
     /// Evenly spaced samples of the watched objects, the last one being the final state
-    /// (0 or 1 report only the final state; at most 120).
+    /// (0 or 1 report only the final state; at most 120). They are spaced across `seconds`, so
+    /// a run that `until` stops early reports fewer.
     #[serde(default)]
     pub samples: u32,
     /// Commands applied to the copy before the run, as in a batch; commands without a scene
@@ -496,19 +503,41 @@ fn resolve(id: &str, applied: &[Applied]) -> Result<Id, String> {
         .ok_or_else(|| format!("\"{id}\" não se refere a um ID criado pela preparação (setup)"))
 }
 
-/// An object by ID: in the running scene, in another scene of the run, or in the copy the
-/// run started from (for objects removed since).
-fn find_entity<'a>(runtime: &'a Runtime, source: &'a Project, id: &str) -> Option<&'a Entity> {
-    runtime
-        .scene()
-        .entity(id)
-        .or_else(|| runtime.project().scenes.iter().find_map(|s| s.entity(id)))
-        .or_else(|| source.scenes.iter().find_map(|s| s.entity(id)))
+/// Finds objects by ID: in the running scene, in another scene of the run, or in the copy the
+/// run started from (for objects removed since). Copies spawned during the run and already
+/// removed keep only their name.
+#[derive(Clone, Copy)]
+struct Lookup<'a> {
+    runtime: &'a Runtime,
+    source: &'a Project,
+    spawned: &'a HashMap<Id, String>,
 }
-fn named(runtime: &Runtime, source: &Project, id: &str) -> Named {
-    Named {
-        id: id.into(),
-        name: find_entity(runtime, source, id).map_or_else(|| id.into(), |e| e.name.clone()),
+impl<'a> Lookup<'a> {
+    fn entity(self, id: &str) -> Option<&'a Entity> {
+        self.runtime
+            .scene()
+            .entity(id)
+            .or_else(|| {
+                self.runtime
+                    .project()
+                    .scenes
+                    .iter()
+                    .find_map(|s| s.entity(id))
+            })
+            .or_else(|| self.source.scenes.iter().find_map(|s| s.entity(id)))
+    }
+    /// Names do not change during a run, so a copy's is found without a scan.
+    fn name(self, id: &str) -> Option<&'a str> {
+        self.spawned
+            .get(id)
+            .map(String::as_str)
+            .or_else(|| self.entity(id).map(|e| e.name.as_str()))
+    }
+    fn named(self, id: &str) -> Named {
+        Named {
+            id: id.into(),
+            name: self.name(id).unwrap_or(id).into(),
+        }
     }
 }
 fn surface(project: &Project, id: &str) -> Named {
@@ -558,8 +587,9 @@ fn is_id(bytes: &[u8]) -> bool {
 }
 
 /// A runtime log line as an entry with names: object and node IDs become fields, and IDs of
-/// objects and scenes left in the text become their names.
-fn log_entry(runtime: &Runtime, source: &Project, time: f64, line: &str) -> Log {
+/// objects and scenes left in the text become their names. `traces` are the step's own: they
+/// name the node of a spawned copy that is already gone.
+fn log_entry(lookup: Lookup, traces: &[NodeTrace], time: f64, line: &str) -> Log {
     let mut entry = Log {
         time: rounded(time),
         text: line.into(),
@@ -567,20 +597,26 @@ fn log_entry(runtime: &Runtime, source: &Project, time: f64, line: &str) -> Log 
         node: None,
     };
     if let Some((object, node, message)) = node_line(line)
-        && let Some(entity) = find_entity(runtime, source, object)
+        && let Some(name) = lookup.name(object)
     {
         entry.object = Some(Named {
             id: object.into(),
-            name: entity.name.clone(),
+            name: name.into(),
         });
         entry.node = Some(NodeRef {
             id: node.into(),
-            operation: entity
-                .graph
-                .nodes
-                .iter()
-                .find(|n| n.id == node)
-                .map_or_else(String::new, |n| n.operation.clone()),
+            operation: lookup
+                .entity(object)
+                .and_then(|e| e.graph.nodes.iter().find(|n| n.id == node))
+                .map(|n| n.operation.clone())
+                .or_else(|| {
+                    traces
+                        .iter()
+                        .rev()
+                        .find(|t| t.node == node)
+                        .map(|t| t.operation.clone())
+                })
+                .unwrap_or_default(),
         });
         entry.text = message.into();
     }
@@ -591,16 +627,16 @@ fn log_entry(runtime: &Runtime, source: &Project, time: f64, line: &str) -> Log 
     while i + 36 <= bytes.len() {
         if (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) && is_id(&bytes[i..i + 36]) {
             let id = &text[i..i + 36];
-            let name = if let Some(entity) = find_entity(runtime, source, id) {
+            let name = if let Some(name) = lookup.name(id) {
                 if entry.object.is_none() {
                     entry.object = Some(Named {
                         id: id.into(),
-                        name: entity.name.clone(),
+                        name: name.into(),
                     });
                 }
-                Some(entity.name.as_str())
+                Some(name)
             } else {
-                runtime.project().scene(id).map(|s| s.name.as_str())
+                lookup.runtime.project().scene(id).map(|s| s.name.as_str())
             };
             if let Some(name) = name {
                 entry.text.push_str(&text[start..i]);
@@ -694,6 +730,80 @@ struct Happened {
     events: Vec<GameEvent>,
 }
 
+/// "Object · Action", with the action's label.
+fn action_text(lookup: Lookup, object: &str, operation: &str) -> String {
+    let action = graph::registry()
+        .iter()
+        .find(|op| op.id == operation)
+        .map_or(operation, |op| op.label);
+    format!("{} · {action}", lookup.named(object).name)
+}
+
+/// The action summary, one line per visible text, so objects that share a name (spawned copies
+/// among them) read as one line. It keeps at most `MAX_ENTRIES` lines: a new line takes the
+/// place of the one idle the longest, which counts as dropped.
+#[derive(Default)]
+struct Summary {
+    /// Each line with the order it first appeared in.
+    lines: Vec<(u64, ActionSummary)>,
+    by_text: HashMap<String, usize>,
+    /// The line text of each (object, operation) already seen.
+    texts: HashMap<(Id, String), String>,
+    started: u64,
+    dropped: usize,
+}
+impl Summary {
+    fn count(
+        &mut self,
+        object: Id,
+        operation: String,
+        time: f64,
+        text: impl FnOnce(&str, &str) -> String,
+    ) {
+        let text = self
+            .texts
+            .entry((object, operation))
+            .or_insert_with_key(|(object, operation)| text(object, operation));
+        if let Some(&i) = self.by_text.get(text.as_str()) {
+            let line = &mut self.lines[i].1;
+            line.count += 1;
+            line.last = time;
+            return;
+        }
+        self.started += 1;
+        let line = (
+            self.started,
+            ActionSummary {
+                text: text.clone(),
+                count: 1,
+                first: time,
+                last: time,
+            },
+        );
+        let i = if self.lines.len() < MAX_ENTRIES {
+            self.lines.push(line);
+            self.lines.len() - 1
+        } else {
+            let i = (0..self.lines.len())
+                .min_by(|&a, &b| self.lines[a].1.last.total_cmp(&self.lines[b].1.last))
+                .unwrap_or_default();
+            self.by_text.remove(&self.lines[i].1.text);
+            self.lines[i] = line;
+            self.dropped += 1;
+            i
+        };
+        self.by_text.insert(text.clone(), i);
+    }
+    /// The lines in the order they first appeared, and how many were dropped.
+    fn finish(mut self) -> (Vec<ActionSummary>, usize) {
+        self.lines.sort_by_key(|(order, _)| *order);
+        (
+            self.lines.into_iter().map(|(_, line)| line).collect(),
+            self.dropped,
+        )
+    }
+}
+
 /// Collects what the runtime did, step by step, into the report lists.
 struct Recorder<'a> {
     source: &'a Project,
@@ -703,26 +813,56 @@ struct Recorder<'a> {
     exclude: Vec<String>,
     exclude_events: Vec<String>,
     excluded_nodes: HashMap<Id, HashSet<Id>>,
-    summary: Vec<ActionSummary>,
-    summary_keys: HashMap<(Id, String), usize>,
-    summary_dropped: usize,
+    /// Names of the copies spawned during the run, which may be gone when they are reported.
+    spawned: HashMap<Id, String>,
+    summary: Summary,
     actions: Recent<Event>,
     scene: Id,
-    overlaps: BTreeSet<(Id, Id)>,
     scene_changes: Recent<SceneChange>,
     logs: Recent<Log>,
     sounds: Recent<Event>,
     events: Recent<GameEvent>,
 }
 impl Recorder<'_> {
+    fn lookup<'b>(&'b self, runtime: &'b Runtime) -> Lookup<'b> {
+        Lookup {
+            runtime,
+            source: self.source,
+            spawned: &self.spawned,
+        }
+    }
+
     fn collect(&mut self, runtime: &mut Runtime) -> Happened {
         let time = runtime.time;
         let mut happened = Happened::default();
+        let recording = runtime
+            .recording
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
         let scenes = std::mem::take(&mut runtime.scene_starts);
         let logs = std::mem::take(&mut runtime.logs);
         let traces = std::mem::take(&mut runtime.traces);
         let sounds = std::mem::take(&mut runtime.sounds);
         let runtime = &*runtime;
+        let Recording {
+            crossings,
+            movements,
+            spawned,
+        } = recording;
+        for object in spawned {
+            // A copy's nodes have IDs of their own, so its exclusions come from its own graph.
+            if self.mode != ActionsMode::None
+                && !self.exclude_events.is_empty()
+                && !object.graph.nodes.is_empty()
+            {
+                self.excluded_nodes.insert(
+                    object.id.clone(),
+                    reached_only_from(&object.graph, &self.exclude_events),
+                );
+            }
+            self.spawned.insert(object.id, object.name);
+        }
         for scene in scenes {
             self.scene_changes.push(SceneChange {
                 time: rounded(time),
@@ -734,12 +874,10 @@ impl Recorder<'_> {
                 scene: scene.clone(),
             });
             self.scene = scene.clone();
-            // The runtime forgets the old scene's overlaps; the new ones are new entries.
-            self.overlaps.clear();
             happened.scenes.push(scene);
         }
         for line in logs {
-            let entry = log_entry(runtime, self.source, time, &line);
+            let entry = log_entry(self.lookup(runtime), &traces, time, &line);
             happened.logs.push(entry.text.clone());
             happened.logs.push(line);
             self.logs.push(entry);
@@ -757,17 +895,22 @@ impl Recorder<'_> {
                 text: name,
             });
         }
+        let lookup = Lookup {
+            runtime,
+            source: self.source,
+            spawned: &self.spawned,
+        };
         let mut events = Vec::new();
         let event = |kind, object: &str, other: Option<&str>| GameEvent {
             time: rounded(time),
             kind,
-            object: named(runtime, self.source, object),
-            other: other.map(|id| named(runtime, self.source, id)),
+            object: lookup.named(object),
+            other: other.map(|id| lookup.named(id)),
             posture: None,
             surface: None,
             speed: None,
         };
-        for record in runtime.movement_records() {
+        for record in &movements {
             let id = &record.object;
             events.push(match &record.event {
                 MovementEvent::Jumped => event(EventKind::Jump, id, None),
@@ -793,28 +936,15 @@ impl Recorder<'_> {
                 }
             });
         }
-        for crossing in runtime.sensor_events() {
+        for crossing in &crossings {
             let kind = if crossing.entered {
                 EventKind::AreaEnter
             } else {
                 EventKind::AreaExit
             };
-            events.push(event(kind, &crossing.object, Some(crossing.area.as_str())));
+            events.push(event(kind, &crossing.other, Some(crossing.area.as_str())));
         }
-        let overlaps: BTreeSet<(Id, Id)> = runtime
-            .area_overlaps()
-            .map(|(area, other)| (area.clone(), other.clone()))
-            .collect();
-        for (area, other) in overlaps.difference(&self.overlaps) {
-            events.push(event(EventKind::AreaEnter, other, Some(area.as_str())));
-        }
-        // Like the runtime, a removed object does not leave an area.
-        for (area, other) in self.overlaps.difference(&overlaps) {
-            if runtime.scene().entity(area).is_some() && runtime.scene().entity(other).is_some() {
-                events.push(event(EventKind::AreaExit, other, Some(area.as_str())));
-            }
-        }
-        self.overlaps = overlaps;
+        // A trigger seen both as a 2D area and as a 3D sensor reads as one event.
         let mut seen = HashSet::new();
         events.retain(|e| {
             seen.insert((
@@ -838,9 +968,13 @@ impl Recorder<'_> {
         {
             return;
         }
-        if !self.exclude_events.is_empty() {
+        // A scene change always shows, even from a chain an excluded event starts (a reset
+        // on falling, checked every step), so each scene start has an action that explains it.
+        if !self.exclude_events.is_empty() && trace.operation != "action.scene" {
             if !self.excluded_nodes.contains_key(&trace.object) {
-                let nodes = find_entity(runtime, self.source, &trace.object)
+                let nodes = self
+                    .lookup(runtime)
+                    .entity(&trace.object)
                     .map(|e| reached_only_from(&e.graph, &self.exclude_events))
                     .unwrap_or_default();
                 self.excluded_nodes.insert(trace.object.clone(), nodes);
@@ -850,35 +984,22 @@ impl Recorder<'_> {
             }
         }
         let time = rounded(trace.time);
-        let text = |object: &str, operation: &str| {
-            let action = graph::registry()
-                .iter()
-                .find(|op| op.id == operation)
-                .map_or(operation, |op| op.label);
-            format!("{} · {action}", named(runtime, self.source, object).name)
+        let lookup = Lookup {
+            runtime,
+            source: self.source,
+            spawned: &self.spawned,
         };
         if self.mode == ActionsMode::All {
             self.actions.push(Event {
                 time,
-                text: text(&trace.object, &trace.operation),
+                text: action_text(lookup, &trace.object, &trace.operation),
             });
             return;
         }
-        let key = (trace.object, trace.operation);
-        if let Some(&i) = self.summary_keys.get(&key) {
-            self.summary[i].count += 1;
-            self.summary[i].last = time;
-        } else if self.summary.len() < MAX_ENTRIES {
-            self.summary.push(ActionSummary {
-                text: text(&key.0, &key.1),
-                count: 1,
-                first: time,
-                last: time,
+        self.summary
+            .count(trace.object, trace.operation, time, |object, operation| {
+                action_text(lookup, object, operation)
             });
-            self.summary_keys.insert(key, self.summary.len() - 1);
-        } else {
-            self.summary_dropped += 1;
-        }
     }
 
     fn finish(self, report: &mut SimulationReport) {
@@ -891,24 +1012,11 @@ impl Recorder<'_> {
             ActionsMode::None => None,
             ActionsMode::All => Some(Actions::All(self.actions.finish("actions", truncated))),
             ActionsMode::Summary => {
-                if self.summary_dropped > 0 {
-                    truncated.insert("actions", self.summary_dropped);
+                let (lines, dropped) = self.summary.finish();
+                if dropped > 0 {
+                    truncated.insert("actions", dropped);
                 }
-                // Objects that share a name read as one line.
-                let mut merged: Vec<ActionSummary> = Vec::new();
-                let mut index: HashMap<String, usize> = HashMap::new();
-                for entry in self.summary {
-                    if let Some(&i) = index.get(&entry.text) {
-                        let line = &mut merged[i];
-                        line.count += entry.count;
-                        line.first = line.first.min(entry.first);
-                        line.last = line.last.max(entry.last);
-                    } else {
-                        index.insert(entry.text.clone(), merged.len());
-                        merged.push(entry);
-                    }
-                }
-                Some(Actions::Summary(merged))
+                Some(Actions::Summary(lines))
             }
         };
     }
@@ -921,7 +1029,8 @@ struct WatchPlan {
     attributes: Option<BTreeSet<String>>,
 }
 
-fn sample(runtime: &Runtime, source: &Project, watch: &WatchPlan) -> Sample {
+fn sample(lookup: Lookup, watch: &WatchPlan) -> Sample {
+    let runtime = lookup.runtime;
     let time = rounded(runtime.time);
     let scene = runtime.scene();
     let Some(entity) = scene.entity(&watch.id) else {
@@ -962,10 +1071,10 @@ fn sample(runtime: &Runtime, source: &Project, watch: &WatchPlan) -> Sample {
         character: has(Field::Character)
             .then(|| runtime.character_state(&watch.id))
             .flatten()
-            .map(|state| character(runtime, source, state)),
+            .map(|state| character(lookup, state)),
     }
 }
-fn character(runtime: &Runtime, source: &Project, state: &CharacterState) -> CharacterSample {
+fn character(lookup: Lookup, state: &CharacterState) -> CharacterSample {
     let velocity = state.total_velocity();
     CharacterSample {
         velocity: velocity.to_array(),
@@ -975,14 +1084,14 @@ fn character(runtime: &Runtime, source: &Project, state: &CharacterState) -> Cha
         sliding: state.posture == Posture::Sliding,
         sprinting: state.sprinting,
         support: state.support.as_ref().map(|support| {
-            let object = named(runtime, source, &support.object);
+            let object = lookup.named(&support.object);
             SupportSample {
                 id: object.id,
                 name: object.name,
                 surface: support
                     .surface
                     .as_deref()
-                    .map(|id| surface(runtime.project(), id)),
+                    .map(|id| surface(lookup.runtime.project(), id)),
             }
         }),
         yaw: state.yaw.to_degrees(),
@@ -1081,21 +1190,49 @@ impl Stop {
             Some(condition) => {
                 let id = resolve(&condition.entity, applied)?;
                 let target = entity(&id)?;
-                if !target.attributes.contains_key(&condition.name) {
+                let Some(current) = target.attributes.get(&condition.name) else {
                     return Err(format!(
                         "until: atributo {} não existe em {}",
                         condition.name, target.name
                     ));
-                }
+                };
                 if condition.op.ordered() && condition.value.number().is_none() {
                     return Err(format!(
                         "until: a comparação {} precisa de um número",
                         condition.op.symbol()
                     ));
                 }
+                // A text compared with an object or surface reference is its ID.
+                let value = match (current, &condition.value) {
+                    (Value::Object(_), Value::Text(id)) if id.is_empty() => Value::Object(None),
+                    (Value::Object(_), Value::Text(id) | Value::Object(Some(id))) => {
+                        let id = resolve(id, applied)?;
+                        entity(&id)?;
+                        Value::Object(Some(id))
+                    }
+                    (Value::Surface(_), Value::Text(id)) if id.is_empty() => Value::Surface(None),
+                    (Value::Surface(_), Value::Text(id) | Value::Surface(Some(id))) => {
+                        if !project.surfaces.iter().any(|s| s.id == *id) {
+                            return Err(format!("until: superfície {id} não existe no projeto"));
+                        }
+                        Value::Surface(Some(id.clone()))
+                    }
+                    (_, value) => value.clone(),
+                };
+                if std::mem::discriminant(current) != std::mem::discriminant(&value) {
+                    let kind = |value: &Value| graph::value_type(value).label().to_lowercase();
+                    return Err(format!(
+                        "until: o atributo {} de {} é {}, mas o valor informado é {}",
+                        condition.name,
+                        target.name,
+                        kind(current),
+                        kind(&value)
+                    ));
+                }
                 Some((
                     AttributeCondition {
                         entity: id,
+                        value,
                         ..condition.clone()
                     },
                     target.name.clone(),
@@ -1353,18 +1490,16 @@ pub fn run(
             .collect(),
         exclude,
         excluded_nodes: HashMap::new(),
-        summary: Vec::new(),
-        summary_keys: HashMap::new(),
-        summary_dropped: 0,
+        spawned: HashMap::new(),
+        summary: Summary::default(),
         actions: Recent::default(),
         scene: start.clone(),
-        overlaps: BTreeSet::new(),
         scene_changes: Recent::default(),
         logs: Recent::default(),
         sounds: Recent::default(),
         events: Recent::default(),
     };
-    let mut runtime = Runtime::new(source, &start)?;
+    let mut runtime = Runtime::recorded(source, &start)?;
     let mut report = SimulationReport {
         seconds: request.seconds,
         start_scene: start.clone(),
@@ -1409,7 +1544,9 @@ pub fn run(
             }
             if every.is_some_and(|every| step % every == 0) && step != steps {
                 for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
-                    watched.samples.push(sample(&runtime, source, watch));
+                    watched
+                        .samples
+                        .push(sample(recorder.lookup(&runtime), watch));
                 }
             }
         }
@@ -1420,7 +1557,9 @@ pub fn run(
         detail,
     });
     for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
-        watched.samples.push(sample(&runtime, source, watch));
+        watched
+            .samples
+            .push(sample(recorder.lookup(&runtime), watch));
     }
     report.camera = camera(&runtime);
     recorder.finish(&mut report);
@@ -1447,13 +1586,19 @@ mod tests {
     fn log_lines_name_their_object_and_node() {
         let (project, id, node) = project();
         let runtime = Runtime::new(&project, &project.start_scene).unwrap();
-        let debug = log_entry(&runtime, &project, 0.5, &format!("[{id} / {node}] Abriu"));
+        let spawned = HashMap::new();
+        let lookup = Lookup {
+            runtime: &runtime,
+            source: &project,
+            spawned: &spawned,
+        };
+        let debug = log_entry(lookup, &[], 0.5, &format!("[{id} / {node}] Abriu"));
         assert_eq!(debug.text, "Abriu");
         assert_eq!(debug.object.as_ref().unwrap().name, "Porta");
         assert_eq!(debug.node.as_ref().unwrap().operation, "debug.message");
         let failure = log_entry(
-            &runtime,
-            &project,
+            lookup,
+            &[],
             0.5,
             &format!("Objeto {id} / nó {node}: Divisão por zero. Comportamento interrompido."),
         );
@@ -1462,26 +1607,75 @@ mod tests {
             "Divisão por zero. Comportamento interrompido."
         );
         assert_eq!(failure.node.unwrap().id, node);
-        let character = log_entry(
-            &runtime,
-            &project,
-            0.5,
-            &format!("Personagem {id}: sem chão"),
-        );
+        let character = log_entry(lookup, &[], 0.5, &format!("Personagem {id}: sem chão"));
         assert_eq!(character.text, "Personagem Porta: sem chão");
         assert_eq!(character.object.unwrap().id, id);
         let scene = &project.start_scene;
-        let camera = log_entry(&runtime, &project, 0., &format!("Câmera {scene}: aviso"));
+        let camera = log_entry(lookup, &[], 0., &format!("Câmera {scene}: aviso"));
         assert_eq!(
             camera.text,
             format!("Câmera {}: aviso", project.scenes[0].name)
         );
         assert!(camera.object.is_none());
-        let plain = log_entry(&runtime, &project, 0., "Limite de tarefas");
+        let plain = log_entry(lookup, &[], 0., "Limite de tarefas");
         assert_eq!(
             (plain.text.as_str(), plain.object),
             ("Limite de tarefas", None)
         );
+    }
+
+    #[test]
+    fn copies_already_removed_keep_their_name_and_node() {
+        let (project, _, _) = project();
+        let runtime = Runtime::new(&project, &project.start_scene).unwrap();
+        let copy = new_id();
+        let node = new_id();
+        let spawned = HashMap::from([(copy.clone(), "Bala (cópia)".to_owned())]);
+        let lookup = Lookup {
+            runtime: &runtime,
+            source: &project,
+            spawned: &spawned,
+        };
+        let traces = [NodeTrace {
+            object: copy.clone(),
+            node: node.clone(),
+            operation: "debug.message".into(),
+            time: 0.5,
+        }];
+        let entry = log_entry(lookup, &traces, 0.5, &format!("[{copy} / {node}] acertou"));
+        assert_eq!(entry.text, "acertou");
+        assert_eq!(entry.object.unwrap().name, "Bala (cópia)");
+        assert_eq!(entry.node.unwrap().operation, "debug.message");
+        assert_eq!(
+            action_text(lookup, &copy, "action.remove"),
+            "Bala (cópia) · Remover objeto"
+        );
+    }
+
+    #[test]
+    fn the_summary_keeps_the_lines_most_recently_active() {
+        let mut summary = Summary::default();
+        // The text names the object by what comes before '#'.
+        let text = |object: &str, operation: &str| {
+            format!("{} · {operation}", object.split('#').next().unwrap())
+        };
+        // Two objects with the same name share a line.
+        summary.count("Moeda#1".into(), "x".into(), 0., text);
+        summary.count("Moeda#2".into(), "x".into(), 0.5, text);
+        for i in 1..MAX_ENTRIES {
+            summary.count(format!("Objeto {i}"), "x".into(), 1. + i as f64, text);
+        }
+        // The first line stays active; "Objeto 1" is now the one idle the longest.
+        summary.count("Moeda#1".into(), "x".into(), 1000., text);
+        summary.count("Novo".into(), "x".into(), 1001., text);
+        let (lines, dropped) = summary.finish();
+        assert_eq!((lines.len(), dropped), (MAX_ENTRIES, 1));
+        assert_eq!(
+            (lines[0].text.as_str(), lines[0].count, lines[0].first),
+            ("Moeda · x", 3, 0.)
+        );
+        assert!(!lines.iter().any(|l| l.text == "Objeto 1 · x"));
+        assert_eq!(lines.last().unwrap().text, "Novo · x");
     }
 
     #[test]
