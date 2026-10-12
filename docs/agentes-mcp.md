@@ -209,7 +209,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 
 - **De onde vem:** `path`, o caminho completo de um arquivo `.png` ou `.wav` deste computador, ou `data_base64`, o conteúdo do arquivo em base64 (também como URL `data:`). Um dos dois, nunca os dois.
 - **O que é conferido:** a extensão (só `.png` e `.wav`), o cabeçalho do conteúdo (uma imagem com nome `.wav`, ou um texto com nome `.png`, é recusada), a imagem inteira e o formato do som, com as mesmas regras do editor. `kind` (`texture` ou `audio`) é opcional; se vier, precisa bater com o arquivo.
-- **Limites:** arquivos de até 64 MB; pelo `data_base64`, até 16 MB. Caminhos relativos e de rede (`\\servidor\pasta`) são recusados.
+- **Limites:** arquivos de até 64 MB; pelo `data_base64`, até 16 MB. Só se importa de um disco deste computador (`C:\...`). Caminhos relativos são recusados, assim como os de rede, escritos com qualquer barra (`\\servidor\pasta`, `//servidor/pasta` ou misturando as duas, como `\/servidor/pasta`), e os de dispositivo (`\\.\`, `\\?\`).
 - **Nome:** `name`, ou o nome do arquivo sem a extensão. Quebras de linha e caracteres de controle saem, e o nome fica com até 80 caracteres.
 - **Aplicar:** `apply_to` põe a imagem num objeto da cena (`scene`, ou a cena aberta no editor; nos arquivos, a cena inicial): na imagem dele, se for um elemento da interface, ou no material. Um sprite fica com a proporção da imagem, mantendo a altura, como no editor. Um grupo ou uma câmera, sem forma, é recusado. Sons não se aplicam a objetos: o nó `action.sound` toca o som pelo ID do recurso, no parâmetro `asset`.
 - **Resposta:** `{asset, name, kind, path, width, height}` para imagens e `{asset, name, kind, path, seconds}` para sons, com `applied_to` quando a imagem foi aplicada.
@@ -225,7 +225,8 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
   - `agente`: as edições do agente e os erros delas;
   - `jogo`: os logs do seu teste, como as mensagens de diagnóstico (`debug.message`) e os erros dos nós, com o objeto (`object: {id, name}`) e o nó (`node`) de onde vieram;
   - `logica`: as ações da lógica que o teste rodou, como o Console as lista (`0.500 s · Porta · Reproduzir WAV`), com o objeto, o nó e a operação.
-- `seq` só cresce. A resposta traz `last_seq`; passando-o em `since` na leitura seguinte, vêm só as linhas novas. `origin` filtra por uma origem ou uma lista, e `limit` (50 por padrão) fica com as linhas mais recentes; `omitted` conta as que ficaram de fora.
+- `seq` cresce enquanto o editor fica aberto. A resposta traz `last_seq`; passando-o em `since` na leitura seguinte, vêm só as linhas novas. `origin` filtra por uma origem ou uma lista, e `limit` (50 por padrão) fica com as linhas mais recentes; `omitted` conta as que ficaram de fora.
+- Ao reabrir o editor, a numeração recomeça, com outra `session` na resposta. Quando a `session` muda, o agente lê de novo sem `since`. Um `since` maior que o `last_seq` (guardado de antes de o editor fechar) não esconde as linhas novas: a leitura começa da linha mais antiga guardada, e a resposta traz `reset: true`.
 - As linhas do jogo e da lógica continuam lá depois que o teste para: quando você diz "apertei J e nada aconteceu", o agente lê o que o seu teste registrou. O agente guarda as 1000 linhas mais recentes, e a lógica guarda as suas 300 à parte, para a lógica que roda a cada passo não empurrar o resto para fora. Limpar o Console limpa também o que o agente lê.
 - Nos arquivos, sem editor aberto, não há Console: a ferramenta explica que só funciona ao vivo. Para testar sem editor, use o `oxy_simulate`.
 

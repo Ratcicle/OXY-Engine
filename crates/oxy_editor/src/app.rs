@@ -187,6 +187,19 @@ impl ConsoleLog {
     pub(crate) fn written(&self) -> u64 {
         self.dropped + self.messages.len() as u64
     }
+    /// Adds a message; past 600 kept, the oldest 100 go.
+    pub(crate) fn push(&mut self, message: String) {
+        self.messages.push(message);
+        if self.messages.len() > 600 {
+            self.messages.drain(..100);
+            self.dropped += 100;
+        }
+    }
+    /// Empties the console; its messages still count as written.
+    pub(crate) fn clear(&mut self) {
+        self.dropped += self.messages.len() as u64;
+        self.messages.clear();
+    }
 }
 /// Frame timing shown by the performance overlay.
 pub(crate) struct FrameStats {
@@ -428,11 +441,7 @@ impl Editor {
             .to_path_buf()
     }
     pub fn log(&mut self, message: impl Into<String>) {
-        self.console.messages.push(message.into());
-        if self.console.messages.len() > 600 {
-            self.console.messages.drain(..100);
-            self.console.dropped += 100;
-        }
+        self.console.push(message.into());
     }
     fn dirty(&self) -> bool {
         self.history.is_dirty()
@@ -1149,8 +1158,7 @@ impl Editor {
             .show(ctx, |ui| self.console_body(ui));
     }
     pub(crate) fn clear_console(&mut self) {
-        self.console.dropped += self.console.messages.len() as u64;
-        self.console.messages.clear();
+        self.console.clear();
         if let Some(rt) = &mut self.play.runtime {
             rt.logs.clear();
         }

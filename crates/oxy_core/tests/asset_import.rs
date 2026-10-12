@@ -215,6 +215,18 @@ fn sources_are_refused_by_place_type_header_and_size_before_anything_is_written(
         (json!({"path": "imagens/placa.png"}), "caminho completo"),
         (json!({"path": "\\\\servidor\\pasta\\placa.png"}), "rede"),
         (json!({"path": "//servidor/pasta/placa.png"}), "rede"),
+        // Windows takes '/' and '\' alike: mixed, they still reach another machine.
+        (json!({"path": "\\/servidor/pasta/placa.png"}), "rede"),
+        (json!({"path": "/\\servidor\\pasta\\placa.png"}), "rede"),
+        (json!({"path": "  \\\\servidor\\pasta\\placa.png"}), "rede"),
+        // Device and verbatim paths are not a disk either.
+        (json!({"path": "/\\.\\pipe\\placa.png"}), "dispositivo"),
+        (json!({"path": "\\\\.\\C:\\placa.png"}), "dispositivo"),
+        (json!({"path": "\\\\?\\C:\\placa.png"}), "dispositivo"),
+        (
+            json!({"path": "\\\\?\\UNC\\servidor\\pasta\\placa.png"}),
+            "dispositivo",
+        ),
         (
             json!({"path": path_arg(&dir.join("leia.txt"))}),
             ".png e .wav",
@@ -267,6 +279,13 @@ fn sources_are_refused_by_place_type_header_and_size_before_anything_is_written(
         let error = request(args.clone()).unwrap().read().unwrap_err();
         assert!(error.contains(expected), "{args}: {error}");
     }
+    // The file read is the path checked: spaces around it do not count.
+    let spaced = request(json!({"path": format!("  {}\n", path_arg(&png_file))})).unwrap();
+    let read = spaced.read().unwrap();
+    assert_eq!(
+        (read.kind, read.name.as_str()),
+        (ImportKind::Texture, "imagem")
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

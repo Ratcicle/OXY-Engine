@@ -10,7 +10,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use std::path::Path;
+use std::path::{Component, Path, Prefix};
 
 /// Largest file imported: a stereo WAV of about 6 minutes at 44.1 kHz and 16 bits.
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -159,7 +159,7 @@ impl ImportRequest {
         self.kind.or_else(|| {
             self.path
                 .as_deref()
-                .and_then(|p| ImportKind::of_extension(Path::new(p)))
+                .and_then(|p| ImportKind::of_extension(Path::new(p.trim())))
         })
     }
 
@@ -169,7 +169,8 @@ impl ImportRequest {
         let (bytes, file_name) = match (&self.path, &self.data_base64) {
             (Some(path), _) => {
                 check_path(path)?;
-                let path = Path::new(path);
+                // The path checked, without the spaces around it.
+                let path = Path::new(path.trim());
                 let meta = std::fs::metadata(path)
                     .map_err(|e| format!("Não foi possível abrir {}: {e}", path.display()))?;
                 if !meta.is_file() {
@@ -256,6 +257,12 @@ impl ImportRequest {
     }
 }
 
+fn not_on_a_disk() -> String {
+    "Caminhos de rede ou de dispositivo não são aceitos; use um arquivo de um disco deste \
+     computador."
+        .into()
+}
+
 fn too_large_inline() -> String {
     format!(
         "data_base64 passa de {} MB; para arquivos maiores, use path.",
@@ -263,14 +270,24 @@ fn too_large_inline() -> String {
     )
 }
 
-/// A path the import may read: absolute, on this computer (network paths are refused, since
-/// reading one reaches another machine) and ending in .png or .wav. Answers the kind it gives.
+/// A path the import may read: absolute, on a disk of this computer and ending in .png or .wav.
+/// Network paths are refused, since reading one reaches another machine, and so are device
+/// paths (`\\.\`, `\\?\`). Answers the kind it gives.
 fn check_path(path: &str) -> Result<ImportKind, String> {
     let trimmed = path.trim();
-    if trimmed.starts_with("\\\\") || trimmed.starts_with("//") {
-        return Err("Caminhos de rede não são aceitos; use um arquivo deste computador.".into());
+    // Windows takes '/' and '\' alike: "\/servidor/pasta" and "/\servidor\pasta" are network
+    // paths as much as "\\servidor\pasta".
+    let separators = trimmed.chars().take_while(|c| matches!(c, '/' | '\\'));
+    if separators.count() >= 2 {
+        return Err(not_on_a_disk());
     }
     let file = Path::new(trimmed);
+    // And what Windows reads the path as decides: only a drive letter is a disk of this computer.
+    if let Some(Component::Prefix(prefix)) = file.components().next()
+        && !matches!(prefix.kind(), Prefix::Disk(_))
+    {
+        return Err(not_on_a_disk());
+    }
     if !file.is_absolute() {
         return Err(format!(
             "Informe o caminho completo do arquivo (absoluto), não {trimmed}."
