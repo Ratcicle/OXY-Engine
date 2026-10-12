@@ -552,6 +552,7 @@ fn build_registry() -> Vec<OperationDef> {
         outputs: vec![],
         params: vec![text("scene", "Cena de destino", "")],
     });
+    result.extend(math::actions());
     result.extend(game::definitions());
     result.push(OperationDef {
         id: "control.sequence",

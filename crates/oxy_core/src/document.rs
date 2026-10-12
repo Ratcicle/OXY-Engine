@@ -476,6 +476,16 @@ impl Scene {
         removed
     }
     pub fn duplicate_subtree(&mut self, id: &str) -> Result<Id, String> {
+        self.duplicate_subtree_with(id, &mut |_| new_id())
+    }
+    /// [`Scene::duplicate_subtree`] with the copies' IDs from `ids`, which gets the ID of each
+    /// original object, clip and node. It is asked again for an object whose ID it gave is
+    /// taken, so a generator of repeatable IDs moves on to another one.
+    pub fn duplicate_subtree_with(
+        &mut self,
+        id: &str,
+        ids: &mut dyn FnMut(&str) -> Id,
+    ) -> Result<Id, String> {
         if self.entity(id).is_none() {
             return Err("Objeto não encontrado".into());
         }
@@ -486,8 +496,17 @@ impl Scene {
             .filter(|e| selected.contains(&e.id))
             .cloned()
             .collect();
-        let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
-        remap_entities(&mut copies, &map)?;
+        let taken: HashSet<&str> = self.entities.iter().map(|e| e.id.as_str()).collect();
+        let mut given = HashSet::new();
+        let mut map = HashMap::new();
+        for copy in &copies {
+            let new = (0..64)
+                .map(|_| ids(&copy.id))
+                .find(|new| !taken.contains(new.as_str()) && given.insert(new.clone()))
+                .ok_or_else(|| format!("Sem ID livre para a cópia de {}", copy.name))?;
+            map.insert(copy.id.clone(), new);
+        }
+        remap_entities_with(&mut copies, &map, ids)?;
         let root = map[id].clone();
         if let Some(e) = copies.iter_mut().find(|e| e.id == root) {
             e.name.push_str(" (cópia)");
@@ -519,13 +538,22 @@ pub fn translate_entity_and_tracks(entities: &mut [Entity], target: &str, delta:
 }
 /// Remaps only exact stable identifiers; names and relative paths remain untouched.
 pub fn remap_entities(entities: &mut [Entity], map: &HashMap<Id, Id>) -> Result<(), String> {
+    remap_entities_with(entities, map, &mut |_| new_id())
+}
+/// [`remap_entities`] with the new IDs of the clips and nodes `map` leaves out from `ids`,
+/// which gets each original ID.
+pub fn remap_entities_with(
+    entities: &mut [Entity],
+    map: &HashMap<Id, Id>,
+    ids: &mut dyn FnMut(&str) -> Id,
+) -> Result<(), String> {
     let mut map = map.clone();
     for e in entities.iter() {
         for clip in &e.clips {
-            map.entry(clip.id.clone()).or_insert_with(new_id);
+            map.entry(clip.id.clone()).or_insert_with(|| ids(&clip.id));
         }
         for node in &e.graph.nodes {
-            map.entry(node.id.clone()).or_insert_with(new_id);
+            map.entry(node.id.clone()).or_insert_with(|| ids(&node.id));
         }
     }
     for e in entities {

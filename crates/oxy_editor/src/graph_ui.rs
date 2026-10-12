@@ -2238,6 +2238,7 @@ mod tests {
             ("math.binary", "operator"),
             ("math.unary", "operator"),
             ("text.time", "format"),
+            ("random.number", "mode"),
             ("condition.compare", "operator"),
             ("camera.mode", "mode"),
         ] {

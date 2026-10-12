@@ -1,6 +1,80 @@
-//! Number and text data operations exposed by the typed graph adapter.
+//! Number and text operations exposed by the typed graph adapter, random draws included.
 use super::*;
+use crate::random::{self, MAX_SEED, Rng};
 impl Runtime {
+    /// Runs `node` when it is one of these actions, else hands it to the movement ones; false
+    /// when no one runs it.
+    pub(super) fn math_action(
+        &mut self,
+        graph: &PreparedGraph,
+        node: &Node,
+        context: &mut Context,
+        budget: &mut usize,
+    ) -> Result<bool, String> {
+        let number = |rt: &Runtime, key: &str, name: &str, budget: &mut usize| {
+            rt.input_value(graph, node, key, context, budget, 0)?
+                .number()
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| format!("{name} precisa ser um número finito"))
+        };
+        match node.operation.as_str() {
+            // An action, so that each execution draws once and whoever reads Valor afterwards
+            // gets that number; a data node would draw again on every read.
+            "random.number" => {
+                let min = number(self, "min", "Mínimo", budget)?;
+                let max = number(self, "max", "Máximo", budget)?;
+                if min > max {
+                    return Err(format!("Mínimo {min} maior que o máximo {max}"));
+                }
+                let key = (context.owner.clone(), node.id.clone());
+                let drawn = self.run.rolls.get(&key).copied().unwrap_or(0);
+                let mut rng = Rng::new(random::hash(&[
+                    &self.run.seed.to_le_bytes(),
+                    key.0.as_bytes(),
+                    key.1.as_bytes(),
+                    &drawn.to_le_bytes(),
+                ]));
+                let value = match node.text("mode") {
+                    "real" => rng.range(min, max),
+                    "integer" => {
+                        let (low, high) = (min.ceil(), max.floor());
+                        if low > high {
+                            return Err(format!(
+                                "Nenhum inteiro entre o mínimo {min} e o máximo {max}"
+                            ));
+                        }
+                        let limit = MAX_SEED as f64;
+                        if low < -limit || high > limit {
+                            return Err(format!(
+                                "No modo Inteiro, mínimo e máximo precisam estar entre -{MAX_SEED} \
+                                 e {MAX_SEED}"
+                            ));
+                        }
+                        rng.int_inclusive(low as i64, high as i64) as f64
+                    }
+                    _ => return Err("Modo de sorteio inválido".into()),
+                };
+                self.run.rolls.insert(key, drawn + 1);
+                // Adding zero turns -0 into 0, as the other number nodes do.
+                Arc::make_mut(&mut context.outputs).insert(
+                    (node.id.clone(), "value".into()),
+                    Value::Number(value + 0.0),
+                );
+            }
+            "random.seed" => {
+                let seed = number(self, "seed", "Semente", budget)?;
+                if seed.fract() != 0.0 || !(0.0..=MAX_SEED as f64).contains(&seed) {
+                    return Err(format!(
+                        "A semente precisa ser um inteiro de 0 a {MAX_SEED}; recebeu {seed}"
+                    ));
+                }
+                self.run.seed = seed as u64;
+                self.run.rolls.clear();
+            }
+            _ => return self.movement_action(graph, node, context, budget),
+        }
+        Ok(true)
+    }
     pub(super) fn math_data(
         &self,
         graph: &PreparedGraph,

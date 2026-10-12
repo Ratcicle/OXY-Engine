@@ -16,7 +16,8 @@ use crate::{
     graph::{self, Edge, Graph, PortType},
     input_actions,
     input_timeline::{InputChange, InputTimeline, TimedInput},
-    runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime},
+    random,
+    runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime, RuntimeOptions},
 };
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -333,6 +334,10 @@ pub struct SimulationRequest {
     /// Reports the game interface at the end; on unless `false`.
     #[serde(default = "on")]
     pub ui: bool,
+    /// What Sortear número draws from, 0 to [`random::MAX_SEED`]: the same seed and inputs
+    /// repeat the draws.
+    #[serde(default)]
+    pub seed: u64,
 }
 fn on() -> bool {
     true
@@ -479,6 +484,8 @@ pub struct SimulationReport {
     pub seconds: f64,
     pub start_scene: Id,
     pub final_scene: Id,
+    /// The seed the draws came from, the one asked for.
+    pub seed: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<StoppedAt>,
     /// What each setup command did, with the IDs it created.
@@ -1426,6 +1433,12 @@ pub fn run(
     if request.samples > 120 {
         return Err("No máximo 120 amostras".into());
     }
+    if request.seed > random::MAX_SEED {
+        return Err(format!(
+            "A semente (seed) deve ser um inteiro de 0 a {}",
+            random::MAX_SEED
+        ));
+    }
     let view_size = request.view_size.unwrap_or(VIEW_SIZE);
     if view_size.iter().any(|v| !(16..=4096).contains(v)) {
         return Err("A vista do jogo deve ter entre 16 e 4096 pixels de lado".into());
@@ -1566,11 +1579,19 @@ pub fn run(
         sounds: Recent::default(),
         events: Recent::default(),
     };
-    let mut runtime = Runtime::recorded(source, &start)?;
+    let mut runtime = Runtime::with_options(
+        source,
+        &start,
+        RuntimeOptions {
+            record: true,
+            seed: request.seed,
+        },
+    )?;
     let mut report = SimulationReport {
         seconds: request.seconds,
         start_scene: start.clone(),
         final_scene: start,
+        seed: request.seed,
         stopped_at: None,
         setup: applied,
         scene_changes: Vec::new(),

@@ -281,6 +281,7 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
         ("math.binary", "operator", "^"),
         ("math.unary", "operator", "log"),
         ("text.time", "format", "hh:mm"),
+        ("random.number", "mode", "inteiro"),
         ("condition.compare", "operator", "=>"),
         ("event.character", "kind", "pulo"),
     ] {

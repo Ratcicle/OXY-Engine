@@ -30,6 +30,7 @@ pub mod physics3d;
 mod prepared_graph;
 pub mod qa;
 pub mod query;
+pub mod random;
 pub mod runtime;
 pub mod scene_view;
 pub mod spatial;

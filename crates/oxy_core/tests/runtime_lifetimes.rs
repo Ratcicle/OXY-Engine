@@ -5,7 +5,7 @@ use oxy_core::{
     graph::{Edge, Graph, Node},
     input_timeline::{InputChange, TimedInput},
     physics3d::{Collider3d, CollisionShape},
-    runtime::{FIXED_DT, InputFrame, Runtime},
+    runtime::{FIXED_DT, InputFrame, Runtime, RuntimeOptions},
     scene_view::SceneEvaluation,
 };
 fn edge(g: &mut Graph, a: &Node, port: &str, b: &Node, input: &str) {
@@ -351,9 +351,24 @@ fn busy_level() -> (Project, Id) {
     let mut contact = Entity::new("Contato", None);
     contact.transform.position = [10., 0., 0.];
     contact.collider = Some(Collider::default());
+    // Draws a number and makes a copy on each step "segurar" is held: run state.
+    let mould = Entity::new("Molde", None);
+    let mut dice = Entity::new("Dado", None);
+    let mut held = Node::new("event.input", [0.; 2]);
+    held.params
+        .insert("action".into(), Value::Text("segurar".into()));
+    held.params
+        .insert("mode".into(), Value::Text("held".into()));
+    let draw = Node::new("random.number", [0.; 2]);
+    let mut copy = Node::new("action.spawn", [0.; 2]);
+    copy.params
+        .insert("target".into(), Value::Object(Some(mould.id.clone())));
+    edge(&mut dice.graph, &held, "exec", &draw, "exec");
+    edge(&mut dice.graph, &draw, "exec", &copy, "exec");
+    dice.graph.nodes = vec![held, draw, copy];
     p.scenes[0]
         .entities
-        .extend([clock, broken, walker, area, contact]);
+        .extend([clock, broken, walker, area, contact, mould, dice]);
     let menu = Scene::new("Menu", SceneKind::TwoD);
     let id = menu.id.clone();
     p.scenes.push(menu);
@@ -363,7 +378,15 @@ fn busy_level() -> (Project, Id) {
 fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
     let (p, menu) = busy_level();
     let busy = || {
-        let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+        let mut rt = Runtime::with_options(
+            &p,
+            &p.start_scene,
+            RuntimeOptions {
+                seed: 7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let held = InputFrame {
             held: ["segurar".into()].into(),
             ..Default::default()
@@ -404,8 +427,15 @@ fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
         );
         rt
     };
+    let fresh = Runtime::new(&p, &p.start_scene).unwrap().run_state_debug();
     let mut rt = busy();
     let run = rt.run_state_debug();
+    // The seed, and three draws and three copies counted for the Dado's nodes.
+    assert!(
+        run.contains("seed: 7") && run.matches("): 3").count() == 2,
+        "{run}"
+    );
+    assert_ne!(run, fresh);
     let (time, logs) = (rt.time, rt.logs.clone());
     assert!(!logs.is_empty());
     rt.change_scene(&menu).unwrap();
@@ -416,10 +446,65 @@ fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
     let mut rt = busy();
     rt.stop();
     assert_eq!(rt.scene_state_in_use(), Vec::<&str>::new());
-    assert_eq!(
-        rt.run_state_debug(),
-        Runtime::new(&p, &p.start_scene).unwrap().run_state_debug()
-    );
+    assert_eq!(rt.run_state_debug(), fresh);
+}
+/// The draw and copy counts of copies made during the run go with them, removed or left in a
+/// scene that changes; the project's own objects keep theirs, as a reload brings them back.
+#[test]
+fn copies_made_during_the_run_leave_no_draw_or_copy_counts_behind() {
+    let mut p = Project::new("Fábrica");
+    // Every Molde draws a number and copies the Faísca on each step; the Fábrica copies the
+    // Molde.
+    let spark = Entity::new("Faísca", None);
+    let mut mould = Entity::new("Molde", None);
+    let step = Node::new("event.step", [0.; 2]);
+    let draw = Node::new("random.number", [0.; 2]);
+    let mut copy = Node::new("action.spawn", [0.; 2]);
+    copy.params
+        .insert("target".into(), Value::Object(Some(spark.id.clone())));
+    edge(&mut mould.graph, &step, "exec", &draw, "exec");
+    edge(&mut mould.graph, &draw, "exec", &copy, "exec");
+    mould.graph.nodes = vec![step, draw, copy];
+    let mut factory = Entity::new("Fábrica", None);
+    let step = Node::new("event.step", [0.; 2]);
+    let mut copy = Node::new("action.spawn", [0.; 2]);
+    copy.params
+        .insert("target".into(), Value::Object(Some(mould.id.clone())));
+    edge(&mut factory.graph, &step, "exec", &copy, "exec");
+    factory.graph.nodes = vec![step, copy];
+    let mould_id = mould.id.clone();
+    p.scenes[0].entities.extend([spark, mould, factory]);
+    let start = p.start_scene.clone();
+    let mut rt = Runtime::new(&p, &start).unwrap();
+    // One entry per (owner, node) counted.
+    let entries = |rt: &Runtime| rt.run_state_debug().matches("): ").count();
+    for _ in 0..300 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let copies: Vec<_> = rt
+            .scene()
+            .entities
+            .iter()
+            .filter(|e| e.name.ends_with("(cópia)"))
+            .map(|e| e.id.clone())
+            .collect();
+        assert!(!copies.is_empty());
+        for id in copies {
+            rt.remove_object(&id);
+        }
+        // The Molde's draws and copies, and the Fábrica's copies.
+        assert_eq!(entries(&rt), 3, "{}", rt.run_state_debug());
+    }
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    for _ in 0..2 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    assert!(entries(&rt) > 3, "{}", rt.run_state_debug());
+    rt.change_scene(&start).unwrap();
+    assert_eq!(entries(&rt), 3, "{}", rt.run_state_debug());
+    let kept = rt.run_state_debug();
+    assert!(kept.contains("): 302"), "{kept}");
+    rt.remove_object(&mould_id);
+    assert_eq!(rt.run_state_debug(), kept);
 }
 #[test]
 fn removing_a_shared_support_reports_departures_in_scene_order() {

@@ -226,6 +226,12 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
   - a câmera do jogo no fim;
   - a interface do jogo no fim (`ui`), na ordem em que é desenhada: cada elemento com o tipo, se está visível, o retângulo na vista do jogo, o texto como aparece (com o valor ligado, como `Tempo: 12.50`; para ler `Tempo: 01:23.45`, a lógica formata os segundos com o nó `text.time` e grava o texto num atributo de texto ligado ao elemento), o quanto uma barra está cheia (`fraction`) e se um botão dá para clicar. O retângulo é medido numa vista de `width` × `height` pixels (960×540 por padrão). `ui: false` deixa a interface fora do relatório.
 
+**Repetir um teste.** Os sorteios e as cópias criadas durante o jogo se repetem de um pedido para outro.
+- Os sorteios do nó `random.number` (**Sortear número**, em Ações) vêm da semente `seed`, um inteiro de 0 a 9007199254740991 (0 por padrão). O relatório repete a semente em `seed`. Para ver outros sorteios, mude a semente; a mesma semente repete os mesmos números.
+- Cada nó `random.number` tem a sua sequência: acrescentar outro sorteio na lógica não muda os números dos que já existiam. O nó `random.seed` (**Definir semente aleatória**) troca a semente durante o jogo e recomeça todas as sequências.
+- As cópias do `action.spawn` recebem os mesmos IDs a cada execução, qualquer que seja a semente, e cada cópia tem os seus, também nos nós e nas animações dela. Os IDs têm o formato dos outros, então os logs e os eventos continuam trazendo o nome da cópia (`Bala (cópia)`). Na 0.5, as cópias recebiam IDs novos a cada execução.
+- O teste do editor e o jogo exportado começam com uma semente nova a cada partida.
+
 **Eventos.** Os eventos entram no relatório no momento em que o jogo os dispara. Por isso aparecem mesmo quando a lógica, no mesmo passo, remove a área ou o objeto (moedas, pontos de controle, zonas de morte) ou troca de cena. Uma área, 2D ou 3D, que a lógica desliga (`action.component` com `collider`) não gera saída para quem estava dentro, como no jogo; ao ser religada, quem está dentro entra de novo, numa nova ativação (um `action.damage` de uma vez por ativação acerta outra vez), mesmo que a área tenha sido desligada e religada no mesmo passo.
 
 **Mudanças no relatório em relação à 0.5.0:**
@@ -236,6 +242,7 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 - `oxy_simulate` e `oxy_screenshot` recusam `width` e `height` fora de 16–4096, e o texto do `oxy_screenshot` nas vistas do jogo passou a ser JSON (tempo, cena e câmera usada).
 - `samples` traz exatamente o número pedido; antes, quando os passos não se dividiam igualmente, vinha uma amostra a mais.
 - O `detail` de um `stopped_at` por evento passou de `land de Jogador (Pouso)` para `Jogador aterrissou em Pouso`, e o tipo do evento ganhou o campo `kind`.
+- O relatório traz `seed`, a semente dos sorteios, e as cópias do `action.spawn` mantêm os IDs de uma execução para outra.
 
 **Resumo das ações.**
 - A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça (`actions_filter: {exclude_operations: []}`).
@@ -260,7 +267,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 
 ## Console e teste ao vivo
 
-- **`oxy_status`** traz `play`: `{running: false}` sem teste, ou `{running: true, paused, scene: {id, name}, time}` enquanto você testa o jogo no editor. Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo.
+- **`oxy_status`** traz `play`: `{running: true, paused, scene: {id, name}, time, seed}` enquanto você testa o jogo no editor, ou `{running: false, seed}` depois do teste (só `{running: false}` antes do primeiro teste do projeto). Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo. `seed` é a semente dos sorteios do teste atual ou do último, nova a cada vez que você joga: no `oxy_simulate`, a mesma semente dá a cada nó `random.number` os mesmos números, na mesma ordem.
 - **`oxy_console`** lê o Console do editor aberto. Cada linha vem com `seq`, `origin` e `text`:
   - `editor`: mensagens do editor; `warning: true` marca as que também viraram aviso;
   - `agente`: as edições do agente e os erros delas;
@@ -274,7 +281,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 ## Imagens com `oxy_screenshot`
 
 - **Vista do editor** (`view: "editor"`, ao vivo): o que aparece na vista do editor. Com `colliders: true`, o editor desenha a mesma vista de novo com os colisores por cima, como na vista de colisores, sem mexer no que aparece na tela. Durante um teste do jogo, mostra a câmera do jogo.
-- **Câmera do jogo** (`view: "game"`, o padrão nos arquivos): roda o jogo numa cópia por `seconds` (0 é o primeiro quadro), com as mesmas `inputs`, `setup`, `spawn` e `until` do `oxy_simulate`, e captura pela câmera do jogo. O texto traz a interface do jogo em `ui`, como no `oxy_simulate`; `ui: false` a deixa de fora, o que encurta a resposta em capturas repetidas.
+- **Câmera do jogo** (`view: "game"`, o padrão nos arquivos): roda o jogo numa cópia por `seconds` (0 é o primeiro quadro), com as mesmas `inputs`, `setup`, `spawn`, `until` e `seed` do `oxy_simulate`, e captura pela câmera do jogo. O texto traz a interface do jogo em `ui`, como no `oxy_simulate`; `ui: false` a deixa de fora, o que encurta a resposta em capturas repetidas.
 - **Câmera livre** (`view: "free"`): uma câmera em `eye` olhando para `target`, que é um ponto ou o ID de um objeto (o centro da forma dele ou, sem forma, a posição), com `fov` em graus (60 por padrão). Só em cenas 3D.
 - **De cima e de lado** (`view: "top"` e `view: "side"`): vistas ortográficas, sem perspectiva, que enquadram os objetos de `ids` e seus filhos, ou tudo o que tem forma. De cima, o -Z fica para cima na imagem. De lado, a câmera olha ao longo do -Z ou, quando a parte enquadrada é mais funda (Z) do que larga (X), ao longo do -X, para o lado comprido ocupar a imagem. Em cenas 2D, as duas mostram o plano da cena.
 - **Colisores** (`colliders: true`): desenha os colisores sólidos em verde e as áreas em amarelo, inclusive de objetos invisíveis, como pontos de controle.
@@ -283,7 +290,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 ## Limites desta versão
 
 - **Imagem do jogo:** não desenha a interface do jogo (textos, botões e barras). Ela vem descrita em `ui`.
-- **Simulação:** nem sempre é determinística. Objetos criados durante o jogo (`action.spawn`) recebem IDs novos a cada execução. Isso fica para a 0.6.
+- **Simulação:** o mesmo pedido repete os sorteios, que a semente (`seed`) decide, e os IDs das cópias do `action.spawn`. Os objetos e nós que o `setup` cria, ao contrário, recebem IDs novos a cada pedido (o relatório os lista em `setup`); por isso os sorteios dos nós `random.number` criados ou copiados no `setup`, e as cópias feitas pelos nós e objetos que ele cria, mudam de um pedido para outro. O teste que você faz no editor não é gravado: com a semente que o `oxy_status` mostra, cada nó `random.number` dá os mesmos números, na mesma ordem, mas as suas entradas e o tempo delas o agente precisa refazer em `inputs`.
 - **Importação:** só PNG e WAV, como no editor. Ao desfazer uma importação, a cópia continua na pasta `assets`, como acontece com o **Importar** da Biblioteca.
 - **Teste ao vivo:** o agente vê se você está testando e lê o Console, mas não inicia nem para o seu teste.
 - **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.

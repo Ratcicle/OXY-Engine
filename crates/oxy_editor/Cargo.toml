@@ -14,6 +14,7 @@ glam.workspace = true
 image.workspace = true
 serde_json.workspace = true
 rfd.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 winresource = "=0.1.31"

@@ -314,8 +314,13 @@ impl Editor {
                         "paused": runtime.paused,
                         "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
                         "time": runtime.time,
+                        "seed": self.play.seed,
                     }),
-                    None => json!({"running": false}),
+                    // The last test's seed stays for the person's report after it stops.
+                    None => match self.play.seed {
+                        Some(seed) => json!({"running": false, "seed": seed}),
+                        None => json!({"running": false}),
+                    },
                 },
             })),
             "console" => self.console_answer(params),

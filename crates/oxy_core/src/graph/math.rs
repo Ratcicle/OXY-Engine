@@ -1,4 +1,5 @@
-//! Number and text data operations: arithmetic, functions, limits and time formatting.
+//! Number and text operations: arithmetic, functions, limits, time formatting and random
+//! draws.
 use super::*;
 pub const ARITHMETIC: [(&str, &str); 7] = [
     ("+", "Somar · A + B"),
@@ -61,6 +62,32 @@ pub(super) fn definitions() -> Vec<OperationDef> {
         ),
     ]
 }
+/// The random draws, listed with the other actions: each execution draws once.
+pub(super) fn actions() -> Vec<OperationDef> {
+    use PortType::*;
+    vec![
+        op(
+            "random.number",
+            "Sortear número",
+            "Ações",
+            true,
+            vec![
+                number("min", "Mínimo", 0.),
+                number("max", "Máximo", 1.),
+                text("mode", "Modo", "real"),
+            ],
+            vec![port("value", "Valor", Number)],
+        ),
+        op(
+            "random.seed",
+            "Definir semente aleatória",
+            "Ações",
+            true,
+            vec![number("seed", "Semente", 0.)],
+            vec![],
+        ),
+    ]
+}
 pub fn math_help(id: &str) -> Option<(&'static str, &'static str, &'static str)> {
     Some(match id {
         "math.binary" => (
@@ -82,6 +109,16 @@ pub fn math_help(id: &str) -> Option<(&'static str, &'static str, &'static str)>
             "Escreve uma quantidade de segundos como texto de tempo, como 01:23.45.",
             "A cada passo, formate o atributo Tempo e grave o texto num atributo ligado a um texto da interface.",
             "Trunca em vez de arredondar: 59,999 segundos mostram 00:59.99. A parte decimal usa ponto. Nos formatos com minutos, eles passam de 59 (62:05.00); em h:mm:ss, contam as horas. ss.cc mostra os segundos totais com dois dígitos ao menos (00.50). Tempo negativo ganha um - à frente; valor não finito gera diagnóstico.",
+        ),
+        "random.number" => (
+            "Sorteia um número a cada execução e o guarda na saída Valor. Com a mesma semente, a partida repete os mesmos sorteios.",
+            "No modo Inteiro, de 1 a 6, sorteia a face de um dado; ligue Valor ao Novo valor de Alterar atributo, executado em seguida.",
+            "É uma ação, não um dado, para que cada execução sorteie uma vez só: os nós que leem Valor depois dela, no mesmo fluxo, recebem o mesmo número, e ler Valor antes de executar o nó gera diagnóstico. O modo Real fica entre o mínimo e o máximo, sem chegar ao máximo; o Inteiro usa os inteiros entre os dois, extremos incluídos. Mínimo maior que o máximo gera diagnóstico. Cada nó tem sua própria sequência: acrescentar outro sorteio não muda os deste. O teste do editor e o jogo exportado começam cada partida com uma semente diferente.",
+        ),
+        "random.seed" => (
+            "Fixa a semente dos sorteios da partida: a partir dela, Sortear número repete a mesma sequência a cada partida.",
+            "Ao iniciar a cena, defina a semente 42 para que o desafio saia igual em toda partida.",
+            "A semente é um inteiro de 0 a 9007199254740991; outro valor gera diagnóstico. Definir a semente recomeça as sequências de todos os nós Sortear número, mesmo que seja a semente atual. Ela vale até o fim da partida, inclusive depois de mudar de cena.",
         ),
         _ => return None,
     })
@@ -108,6 +145,10 @@ pub fn math_choices(
             ("ss.cc", "ss.cc · 83.45 (segundos totais)"),
             ("h:mm:ss", "h:mm:ss · 0:01:23"),
             ("mm:ss.mmm", "mm:ss.mmm · 01:23.456"),
+        ],
+        ("random.number", "mode") => &[
+            ("real", "Real entre mínimo e máximo"),
+            ("integer", "Inteiro, extremos incluídos"),
         ],
         _ => return None,
     })

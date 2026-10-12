@@ -36,8 +36,8 @@ use oxy_core::{
     edit_history::CommandHistory,
     editing::{self, Selection},
     painting::PaintImage,
-    persistence,
-    runtime::Runtime,
+    persistence, random,
+    runtime::{Runtime, RuntimeOptions},
     texture_cache::TextureCache,
 };
 use oxy_render::{CameraState, Renderer};
@@ -130,6 +130,9 @@ pub(crate) struct PlaySession {
     pub(crate) previous_tab: Tab,
     pub(crate) last_runtime_scene: Option<Id>,
     pub(crate) game_size: Option<[u32; 2]>,
+    /// The seed the current or last test of the project started with, for agents to repeat
+    /// its draws in oxy_simulate after it stops too.
+    pub(crate) seed: Option<u64>,
 }
 impl Default for PlaySession {
     fn default() -> Self {
@@ -140,6 +143,7 @@ impl Default for PlaySession {
             previous_tab: Tab::Scene,
             last_runtime_scene: None,
             game_size: None,
+            seed: None,
         }
     }
 }
@@ -459,6 +463,7 @@ impl Editor {
         self.console_feed.new_test();
         self.play.runtime = None;
         self.play.capture = false;
+        self.play.seed = None;
         self.selected = None;
         self.selection.single(None);
         self.hierarchy_ui.rename = None;
@@ -831,8 +836,16 @@ impl Editor {
         self.cancel_mesh_operation();
         self.set_spatial_tool(Tool::Object);
         self.finish_history(true);
-        match Runtime::new(&self.state.project, &self.scene_id) {
+        // Every test draws differently, as the exported game does. The low half of a v4 UUID
+        // has its fixed bits above the 53 kept.
+        let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
+        let options = RuntimeOptions {
+            seed,
+            ..Default::default()
+        };
+        match Runtime::with_options(&self.state.project, &self.scene_id, options) {
             Ok(runtime) => {
+                self.play.seed = Some(seed);
                 self.play.previous_tab = self.tab;
                 // The new test's logs count from zero.
                 self.sync_console_feed();

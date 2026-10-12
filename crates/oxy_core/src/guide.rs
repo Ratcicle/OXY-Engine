@@ -59,7 +59,11 @@ impl Topic {
             "scene.current" => {
                 "Não precisa de configuração. Ligue Cena à entrada Cena de Mudar de cena, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
             }
-            "condition.branch" | "control.sequence" | "control.wait" | "debug.message" => {
+            "random.number" => {
+                "Conecte uma saída de execução à entrada Executar. Quem lê Valor precisa ser executado depois deste nó, no mesmo fluxo."
+            }
+            "condition.branch" | "control.sequence" | "control.wait" | "debug.message"
+            | "random.seed" => {
                 "Conecte uma saída de execução à entrada Executar. Forneça os dados pedidos por portas conectadas ou pelos parâmetros do painel."
             }
             "event.scene_start" => {

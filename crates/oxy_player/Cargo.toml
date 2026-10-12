@@ -10,6 +10,7 @@ oxy_core.workspace = true
 oxy_render.workspace = true
 eframe.workspace = true
 egui.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

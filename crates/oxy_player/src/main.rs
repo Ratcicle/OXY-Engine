@@ -3,7 +3,10 @@
 #[cfg(all(test, target_os = "windows"))]
 mod native_qa;
 use egui::{Color32, Rect, Sense, Vec2};
-use oxy_core::{audio, persistence, runtime::Runtime};
+use oxy_core::{
+    audio, persistence, random,
+    runtime::{Runtime, RuntimeOptions},
+};
 use oxy_render::{CameraState, GameUi, Renderer};
 use std::{
     path::{Path, PathBuf},
@@ -82,9 +85,15 @@ impl Player {
         player
     }
     fn reload(&mut self) {
+        // Every run draws differently; the low half of a v4 UUID has its fixed bits above the
+        // 53 kept.
+        let options = RuntimeOptions {
+            seed: uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED,
+            ..Default::default()
+        };
         let loaded = persistence::load_project(&self.path)
             .map_err(String::from)
-            .and_then(|project| Runtime::new(&project, &project.start_scene));
+            .and_then(|project| Runtime::with_options(&project, &project.start_scene, options));
         match loaded {
             Ok(runtime) => {
                 self.error = None;

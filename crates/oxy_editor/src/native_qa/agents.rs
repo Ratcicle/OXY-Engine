@@ -7,7 +7,7 @@
 //! test, still there after the test stops) and the play state, is refused edits and imports
 //! while the game is running, and undoes its own steps.
 use super::*;
-use oxy_core::{document::Value, encoding, painting::PaintImage, query};
+use oxy_core::{document::Value, encoding, painting::PaintImage, query, random};
 use serde_json::{Value as Json, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -486,6 +486,9 @@ impl NativeQa {
                 if play["running"] != true
                     || play["scene"]["id"] != json!(self.editor.scene_id)
                     || !play["time"].is_number()
+                    || play["seed"]
+                        .as_u64()
+                        .is_none_or(|seed| seed > random::MAX_SEED)
                     || status["busy"].as_str().is_none_or(|b| !b.contains("teste"))
                 {
                     return Err(format!("Status sem o teste em andamento: {status}"));
@@ -531,8 +534,10 @@ impl NativeQa {
                     return Err(format!("O log do teste sumiu ao parar: {console}"));
                 }
                 let status = get("status", 0)??;
-                if status["play"] != json!({"running": false}) {
-                    return Err(format!("Teste ainda em andamento: {status}"));
+                // Stopped, with the seed of the test that ran.
+                let seed = self.editor.play.seed.ok_or("Teste sem semente")?;
+                if status["play"] != json!({"running": false, "seed": seed}) {
+                    return Err(format!("Teste ainda em andamento ou sem semente: {status}"));
                 }
                 let labels: Vec<Json> = (0..3)
                     .map(|i| get("undo", i).and_then(|a| a).map(|a| a["label"].clone()))

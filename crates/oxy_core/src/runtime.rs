@@ -10,7 +10,8 @@
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
 //!   stopped behaviors, area pairs, activations and hit leases.
 //! - Per object: the entries of per-scene structures keyed by an object, pruned in
-//!   `remove_object` when it goes (the cameras' lazily, at the next presentation).
+//!   `remove_object` when it goes (the cameras' lazily, at the next presentation), and the
+//!   run's counts of an object made during the run (see `forget_copies`).
 //!
 //! Anything whose order reaches events, tasks, logs, the recording or physics is walked in
 //! an order the scene fixes (scene order, as `emit` visits owners), a BTreeMap or a Vec,
@@ -146,16 +147,29 @@ struct BodyState {
     velocity: Vec3,
     grounded: bool,
 }
-/// Run-lifetime state: `change_scene` keeps it and `stop` resets it. Empty for now; the home
-/// of game variables, the seeded RNG and spawn counters, music and volumes, and the
-/// game-clock offset.
+/// Run-lifetime state: `change_scene` keeps it and `stop` resets it. The home of the seeded
+/// draws and the spawn counters, and later of game variables, music and volumes, and the
+/// game-clock offset. The counts of an object made during the run go with it (see
+/// `Runtime::forget_copies`).
 #[derive(Debug, Default)]
-pub(crate) struct RunState {}
+pub(crate) struct RunState {
+    /// What Sortear número draws from, with the draws so far of each (owner, node): a node's
+    /// numbers depend on the seed and on that node alone. Definir semente aleatória sets the
+    /// seed and starts the counts over.
+    seed: u64,
+    rolls: BTreeMap<(Id, Id), u64>,
+    /// Copies made so far by each (owner, Criar cópia node), which name the IDs of the next
+    /// one (see `spawn_ids`). The seed plays no part.
+    spawns: BTreeMap<(Id, Id), u64>,
+}
 /// How a host starts a [`Runtime`]. The default is [`Runtime::new`].
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeOptions {
     /// Keep a [`Recording`] from the scene start logic on, as [`Runtime::recorded`] does.
     pub record: bool,
+    /// What Sortear número draws from: hosts that play pass entropy, a headless run the seed
+    /// asked for, 0 by default. The same seed and inputs give the same draws.
+    pub seed: u64,
 }
 
 pub struct Runtime {
@@ -216,7 +230,14 @@ impl Runtime {
     }
     /// `new` with a `Recording`, kept from the scene start logic on.
     pub fn recorded(project: &Project, scene_id: &str) -> Result<Self, String> {
-        Self::with_options(project, scene_id, RuntimeOptions { record: true })
+        Self::with_options(
+            project,
+            scene_id,
+            RuntimeOptions {
+                record: true,
+                ..Default::default()
+            },
+        )
     }
     pub fn with_options(
         project: &Project,
@@ -267,7 +288,10 @@ impl Runtime {
             area_hits: HashMap::new(),
             serial: 0,
             stopped: false,
-            run: RunState::default(),
+            run: RunState {
+                seed: options.seed,
+                ..Default::default()
+            },
         };
         runtime.initialize_character_states()?;
         runtime.begin_camera_input(&InputFrame::default());
@@ -1082,7 +1106,12 @@ impl Runtime {
                 self.index.take();
                 self.input_modes.take();
                 self.event_operations.take();
-                let root = self.scene_mut_internal().duplicate_subtree(&template)?;
+                let key = (context.owner.clone(), node.id.clone());
+                let count = self.run.spawns.get(&key).copied().unwrap_or(0);
+                let root = self
+                    .scene_mut_internal()
+                    .duplicate_subtree_with(&template, &mut spawn_ids(&key, count))?;
+                self.run.spawns.insert(key, count + 1);
                 // The editor duplicate offset is not part of a runtime spawn's explicit offset.
                 let delta = Vec3::new(
                     node.number("x", 0.0) as f32 - 0.5,
@@ -1191,7 +1220,7 @@ impl Runtime {
                 return Ok(());
             }
             _ => {
-                if !self.movement_action(&graph, node, &mut context, budget)? {
+                if !self.math_action(&graph, node, &mut context, budget)? {
                     return Err(format!("Operação {} não é executável", node.operation));
                 }
             }
@@ -1226,6 +1255,29 @@ impl Runtime {
             }
             !ids.contains(a) && hits.strong_count() > 0
         });
+        self.forget_copies(|owner| ids.contains(owner));
+    }
+    /// Drops the draw and copy counts of the objects `gone` names that the project lacks: an
+    /// object made during the run never comes back, since copies get new IDs, while a scene
+    /// reload brings back the project's own with their IDs, and their counts go on.
+    fn forget_copies(&mut self, gone: impl Fn(&str) -> bool) {
+        let source = &self.source;
+        let mut authored: Option<HashSet<&str>> = None;
+        let mut keep = |owner: &Id| {
+            !gone(owner)
+                || authored
+                    .get_or_insert_with(|| {
+                        source
+                            .scenes
+                            .iter()
+                            .flat_map(|scene| &scene.entities)
+                            .map(|entity| entity.id.as_str())
+                            .collect()
+                    })
+                    .contains(owner.as_str())
+        };
+        self.run.rolls.retain(|(owner, _), _| keep(owner));
+        self.run.spawns.retain(|(owner, _), _| keep(owner));
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();
@@ -1246,7 +1298,9 @@ impl Runtime {
         if self.scene_starts.len() > 64 {
             self.scene_starts.drain(..32);
         }
-        // Per-scene state only (see the module docs): `run` carries over.
+        // Per-scene state only (see the module docs): `run` carries over, but for the counts
+        // of the copies left behind.
+        self.forget_copies(|_| true);
         self.input_timeline = Default::default();
         self.characters = Default::default();
         self.cameras = Default::default();
@@ -1607,6 +1661,31 @@ pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {
         return None;
     }
     crate::spatial::collider_bounds(scene, id).ok()
+}
+
+/// The IDs of copy number `count` made by the Criar cópia node of `(owner, node)`: each comes
+/// from the ID of the original object, clip or node, so a run that makes the same copies gives
+/// them the same IDs, in any order and whatever the seed. An ID the scene already has is
+/// asked again and salted.
+fn spawn_ids((owner, node): &(Id, Id), count: u64) -> impl FnMut(&str) -> Id {
+    let (owner, node) = (owner.clone(), node.clone());
+    let mut salts: HashMap<Id, u64> = HashMap::new();
+    move |original: &str| {
+        let salt = salts.entry(original.into()).or_insert(0);
+        let (count, extra) = (count.to_le_bytes(), salt.to_le_bytes());
+        let mut parts = vec![
+            b"oxy.spawn".as_slice(),
+            owner.as_bytes(),
+            node.as_bytes(),
+            &count,
+            original.as_bytes(),
+        ];
+        if *salt > 0 {
+            parts.push(&extra);
+        }
+        *salt += 1;
+        crate::random::derived_id(&parts)
+    }
 }
 
 #[cfg(test)]

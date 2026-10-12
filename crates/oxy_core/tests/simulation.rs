@@ -2,16 +2,19 @@
 //! movement and camera detail, setup, spawn and stop conditions on the copy, and the game
 //! interface at the end.
 use oxy_core::{
+    animation::Clip,
     character::{CameraRig, CharacterConfig},
     command,
     document::*,
     graph::{Edge, Node},
     headless::{self, Actions, EventKind, SimulationReport, SimulationRequest},
     physics3d::{Collider3d, CollisionShape},
-    runtime::{FIXED_DT, InputFrame, MAX_STEPS, Runtime},
+    random::MAX_SEED,
+    runtime::{FIXED_DT, InputFrame, MAX_STEPS, Runtime, RuntimeOptions},
     surface::{PlatformMode, TranslationPlatform},
 };
 use serde_json::json;
+use std::collections::HashSet;
 
 fn node(entity: &mut Entity, operation: &str, params: &[(&str, Value)]) -> Id {
     let mut node = Node::new(operation, [0.; 2]);
@@ -1343,6 +1346,11 @@ fn looks_like_id(text: &str) -> bool {
     text.split([' ', '(', ')'])
         .any(|word| word.len() == 36 && word.matches('-').count() == 4)
 }
+/// An ID derived for a spawned copy: a version 8 UUID written as the editor writes IDs.
+fn derived_uuid(id: &str) {
+    let uuid = uuid::Uuid::parse_str(id).unwrap_or_else(|e| panic!("{id}: {e}"));
+    assert_eq!((uuid.get_version_num(), uuid.to_string()), (8, id.into()));
+}
 
 #[test]
 fn spawned_copies_removed_in_the_same_step_keep_names_and_the_summary_room() {
@@ -1439,6 +1447,33 @@ fn spawned_copies_removed_in_the_same_step_keep_names_and_the_summary_room() {
     let hit = report.logs.iter().find(|l| l.text == "acertou").unwrap();
     assert_eq!(hit.object.as_ref().unwrap().name, "Bala (cópia)");
     assert_eq!(hit.node.as_ref().unwrap().operation, "debug.message");
+    // Each shot's copy and its logging node: named in the logs, so read as IDs, and the same
+    // on every run, while every shot gets its own.
+    let copies = |report: &SimulationReport| -> Vec<(Id, Id)> {
+        report
+            .logs
+            .iter()
+            .filter(|l| l.text == "acertou")
+            .map(|l| {
+                let (object, node) = (l.object.as_ref().unwrap(), l.node.as_ref().unwrap());
+                assert_eq!(object.name, "Bala (cópia)");
+                (object.id.clone(), node.id.clone())
+            })
+            .collect()
+    };
+    let shots = copies(&report);
+    assert!(shots.len() > 200, "{}", shots.len());
+    assert_eq!(
+        shots,
+        copies(&run(&project, json!({"seconds": 4.5, "inputs": inputs})))
+    );
+    let objects: HashSet<_> = shots.iter().map(|(object, _)| object).collect();
+    let nodes: HashSet<_> = shots.iter().map(|(_, node)| node).collect();
+    assert_eq!((objects.len(), nodes.len()), (shots.len(), shots.len()));
+    for (object, node) in &shots {
+        derived_uuid(object);
+        derived_uuid(node);
+    }
     assert!(
         report.events.iter().all(|e| !looks_like_id(&e.object.name)
             && e.other.as_ref().is_none_or(|o| !looks_like_id(&o.name))),
@@ -1454,6 +1489,183 @@ fn spawned_copies_removed_in_the_same_step_keep_names_and_the_summary_room() {
         panic!("{:?}", all.actions);
     };
     assert!(actions.iter().all(|a| !looks_like_id(&a.text)));
+}
+
+/// A Fábrica whose two Criar cópia nodes copy the Caixa (its Tampa, logic and animation
+/// included) on each press of "gerar".
+fn factory() -> Project {
+    let mut project = Project::new("Fábrica");
+    project.input_bindings.insert("gerar".into(), "G".into());
+    project.scenes[0].kind = SceneKind::TwoD;
+    let mut boxed = Entity::new("Caixa", None);
+    let click = node(&mut boxed, "event.click", &[]);
+    let say = node(&mut boxed, "debug.message", &[("message", text("aberta"))]);
+    link(&mut boxed, &click, &say);
+    boxed.clips.push(Clip::new("Abrir"));
+    let mut lid = Entity::new("Tampa", None);
+    lid.parent = Some(boxed.id.clone());
+    let mut factory = Entity::new("Fábrica", None);
+    let press = node(&mut factory, "event.input", &[("action", text("gerar"))]);
+    let template = Value::Object(Some(boxed.id.clone()));
+    let first = node(
+        &mut factory,
+        "action.spawn",
+        &[("target", template.clone())],
+    );
+    let second = node(&mut factory, "action.spawn", &[("target", template)]);
+    link(&mut factory, &press, &first);
+    link(&mut factory, &first, &second);
+    project.scenes[0].entities = vec![boxed, lid, factory];
+    project
+}
+/// Each object the runtime copies when "gerar" is pressed twice in a run started with `seed`:
+/// its ID, name, clip IDs and node IDs.
+fn made(project: &Project, seed: u64) -> Vec<(Id, String, Vec<Id>, Vec<Id>)> {
+    let options = RuntimeOptions { record: true, seed };
+    let mut runtime = Runtime::with_options(project, &project.start_scene, options).unwrap();
+    let press = InputFrame {
+        pressed: ["gerar".into()].into(),
+        ..Default::default()
+    };
+    for input in [&press, &InputFrame::default(), &press] {
+        runtime.advance(FIXED_DT, input);
+    }
+    assert!(runtime.logs.is_empty(), "{:?}", runtime.logs);
+    let spawned = runtime.recording.take().unwrap().spawned;
+    spawned
+        .into_iter()
+        .map(|copy| {
+            let clips = runtime.scene().entity(&copy.id).unwrap().clips.iter();
+            let nodes = copy
+                .graph
+                .nodes
+                .iter()
+                .map(|node| node.id.clone())
+                .collect();
+            (
+                copy.id,
+                copy.name,
+                clips.map(|clip| clip.id.clone()).collect(),
+                nodes,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn spawned_copies_get_the_same_ids_on_every_run_and_others_per_node_and_count() {
+    let project = factory();
+    let copies = made(&project, 0);
+    // Two presses, two nodes, the Caixa and its Tampa each time.
+    let names: Vec<_> = copies.iter().map(|copy| copy.1.as_str()).collect();
+    assert_eq!(names, ["Caixa (cópia)", "Tampa"].repeat(4));
+    assert_eq!(copies, made(&project, 0));
+    let originals: HashSet<_> = project.scenes[0]
+        .entities
+        .iter()
+        .flat_map(|e| {
+            let clips = e.clips.iter().map(|clip| &clip.id);
+            let nodes = e.graph.nodes.iter().map(|node| &node.id);
+            std::iter::once(&e.id).chain(clips).chain(nodes)
+        })
+        .collect();
+    let mut ids = HashSet::new();
+    for (id, name, clips, nodes) in &copies {
+        let expected = if name == "Tampa" { (0, 0) } else { (1, 2) };
+        assert_eq!((clips.len(), nodes.len()), expected, "{name}");
+        for id in std::iter::once(id).chain(clips).chain(nodes) {
+            derived_uuid(id);
+            assert!(!originals.contains(id) && ids.insert(id), "{id}");
+        }
+    }
+
+    // A copy whose ID the scene already has gets another one, the same on every run; the rest
+    // of the copy keeps its IDs.
+    let mut crowded = project.clone();
+    let mut squatter = Entity::new("Ocupante", None);
+    squatter.id = copies[0].0.clone();
+    crowded.scenes[0].entities.push(squatter);
+    let moved = made(&crowded, 0);
+    assert_eq!(moved, made(&crowded, 0));
+    assert_ne!(moved[0].0, copies[0].0);
+    derived_uuid(&moved[0].0);
+    assert!(!ids.contains(&moved[0].0));
+    assert_eq!(
+        (&moved[0].1, &moved[0].2, &moved[0].3),
+        (&copies[0].1, &copies[0].2, &copies[0].3)
+    );
+    assert_eq!(moved[1..], copies[1..]);
+
+    // The seed plays no part: neither the one the run starts with nor one the logic sets
+    // before each press's copies, which starts the draws over but not the copy counts.
+    assert_eq!(made(&project, 99), copies);
+    let mut seeding = project.clone();
+    let factory = seeding.scenes[0].entities.last_mut().unwrap();
+    let (press, first) = (
+        factory.graph.nodes[0].id.clone(),
+        factory.graph.nodes[1].id.clone(),
+    );
+    let reseed = node(factory, "random.seed", &[("seed", Value::Number(12345.))]);
+    let pressed = factory
+        .graph
+        .edges
+        .iter_mut()
+        .find(|e| e.from_node == press)
+        .unwrap();
+    pressed.to_node = reseed.clone();
+    link(factory, &reseed, &first);
+    assert_eq!(made(&seeding, 7), copies);
+}
+
+#[test]
+fn the_seed_asked_for_repeats_the_draws_and_comes_back_in_the_report() {
+    let mut project = Project::new("Sorteio");
+    project.scenes[0].kind = SceneKind::TwoD;
+    let mut dice = Entity::new("Dado", None);
+    dice.attributes.insert("valor".into(), Value::Number(0.));
+    let step = node(&mut dice, "event.step", &[]);
+    let draw = node(
+        &mut dice,
+        "random.number",
+        &[("max", Value::Number(1e6)), ("mode", text("integer"))],
+    );
+    let write = node(&mut dice, "attribute.set", &[("attribute", text("valor"))]);
+    link(&mut dice, &step, &draw);
+    link(&mut dice, &draw, &write);
+    wire(&mut dice, &draw, "value", &write, "value");
+    let id = dice.id.clone();
+    project.scenes[0].entities.push(dice);
+    let draws = |seed: Option<u64>| -> (u64, Vec<Value>) {
+        let mut asked = json!({"seconds": 1.0, "samples": 10, "watch": [id]});
+        if let Some(seed) = seed {
+            asked["seed"] = json!(seed);
+        }
+        let report = run(&project, asked);
+        let values = report.watched[0]
+            .samples
+            .iter()
+            .map(|sample| sample.attributes.as_ref().unwrap()["valor"].clone())
+            .collect();
+        (report.seed, values)
+    };
+    let (seed, zero) = draws(None);
+    assert_eq!(seed, 0);
+    assert_eq!(draws(Some(0)), (0, zero.clone()));
+    let (seed, other) = draws(Some(12345));
+    assert_eq!(seed, 12345);
+    assert_ne!(other, zero);
+    assert_eq!(draws(Some(12345)).1, other);
+    let largest = draws(Some(MAX_SEED));
+    assert_eq!(largest.0, MAX_SEED);
+    let error = headless::simulate(
+        &project,
+        &request(json!({"seconds": 1.0, "seed": MAX_SEED + 1})),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("A semente (seed) deve ser um inteiro de 0 a 9007199254740991"),
+        "{error}"
+    );
 }
 
 #[test]

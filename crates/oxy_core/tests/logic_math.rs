@@ -1,9 +1,10 @@
-//! The number and text data nodes run by the runtime: arithmetic, functions, limits and
-//! time formatting.
+//! The number and text nodes run by the runtime: arithmetic, functions, limits, time
+//! formatting and random draws.
 use oxy_core::{
     document::*,
     graph::*,
-    runtime::{FIXED_DT, InputFrame, Runtime},
+    random::MAX_SEED,
+    runtime::{FIXED_DT, InputFrame, Runtime, RuntimeOptions},
 };
 
 fn node(op: &str, params: &[(&str, Value)]) -> Node {
@@ -302,4 +303,239 @@ fn time_formats_a_number_read_through_its_port_and_refuses_one_not_finite() {
         runtime.logs
     );
     assert_eq!(attributes(&runtime)["Resultado"], text("01:23.45"));
+}
+
+/// A Dado that draws with `draw` on every step and writes the number into its attribute A;
+/// with `before`, another draw runs first and writes B. Pressing "semear" runs `reseed`.
+fn dice(draw: &Node, before: Option<&Node>, reseed: Option<&Node>) -> Project {
+    let mut project = Project::new("Sorteios");
+    let mut owner = Entity::new("Dado", None);
+    // The same object in every project, as the draws depend on it.
+    owner.id = "dado".into();
+    owner.attributes.insert("A".into(), n(0.));
+    owner.attributes.insert("B".into(), n(0.));
+    let step = node("event.step", &[]);
+    let write = node("attribute.set", &[("attribute", text("A"))]);
+    owner.graph.nodes = vec![step.clone(), draw.clone(), write.clone()];
+    wire(&mut owner.graph, draw, "exec", &write, "exec");
+    wire(&mut owner.graph, draw, "value", &write, "value");
+    if let Some(before) = before {
+        let other = node("attribute.set", &[("attribute", text("B"))]);
+        owner.graph.nodes.extend([before.clone(), other.clone()]);
+        wire(&mut owner.graph, &step, "exec", before, "exec");
+        wire(&mut owner.graph, before, "exec", &other, "exec");
+        wire(&mut owner.graph, before, "value", &other, "value");
+        wire(&mut owner.graph, &other, "exec", draw, "exec");
+    } else {
+        wire(&mut owner.graph, &step, "exec", draw, "exec");
+    }
+    if let Some(reseed) = reseed {
+        let press = node("event.input", &[("action", text("semear"))]);
+        owner.graph.nodes.extend([press.clone(), reseed.clone()]);
+        wire(&mut owner.graph, &press, "exec", reseed, "exec");
+    }
+    project.scenes[0].entities.push(owner);
+    validate_project(&project).unwrap();
+    project
+}
+fn seeded(project: &Project, seed: u64) -> Runtime {
+    Runtime::with_options(
+        project,
+        &project.start_scene,
+        RuntimeOptions {
+            seed,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+fn step(runtime: &mut Runtime, press: bool) {
+    let input = InputFrame {
+        pressed: if press {
+            ["semear".into()].into()
+        } else {
+            Default::default()
+        },
+        ..Default::default()
+    };
+    runtime.advance(FIXED_DT, &input);
+}
+/// The number A holds after each of `steps` steps of a run started with `seed`, pressing
+/// "semear" on the steps in `press`.
+fn draws(project: &Project, seed: u64, steps: usize, press: &[usize]) -> Vec<f64> {
+    let mut runtime = seeded(project, seed);
+    (0..steps)
+        .map(|i| {
+            step(&mut runtime, press.contains(&i));
+            assert!(runtime.logs.is_empty(), "{:?}", runtime.logs);
+            match runtime.scene().entity("dado").unwrap().attributes["A"] {
+                Value::Number(value) => value,
+                ref other => panic!("{other:?}"),
+            }
+        })
+        .collect()
+}
+fn draw_node(min: f64, max: f64, mode: &str) -> Node {
+    node(
+        "random.number",
+        &[("min", n(min)), ("max", n(max)), ("mode", text(mode))],
+    )
+}
+
+#[test]
+fn the_random_nodes_are_actions_with_their_numbers_also_through_ports() {
+    for id in ["random.number", "random.seed"] {
+        let def = definition(id).unwrap();
+        assert_eq!(def.category, "Ações", "{id}");
+        assert_eq!(def.inputs[0].kind, PortType::Exec, "{id}");
+        assert_eq!(def.outputs[0].kind, PortType::Exec, "{id}");
+        for param in &def.params {
+            let port = def.inputs.iter().find(|port| port.id == param.id);
+            match &param.default {
+                Value::Number(_) => assert_eq!(port.unwrap().kind, PortType::Number, "{id}"),
+                _ => assert!(port.is_none(), "{id}.{}", param.id),
+            }
+        }
+    }
+    let number = definition("random.number").unwrap();
+    assert_eq!(number.outputs[1].id, "value");
+    assert_eq!(number.outputs[1].kind, PortType::Number);
+    let modes: Vec<_> = choices("random.number", "mode").unwrap().to_vec();
+    assert_eq!(
+        modes,
+        [
+            ("real", "Real entre mínimo e máximo"),
+            ("integer", "Inteiro, extremos incluídos")
+        ]
+    );
+    // After Mudar de cena, before the Jogo nodes.
+    let order: Vec<_> = registry().iter().map(|def| def.id).collect();
+    let scene = order.iter().position(|id| *id == "action.scene").unwrap();
+    assert_eq!(
+        order[scene..scene + 3],
+        ["action.scene", "random.number", "random.seed"]
+    );
+}
+
+#[test]
+fn each_draw_node_repeats_its_numbers_for_a_seed_whatever_other_draws_do() {
+    let draw = draw_node(1., 6., "integer");
+    let alone = dice(&draw, None, None);
+    let with_other = dice(&draw, Some(&draw_node(0., 1., "real")), None);
+    let first = draws(&alone, 5, 120, &[]);
+    assert_eq!(first, draws(&alone, 5, 120, &[]));
+    assert_eq!(
+        first,
+        draws(&with_other, 5, 120, &[]),
+        "another draw node, run first, leaves these numbers alone"
+    );
+    assert_ne!(first, draws(&alone, 6, 120, &[]));
+    // Both ends included, only integers.
+    for face in 1..=6 {
+        assert!(first.contains(&f64::from(face)), "{face}: {first:?}");
+    }
+    assert!(
+        first
+            .iter()
+            .all(|v| v.fract() == 0. && (1. ..=6.).contains(v))
+    );
+    // Bounds with decimals keep the integers between them.
+    let between = draws(
+        &dice(&draw_node(0.5, 3.5, "integer"), None, None),
+        0,
+        120,
+        &[],
+    );
+    for k in [1., 2., 3.] {
+        assert!(between.contains(&k), "{k}: {between:?}");
+    }
+    assert!(
+        between.iter().all(|v| [1., 2., 3.].contains(v)),
+        "{between:?}"
+    );
+    // Real numbers never reach the maximum.
+    let real = draws(&dice(&draw_node(-2., 3., "real"), None, None), 0, 120, &[]);
+    assert!(real.iter().all(|v| (-2. ..3.).contains(v)), "{real:?}");
+    assert!(real.iter().any(|v| v.fract() != 0.), "{real:?}");
+    let same = draws(&dice(&draw_node(4., 4., "real"), None, None), 0, 3, &[]);
+    assert_eq!(same, [4.; 3]);
+    let wide = draws(
+        &dice(&draw_node(-1e308, 1e308, "real"), None, None),
+        0,
+        3,
+        &[],
+    );
+    assert!(wide.iter().all(|v| v.is_finite()), "{wide:?}");
+}
+
+#[test]
+fn setting_the_seed_starts_every_draw_over() {
+    let draw = draw_node(1., 1000., "integer");
+    let project = dice(&draw, None, Some(&node("random.seed", &[("seed", n(42.))])));
+    let plain = draws(&project, 42, 5, &[]);
+    // On step 3 the draw comes first (the step event runs before inputs), then the seed
+    // starts the count over: steps 4 and 5 draw as steps 0 and 1.
+    let again = draws(&project, 42, 6, &[3]);
+    assert_eq!(again[..4], plain[..4]);
+    assert_eq!(again[4..], plain[..2]);
+    // Given 42 by logic, a run started with 0 draws as one started with 42.
+    let late = draws(&project, 0, 6, &[0]);
+    assert_eq!(late[1..], plain[..]);
+    assert_ne!(late[0], plain[0]);
+    // The largest seed is accepted.
+    let largest = dice(
+        &draw,
+        None,
+        Some(&node("random.seed", &[("seed", n(MAX_SEED as f64))])),
+    );
+    assert_eq!(
+        draws(&largest, 0, 3, &[0])[1..],
+        draws(&largest, MAX_SEED, 2, &[])
+    );
+}
+
+#[test]
+fn draws_refuse_bounds_without_numbers_and_a_value_read_before_the_draw() {
+    let errors = |project: &Project| {
+        let mut runtime = seeded(project, 0);
+        step(&mut runtime, true);
+        runtime.logs.join("\n")
+    };
+    for (draw, message) in [
+        (draw_node(2., 1., "real"), "Mínimo 2 maior que o máximo 1"),
+        (
+            draw_node(0.2, 0.8, "integer"),
+            "Nenhum inteiro entre o mínimo 0.2 e o máximo 0.8",
+        ),
+        (
+            draw_node(-1e300, 1., "integer"),
+            "No modo Inteiro, mínimo e máximo precisam estar entre -9007199254740991 e \
+             9007199254740991",
+        ),
+    ] {
+        let error = errors(&dice(&draw, None, None));
+        assert!(error.contains(message), "{error}");
+    }
+    for seed in [-1., 1.5, (MAX_SEED + 1) as f64] {
+        let reseed = node("random.seed", &[("seed", n(seed))]);
+        let error = errors(&dice(&draw_node(0., 1., "real"), None, Some(&reseed)));
+        assert!(
+            error.contains("A semente precisa ser um inteiro de 0 a 9007199254740991"),
+            "{seed}: {error}"
+        );
+    }
+    // The number exists once the node runs: reading it from a flow that did not run it fails.
+    let mut project = dice(&draw_node(0., 1., "real"), None, None);
+    let owner = &mut project.scenes[0].entities[0];
+    let draw = owner.graph.nodes[1].clone();
+    let press = node("event.input", &[("action", text("semear"))]);
+    let write = node("attribute.set", &[("attribute", text("B"))]);
+    owner.graph.nodes.extend([press.clone(), write.clone()]);
+    wire(&mut owner.graph, &press, "exec", &write, "exec");
+    wire(&mut owner.graph, &draw, "value", &write, "value");
+    let error = errors(&project);
+    assert!(
+        error.contains("Dados da saída value indisponíveis; execute a ação produtora antes"),
+        "{error}"
+    );
 }

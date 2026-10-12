@@ -6,7 +6,7 @@ use oxy_core::{
     asset_import::{self, ImportRequest},
     command::{self, Applied},
     document::*,
-    encoding, headless, persistence, query,
+    encoding, headless, persistence, query, random,
     runtime::Runtime,
 };
 use oxy_render::{CameraState, offscreen::ShotView};
@@ -90,6 +90,10 @@ degrees by default), +x turns right and +y looks down unless the camera inverts 
 click, at, entity}. They survive scene changes and reloads; a key held across one stays held.";
 const COLLIDERS: &str = "Draws colliders (green) and sensor areas (yellow) over the image, \
 invisible objects' too, as the editor's collider view does.";
+const SEED: &str = "Seed of the random.number draws, an integer from 0 to 9007199254740991 \
+(default 0): the same seed and inputs draw the same numbers, so pass other seeds to see other \
+draws. Copies made by action.spawn get the same IDs whatever the seed. Objects and nodes that \
+setup creates get new IDs on each call, so their draws and the copies they make change.";
 const TREE_FIELDS: &str = "Extra per-object fields: world_position, where its position (its \
 pivot) is in the world, which tells distances across parent groups; rotation (local, degrees, as \
 set_transform takes it); scale (local); dimensions (of its shape); visual_bounds, the world box \
@@ -131,6 +135,8 @@ pub fn definitions() -> Json {
     let start_scene = json!({"type": "string", "description": START_SCENE});
     let inputs = json!({"type": "array", "items": {"type": "object"}, "description": INPUTS});
     let colliders = json!({"type": "boolean", "description": COLLIDERS});
+    let seed = json!({"type": "integer", "minimum": 0, "maximum": random::MAX_SEED,
+        "description": SEED});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
     let offset = json!({"type": "integer", "minimum": 0, "description":
         "Entries skipped (default 0): the answer's next_offset when more follow."});
@@ -147,7 +153,10 @@ pub fn definitions() -> Json {
             "Lists open OXY editors that allow AI agents (project, active scene, unsaved changes, \
              whether the editor is busy and why) and explains how tools pick a target. play says \
              whether the person is testing the game: {running, paused?, scene? {id, name}, \
-             time? (simulated seconds)}; while it runs, edits are refused. Call this first.",
+             time? (simulated seconds), seed? (of the test's random.number draws, new on each \
+             test and still there after it stops: oxy_simulate with this seed gives each \
+             random.number node the same numbers in the same order)}; while it runs, edits are \
+             refused. Call this first.",
             json!({}),
             json!([])
         ),
@@ -368,7 +377,8 @@ pub fn definitions() -> Json {
                        "Game view height in pixels, 16-4096 (default 540)."},
                    "screenshot": {"type": "boolean", "description":
                        "Also returns the game camera view at the end, as oxy_screenshot view=game."},
-                   "colliders": colliders}),
+                   "colliders": colliders,
+                   "seed": seed}),
             json!(["seconds"])
         ),
         tool(
@@ -388,6 +398,7 @@ pub fn definitions() -> Json {
                        "As in oxy_simulate: {entity, position, yaw?} on the copy before the run."},
                    "until": {"type": "object", "description":
                        "As in oxy_simulate: stops the run early; the capture is taken then."},
+                   "seed": seed,
                    "colliders": colliders,
                    "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
                        "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
@@ -588,14 +599,16 @@ involved or changes scene), the game camera at the end {active, mode, position, 
 the game interface at the end (ui: texts with their values, bars, buttons) and the watched \
 objects. Inputs use the project's input actions, by ID or name (see oxy_project). To test one \
 section without editing the project, use setup (commands on the copy), spawn (place the player) \
-and until (stop when something happens). Lists keep the most recent 300 entries and `truncated` \
-counts what was dropped. Times are seconds rounded to 0.1 ms. Set screenshot=true to also get the \
-game camera view at the end.";
+and until (stop when something happens). Draws repeat: random.number takes them from seed \
+(default 0, echoed in the report; vary it to see other draws), and copies made by action.spawn \
+get the same IDs on every run (not those of the logic setup creates: see seed). Lists keep the \
+most recent 300 entries and `truncated` counts what was dropped. Times are seconds rounded to \
+0.1 ms. Set screenshot=true to also get the game camera view at the end.";
 
 const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
 the editor viewport as the person sees it, with the collider view when colliders is set. Every \
-other view first runs the game on an in-memory copy for `seconds`, with inputs (and setup, spawn \
-and until as in oxy_simulate), then captures: game (the default on files) through the game \
+other view first runs the game on an in-memory copy for `seconds`, with inputs (and setup, spawn, \
+until and seed as in oxy_simulate), then captures: game (the default on files) through the game \
 camera, and lists the game interface as ui like oxy_simulate, since the image leaves out texts, \
 buttons and bars (ui: false leaves the list out); free through a perspective camera at eye \
 looking at target (3D scenes); top and side through orthographic views framing ids: top \
@@ -1095,6 +1108,11 @@ impl Tools {
                 .unwrap_or_default(),
             view_size: Some(view_size(args)),
             ui: args["ui"].as_bool().unwrap_or(true),
+            seed: arg("seed")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Semente (seed) inválida"))?
+                .unwrap_or_default(),
         })
     }
 
@@ -1264,9 +1282,14 @@ mod tests {
         }
         assert!(SCREENSHOT_DESCRIPTION.contains("ui: false"));
         let simulate = schema("oxy_simulate");
-        for option in ["ui", "width", "height", "screenshot", "colliders"] {
+        for option in ["ui", "width", "height", "screenshot", "colliders", "seed"] {
             assert!(simulate[option]["description"].is_string(), "{option}");
         }
+        // The seed is a JSON integer both tools take alike, up to the largest one kept exactly.
+        assert_eq!(shot["seed"], simulate["seed"]);
+        assert_eq!(simulate["seed"]["type"], "integer");
+        assert_eq!(simulate["seed"]["maximum"], json!(9007199254740991_u64));
+        assert!(SIMULATE_DESCRIPTION.contains("seed") && SCREENSHOT_DESCRIPTION.contains("seed"));
         // Look units and signs, and the same inputs in both tools.
         let inputs = shot["inputs"]["description"].as_str().unwrap();
         assert!(inputs.contains("sensitivity") && inputs.contains("+x turns right"));
@@ -1425,6 +1448,34 @@ mod tests {
             .map(|port| port["id"].as_str().unwrap())
             .collect();
         assert_eq!(inputs, ["value", "min", "max"]);
+        // The random draws are actions, with their modes listed.
+        let random = catalog(json!({"operations": ["random."]}));
+        let random = random["nodes"].as_array().unwrap();
+        let listed: Vec<_> = random
+            .iter()
+            .map(|node| {
+                (
+                    node["operation"].as_str().unwrap(),
+                    node["category"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [("random.number", "Ações"), ("random.seed", "Ações")]
+        );
+        let modes: Vec<_> = random[0]["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "mode")
+            .unwrap()["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["value"].as_str().unwrap())
+            .collect();
+        assert_eq!(modes, ["real", "integer"]);
     }
 
     #[test]
@@ -2231,6 +2282,66 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn simulate_draws_from_the_seed_asked_and_echoes_it() {
+        use oxy_core::graph::{Edge, Node};
+        let mut project = editing::blank_project("Sorteio", SceneKind::TwoD).unwrap();
+        let mut dice = Entity::new("Dado", None);
+        dice.attributes.insert("valor".into(), Value::Number(0.));
+        let start = Node::new("event.scene_start", [0.; 2]);
+        let mut draw = Node::new("random.number", [0.; 2]);
+        draw.params.insert("max".into(), Value::Number(1e6));
+        draw.params
+            .insert("mode".into(), Value::Text("integer".into()));
+        let mut write = Node::new("attribute.set", [0.; 2]);
+        write
+            .params
+            .insert("attribute".into(), Value::Text("valor".into()));
+        let edge = |from: &Node, port: &str, to: &Node, input: &str| Edge {
+            from_node: from.id.clone(),
+            from_port: port.into(),
+            to_node: to.id.clone(),
+            to_port: input.into(),
+        };
+        dice.graph.edges = vec![
+            edge(&start, "exec", &draw, "exec"),
+            edge(&draw, "exec", &write, "exec"),
+            edge(&draw, "value", &write, "value"),
+        ];
+        dice.graph.nodes = vec![start, draw, write];
+        let id = dice.id.clone();
+        project.scenes[0].entities.push(dice);
+        // The arguments as the tool reads them, run on the project as it would be.
+        let simulate = |extra: Json| -> Result<Json, String> {
+            let mut args = json!({"ui": false, "watch": [{"id": id, "fields": ["attributes"]}]});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let request = Tools::simulation_request(&args, 0.1)?;
+            let report = headless::simulate(&project, &request)?;
+            Ok(serde_json::to_value(report).unwrap())
+        };
+        let drawn = |report: &Json| report["watched"][0]["samples"][0]["attributes"].clone();
+        let default = simulate(json!({})).unwrap();
+        assert_eq!(default["seed"], 0);
+        assert_eq!(simulate(json!({"seed": null})).unwrap(), default);
+        let seeded = simulate(json!({"seed": 7})).unwrap();
+        assert_eq!(seeded["seed"], 7);
+        assert_eq!(seeded, simulate(json!({"seed": 7})).unwrap());
+        assert_ne!(drawn(&seeded), drawn(&default));
+        let largest = simulate(json!({"seed": random::MAX_SEED})).unwrap();
+        assert_eq!(largest["seed"], json!(9007199254740991_u64));
+        for (bad, refusal) in [
+            (json!(-1), "Semente (seed) inválida"),
+            (json!(1.5), "Semente (seed) inválida"),
+            (json!("7"), "Semente (seed) inválida"),
+            (json!(9007199254740992_u64), "0 a 9007199254740991"),
+        ] {
+            let error = simulate(json!({"seed": bad})).unwrap_err();
+            assert!(error.contains(refusal), "{bad}: {error}");
+        }
+    }
+
     /// The whole capture on files, with a real GPU: the game view lists the interface, the
     /// free and top views report their camera, and the collider view changes the image.
     #[test]
@@ -2372,7 +2483,7 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(
-            status.contains("play") && status.contains("running"),
+            status.contains("play") && status.contains("running") && status.contains("seed"),
             "{status}"
         );
         let project = definitions()
