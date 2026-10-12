@@ -67,6 +67,7 @@ pub enum Icon {
     Branch,
     Action,
     Flow,
+    Game,
     Keyboard,
     Book,
     Check,
@@ -851,6 +852,27 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                     Stroke::new(1.3, color),
                 );
             }
+        }
+        Icon::Game => {
+            // A gamepad drawn on a 14-unit grid: body and grips, a cross and a button.
+            let unit = |x: f32, y: f32| at(x / 14., y / 14.);
+            let arc = |cx: f32, cy: f32, radius: f32, from: f32, to: f32| -> Vec<Pos2> {
+                (0..=6)
+                    .map(|i| {
+                        let a = (from + (to - from) * i as f32 / 6.).to_radians();
+                        unit(cx + radius * a.cos(), cy + radius * a.sin())
+                    })
+                    .collect()
+            };
+            let mut body = arc(10., 7.5, 3., -90., 0.);
+            body.extend(arc(11.2, 8.67, 1.8, 0., 141.));
+            body.extend([unit(8.8, 8.5), unit(5.2, 8.5)]);
+            body.extend(arc(2.8, 8.67, 1.8, 39., 180.));
+            body.extend(arc(4., 7.5, 3., 180., 270.));
+            p.add(egui::Shape::closed_line(body, Stroke::new(1.3, color)));
+            line(unit(4.3, 6.), unit(4.3, 7.8));
+            line(unit(3.4, 6.9), unit(5.2, 6.9));
+            p.circle_filled(unit(9.8, 6.8), r.width() * 0.08, color);
         }
         Icon::Keyboard => {
             p.rect_stroke(

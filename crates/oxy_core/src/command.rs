@@ -700,7 +700,8 @@ enum Check {
         size: [f32; 3],
     },
     /// copy_entities copied into `scene` the nodes `nodes` ([object, node, parameter]) whose
-    /// scene parameter names `from`, the scene the copies came from, such as action.scene.
+    /// scene parameter names `from`, the scene the copies came from, such as action.scene
+    /// without its Cena input (see `opens_scene`).
     SceneBack {
         scene: Id,
         from: Id,
@@ -734,6 +735,8 @@ impl Check {
             Self::SceneBack { scene, from, nodes } => {
                 let to = project.scene(scene)?;
                 let mut params: Vec<&str> = Vec::new();
+                // Whether every node listed takes its scene through an input as well.
+                let mut wirable = true;
                 let listed: Vec<String> = nodes
                     .iter()
                     .filter_map(|(entity, node, param)| {
@@ -742,10 +745,12 @@ impl Check {
                             .graph
                             .nodes
                             .iter()
-                            .find(|n| n.id == *node && n.text(param) == from)?;
+                            .find(|n| n.id == *node && opens_scene(e, n, param, from))?;
                         if !params.contains(param) {
                             params.push(param);
                         }
+                        wirable &= graph::definition(&n.operation)
+                            .is_some_and(|def| def.inputs.iter().any(|port| port.id == *param));
                         // The copy's ID, which set_node_params takes: the answer gives only
                         // the copied roots.
                         Some(format!(
@@ -758,18 +763,32 @@ impl Check {
                     return None;
                 }
                 let source = project.scene(from).map_or(from.as_str(), |s| &s.name);
+                let params = params.join("/");
+                let wire = if wirable {
+                    format!(
+                        ", ou ligue a saída scene de um scene.current à entrada {params}, para \
+                         que abram a cena em que estiverem"
+                    )
+                } else {
+                    String::new()
+                };
                 Some(format!(
                     "estes nós copiados para {} ainda abrem {source}, a cena de onde vieram; \
                      para que abram a cena nova (reiniciar a fase, por exemplo), use \
-                     set_node_params com {} {{\"Text\": \"{}\"}}: {}",
+                     set_node_params com {params} {{\"Text\": \"{}\"}}{wire}: {}",
                     to.name,
-                    params.join("/"),
                     to.id,
                     listed.join("; ")
                 ))
             }
         }
     }
+}
+
+/// Whether the parameter `param` of `n`, a node of `e`, opens `scene`: it names the scene, and
+/// no input of the same id gives one in its place.
+fn opens_scene(e: &Entity, n: &Node, param: &str, scene: &str) -> bool {
+    n.text(param) == scene && !e.graph.input_connected(&n.id, param)
 }
 
 /// The size of an object's box collider: its 3D box collider or, without one, its 2D box
@@ -1444,7 +1463,7 @@ fn apply_one(
                     e.graph.nodes.iter().flat_map(move |n| {
                         graph::node_references(n)
                             .filter(move |(param, reference, _)| {
-                                *reference == Reference::Scene && n.text(param.id) == back
+                                *reference == Reference::Scene && opens_scene(e, n, param.id, back)
                             })
                             .map(move |(param, ..)| (e.id.clone(), n.id.clone(), param.id))
                     })

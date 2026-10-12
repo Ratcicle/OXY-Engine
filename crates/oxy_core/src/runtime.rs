@@ -31,6 +31,7 @@ use crate::prepared_graph::PreparedGraph;
 mod cameras;
 pub use cameras::{CameraDebug, CameraPreview};
 mod characters;
+mod game_nodes;
 mod math_nodes;
 mod movement_nodes;
 pub use characters::SensorCrossing;
@@ -899,7 +900,7 @@ impl Runtime {
                 };
                 Ok(Value::Bool(result))
             }
-            _ => self.math_data(graph, node, output, context, budget, depth),
+            _ => self.game_data(graph, node, output, context, budget, depth),
         }
     }
     fn outputs(
@@ -1179,7 +1180,8 @@ impl Runtime {
                 }
             }
             "action.scene" => {
-                self.change_scene(node.text("scene"))?;
+                let scene = self.scene_destination(&graph, node, &context, budget)?;
+                self.change_scene(&scene)?;
                 // A sound played right before the first change of the step is heard; those
                 // of a scene that starts and ends within the step are not.
                 match self.sounds_before_change {

@@ -53,7 +53,12 @@ impl Topic {
             "action.spawn" | "action.remove" | "action.component" => {
                 "Indique um objeto existente ou conecte uma referência de objeto. Confirme qual componente ou hierarquia será afetado."
             }
-            "action.scene" => "Crie a cena de destino no projeto e escolha-a no parâmetro do nó.",
+            "action.scene" => {
+                "Crie a cena de destino no projeto e escolha-a no parâmetro do nó. Para reiniciar a cena em que o objeto está, ligue a saída Cena de Cena atual à entrada Cena."
+            }
+            "scene.current" => {
+                "Não precisa de configuração. Ligue Cena à entrada Cena de Mudar de cena, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
+            }
             "condition.branch" | "control.sequence" | "control.wait" | "debug.message" => {
                 "Conecte uma saída de execução à entrada Executar. Forneça os dados pedidos por portas conectadas ou pelos parâmetros do painel."
             }
@@ -90,11 +95,11 @@ pub fn topics() -> &'static [Topic] {
             "action.spawn"=>("Cria uma cópia da hierarquia indicada durante o jogo.","Crie uma cópia de um objeto de efeito e use a saída Objeto para configurar sua continuação.","É uma instância do runtime. Parar descarta as criações; referências internas da hierarquia são remapeadas."),
             "action.remove"=>("Remove um objeto e seus descendentes do jogo.","Após registrar Chave no visitante, remova o coletável.","As tarefas do objeto removido são canceladas. A alteração não apaga o documento de edição."),
             "action.component"=>("Ativa ou desativa o componente escolhido: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel.","Ative a colisão da área de ataque, espere sua duração e desative-a.","Visibilidade, comportamento, controlador, animação, colisão e plataforma são estados distintos: ocultar a peça não desativa seu colisor. Desativar uma área encerra a ocupação sem gerar saída; ao reativá-la, quem estiver dentro entra de novo. Desativar a plataforma móvel para o movimento por velocidade; numa plataforma animada, só deixa de carregar quem está em cima, e a animação continua: pause-a com Reprodução da animação."),
-            "action.scene"=>("Encerra a cena atual e abre o destino configurado.","Uma passagem usa a área para iniciar a segunda cena.","Escolha uma cena existente. Tarefas e ativações da cena anterior são canceladas."),
+            "action.scene"=>("Encerra a cena atual e abre a cena de destino: a escolhida no parâmetro ou a que a entrada Cena receber.","Uma passagem usa a área para iniciar a segunda cena. Com Cena atual ligada à entrada Cena, o mesmo nó reinicia a cena em que está, em qualquer cena para onde a lógica for copiada.","Conectada, a entrada Cena substitui a cena escolhida, que fica ignorada. Ela espera o identificador de uma cena, não o nome: um texto vazio, um nome ou um identificador que o projeto não tem interrompe o comportamento com erro. Para seguir para outra cena, escolha-a no parâmetro em cada cópia da lógica. Um atributo de texto ligado por Ler atributo também serve, com o identificador da cena, que o editor não mostra e um agente de IA pode gravar. Tarefas e ativações da cena anterior são canceladas."),
             "control.sequence"=>("Dispara as saídas 1, 2 e 3 nessa ordem.","Inicie som e animação a partir do mesmo evento.","Não aguarda que um ramo termine. Para esperar antes da próxima ação, conecte-as em um mesmo ramo através de Esperar."),
             "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é da simulação: pausar o jogo suspende a espera. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
             "debug.message"=>("Registra uma mensagem no Console durante o teste.","Ligue à ação K para verificar seu primeiro fluxo.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução."),
-            _=>crate::graph::math_help(operation.id).or_else(||crate::graph::movement_help(operation.id)).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
+            _=>crate::graph::game_help(operation.id).or_else(||crate::graph::math_help(operation.id)).or_else(||crate::graph::movement_help(operation.id)).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
         };Topic {operation,purpose,example,caution}
     }).collect())
 }

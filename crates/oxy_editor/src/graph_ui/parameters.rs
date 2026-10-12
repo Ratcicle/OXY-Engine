@@ -1,6 +1,6 @@
 //! Human-readable choices preserve stable identifiers in graph parameters.
 use oxy_core::document::{AssetKind, Id, Project, Scene, Value};
-use oxy_core::graph::{Node, ParamDef, Reference, reference};
+use oxy_core::graph::{Node, OperationDef, ParamDef, Reference, reference};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn value_editor(
@@ -151,6 +151,18 @@ pub(super) fn param_label(operation: &str, param: &ParamDef) -> &'static str {
         ("condition.compare", "operator") => "Comparação",
         _ => param.label,
     }
+}
+
+/// What the picker of a parameter chosen by name (a scene, an audio, a clip, an input action)
+/// shows while the input of the same id is connected, as Mudar de cena's scene with Cena atual
+/// wired in: the input decides the value. `None` for the other parameters.
+pub(super) fn connected_choice(operation: &OperationDef, param: &ParamDef) -> Option<String> {
+    let input = operation.inputs.iter().find(|port| port.id == param.id)?;
+    matches!(
+        reference(operation.id, param),
+        Some(Reference::Scene | Reference::Audio | Reference::Clip | Reference::InputAction)
+    )
+    .then(|| format!("Usando a entrada {}", input.label))
 }
 
 fn number_text(value: f64) -> String {

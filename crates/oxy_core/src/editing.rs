@@ -43,7 +43,7 @@ pub fn duplicate_scene(project: &mut Project, id: &str) -> Result<Id, String> {
 }
 
 /// The logic nodes of the scenes and models that name the scene `id`, as "Scope → Object →
-/// node label".
+/// node label". A parameter that a connected input replaces names nothing: the input decides.
 pub fn scene_references(project: &Project, id: &str) -> Vec<String> {
     crate::input_actions::every_entity(project)
         .flat_map(|(scope, e)| {
@@ -51,9 +51,10 @@ pub fn scene_references(project: &Project, id: &str) -> Vec<String> {
                 .nodes
                 .iter()
                 .filter(move |n| {
-                    graph::node_references(n).any(|(_, reference, value)| {
+                    graph::node_references(n).any(|(param, reference, value)| {
                         reference == Reference::Scene
                             && matches!(value, Value::Text(target) if target == id)
+                            && !e.graph.input_connected(&n.id, param.id)
                     })
                 })
                 .filter_map(move |n| {
@@ -82,6 +83,25 @@ pub fn delete_scene(project: &mut Project, id: &str) -> Result<(), String> {
         return Err("Escolha outra cena inicial do jogo antes de excluir esta cena.".into());
     }
     project.scenes.retain(|s| s.id != id);
+    // What still names the scene is a parameter that a connected input replaces: it goes back
+    // to its default, so the project keeps no broken reference.
+    let holders = project
+        .scenes
+        .iter_mut()
+        .map(|s| &mut s.entities)
+        .chain(project.assets.iter_mut().filter_map(|a| a.model.as_mut()));
+    for n in holders.flatten().flat_map(|e| &mut e.graph.nodes) {
+        let unused: Vec<_> = graph::node_references(n)
+            .filter(|(_, reference, value)| {
+                *reference == Reference::Scene
+                    && matches!(value, Value::Text(target) if target == id)
+            })
+            .map(|(param, ..)| param)
+            .collect();
+        for param in unused {
+            n.params.insert(param.id.into(), param.default.clone());
+        }
+    }
     Ok(())
 }
 

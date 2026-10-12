@@ -2,7 +2,9 @@
 //! The graph stays the persisted contract of `oxy_core::graph`; this module draws and
 //! edits it.
 mod parameters;
-use parameters::{ParameterContext, param_label, param_summary, parameter_editor};
+use parameters::{
+    ParameterContext, connected_choice, param_label, param_summary, parameter_editor,
+};
 pub use parameters::{collision_filter_picker, object_picker, value_editor};
 
 use crate::icons::{self, Icon};
@@ -43,7 +45,7 @@ const STARTERS: [&str; 4] = [
     "event.area_enter",
 ];
 /// Catalog categories open by default; the movement families start collapsed.
-const OPEN_CATEGORIES: [&str; 5] = ["Eventos", "Dados", "Condições", "Ações", "Controle"];
+const OPEN_CATEGORIES: [&str; 6] = ["Eventos", "Dados", "Condições", "Ações", "Jogo", "Controle"];
 
 fn port_color(kind: &PortType) -> Color32 {
     match kind {
@@ -85,6 +87,7 @@ pub fn category_icon(category: &str) -> Icon {
         "Dados" => Icon::Data,
         "Condições" => Icon::Branch,
         "Ações" => Icon::Action,
+        "Jogo" => Icon::Game,
         "Controle" => Icon::Flow,
         "Entrada e tempo" => Icon::Keyboard,
         "Personagem 3D" => Icon::Person,
@@ -1513,15 +1516,27 @@ impl GraphView {
             for (param, source) in op.params.iter().zip(&sources) {
                 widgets::property_row_with(ui, column, param_label(op.id, param), "", |ui| {
                     if let Some(source) = source {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("← {source}"))
-                                    .size(12.)
-                                    .color(theme::TEXT_MUTED),
+                        ui.vertical(|ui| {
+                            // A picker by name stays, disabled, saying the input decides.
+                            if let Some(choice) = connected_choice(op, param) {
+                                ui.add_enabled_ui(false, |ui| {
+                                    egui::ComboBox::from_id_salt((&node_id, param.id, "input"))
+                                        .width(ui.available_width().clamp(80., 240.))
+                                        .selected_text(choice)
+                                        .truncate()
+                                        .show_ui(ui, |_| {});
+                                });
+                            }
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("← {source}"))
+                                        .size(12.)
+                                        .color(theme::TEXT_MUTED),
+                                )
+                                .truncate(),
                             )
-                            .truncate(),
-                        )
-                        .on_hover_text("Uma entrada conectada recebe o valor do outro nó.");
+                            .on_hover_text("Uma entrada conectada recebe o valor do outro nó.");
+                        });
                     } else {
                         ui.vertical(|ui| {
                             let context = ParameterContext {
@@ -1900,7 +1915,7 @@ mod tests {
         ctx
     }
 
-    fn text_center(output: &egui::FullOutput, label: &str) -> Pos2 {
+    fn rendered_text(output: &egui::FullOutput, label: &str) -> Option<Pos2> {
         fn find(shape: &egui::Shape, label: &str) -> Option<Pos2> {
             match shape {
                 egui::Shape::Text(text) if text.galley.text() == label => {
@@ -1914,7 +1929,10 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| find(&shape.shape, label))
-            .unwrap_or_else(|| panic!("UI text not rendered: {label}"))
+    }
+
+    fn text_center(output: &egui::FullOutput, label: &str) -> Pos2 {
+        rendered_text(output, label).unwrap_or_else(|| panic!("UI text not rendered: {label}"))
     }
 
     fn parameter_frame(
@@ -2288,6 +2306,52 @@ mod tests {
     }
 
     #[test]
+    fn a_scene_picker_says_when_its_connected_input_decides() {
+        let ctx = themed();
+        let mut project = Project::new("Reinício");
+        let other = Scene::new("Outra cena", SceneKind::ThreeD);
+        // The parameter still names a scene, which the connected input replaces.
+        let mut change = Node::new("action.scene", [260.0, 15.0]);
+        change
+            .params
+            .insert("scene".into(), Value::Text(other.id.clone()));
+        project.scenes.push(other);
+        let current = Node::new("scene.current", [15.0, 15.0]);
+        let mut graph = Graph {
+            nodes: vec![current.clone(), change.clone()],
+            edges: vec![Edge {
+                from_node: current.id.clone(),
+                from_port: "scene".into(),
+                to_node: change.id.clone(),
+                to_port: "scene".into(),
+            }],
+        };
+        let op = operation("action.scene").unwrap();
+        assert_eq!(
+            connected_choice(op, &op.params[0]).as_deref(),
+            Some("Usando a entrada Cena")
+        );
+        // Parameters without a picker keep showing only where the value comes from.
+        let wait = operation("control.wait").unwrap();
+        assert_eq!(connected_choice(wait, &wait.params[0]), None);
+        let mut view = GraphView {
+            selected: Some(change.id.clone()),
+            ..Default::default()
+        };
+        let output = logic_frame(&ctx, &mut view, &mut graph, &project, vec![]);
+        text_center(&output, "Usando a entrada Cena");
+        text_center(&output, "← Cena atual · Cena");
+        // Neither the inspector nor the node shows the ignored scene.
+        assert!(rendered_text(&output, "Outra cena").is_none());
+        // Disconnected, the scene is picked by name again.
+        graph.edges.clear();
+        let output = logic_frame(&ctx, &mut view, &mut graph, &project, vec![]);
+        text_center(&output, "Outra cena");
+        assert!(rendered_text(&output, "Usando a entrada Cena").is_none());
+        assert_eq!(graph.nodes[1].params, change.params);
+    }
+
+    #[test]
     fn every_operation_is_described_and_listed_once_in_the_catalog() {
         let listed: Vec<_> = categories()
             .iter()
@@ -2300,6 +2364,16 @@ mod tests {
             categories().len(),
             "Each category appears once"
         );
+        for name in &names {
+            assert!(
+                !matches!(category_icon(name), Icon::Logic),
+                "{name} has no icon"
+            );
+        }
+        assert!(OPEN_CATEGORIES.iter().all(|name| names.contains(name)));
+        let order: Vec<_> = categories().iter().map(|(name, _)| *name).collect();
+        let game = order.iter().position(|name| *name == "Jogo").unwrap();
+        assert_eq!(order[game - 1..=game + 1], ["Ações", "Jogo", "Controle"]);
         for op in registry() {
             assert!(
                 !operation_description(op.id).contains("desconhecida"),

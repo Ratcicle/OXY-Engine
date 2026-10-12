@@ -3,8 +3,10 @@
 use crate::document::{Value, new_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+mod game;
 mod math;
 mod movement;
+pub use game::{game_choices, game_help};
 pub use math::{ARITHMETIC, math_choices, math_help};
 pub use movement::{movement_choices, movement_help};
 
@@ -40,6 +42,7 @@ pub fn choices(
 ) -> Option<&'static [(&'static str, &'static str)]> {
     movement_choices(operation, parameter)
         .or_else(|| math_choices(operation, parameter))
+        .or_else(|| game_choices(operation, parameter))
         .or(match (operation, parameter) {
             ("event.input", "mode") => Some(&INPUT_MODES),
             ("action.component", "component") => Some(&COMPONENTS),
@@ -218,7 +221,9 @@ pub fn description(operation: &str) -> &'static str {
         "action.component" => {
             "Ativa ou desativa o componente escolhido do objeto: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel."
         }
-        "action.scene" => "Encerra a cena atual e abre a cena de destino no jogo.",
+        "action.scene" => {
+            "Encerra a cena atual e abre a cena de destino, ou a que a entrada Cena receber: ligada a Cena atual, reinicia a cena."
+        }
         "control.sequence" => "Executa as saídas 1, 2 e 3 nessa ordem.",
         "control.wait" => "Continua após o tempo indicado, sem interromper o jogo ou o editor.",
         "debug.message" => "Exibe uma mensagem no diagnóstico durante a execução.",
@@ -542,10 +547,12 @@ fn build_registry() -> Vec<OperationDef> {
         id: "action.scene",
         label: "Mudar de cena",
         category: "Ações",
-        inputs: exec(),
+        // A connected Cena replaces the parameter, which keeps the scene it names.
+        inputs: vec![port("exec", "Executar", Exec), port("scene", "Cena", Text)],
         outputs: vec![],
         params: vec![text("scene", "Cena de destino", "")],
     });
+    result.extend(game::definitions());
     result.push(OperationDef {
         id: "control.sequence",
         label: "Sequência",
@@ -585,6 +592,13 @@ fn build_registry() -> Vec<OperationDef> {
 impl Graph {
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|node| node.id == id)
+    }
+    /// Whether a connection reaches the input `port` of `node`, which then gives the value in
+    /// place of the parameter of the same id.
+    pub fn input_connected(&self, node: &str, port: &str) -> bool {
+        self.edges
+            .iter()
+            .any(|edge| edge.to_node == node && edge.to_port == port)
     }
     pub fn connect(&mut self, edge: &Edge, object_ids: &HashSet<String>) -> Result<(), String> {
         let mut draft = self.clone();

@@ -1739,3 +1739,222 @@ fn plain_values_follow_the_catalog_type_and_the_rest_is_refused_in_portuguese() 
         assert!(error.ends_with(expected), "{error}");
     }
 }
+
+#[test]
+fn the_current_scene_wires_into_the_scene_change_and_the_catalog_lists_both() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Reiniciar", "key": "R"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle"},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": "Reiniciar"}},
+            {"op": "add_node", "entity": "$1", "operation": "scene.current"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene"},
+            {"op": "connect", "entity": "$1", "from_node": "$2", "from_port": "exec",
+             "to_node": "$4", "to_port": "exec"},
+            {"op": "connect", "entity": "$1", "from_node": "$3", "from_port": "scene",
+             "to_node": "$4", "to_port": "scene"},
+        ])),
+    )
+    .unwrap();
+    // An empty scene parameter is no warning: the input gives the scene.
+    assert!(report.get("warnings").is_none(), "{report}");
+    validate_project(&project).unwrap();
+    let id = |index: &str| {
+        report["created"][index][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (control, current, change) = (id("1"), id("3"), id("4"));
+    let graph = &project
+        .scene(&scene)
+        .unwrap()
+        .entity(&control)
+        .unwrap()
+        .graph;
+    let summary = query::graph_summary(&project, graph);
+    assert!(
+        summary["edges"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("scene.current.scene -> action.scene.scene")),
+        "{summary}"
+    );
+    // The scene is text, and the input takes one connection.
+    for (to_port, refusal) in [
+        ("seconds", "Conexão incompatível: Texto → Número"),
+        ("scene", "já possui uma conexão de dados"),
+    ] {
+        let before = project.clone();
+        let to_node = if to_port == "scene" {
+            change.as_str()
+        } else {
+            "$0"
+        };
+        let error = command::apply(
+            &mut project,
+            &scene,
+            &batch(json!([
+                {"op": "add_node", "entity": control, "operation": "control.wait"},
+                {"op": "connect", "entity": control, "from_node": current, "from_port": "name",
+                 "to_node": to_node, "to_port": to_port},
+            ])),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(refusal), "{error}");
+        assert_eq!(project, before);
+    }
+
+    let catalog = |args: serde_json::Value| query::catalog_query(&args).unwrap();
+    let categories = catalog(json!({}))["categories"].clone();
+    let categories: Vec<&str> = categories
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    let game = categories.iter().position(|c| *c == "Jogo").unwrap();
+    assert_eq!(
+        categories[game - 1..=game + 1],
+        ["Ações", "Jogo", "Controle"],
+        "{categories:?}"
+    );
+    let nodes = catalog(json!({"category": "Jogo"}))["nodes"].clone();
+    let current = nodes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["operation"] == "scene.current")
+        .unwrap();
+    assert_eq!(current["inputs"], json!([]));
+    assert_eq!(
+        current["outputs"],
+        json!([
+            {"id": "scene", "label": "Cena", "type": "text"},
+            {"id": "name", "label": "Nome", "type": "text"},
+        ])
+    );
+    assert_eq!(current["params"], json!([]));
+    let change = catalog(json!({"operations": ["action.scene"]}))["nodes"][0].clone();
+    assert_eq!(
+        change["inputs"],
+        json!([
+            {"id": "exec", "label": "Executar", "type": "exec"},
+            {"id": "scene", "label": "Cena", "type": "text"},
+        ])
+    );
+    assert_eq!(change["params"][0]["id"], "scene");
+    assert_eq!(change["params"][0]["ref"], "scene");
+}
+
+#[test]
+fn a_copied_scene_change_fed_by_its_input_is_not_warned() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // Both name the scene they are in, but the second takes the scene from Cena atual.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Fixo"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": first}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Ligado"},
+            {"op": "add_node", "entity": "$3", "operation": "action.scene",
+             "params": {"scene": first}},
+            {"op": "add_node", "entity": "$3", "operation": "scene.current"},
+            {"op": "connect", "entity": "$3", "from_node": "$5", "from_port": "scene",
+             "to_node": "$4", "to_port": "scene"},
+            {"op": "copy_entities", "ids": ["$1", "$3"], "to_scene": "$0"},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    let copies = &report["created"]["7"];
+    let (fixed, wired) = (
+        copies[0]["id"].as_str().unwrap(),
+        copies[1]["id"].as_str().unwrap(),
+    );
+    assert!(
+        warning.contains(&format!("Fixo ({fixed})"))
+            && !warning.contains(wired)
+            && warning.contains("ou ligue a saída scene de um scene.current à entrada scene"),
+        "{warning}"
+    );
+}
+
+#[test]
+fn a_scene_named_only_where_the_input_decides_can_be_deleted() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // A restart wired to Cena atual whose ignored parameter still names "Fase 2", in a scene
+    // and in a model.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Reinício"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": "$0"}},
+            {"op": "add_node", "entity": "$1", "operation": "scene.current"},
+            {"op": "connect", "entity": "$1", "from_node": "$3", "from_port": "scene",
+             "to_node": "$2", "to_port": "scene"},
+            {"op": "save_model", "entity": "$1", "name": "Reinício salvo"},
+        ])),
+    )
+    .unwrap();
+    let id = |index: &str| {
+        report["created"][index][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (second, owner) = (id("0"), id("1"));
+    assert!(editing::scene_references(&project, &second).is_empty());
+
+    // Unconnected, the same parameter guards the scene.
+    let mut unwired = project.clone();
+    unwired.scenes[0]
+        .entity_mut(&owner)
+        .unwrap()
+        .graph
+        .edges
+        .clear();
+    assert_eq!(
+        editing::scene_references(&unwired, &second),
+        ["Cena 3D → Reinício → Mudar de cena"]
+    );
+    assert!(editing::delete_scene(&mut unwired, &second).is_err());
+
+    command::apply(
+        &mut project,
+        &first,
+        &batch(json!({"op": "delete_scene", "scene": second})),
+    )
+    .unwrap();
+    validate_project(&project).unwrap();
+    assert!(project.scene(&second).is_none());
+    let model = project
+        .assets
+        .iter()
+        .find(|asset| asset.name == "Reinício salvo")
+        .and_then(|asset| asset.model.as_ref())
+        .unwrap();
+    for e in [project.scenes[0].entity(&owner).unwrap(), &model[0]] {
+        let node = e
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.operation == "action.scene")
+            .unwrap();
+        // The parameter goes back to its default; the input still gives the scene.
+        assert_eq!(node.text("scene"), "", "{}", e.name);
+        assert_eq!(e.graph.edges.len(), 1);
+    }
+}

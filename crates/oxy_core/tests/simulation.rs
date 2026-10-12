@@ -3,6 +3,7 @@
 //! interface at the end.
 use oxy_core::{
     character::{CameraRig, CharacterConfig},
+    command,
     document::*,
     graph::{Edge, Node},
     headless::{self, Actions, EventKind, SimulationReport, SimulationRequest},
@@ -281,6 +282,210 @@ fn every_sound_of_a_step_is_kept() {
         json!({"seconds": 0.5, "inputs": [{"type": "press", "at": 0.25, "action": "reiniciar"}]}),
     );
     assert_eq!(report.sounds.len(), 20, "{:?}", report.logs);
+}
+
+/// `beep_then_restart(false)` with the restart wired: Cena atual gives Mudar de cena the scene
+/// to open, and the node names none.
+fn wired_restart() -> Project {
+    let mut project = beep_then_restart(false);
+    let control = &mut project.scenes[0].entities[0];
+    let restart = control.graph.nodes.last_mut().unwrap();
+    restart.params.insert("scene".into(), text(""));
+    let restart = restart.id.clone();
+    let current = node(control, "scene.current", &[]);
+    wire(control, &current, "scene", &restart, "scene");
+    project
+}
+
+#[test]
+fn a_restart_wired_to_the_current_scene_reloads_it() {
+    let project = wired_restart();
+    let scene = project.start_scene.clone();
+    let report = run(
+        &project,
+        json!({"seconds": 2.0, "inputs": [
+            {"type": "press", "at": 0.5, "action": "reiniciar"},
+            {"type": "release", "at": 0.6, "action": "reiniciar"},
+            {"type": "press", "at": 1.5, "action": "reiniciar"},
+        ]}),
+    );
+    let changes: Vec<_> = report
+        .scene_changes
+        .iter()
+        .map(|c| (c.scene.as_str(), c.reload))
+        .collect();
+    assert_eq!(changes, [(scene.as_str(), true), (scene.as_str(), true)]);
+    assert!(
+        near(report.scene_changes[0].time, 0.5) && near(report.scene_changes[1].time, 1.5),
+        "{:?}",
+        report.scene_changes
+    );
+    // The beep right before each restart is still heard, and each change has its action.
+    assert_eq!(report.sounds.len(), 2, "{:?}", report.sounds);
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+    assert!(
+        summary(&report).contains(&("Controle · Mudar de cena".into(), 2)),
+        "{:?}",
+        summary(&report)
+    );
+}
+
+#[test]
+fn a_wired_restart_copied_or_placed_in_another_scene_restarts_that_scene() {
+    let mut project = wired_restart();
+    let first = project.start_scene.clone();
+    let control = project.scenes[0].entities[0].id.clone();
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &command::parse(&json!([
+            {"op": "create_scene", "name": "Segunda", "kind": "2d"},
+            {"op": "create_scene", "name": "Terceira", "kind": "2d"},
+            {"op": "copy_entities", "ids": [control], "to_scene": "$0"},
+            {"op": "save_model", "entity": control, "name": "Reinício"},
+            {"op": "place_model", "model": "$3", "scene": "$1"},
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    // Nothing copied still opens the scene it came from.
+    assert!(report.get("warnings").is_none(), "{report}");
+    let created = |index: &str| {
+        report["created"][index][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    for scene in [first, created("0"), created("1")] {
+        let report = run(
+            &project,
+            json!({"scene": scene, "seconds": 1.0,
+                   "inputs": [{"type": "press", "at": 0.5, "action": "reiniciar"}]}),
+        );
+        let changes: Vec<_> = report
+            .scene_changes
+            .iter()
+            .map(|c| (c.scene.as_str(), c.reload))
+            .collect();
+        assert_eq!(changes, [(scene.as_str(), true)]);
+        assert_eq!(report.final_scene, scene);
+    }
+}
+
+/// Two scenes whose "Saída" opens, on "seguir", the scene its Text attribute "Próxima" names:
+/// the first scene's leads to the second, and the second's back to the first.
+fn next_scene_by_attribute() -> (Project, Id, Id) {
+    let mut project = Project::new("Cenas em sequência");
+    project.input_bindings.insert("seguir".into(), "N".into());
+    project.scenes[0].kind = SceneKind::TwoD;
+    let first = project.scenes[0].id.clone();
+    let second_scene = Scene::new("Segunda", SceneKind::TwoD);
+    let second = second_scene.id.clone();
+    project.scenes.push(second_scene);
+    for (index, next) in [(0, &second), (1, &first)] {
+        let mut exit = Entity::new("Saída", None);
+        exit.attributes.insert("Próxima".into(), text(next));
+        let go = node(&mut exit, "event.input", &[("action", text("seguir"))]);
+        let read = node(
+            &mut exit,
+            "attribute.get",
+            &[("attribute", text("Próxima"))],
+        );
+        let change = node(&mut exit, "action.scene", &[]);
+        link(&mut exit, &go, &change);
+        wire(&mut exit, &read, "value", &change, "scene");
+        project.scenes[index].entities.push(exit);
+    }
+    (project, first, second)
+}
+
+#[test]
+fn a_text_attribute_chooses_the_next_scene() {
+    let (project, first, second) = next_scene_by_attribute();
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": [
+            {"type": "press", "at": 0.5, "action": "seguir"},
+            {"type": "release", "at": 0.6, "action": "seguir"},
+            {"type": "press", "at": 1.0, "action": "seguir"},
+        ]}),
+    );
+    let changes: Vec<_> = report
+        .scene_changes
+        .iter()
+        .map(|c| (c.scene.as_str(), c.name.as_str(), c.reload))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            (second.as_str(), "Segunda", false),
+            (first.as_str(), project.scenes[0].name.as_str(), false)
+        ]
+    );
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+    assert_eq!(report.final_scene, first);
+}
+
+#[test]
+fn a_scene_the_input_does_not_name_stops_the_node_with_a_clear_error() {
+    let (project, first, _) = next_scene_by_attribute();
+    let exit = project.scenes[0].entities[0].id.clone();
+    let press =
+        json!({"seconds": 1.0, "inputs": [{"type": "press", "at": 0.5, "action": "seguir"}]});
+    for (value, expected) in [
+        (
+            text(""),
+            "Cena de destino vazia: a entrada Cena recebeu um texto vazio",
+        ),
+        (
+            text("cena-inexistente"),
+            "Cena de destino não existe: a entrada Cena recebeu \"cena-inexistente\"",
+        ),
+        (
+            text("Segunda"),
+            "a entrada Cena recebeu \"Segunda\", o nome de uma cena; a entrada espera o \
+             identificador (para reiniciar, a saída Cena de Cena atual)",
+        ),
+        (
+            Value::Number(2.),
+            "A entrada Cena precisa receber o identificador de uma cena, em texto",
+        ),
+    ] {
+        let mut project = project.clone();
+        let saida = project.scenes[0].entity_mut(&exit).unwrap();
+        saida.attributes.insert("Próxima".into(), value);
+        let report = run(&project, press.clone());
+        assert!(
+            report.scene_changes.is_empty(),
+            "{:?}",
+            report.scene_changes
+        );
+        assert_eq!(report.final_scene, first);
+        let [log] = report.logs.as_slice() else {
+            panic!("{:?}", report.logs);
+        };
+        assert!(log.text.contains(expected), "{}", log.text);
+        assert_eq!(log.object.as_ref().unwrap().name, "Saída");
+        assert_eq!(log.node.as_ref().unwrap().operation, "action.scene");
+    }
+    // Unconnected, an empty parameter stays an error, as before the input existed.
+    let mut project = project;
+    let saida = project.scenes[0].entity_mut(&exit).unwrap();
+    saida.graph.edges.retain(|edge| edge.to_port != "scene");
+    let report = run(&project, press);
+    assert!(
+        report.scene_changes.is_empty(),
+        "{:?}",
+        report.scene_changes
+    );
+    assert!(
+        report.logs.len() == 1
+            && report.logs[0]
+                .text
+                .starts_with("Cena de destino não existe."),
+        "{:?}",
+        report.logs
+    );
 }
 
 /// "Relógio" runs logic every step and greets at the start; "Quebrado" fails at the start.

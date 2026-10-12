@@ -490,13 +490,19 @@ to another scene, keeping their place in the world and the world path of the ani
 move them, under a scaled or turned parent too; answers the copies' roots. Refused while they \
 point to objects or animations left behind (copy those too). action.scene nodes keep their \
 scene: those opening the scene copied from come back in warnings, each with its copy's ID \
-(set_node_params them)
+(set_node_params them), unless their scene input is connected
 - save_model {entity, name?}: the object and everything under it become a model asset (answers \
 its ID); a name another model has is refused (any case). place_model {model: ID or name, \
 parent?, position?, name?}: places a copy in `scene`, answering every piece, its root first. \
 Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene nodes keep the \
 scene they opened when it was saved, with no warning (a restart saved in level 1 reopens level \
 1): set_node_params them after placing
+- Scene changes without a fixed scene: action.scene's scene input (text) replaces its scene \
+parameter. Restart: connect scene.current.scene -> action.scene.scene, and the logic reopens \
+whatever scene it is in, copied or placed anywhere. Next scene: keep the scene's ID in a Text \
+attribute and connect attribute.get.value -> action.scene.scene. An empty text or one that is \
+not a scene ID stops the node with an error. While the input is connected the parameter is \
+ignored: delete_scene does not refuse over it and empties it
 - set_transform {entity, position?, rotation? (degrees), scale?, move_tracks?}: keyframes that \
 animate the object follow it (a moved platform keeps its path around its new place) when \
 move_tracks is true; by default when its own animations move it. set_visible {entity, visible}; \
@@ -1419,6 +1425,47 @@ mod tests {
             .map(|port| port["id"].as_str().unwrap())
             .collect();
         assert_eq!(inputs, ["value", "min", "max"]);
+    }
+
+    #[test]
+    fn the_catalog_lists_the_current_scene_and_the_scene_input_of_scene_changes() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let brief = catalog(json!({}));
+        assert!(
+            brief["categories"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Jogo"))
+        );
+        let game = catalog(json!({"category": "Jogo"}));
+        let current = game["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["operation"] == "scene.current")
+            .unwrap();
+        let outputs: Vec<(&str, &str)> = current["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| (port["id"].as_str().unwrap(), port["type"].as_str().unwrap()))
+            .collect();
+        assert_eq!(outputs, [("scene", "text"), ("name", "text")]);
+        let change = catalog(json!({"operations": ["action.scene"]}))["nodes"][0].clone();
+        assert_eq!(change["inputs"][1]["id"], "scene");
+        assert_eq!(change["inputs"][1]["type"], "text");
+        assert_eq!(change["params"][0]["ref"], "scene");
+        for text in [
+            "scene.current.scene -> action.scene.scene",
+            "attribute.get.value -> action.scene.scene",
+            "unless their scene input is connected",
+            "delete_scene does not refuse over it and empties it",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
     }
 
     #[test]
