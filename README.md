@@ -4,7 +4,7 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 
 ![Editor da OXY Engine com o Laboratório 3D aberto](assets/screenshots/editor.png)
 
-**Versão atual: 0.5.0.** Veja as novidades no [CHANGELOG](CHANGELOG.md), o uso detalhado no [guia do editor](docs/guia-do-editor.md) e os próximos passos no [roadmap](docs/roadmap.md).
+**Versão atual: 0.5.1.** Veja as novidades no [CHANGELOG](CHANGELOG.md), o uso detalhado no [guia do editor](docs/guia-do-editor.md) e os próximos passos no [roadmap](docs/roadmap.md).
 
 ## O que ela faz
 
@@ -64,7 +64,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ./scripts/test-native.ps1
 # Engine portátil: editor + player + exemplos. -SkipBuild reutiliza o release já compilado.
 ./scripts/package-engine.ps1
-./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.5.0-windows-x64.zip'
+./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.5.1-windows-x64.zip'
 # Exportar um jogo: só runtime e dados, sem depender do editor.
 ./scripts/package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
 ```

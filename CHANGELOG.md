@@ -2,9 +2,9 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
-## Não lançado
+## 0.5.1 — 2026-10-12
 
-- **MCP pronto para o parkour (0.5.1):** um agente constrói e confere o próprio trabalho sem adivinhar.
+- **MCP pronto para o parkour:** um agente constrói e confere o próprio trabalho sem adivinhar.
   - **Simulação:** as entradas programadas sobrevivem à troca e ao reinício de cena, e o relatório marca cada recarga. As ações vêm resumidas por padrão (objeto, ação, quantas vezes, quando), e os logs trazem o objeto e o nó, sem IDs. O relatório tem a velocidade, o chão, a postura e o olhar do personagem; a câmera do jogo; os eventos de pulo, aterrissagem, saída do chão, superfície e áreas; e a interface do jogo no fim. `setup` e `spawn` preparam o teste só na cópia, e `until` para o teste quando algo acontece.
   - **Capturas:** colisores e sensores visíveis, câmera livre e vistas de cima e de lado. As vistas do jogo listam a interface do jogo, que a imagem não desenha.
   - **Consultas compactas:** posições, rotações e escalas no mundo e caixas envolventes; projeção de campos; paginação da árvore da cena; catálogo filtrável; números arredondados. O `oxy_find` responde em páginas.
