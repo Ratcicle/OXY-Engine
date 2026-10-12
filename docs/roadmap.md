@@ -65,16 +65,18 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
    - **Variáveis do jogo** declaradas no projeto (nome, tipo, valor inicial, "Salva entre partidas"), com chave opcional nos nós, por exemplo um valor por fase. Botão "Variáveis do jogo" na barra da Lógica.
    - **Progresso salvo** em `%APPDATA%\OXY Engine\Jogos\<id do projeto>\progresso.json`. No teste do editor, o progresso fica em memória durante a sessão.
    - **Catálogo:** categorias novas **Jogo** (variáveis, progresso, cena atual, pausa, sair) e **Som** ("Reproduzir WAV" vai para Som). Formatar tempo corta as casas e usa ponto (01:23.45).
-   - **Pausa:** numa cena com menu de pausa do jogo, o Esc abre esse menu também no teste do editor.
+   - **Pausa:** a pausa do jogo (menu feito na lógica) e a pausa da engine são separadas e podem coexistir. O Esc abre o menu do jogo quando a cena tem o evento "Ao pausar ou retomar", no player e no teste do editor; perder o foco sempre aciona a pausa da engine, com a janela "Jogo pausado". "Sair do jogo" fecha o player e para o teste do editor.
+   - **Interface:** sem tipo novo; a Imagem de interface sem imagem passa a desenhar um retângulo na Cor do elemento, para fundos de menus.
    - **Áudio:** cpal para o dispositivo, com mixador próprio (loops, transições, canais de música e efeitos).
    - **Plataformas que giram** passam a carregar o personagem (posição e giro), revertendo o contrato da 0.3.0; a câmera em primeira pessoa gira junto.
-   - **Exportação** pelo editor e pelo MCP (`oxy_export`, só num destino que a pessoa indicar).
-   - Protótipo aprovado da Lógica e das Variáveis do jogo: https://claude.ai/artifact/DpTXojrNpJKgH7a31ZUWsM
+   - **Exportação** pelo editor e pelo MCP (`oxy_export`, só num destino que a pessoa indicar). A janela do jogo usa o nome do jogo e o ícone da OXY; Alt+Enter alterna a tela cheia; ícone próprio do jogo fica para depois.
+   - **Agentes:** a barra do teste mostra "Agente jogando" com o botão "Assumir"; salvar ao vivo é uma preferência própria, desligada, que guarda um backup antes.
+   - Protótipos aprovados: Lógica e Variáveis do jogo (https://claude.ai/artifact/DpTXojrNpJKgH7a31ZUWsM); teste, pausa e exportação (https://claude.ai/artifact/RGSjLXekAJGumKdV9YzdMz), com as mudanças acima.
 
    **Ordem de trabalho:**
    1. Fundação: referências dos nós pelo catálogo, estado da partida no runtime e ordem determinística dos eventos (feito).
-   2. Formato 5, matemática e Formatar tempo, colisores e plataformas pela lógica.
-   3. Cena atual e entrada Cena em Mudar de cena, sorteio com semente, IDs estáveis e checagem de replay.
+   2. Formato 5, matemática e Formatar tempo, colisores e plataformas pela lógica (feito).
+   3. Cena atual e entrada Cena em Mudar de cena, Referência de cena, sorteio com semente, IDs estáveis e checagem de replay (feito).
    4. Variáveis do jogo (núcleo, MCP e editor), depois uma primeira fatia do parkour montada pelo MCP.
    5. Progresso salvo, pausa do jogo, mixador e som em loop, transformações pela lógica e plataformas que giram.
    6. MCP: interface do jogo nas capturas, layout automático da lógica, colisores pela forma, cópias no mesmo lote, bot que segue um caminho, teste e salvamento ao vivo.
