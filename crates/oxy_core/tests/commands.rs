@@ -279,6 +279,8 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
         ("event.input", "mode", "segurando"),
         ("action.component", "component", "colisor"),
         ("math.binary", "operator", "^"),
+        ("math.unary", "operator", "log"),
+        ("text.time", "format", "hh:mm"),
         ("condition.compare", "operator", "=>"),
         ("event.character", "kind", "pulo"),
     ] {
@@ -329,7 +331,9 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
         )
     };
     assert!(command::apply(&mut project, &scene, &set("**")).is_err());
-    command::apply(&mut project, &scene, &set("/")).unwrap();
+    for allowed in ["/", "%", "min", "max"] {
+        command::apply(&mut project, &scene, &set(allowed)).unwrap();
+    }
 
     // The editor reads the same lists from the core.
     assert_eq!(
@@ -339,6 +343,10 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
     assert_eq!(
         graph::choices("condition.compare", "operator"),
         Some(&graph::COMPARISONS[..])
+    );
+    assert_eq!(
+        graph::choices("math.binary", "operator"),
+        Some(&graph::ARITHMETIC[..])
     );
     assert!(graph::choices("character.posture", "command").is_some());
     assert!(graph::choices("debug.message", "message").is_none());

@@ -3,7 +3,9 @@
 use crate::document::{Value, new_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+mod math;
 mod movement;
+pub use math::{ARITHMETIC, math_choices, math_help};
 pub use movement::{movement_choices, movement_help};
 
 /// When an input event fires: value stored and label shown.
@@ -20,12 +22,6 @@ pub const COMPONENTS: [(&str, &str); 5] = [
     ("behavior", "Comportamento visual"),
     ("animation", "Reprodução da animação"),
 ];
-pub const ARITHMETIC: [(&str, &str); 4] = [
-    ("+", "Somar · A + B"),
-    ("-", "Subtrair · A − B"),
-    ("*", "Multiplicar · A × B"),
-    ("/", "Dividir · A ÷ B"),
-];
 pub const COMPARISONS: [(&str, &str); 6] = [
     ("==", "Igual · A = B"),
     ("!=", "Diferente · A ≠ B"),
@@ -41,13 +37,14 @@ pub fn choices(
     operation: &str,
     parameter: &str,
 ) -> Option<&'static [(&'static str, &'static str)]> {
-    movement_choices(operation, parameter).or(match (operation, parameter) {
-        ("event.input", "mode") => Some(&INPUT_MODES),
-        ("action.component", "component") => Some(&COMPONENTS),
-        ("math.binary", "operator") => Some(&ARITHMETIC),
-        ("condition.compare", "operator") => Some(&COMPARISONS),
-        _ => None,
-    })
+    movement_choices(operation, parameter)
+        .or_else(|| math_choices(operation, parameter))
+        .or(match (operation, parameter) {
+            ("event.input", "mode") => Some(&INPUT_MODES),
+            ("action.component", "component") => Some(&COMPONENTS),
+            ("condition.compare", "operator") => Some(&COMPARISONS),
+            _ => None,
+        })
 }
 
 /// Checks the fixed choices of `params` given to a node of `operation`.
@@ -205,7 +202,9 @@ pub fn description(operation: &str) -> &'static str {
         "value.object" => "Fornece a referência de um objeto da cena.",
         "attribute.get" => "Lê o atributo escolhido do objeto informado.",
         "attribute.set" => "Altera o atributo escolhido do objeto informado.",
-        "math.binary" => "Soma, subtrai, multiplica ou divide os números A e B.",
+        "math.binary" => {
+            "Soma, subtrai, multiplica, divide, tira o resto ou escolhe o menor ou o maior entre os números A e B."
+        }
         "condition.compare" => "Compara A e B e fornece verdadeiro ou falso.",
         "condition.branch" => "Segue a saída Verdadeiro ou Falso conforme a condição.",
         "action.damage" => {
@@ -410,18 +409,7 @@ fn build_registry() -> Vec<OperationDef> {
         outputs: vec![port("value", "Valor", Any)],
         params: vec![target(), text("attribute", "Atributo", "Vida")],
     });
-    result.push(OperationDef {
-        id: "math.binary",
-        label: "Operação aritmética",
-        category: "Dados",
-        inputs: vec![port("a", "A", Number), port("b", "B", Number)],
-        outputs: vec![port("value", "Resultado", Number)],
-        params: vec![
-            number("a", "A", 0.0),
-            number("b", "B", 1.0),
-            text("operator", "Operação (+ - * /)", "+"),
-        ],
-    });
+    result.extend(math::definitions());
     result.push(OperationDef {
         id: "condition.compare",
         label: "Comparar",

@@ -31,6 +31,7 @@ use crate::prepared_graph::PreparedGraph;
 mod cameras;
 pub use cameras::{CameraDebug, CameraPreview};
 mod characters;
+mod math_nodes;
 mod movement_nodes;
 pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
@@ -878,28 +879,6 @@ impl Runtime {
                         )
                     })
             }
-            "math.binary" => {
-                let a = self
-                    .input_value(graph, node, "a", context, budget, depth + 1)?
-                    .number()
-                    .ok_or("A precisa ser número")?;
-                let b = self
-                    .input_value(graph, node, "b", context, budget, depth + 1)?
-                    .number()
-                    .ok_or("B precisa ser número")?;
-                let value = match node.text("operator") {
-                    "+" => a + b,
-                    "-" => a - b,
-                    "*" => a * b,
-                    "/" if b != 0.0 => a / b,
-                    "/" => return Err("Divisão por zero".into()),
-                    _ => return Err("Operador aritmético inválido".into()),
-                };
-                if !value.is_finite() {
-                    return Err("Resultado aritmético não finito".into());
-                }
-                Ok(Value::Number(value))
-            }
             "condition.compare" => {
                 let a = self.input_value(graph, node, "a", context, budget, depth + 1)?;
                 let b = self.input_value(graph, node, "b", context, budget, depth + 1)?;
@@ -920,7 +899,7 @@ impl Runtime {
                 };
                 Ok(Value::Bool(result))
             }
-            _ => self.movement_data(graph, node, output, context, budget, depth),
+            _ => self.math_data(graph, node, output, context, budget, depth),
         }
     }
     fn outputs(

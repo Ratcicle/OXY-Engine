@@ -148,7 +148,6 @@ fn enum_choice(
 pub(super) fn param_label(operation: &str, param: &ParamDef) -> &'static str {
     match (operation, param.id) {
         ("action.component", "component") => "Componente",
-        ("math.binary", "operator") => "Operação",
         ("condition.compare", "operator") => "Comparação",
         _ => param.label,
     }

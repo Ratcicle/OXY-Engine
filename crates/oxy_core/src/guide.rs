@@ -82,7 +82,6 @@ pub fn topics() -> &'static [Topic] {
             "value.object"=>("Fornece a referência de um objeto da cena.","Escolha o alvo de um efeito de carta.","Se o objeto for removido durante o teste, a referência deixa de resolver; verifique o diagnóstico."),
             "attribute.get"=>("Lê o atributo do objeto informado.","Ligue o visitante de uma área ao alvo e escolha Chave.","Sem alvo conectado ou explícito, lê o responsável. O nome do atributo deve corresponder ao valor que você criou."),
             "attribute.set"=>("Altera um atributo usando o valor fornecido.","Depois de verificar energia suficiente, grave Energia menos Custo.","Nada associa automaticamente Vida à morte. Monte as condições e ações desejadas."),
-            "math.binary"=>("Soma, subtrai, multiplica ou divide A e B.","Energia menos Custo fornece a nova energia.","Dividir por zero gera diagnóstico. Confira a ordem A e B ao subtrair ou dividir."),
             "condition.compare"=>("Compara A e B e fornece um booleano.","Energia maior ou igual a Custo permite jogar a carta.","Comparar fornece dados; conecte o resultado à Condição para escolher um fluxo de execução."),
             "condition.branch"=>("Escolhe somente a saída Verdadeiro ou Falso.","Verdadeiro desconta energia e aplica dano; Falso mostra uma mensagem.","A porta de execução inicia a decisão; conectar somente o dado não executa ações."),
             "action.damage"=>("Subtrai dano de um atributo numérico configurável do alvo.","A área de um golpe aplica 25 ao atributo Vida do objeto que entrou.","Uma vez por ativação e alvo evita repetição do golpe, inclusive após uma espera. Ativações distintas podem causar novo dano."),
@@ -95,7 +94,7 @@ pub fn topics() -> &'static [Topic] {
             "control.sequence"=>("Dispara as saídas 1, 2 e 3 nessa ordem.","Inicie som e animação a partir do mesmo evento.","Não aguarda que um ramo termine. Para esperar antes da próxima ação, conecte-as em um mesmo ramo através de Esperar."),
             "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é da simulação: pausar o jogo suspende a espera. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
             "debug.message"=>("Registra uma mensagem no Console durante o teste.","Ligue à ação K para verificar seu primeiro fluxo.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução."),
-            _=>crate::graph::movement_help(operation.id).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
+            _=>crate::graph::math_help(operation.id).or_else(||crate::graph::movement_help(operation.id)).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
         };Topic {operation,purpose,example,caution}
     }).collect())
 }

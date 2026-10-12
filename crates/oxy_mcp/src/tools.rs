@@ -1353,6 +1353,71 @@ mod tests {
     }
 
     #[test]
+    fn the_catalog_lists_the_math_and_time_nodes_with_their_choices() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let data = catalog(json!({"category": "Dados", "brief": true}));
+        let listed: Vec<&str> = data["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["operation"].as_str().unwrap())
+            .collect();
+        for operation in ["math.binary", "math.unary", "math.clamp", "text.time"] {
+            assert!(listed.contains(&operation), "{operation}: {listed:?}");
+        }
+        let full = catalog(json!({"operations": ["math.", "text.time"]}));
+        let nodes = full["nodes"].as_array().unwrap();
+        let choices = |operation: &str, param: &str| -> Vec<String> {
+            let node = nodes.iter().find(|n| n["operation"] == operation).unwrap();
+            let param = node["params"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == param)
+                .unwrap();
+            param["choices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|choice| choice["value"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            choices("math.binary", "operator"),
+            ["+", "-", "*", "/", "%", "min", "max"]
+        );
+        assert_eq!(
+            choices("math.unary", "operator"),
+            ["floor", "ceil", "round", "trunc", "abs", "sign", "sqrt"]
+        );
+        assert_eq!(
+            choices("text.time", "format"),
+            [
+                "mm:ss.cc",
+                "m:ss.cc",
+                "mm:ss",
+                "ss.cc",
+                "h:mm:ss",
+                "mm:ss.mmm"
+            ]
+        );
+        let clamp = nodes
+            .iter()
+            .find(|n| n["operation"] == "math.clamp")
+            .unwrap();
+        let inputs: Vec<&str> = clamp["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| port["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(inputs, ["value", "min", "max"]);
+    }
+
+    #[test]
     fn reads_on_files_take_their_options_and_reject_bad_ones_first() {
         let dir =
             std::env::temp_dir().join(format!("oxy-mcp-reads-{}", oxy_core::document::new_id()));

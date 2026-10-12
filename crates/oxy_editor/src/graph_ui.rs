@@ -2218,6 +2218,8 @@ mod tests {
             ("event.input", "mode"),
             ("action.component", "component"),
             ("math.binary", "operator"),
+            ("math.unary", "operator"),
+            ("text.time", "format"),
             ("condition.compare", "operator"),
             ("camera.mode", "mode"),
         ] {
