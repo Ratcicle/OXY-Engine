@@ -456,7 +456,9 @@ const APPLY_DESCRIPTION: &str = "Edits the project with a batch of commands, all
 one fails, nothing changes and the error names it as \"Comando N (op, o Kº do lote)\", N being \
 its 0-based index, the one \"$N\" and created use (K = N + 1). Live, the batch is one undo step \
 labelled 'Agente: …' in the editor and the person saves; on files, the project file is saved \
-(the previous version is kept as project.oxy.json.agente.bak). The answer is {created, \
+(the previous version is kept as project.oxy.json.agente.bak; a project from an older OXY is \
+saved in the current format and its original is kept once as \
+project.oxy.json.schema-N.….backup.json). The answer is {created, \
 warnings?}: created maps the index of each command that created something to [{id, name}] \
 (every piece of a preset, its root first; a node's name is its operation; what a later command \
 removed keeps the name it was created with), and warnings lists what the batch left that the \
@@ -547,7 +549,9 @@ editor's Importar does: the source is checked (extension, header, full content, 
 written. Import only files the person asked for. Give exactly one of path and data_base64. \
 Live, it is one undo step 'Agente: Importar \
 recurso' and the person saves (the project needs a folder: refused before its first save); on \
-files, the project file is saved (previous version in project.oxy.json.agente.bak). Answers \
+files, the project file is saved (previous version in project.oxy.json.agente.bak; an older \
+project is saved in the current format and its original is kept once as \
+project.oxy.json.schema-N.….backup.json). Answers \
 {asset, name, kind, path (relative to the project folder), width and height (images), seconds \
 (sounds), applied_to?}. Use the asset ID in set_material texture, an interface element's \
 ui.texture (update_entity) or an action.sound node's asset parameter.";
@@ -1586,6 +1590,8 @@ mod tests {
             "warnings",
             "\"$N.M\"",
             "input_keys",
+            "agente.bak",
+            "schema-N.….backup.json",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }
@@ -2203,6 +2209,7 @@ mod tests {
             "16 MB",
             "Agente: Importar",
             "agente.bak",
+            "schema-N.….backup.json",
             "action.sound",
         ] {
             assert!(IMPORT_DESCRIPTION.contains(text), "{text}");

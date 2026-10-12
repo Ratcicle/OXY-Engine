@@ -75,7 +75,7 @@ O CI (`ci.yml`) verifica formatação, build, testes e Clippy. `portable-windows
 
 ## Compatibilidade
 
-O formato atual dos projetos é **schema_version 4**. Documentos de versões anteriores são migrados em memória sem mudar IDs; ao salvar, um backup dos bytes originais é criado. Versões futuras ou inválidas são recusadas. Os limites de cada ferramenta estão no [guia do editor](docs/guia-do-editor.md#compatibilidade-e-domínio-suportado).
+O formato atual dos projetos é **schema_version 5**, da 0.6. Documentos de versões anteriores são migrados em memória sem mudar IDs; ao salvar, um backup dos bytes originais é criado. Versões futuras ou inválidas são recusadas, e a 0.5.x e versões anteriores não abrem projetos salvos pela 0.6. Os limites de cada ferramenta estão no [guia do editor](docs/guia-do-editor.md#compatibilidade-e-domínio-suportado).
 
 ## Licença
 

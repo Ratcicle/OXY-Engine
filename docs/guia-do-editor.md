@@ -87,7 +87,7 @@ Em **Preferências do editor**, **Permitir agentes de IA** (desligado por padrã
 
 ## Compatibilidade e domínio suportado
 
-O formato atual é **schema_version 4**. Documentos schema 1, 2 e 3 são migrados em memória sem mudar IDs nem sobrescrever ao abrir. Ao salvar convertido, há backup identificado dos bytes originais e escrita segura. Versões futuras/inválidas são recusadas; leitores antigos não devem abrir o novo formato. As três demonstrações continuam em `examples/validacao`; doze receitas em `examples/guia` e a pista em `examples/laboratorio-3d` são projetos comuns.
+O formato atual é **schema_version 5**, da 0.6. Documentos schema 1 a 4 são migrados em memória sem mudar IDs nem sobrescrever ao abrir; na conversão, os nós da lógica recebem, com o valor padrão, os parâmetros criados depois da versão do arquivo. O primeiro salvamento grava o formato 5, com backup identificado dos bytes originais (como `project.oxy.json.schema-4.….backup.json`) e escrita segura. Versões futuras/inválidas são recusadas. A 0.5.x e versões anteriores não abrem projetos salvos pela 0.6; o backup guarda o arquivo como estava antes da conversão. As três demonstrações continuam em `examples/validacao`; doze receitas em `examples/guia` e a pista em `examples/laboratorio-3d` são projetos comuns.
 
 A cápsula de locomoção da 0.3.1 é convertida para o corpo interno, preservando dimensões, filtros, superfície, pés e IDs. Configurações antigas ambíguas são recusadas antes de alterar o documento; o erro identifica o personagem. O Colisor 3D de obstáculos e sensores permanece separado.
 

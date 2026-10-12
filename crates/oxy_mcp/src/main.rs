@@ -339,6 +339,44 @@ mod tests {
     }
 
     #[test]
+    fn file_mode_saves_an_older_project_in_the_current_format_with_both_backups() {
+        use oxy_core::{
+            document::{SCHEMA_VERSION, SceneKind},
+            editing, persistence,
+        };
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Antigo", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let mut older: Json = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        older["schema_version"] = 4.into();
+        let original = serde_json::to_vec_pretty(&older).unwrap();
+        std::fs::write(&file, &original).unwrap();
+        let mut tools = tools::Tools::default();
+        tools
+            .call(
+                "oxy_apply",
+                &json!({"project": dir.display().to_string(), "commands": [
+                    {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Caixa"},
+                ]}),
+            )
+            .unwrap();
+        let saved: Json = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["schema_version"], SCHEMA_VERSION);
+        assert_eq!(
+            std::fs::read(file.with_extension("json.agente.bak")).unwrap(),
+            original
+        );
+        let backup = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.to_string_lossy().contains(".schema-4."))
+            .unwrap();
+        assert_eq!(std::fs::read(backup).unwrap(), original);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn simulation_setup_and_spawn_never_touch_the_project_file() {
         use oxy_core::{document::SceneKind, editing, persistence};
         let simulate = tools::definitions()
