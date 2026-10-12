@@ -630,6 +630,8 @@ impl GraphView {
                 center.y - size.y * 0.5 + step,
             ],
         );
+        // The event never fires before an action is picked; Ler ação de entrada keeps its
+        // default, the jump action.
         if op.id == "event.input" {
             node.params
                 .insert("action".into(), Value::Text(String::new()));
@@ -1888,7 +1890,7 @@ mod tests {
     use oxy_core::{
         animation::Clip,
         document::{Asset, AssetKind, Entity, SceneKind, new_id},
-        graph::ParamDef,
+        graph::{ParamDef, Reference, reference},
     };
 
     /// A context with the editor fonts: nodes and headers use the medium family.
@@ -2062,6 +2064,130 @@ mod tests {
             if operation == "action.animation" {
                 assert_eq!(node.params["target"], Value::Object(Some(owner_id.clone())));
             }
+        }
+    }
+
+    /// Every parameter that names a scene, an audio, a clip or an input action, by the core's
+    /// reference(), is picked by name and never typed, and the node body shows that name.
+    #[test]
+    fn every_reference_parameter_gets_a_picker_and_never_a_text_field() {
+        let mut project = Project::new("Referências do catálogo");
+        let mut owner = Entity::new("Peça animada", None);
+        let clip = Clip::new("Golpe editável");
+        let clip_id = clip.id.clone();
+        owner.clips.push(clip);
+        let owner_id = owner.id.clone();
+        project.scenes[0].entities.push(owner);
+        let next_scene = Scene::new("Outra cena", SceneKind::ThreeD);
+        let next_id = next_scene.id.clone();
+        project.scenes.push(next_scene);
+        let audio_id = new_id();
+        project.assets.push(Asset {
+            id: audio_id.clone(),
+            name: "Som de impacto".into(),
+            path: "assets/impacto.wav".into(),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        let context = ParameterContext {
+            objects: &[],
+            project: &project,
+            scene: &project.scenes[0],
+            owner: Some(&owner_id),
+            target_connected: false,
+            any_type: false,
+        };
+        let text_fields =
+            |ctx: &egui::Context| ctx.data(|data| data.count::<egui::text_edit::TextEditState>());
+        // A plain text parameter shows that the count sees text fields.
+        let (operation, plain) = registry()
+            .iter()
+            .find_map(|op| {
+                let param = op.params.iter().find(|param| {
+                    matches!(param.default, Value::Text(_))
+                        && reference(op.id, param).is_none()
+                        && oxy_core::graph::choices(op.id, param.id).is_none()
+                })?;
+                Some((op.id, param))
+            })
+            .unwrap();
+        let ctx = themed();
+        let mut node = Node::new(operation, [0.0; 2]);
+        parameter_frame(&ctx, &mut node, plain, &context, vec![]);
+        assert!(text_fields(&ctx) > 0);
+        let mut covered = Vec::new();
+        for op in registry() {
+            for param in &op.params {
+                let kind = reference(op.id, param);
+                let (label, expected, summary, missing) = match kind {
+                    Some(Reference::Scene) => (
+                        "Outra cena",
+                        next_id.as_str(),
+                        "Outra cena",
+                        "cena removida",
+                    ),
+                    Some(Reference::Audio) => (
+                        "Som de impacto",
+                        audio_id.as_str(),
+                        "Som de impacto",
+                        "áudio removido",
+                    ),
+                    Some(Reference::Clip) => (
+                        "Peça animada · Golpe editável",
+                        clip_id.as_str(),
+                        "Golpe editável",
+                        "animação removida",
+                    ),
+                    Some(Reference::InputAction) => {
+                        ("Atacar · J", "atacar", "Atacar (J)", "ação removida")
+                    }
+                    _ => continue,
+                };
+                let name = format!("{}.{}", op.id, param.id);
+                let ctx = themed();
+                let mut node = Node::new(op.id, [0.0; 2]);
+                node.params
+                    .insert(param.id.into(), Value::Text(String::new()));
+                let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
+                assert_eq!(text_fields(&ctx), 0, "{name} shows a text field");
+                let button = text_center(&output, "Escolha…");
+                click_parameter(&ctx, &mut node, param, &context, button);
+                let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
+                let choice = text_center(&output, label);
+                click_parameter(&ctx, &mut node, param, &context, choice);
+                assert_eq!(text_fields(&ctx), 0, "{name} shows a text field");
+                assert_eq!(
+                    node.params[param.id],
+                    Value::Text(expected.into()),
+                    "{name}"
+                );
+                if kind == Some(Reference::Clip) && node.params.contains_key("target") {
+                    assert_eq!(node.params["target"], Value::Object(Some(owner_id.clone())));
+                }
+                assert_eq!(param_label(op.id, param), param.label, "{name}");
+                assert_eq!(
+                    param_summary(&node, param, &context).as_deref(),
+                    Some(summary),
+                    "{name}"
+                );
+                node.params
+                    .insert(param.id.into(), Value::Text("removido".into()));
+                assert_eq!(
+                    param_summary(&node, param, &context).as_deref(),
+                    Some(missing),
+                    "{name}"
+                );
+                covered.push(name);
+            }
+        }
+        for known in [
+            "action.scene.scene",
+            "action.sound.asset",
+            "action.animation.clip",
+            "event.input.action",
+            "input.read.action",
+        ] {
+            assert!(covered.iter().any(|name| name == known), "{known}");
         }
     }
 

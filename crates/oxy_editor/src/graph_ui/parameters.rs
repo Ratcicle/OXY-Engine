@@ -1,6 +1,6 @@
 //! Human-readable choices preserve stable identifiers in graph parameters.
 use oxy_core::document::{AssetKind, Id, Project, Scene, Value};
-use oxy_core::graph::{Node, ParamDef};
+use oxy_core::graph::{Node, ParamDef, Reference, reference};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn value_editor(
@@ -147,9 +147,6 @@ fn enum_choice(
 /// some definitions carry in their label.
 pub(super) fn param_label(operation: &str, param: &ParamDef) -> &'static str {
     match (operation, param.id) {
-        ("action.animation", "clip") => "Animação",
-        ("action.sound", "asset") => "Áudio",
-        ("action.scene", "scene") => "Cena de destino",
         ("action.component", "component") => "Componente",
         ("math.binary", "operator") => "Operação",
         ("condition.compare", "operator") => "Comparação",
@@ -208,21 +205,21 @@ pub(super) fn param_summary(
                         .to_owned(),
                 );
             }
-            match (node.operation.as_str(), param.id) {
-                ("action.animation", "clip") => context
+            match reference(&node.operation, param) {
+                Some(Reference::Clip) => context
                     .scene
                     .entities
                     .iter()
                     .flat_map(|entity| entity.clips.iter())
                     .find(|clip| &clip.id == text)
                     .map_or_else(|| "animação removida".into(), |clip| clip.name.clone()),
-                ("action.sound", "asset") => context
+                Some(Reference::Audio) => context
                     .project
                     .assets
                     .iter()
                     .find(|asset| &asset.id == text)
                     .map_or_else(|| "áudio removido".into(), |asset| asset.name.clone()),
-                ("action.scene", "scene") => context
+                Some(Reference::Scene) => context
                     .project
                     .scenes
                     .iter()
@@ -230,16 +227,14 @@ pub(super) fn param_summary(
                     .map_or_else(|| "cena removida".into(), |scene| scene.name.clone()),
                 // The key goes in parentheses: the action name alone stays the name of
                 // its field in Ações de entrada.
-                ("event.input" | "input.read", "action") => {
-                    match context.project.input_bindings.get(text) {
-                        Some(key) => format!(
-                            "{} ({})",
-                            oxy_core::input_actions::label(context.project, text),
-                            crate::labels::key(key)
-                        ),
-                        None => "ação removida".into(),
-                    }
-                }
+                Some(Reference::InputAction) => match context.project.input_bindings.get(text) {
+                    Some(key) => format!(
+                        "{} ({})",
+                        oxy_core::input_actions::label(context.project, text),
+                        crate::labels::key(key)
+                    ),
+                    None => "ação removida".into(),
+                },
                 _ => text.clone(),
             }
         }
@@ -283,8 +278,8 @@ pub(super) fn parameter_editor(
             node.params.insert(param.id.into(), value);
             return;
         }
-        match (node.operation.as_str(), param.id) {
-            ("action.animation", "clip") => {
+        match reference(&node.operation, param) {
+            Some(Reference::Clip) => {
                 let choices: Vec<_> = context
                     .scene
                     .entities
@@ -296,39 +291,41 @@ pub(super) fn parameter_editor(
                     })
                     .collect();
                 let changed = named_choice(ui, selected, &choices, salt.clone());
-                if changed
-                    && !context.target_connected
-                    && let Some(owner) = context
-                        .scene
-                        .entities
-                        .iter()
-                        .find(|entity| entity.clips.iter().any(|clip| clip.id == *selected))
-                {
-                    node.params
-                        .insert("target".into(), Value::Object(Some(owner.id.clone())));
-                }
-                ui.small(if context.target_connected {
-                    "O objeto recebido pela porta deve conter a animação escolhida."
-                } else {
-                    "Escolher uma animação define também o objeto que a contém."
-                });
-                if let Some(target) = target
-                    && !context.target_connected
-                    && !changed
-                    && !selected.is_empty()
-                    && !context
-                        .scene
-                        .entity(target)
-                        .is_some_and(|entity| entity.clips.iter().any(|clip| clip.id == *selected))
-                {
-                    ui.colored_label(
-                        crate::theme::ERROR,
-                        "A animação selecionada não pertence ao objeto atual.",
-                    );
+                // On a node that acts on an object, picking a clip also picks its object.
+                if node.params.contains_key("target") {
+                    if changed
+                        && !context.target_connected
+                        && let Some(owner) = context
+                            .scene
+                            .entities
+                            .iter()
+                            .find(|entity| entity.clips.iter().any(|clip| clip.id == *selected))
+                    {
+                        node.params
+                            .insert("target".into(), Value::Object(Some(owner.id.clone())));
+                    }
+                    ui.small(if context.target_connected {
+                        "O objeto recebido pela porta deve conter a animação escolhida."
+                    } else {
+                        "Escolher uma animação define também o objeto que a contém."
+                    });
+                    if let Some(target) = target
+                        && !context.target_connected
+                        && !changed
+                        && !selected.is_empty()
+                        && !context.scene.entity(target).is_some_and(|entity| {
+                            entity.clips.iter().any(|clip| clip.id == *selected)
+                        })
+                    {
+                        ui.colored_label(
+                            crate::theme::ERROR,
+                            "A animação selecionada não pertence ao objeto atual.",
+                        );
+                    }
                 }
                 specialized = true;
             }
-            ("action.sound", "asset") => {
+            Some(Reference::Audio) => {
                 let choices: Vec<_> = context
                     .project
                     .assets
@@ -340,7 +337,7 @@ pub(super) fn parameter_editor(
                 ui.small("Importe um WAV pela biblioteca para adicioná-lo aqui.");
                 specialized = true;
             }
-            ("action.scene", "scene") => {
+            Some(Reference::Scene) => {
                 let choices: Vec<_> = context
                     .project
                     .scenes
@@ -350,7 +347,7 @@ pub(super) fn parameter_editor(
                 named_choice(ui, selected, &choices, salt.clone());
                 specialized = true;
             }
-            ("event.input" | "input.read", "action") => {
+            Some(Reference::InputAction) => {
                 let choices: Vec<_> = context
                     .project
                     .input_bindings
@@ -369,7 +366,7 @@ pub(super) fn parameter_editor(
                 named_choice(ui, selected, &choices, salt.clone());
                 specialized = true;
             }
-            ("event.animation", "marker") => {
+            Some(Reference::Marker) => {
                 let markers: BTreeSet<_> = context
                     .scene
                     .entities
@@ -396,7 +393,7 @@ pub(super) fn parameter_editor(
                 );
                 specialized = true;
             }
-            (_, "attribute") => {
+            Some(Reference::Attribute) => {
                 let attributes: BTreeMap<_, _> = context
                     .scene
                     .entities
