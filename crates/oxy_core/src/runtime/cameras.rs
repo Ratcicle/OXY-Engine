@@ -14,7 +14,7 @@ pub(super) struct CameraControl {
     pub pitch: f32,
     pub mode: CameraMode,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct RigState {
     yaw: f32,
     pitch: f32,
@@ -27,6 +27,7 @@ struct RigState {
     shown_distance: Option<f32>,
     rotation: Option<Quat>,
 }
+#[derive(Debug)]
 struct Transition {
     from: GameCameraPose,
     elapsed: f32,
@@ -82,6 +83,41 @@ impl Cameras {
             runtime.log(format!("Câmera {id}: {warning}"));
             self.reported.insert(id, warning);
         }
+    }
+    /// What the state digest reads of the cameras (see `Runtime::state_digest`): the active
+    /// one, each rig's control by ID, the pose shown with a transition under way, the view
+    /// aspect it is framed for and the warnings given. Debug text keeps floats exact.
+    pub(super) fn write_digest(
+        &self,
+        scene: &Scene,
+        out: &mut dyn std::fmt::Write,
+    ) -> std::fmt::Result {
+        use super::state_hash::sorted;
+        // Every field, so that a new one is read here or left out on purpose.
+        let Self {
+            // Rebuilt for every presentation, and the editor's preview.
+            debug: _,
+            worlds: _,
+            query_world: _,
+            active_override,
+            states,
+            pose,
+            aspect,
+            reported,
+            key,
+            transition,
+            next_transition,
+        } = self;
+        let mut states: Vec<_> = states.iter().collect();
+        states.sort_by(|a, b| a.0.cmp(b.0));
+        write!(
+            out,
+            "{:?};{active_override:?};{states:?};{pose:?};{transition:?};{next_transition:?};\
+             {key:?};{:?};{:?}",
+            self.active(scene).map(|e| &e.id),
+            aspect.to_bits(),
+            sorted(reported),
+        )
     }
     pub(super) fn active<'a>(&self, scene: &'a Scene) -> Option<&'a crate::document::Entity> {
         self.active_override

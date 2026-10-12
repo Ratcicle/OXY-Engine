@@ -94,6 +94,13 @@ const SEED: &str = "Seed of the random.number draws, an integer from 0 to 900719
 (default 0): the same seed and inputs draw the same numbers, so pass other seeds to see other \
 draws. Copies made by action.spawn get the same IDs whatever the seed. Objects and nodes that \
 setup creates get new IDs on each call, so their draws and the copies they make change.";
+const CHECK_REPLAY: &str = "Runs a second copy of the game alongside, on the same inputs and \
+seed, and compares the two states after every step (a few times the work of a plain run): the \
+answer adds replay {identical, steps (compared), first_difference? {time, object? {id, name}, \
+part}}, part being what differed first (transform, visible, attributes.<name>, document, \
+character, animation, tasks, random…; exists: only one copy has the object; order: both have \
+it, in another scene order). identical: false \
+means the engine did not repeat itself: tell the person, it is not a fault of the logic.";
 const TREE_FIELDS: &str = "Extra per-object fields: world_position, where its position (its \
 pivot) is in the world, which tells distances across parent groups; rotation (local, degrees, as \
 set_transform takes it); scale (local); dimensions (of its shape); visual_bounds, the world box \
@@ -137,6 +144,7 @@ pub fn definitions() -> Json {
     let colliders = json!({"type": "boolean", "description": COLLIDERS});
     let seed = json!({"type": "integer", "minimum": 0, "maximum": random::MAX_SEED,
         "description": SEED});
+    let check_replay = json!({"type": "boolean", "description": CHECK_REPLAY});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
     let offset = json!({"type": "integer", "minimum": 0, "description":
         "Entries skipped (default 0): the answer's next_offset when more follow."});
@@ -378,7 +386,8 @@ pub fn definitions() -> Json {
                    "screenshot": {"type": "boolean", "description":
                        "Also returns the game camera view at the end, as oxy_screenshot view=game."},
                    "colliders": colliders,
-                   "seed": seed}),
+                   "seed": seed,
+                   "check_replay": check_replay}),
             json!(["seconds"])
         ),
         tool(
@@ -399,6 +408,7 @@ pub fn definitions() -> Json {
                    "until": {"type": "object", "description":
                        "As in oxy_simulate: stops the run early; the capture is taken then."},
                    "seed": seed,
+                   "check_replay": check_replay,
                    "colliders": colliders,
                    "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
                        "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
@@ -601,9 +611,12 @@ objects. Inputs use the project's input actions, by ID or name (see oxy_project)
 section without editing the project, use setup (commands on the copy), spawn (place the player) \
 and until (stop when something happens). Draws repeat: random.number takes them from seed \
 (default 0, echoed in the report; vary it to see other draws), and copies made by action.spawn \
-get the same IDs on every run (not those of the logic setup creates: see seed). Lists keep the \
-most recent 300 entries and `truncated` counts what was dropped. Times are seconds rounded to \
-0.1 ms. Set screenshot=true to also get the game camera view at the end.";
+get the same IDs on every run (not those of the logic setup creates: see seed). state_hash, 16 \
+hex digits, fingerprints the game state at the end: equal hashes, same state (the seed counts \
+even with no draws, and so do IDs: objects setup creates change it on each call); check_replay \
+checks that a run repeats itself. \
+Lists keep the most recent 300 entries and `truncated` counts what was dropped. Times are \
+seconds rounded to 0.1 ms. Set screenshot=true to also get the game camera view at the end.";
 
 const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
 the editor viewport as the person sees it, with the collider view when colliders is set. Every \
@@ -615,7 +628,7 @@ looking at target (3D scenes); top and side through orthographic views framing i
 straight down with -Z up and +X right, side level along -Z, or along -X when the framed part is \
 deeper (Z) than wide (X), so the long side spans the image. In 2D scenes top and side both show the scene plane. The text gives the \
 time, the scene and the camera used (position, forward, and fov or the visible width and \
-height in metres).";
+height in metres), and replay when check_replay is set.";
 
 /// Values of oxy_console's origin.
 const CONSOLE_ORIGINS: [&str; 4] = ["editor", "agente", "jogo", "logica"];
@@ -1113,6 +1126,7 @@ impl Tools {
                 .transpose()
                 .map_err(invalid("Semente (seed) inválida"))?
                 .unwrap_or_default(),
+            check_replay: args["check_replay"].as_bool() == Some(true),
         })
     }
 
@@ -1193,6 +1207,9 @@ impl Tools {
         }
         if !report.ui.is_empty() {
             text["ui"] = serde_json::to_value(&report.ui).map_err(|e| e.to_string())?;
+        }
+        if let Some(replay) = &report.replay {
+            text["replay"] = serde_json::to_value(replay).map_err(|e| e.to_string())?;
         }
         let mut output = Output::json(text);
         output.image = Some(image);
@@ -1290,6 +1307,12 @@ mod tests {
         assert_eq!(simulate["seed"]["type"], "integer");
         assert_eq!(simulate["seed"]["maximum"], json!(9007199254740991_u64));
         assert!(SIMULATE_DESCRIPTION.contains("seed") && SCREENSHOT_DESCRIPTION.contains("seed"));
+        assert_eq!(shot["check_replay"], simulate["check_replay"]);
+        assert_eq!(simulate["check_replay"]["type"], "boolean");
+        let replay = simulate["check_replay"]["description"].as_str().unwrap();
+        assert!(replay.contains("first_difference") && replay.contains("part"));
+        assert!(SIMULATE_DESCRIPTION.contains("state_hash"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("check_replay"));
         // Look units and signs, and the same inputs in both tools.
         let inputs = shot["inputs"]["description"].as_str().unwrap();
         assert!(inputs.contains("sensitivity") && inputs.contains("+x turns right"));
@@ -2329,6 +2352,20 @@ mod tests {
         assert_eq!(seeded["seed"], 7);
         assert_eq!(seeded, simulate(json!({"seed": 7})).unwrap());
         assert_ne!(drawn(&seeded), drawn(&default));
+        // The state at the end: the same for the same seed, another for another draw.
+        let hash = |report: &Json| report["state_hash"].as_str().unwrap().to_owned();
+        assert!(
+            hash(&default).len() == 16 && hash(&default).chars().all(|c| c.is_ascii_hexdigit())
+        );
+        assert_ne!(hash(&seeded), hash(&default));
+        assert!(default.get("replay").is_none());
+        let checked = simulate(json!({"seed": 7, "check_replay": true})).unwrap();
+        assert_eq!(
+            checked["replay"],
+            json!({"identical": true, "steps": 6}),
+            "{checked}"
+        );
+        assert_eq!(hash(&checked), hash(&seeded));
         let largest = simulate(json!({"seed": random::MAX_SEED})).unwrap();
         assert_eq!(largest["seed"], json!(9007199254740991_u64));
         for (bad, refusal) in [

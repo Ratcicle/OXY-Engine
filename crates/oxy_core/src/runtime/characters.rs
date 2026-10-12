@@ -36,6 +36,75 @@ pub(super) struct Characters {
     sensor_events: Vec<SensorCrossing>,
 }
 impl Characters {
+    /// What the state digest reads of character `id` (see `Runtime::state_digest`): its state
+    /// and what logic asked of it for the coming step. None when it is not a character.
+    pub(super) fn write_character(
+        &self,
+        id: &str,
+        out: &mut dyn std::fmt::Write,
+    ) -> Option<std::fmt::Result> {
+        let state = self.states.get(id)?;
+        Some(write!(
+            out,
+            "{state:?};{:?};{};{:?};{:?};{};{:?}",
+            self.intents.get(id),
+            self.jumps.contains(id),
+            self.sprints.get(id),
+            self.crouches.get(id),
+            self.slides.contains(id),
+            self.paths.get(id)
+        ))
+    }
+    /// The frame platform `id` moved by in the last step, which carries whoever stands on it.
+    pub(super) fn write_platform(
+        &self,
+        id: &str,
+        out: &mut dyn std::fmt::Write,
+    ) -> Option<std::fmt::Result> {
+        self.platforms.get(id).map(|frame| write!(out, "{frame:?}"))
+    }
+    /// The rest the state digest reads, belonging to no one character: pairs in contact,
+    /// warnings given, and movement records and sensor crossings still to come.
+    pub(super) fn write_shared(&self, out: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        use super::state_hash::sorted;
+        // Every field, so that a new one is read somewhere or left out on purpose.
+        let Self {
+            // Synced from the scene every step.
+            world: _,
+            overrides: _,
+            // Read per object by write_character and write_platform.
+            states: _,
+            intents: _,
+            jumps: _,
+            sprints: _,
+            crouches: _,
+            slides: _,
+            paths: _,
+            platforms: _,
+            sensor_pairs,
+            lateral,
+            released,
+            ignored_tracks,
+            looped,
+            reported,
+            events,
+            records,
+            pending_records,
+            sensor_events,
+            warnings,
+        } = self;
+        write!(
+            out,
+            "{:?};{:?};{:?};{:?};{:?};{:?};{events:?};{records:?};{pending_records:?};\
+             {sensor_events:?};{warnings:?}",
+            sorted(sensor_pairs),
+            sorted(lateral),
+            sorted(released),
+            sorted(ignored_tracks),
+            sorted(looped),
+            sorted(reported),
+        )
+    }
     pub(super) fn presentation_worlds(&self, alpha: f32) -> HashMap<Id, Mat4> {
         let mut worlds = HashMap::with_capacity(self.states.len() + self.platforms.len());
         for (id, platform) in &self.platforms {

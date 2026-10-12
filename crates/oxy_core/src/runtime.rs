@@ -15,7 +15,8 @@
 //!
 //! Anything whose order reaches events, tasks, logs, the recording or physics is walked in
 //! an order the scene fixes (scene order, as `emit` visits owners), a BTreeMap or a Vec,
-//! never in the order of a HashMap or HashSet.
+//! never in the order of a HashMap or HashSet. The state digest (`state_hash.rs`) reads every
+//! field that shapes the steps to come, so a new one goes there too or is left out on purpose.
 use crate::scene_view::{SceneEvaluation, SceneIndex, SceneView};
 use crate::{
     animation::AnimationPlayer,
@@ -35,8 +36,10 @@ mod characters;
 mod game_nodes;
 mod math_nodes;
 mod movement_nodes;
+mod state_hash;
 pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
+pub use state_hash::{StateDifference, StateDigest, StatePart};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;

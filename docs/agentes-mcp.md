@@ -59,7 +59,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, ações de entrada, superfícies físicas, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_import` | Importa uma imagem PNG ou um som WAV como recurso do projeto e, se pedido, já aplica a imagem num objeto |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria ou o que nele pararia com erro |
-| `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo e os objetos observados |
+| `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo, os objetos observados e o resumo do estado no fim; se pedido, confere que o teste se repete |
 | `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
 | `oxy_select`, `oxy_frame` | Ao vivo: seleciona e enquadra objetos para você ver do que o agente fala |
 | `oxy_undo`, `oxy_redo` | Ao vivo: desfaz ou refaz o último passo |
@@ -226,11 +226,7 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
   - a câmera do jogo no fim;
   - a interface do jogo no fim (`ui`), na ordem em que é desenhada: cada elemento com o tipo, se está visível, o retângulo na vista do jogo, o texto como aparece (com o valor ligado, como `Tempo: 12.50`; para ler `Tempo: 01:23.45`, a lógica formata os segundos com o nó `text.time` e grava o texto num atributo de texto ligado ao elemento), o quanto uma barra está cheia (`fraction`) e se um botão dá para clicar. O retângulo é medido numa vista de `width` × `height` pixels (960×540 por padrão). `ui: false` deixa a interface fora do relatório.
 
-**Repetir um teste.** Os sorteios e as cópias criadas durante o jogo se repetem de um pedido para outro.
-- Os sorteios do nó `random.number` (**Sortear número**, em Ações) vêm da semente `seed`, um inteiro de 0 a 9007199254740991 (0 por padrão). O relatório repete a semente em `seed`. Para ver outros sorteios, mude a semente; a mesma semente repete os mesmos números.
-- Cada nó `random.number` tem a sua sequência: acrescentar outro sorteio na lógica não muda os números dos que já existiam. O nó `random.seed` (**Definir semente aleatória**) troca a semente durante o jogo e recomeça todas as sequências.
-- As cópias do `action.spawn` recebem os mesmos IDs a cada execução, qualquer que seja a semente, e cada cópia tem os seus, também nos nós e nas animações dela. Os IDs têm o formato dos outros, então os logs e os eventos continuam trazendo o nome da cópia (`Bala (cópia)`). Na 0.5, as cópias recebiam IDs novos a cada execução.
-- O teste do editor e o jogo exportado começam com uma semente nova a cada partida.
+**Repetir um teste.** O mesmo pedido dá o mesmo jogo; veja [Determinismo](#determinismo).
 
 **Eventos.** Os eventos entram no relatório no momento em que o jogo os dispara. Por isso aparecem mesmo quando a lógica, no mesmo passo, remove a área ou o objeto (moedas, pontos de controle, zonas de morte) ou troca de cena. Uma área, 2D ou 3D, que a lógica desliga (`action.component` com `collider`) não gera saída para quem estava dentro, como no jogo; ao ser religada, quem está dentro entra de novo, numa nova ativação (um `action.damage` de uma vez por ativação acerta outra vez), mesmo que a área tenha sido desligada e religada no mesmo passo.
 
@@ -242,7 +238,7 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 - `oxy_simulate` e `oxy_screenshot` recusam `width` e `height` fora de 16–4096, e o texto do `oxy_screenshot` nas vistas do jogo passou a ser JSON (tempo, cena e câmera usada).
 - `samples` traz exatamente o número pedido; antes, quando os passos não se dividiam igualmente, vinha uma amostra a mais.
 - O `detail` de um `stopped_at` por evento passou de `land de Jogador (Pouso)` para `Jogador aterrissou em Pouso`, e o tipo do evento ganhou o campo `kind`.
-- O relatório traz `seed`, a semente dos sorteios, e as cópias do `action.spawn` mantêm os IDs de uma execução para outra.
+- O relatório traz `seed`, a semente dos sorteios, e `state_hash`, o resumo do estado no fim; as cópias do `action.spawn` mantêm os IDs de uma execução para outra.
 
 **Resumo das ações.**
 - A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça (`actions_filter: {exclude_operations: []}`).
@@ -250,6 +246,19 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 - Objetos com o mesmo nome dividem uma linha, como as cópias criadas durante o jogo (`Bala (cópia)`).
 - `actions: "all"` lista cada ação com o horário e usa o mesmo filtro. Na 0.5.0, a lista completa era o padrão.
 - Cada lista do relatório guarda as 300 entradas mais recentes; no resumo, ficam as 300 linhas com atividade mais recente. `truncated` conta o que ficou de fora.
+
+## Determinismo
+
+O mesmo pedido ao `oxy_simulate` dá o mesmo jogo: os passos têm duração fixa (1/60 s), e o que poderia mudar de uma execução para outra segue regras.
+- **Semente** (`seed`): os sorteios do nó `random.number` (**Sortear número**, em Ações) vêm da semente, um inteiro de 0 a 9007199254740991 (0 por padrão). O relatório repete a semente em `seed`. Para ver outros sorteios, mude a semente; a mesma semente repete os mesmos números.
+  - Cada nó `random.number` tem a sua sequência: acrescentar outro sorteio na lógica não muda os números dos que já existiam. O nó `random.seed` (**Definir semente aleatória**) troca a semente durante o jogo e recomeça todas as sequências.
+  - O teste do editor e o jogo exportado começam com uma semente nova a cada partida.
+- **Cópias:** as cópias do `action.spawn` recebem os mesmos IDs a cada execução, qualquer que seja a semente, e cada cópia tem os seus, também nos nós e nas animações dela. Os IDs têm o formato dos outros, então os logs e os eventos continuam trazendo o nome da cópia (`Bala (cópia)`). Na 0.5, as cópias recebiam IDs novos a cada execução.
+- **Estado no fim** (`state_hash`): 16 dígitos hexadecimais que resumem o estado do jogo no fim do teste: a cena, o tempo, cada objeto (posição, atributos, componentes, lógica), os personagens, a câmera, as tarefas pendentes e os sorteios. Dois testes com o mesmo `state_hash` terminaram no mesmo estado, então basta compará-lo para saber se uma mudança alterou o resultado. A semente também entra na conta: sementes diferentes dão `state_hash` diferentes mesmo sem sorteios. Os IDs também: os objetos que o `setup` cria recebem IDs novos a cada pedido e mudam o `state_hash`.
+- **Conferir a repetição** (`check_replay: true`): roda uma segunda cópia do jogo ao lado da primeira, com as mesmas entradas e a mesma semente, e compara o estado das duas a cada passo. O relatório ganha `replay: {identical, steps, first_difference}`:
+  - `identical` diz se as duas ficaram iguais até o fim, e `steps` quantos passos foram comparados (o início também é comparado, antes do primeiro passo);
+  - `first_difference` diz onde se separaram: o tempo, o objeto (`object`, com o nome) e a parte (`part`): `transform`, `visible`, `attributes.Vida`, `document` (o resto do objeto), `character`, `animation`… ou, sem objeto, `tasks`, `random`, `camera`…; `exists` quando só uma das cópias tem o objeto, e `order` quando as duas o têm, em outra ordem na cena.
+  - Uma diferença é um defeito da engine, não da lógica do jogo. A conferência custa algumas vezes o tempo de um teste comum. O `oxy_screenshot` aceita o mesmo `check_replay` e traz `replay` no texto.
 
 ## Importar imagens e sons com `oxy_import`
 
@@ -290,7 +299,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 ## Limites desta versão
 
 - **Imagem do jogo:** não desenha a interface do jogo (textos, botões e barras). Ela vem descrita em `ui`.
-- **Simulação:** o mesmo pedido repete os sorteios, que a semente (`seed`) decide, e os IDs das cópias do `action.spawn`. Os objetos e nós que o `setup` cria, ao contrário, recebem IDs novos a cada pedido (o relatório os lista em `setup`); por isso os sorteios dos nós `random.number` criados ou copiados no `setup`, e as cópias feitas pelos nós e objetos que ele cria, mudam de um pedido para outro. O teste que você faz no editor não é gravado: com a semente que o `oxy_status` mostra, cada nó `random.number` dá os mesmos números, na mesma ordem, mas as suas entradas e o tempo delas o agente precisa refazer em `inputs`.
+- **Simulação:** o mesmo pedido repete os sorteios, que a semente (`seed`) decide, e os IDs das cópias do `action.spawn`. Os objetos e nós que o `setup` cria, ao contrário, recebem IDs novos a cada pedido (o relatório os lista em `setup`); por isso os sorteios dos nós `random.number` criados ou copiados no `setup`, as cópias feitas pelos nós e objetos que ele cria e o `state_hash` mudam de um pedido para outro. O teste que você faz no editor não é gravado: com a semente que o `oxy_status` mostra, cada nó `random.number` dá os mesmos números, na mesma ordem, mas as suas entradas e o tempo delas o agente precisa refazer em `inputs`.
 - **Importação:** só PNG e WAV, como no editor. Ao desfazer uma importação, a cópia continua na pasta `assets`, como acontece com o **Importar** da Biblioteca.
 - **Teste ao vivo:** o agente vê se você está testando e lê o Console, mas não inicia nem para o seu teste.
 - **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.

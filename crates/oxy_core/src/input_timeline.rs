@@ -15,7 +15,7 @@ pub struct TimedInput {
     pub at: f64,
     pub change: InputChange,
 }
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct InputTimeline {
     queue: VecDeque<TimedInput>,
     held: BTreeSet<String>,

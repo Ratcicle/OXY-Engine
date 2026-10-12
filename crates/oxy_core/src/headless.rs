@@ -1,7 +1,8 @@
 //! Runs a game without a window for a simulated time and reports what happened: scene
 //! changes, logs, logic actions, sounds, movement and area events, the game camera, the game
-//! interface and the state of watched objects. Used by the MCP server so an agent can test a
-//! change, and by tests.
+//! interface, the state of watched objects and a hash of the whole state at the end. Used by
+//! the MCP server so an agent can test a change, and by tests. On request a second copy runs
+//! alongside on the same inputs, to check that the run repeats itself step by step.
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -338,6 +339,10 @@ pub struct SimulationRequest {
     /// repeat the draws.
     #[serde(default)]
     pub seed: u64,
+    /// Runs a second copy of the game alongside, with the same inputs, and compares the two
+    /// states after every step: the report's `replay` says whether they stayed the same.
+    #[serde(default)]
+    pub check_replay: bool,
 }
 fn on() -> bool {
     true
@@ -479,6 +484,30 @@ pub struct StoppedAt {
     /// What happened, in words.
     pub detail: String,
 }
+/// Two copies of the game run side by side on the same inputs, compared after every step.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ReplayCheck {
+    /// The two stayed the same to the end.
+    pub identical: bool,
+    /// Steps compared: all of the run's, or up to the one where the two first differed. The
+    /// start, before the first step, is compared too.
+    pub steps: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_difference: Option<ReplayDifference>,
+}
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ReplayDifference {
+    pub time: f64,
+    /// The object that differed; none for the run's own state (scene, time, input, tasks,
+    /// areas, characters, random, camera).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<Named>,
+    /// What differed, a part of [`crate::runtime::StateDigest`]: transform, attributes.<name>,
+    /// document, character… for an object; exists when only one copy has it, order when both
+    /// have it in another scene order.
+    pub part: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SimulationReport {
     pub seconds: f64,
@@ -486,6 +515,12 @@ pub struct SimulationReport {
     pub final_scene: Id,
     /// The seed the draws came from, the one asked for.
     pub seed: u64,
+    /// [`Runtime::state_hash`] at the end, 16 hex digits: runs that ended in the same state
+    /// have the same one. The seed is part of the state, draws or not.
+    pub state_hash: String,
+    /// The replay check, when asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ReplayCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<StoppedAt>,
     /// What each setup command did, with the IDs it created.
@@ -1412,12 +1447,79 @@ fn event_detail(event: &GameEvent) -> String {
     }
 }
 
+/// The replay check: a second copy of the game, fed the same clicks and inputs in lockstep and
+/// compared after every step until the two differ.
+struct Twin {
+    runtime: Option<Runtime>,
+    check: ReplayCheck,
+}
+impl Twin {
+    fn click(&mut self, entity: &str) {
+        if let Some(twin) = &mut self.runtime {
+            twin.click(entity);
+        }
+    }
+    fn advance(&mut self, frame: &InputFrame) {
+        if let Some(twin) = &mut self.runtime {
+            twin.advance(FIXED_DT, frame);
+        }
+    }
+    /// Compares the copy with the first, both stepped `steps` times. `lookup` names the
+    /// object that differs.
+    fn compare(&mut self, lookup: Lookup, steps: usize) {
+        let Some(twin) = &mut self.runtime else {
+            return;
+        };
+        // The host's queues, taken as the recorder takes the first copy's.
+        if let Some(recording) = &mut twin.recording {
+            *recording = Recording::default();
+        }
+        twin.scene_starts.clear();
+        twin.logs.clear();
+        twin.traces.clear();
+        twin.sounds.clear();
+        self.check.steps = steps;
+        let runtime = lookup.runtime;
+        if runtime.state_hash() == twin.state_hash() {
+            return;
+        }
+        let difference = runtime
+            .state_digest()
+            .first_difference(&twin.state_digest());
+        self.check.identical = false;
+        self.check.first_difference = difference.map(|difference| ReplayDifference {
+            time: rounded(runtime.time),
+            object: difference.object.map(|id| {
+                // An object only the second copy has is named by it.
+                let name = lookup
+                    .name(&id)
+                    .or_else(|| twin.scene().entity(&id).map(|e| e.name.as_str()))
+                    .unwrap_or(&id)
+                    .to_owned();
+                Named { id, name }
+            }),
+            part: difference.part,
+        });
+        self.runtime = None;
+    }
+}
+
 /// Runs `request` on a copy of `project`. Nothing in `project` changes.
 pub fn simulate(
     project: &Project,
     request: &SimulationRequest,
 ) -> Result<SimulationReport, String> {
     run(project, request).map(|(report, _)| report)
+}
+
+/// Runs `request` with the replay check on (see [`SimulationRequest::check_replay`]).
+pub fn check_replay(project: &Project, request: &SimulationRequest) -> Result<ReplayCheck, String> {
+    let request = SimulationRequest {
+        check_replay: true,
+        ..request.clone()
+    };
+    let (report, _) = run(project, &request)?;
+    Ok(report.replay.expect("the replay check was asked for"))
 }
 
 /// `simulate`, also returning the runtime at the end, e.g. to render the game view.
@@ -1579,19 +1681,29 @@ pub fn run(
         sounds: Recent::default(),
         events: Recent::default(),
     };
-    let mut runtime = Runtime::with_options(
-        source,
-        &start,
-        RuntimeOptions {
-            record: true,
-            seed: request.seed,
+    let options = RuntimeOptions {
+        record: true,
+        seed: request.seed,
+    };
+    let mut runtime = Runtime::with_options(source, &start, options.clone())?;
+    let mut twin = Twin {
+        runtime: request
+            .check_replay
+            .then(|| Runtime::with_options(source, &start, options))
+            .transpose()?,
+        check: ReplayCheck {
+            identical: true,
+            steps: 0,
+            first_difference: None,
         },
-    )?;
+    };
     let mut report = SimulationReport {
         seconds: request.seconds,
         start_scene: start.clone(),
         final_scene: start,
         seed: request.seed,
+        state_hash: String::new(),
+        replay: None,
         stopped_at: None,
         setup: applied,
         scene_changes: Vec::new(),
@@ -1620,17 +1732,21 @@ pub fn run(
     let mut clicks = clicks.into_iter().peekable();
     // What the scene start logic did happens at time 0.
     let started = recorder.collect(&mut runtime);
+    twin.compare(recorder.lookup(&runtime), 0);
     let mut stopped = stop.as_ref().and_then(|s| s.check(&runtime, &started));
     if stopped.is_none() {
         for step in 1..=steps {
             while clicks.peek().is_some_and(|(at, _)| *at <= runtime.time) {
                 let (_, entity) = clicks.next().unwrap();
                 runtime.click(&entity);
+                twin.click(&entity);
             }
             let mut frame = InputFrame::default();
             timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
             runtime.advance(FIXED_DT, &frame);
+            twin.advance(&frame);
             let happened = recorder.collect(&mut runtime);
+            twin.compare(recorder.lookup(&runtime), step);
             stopped = stop.as_ref().and_then(|s| s.check(&runtime, &happened));
             if stopped.is_some() {
                 break;
@@ -1669,6 +1785,8 @@ pub fn run(
     }
     recorder.finish(&mut report);
     report.final_scene = runtime.scene_id().to_owned();
+    report.state_hash = format!("{:016x}", runtime.state_hash());
+    report.replay = request.check_replay.then_some(twin.check);
     Ok((report, runtime))
 }
 
@@ -1781,6 +1899,115 @@ mod tests {
         );
         assert!(!lines.iter().any(|l| l.text == "Objeto 1 · x"));
         assert_eq!(lines.last().unwrap().text, "Novo · x");
+    }
+
+    #[test]
+    fn the_replay_check_names_where_the_copies_part_and_stops_there() {
+        use crate::graph::Node;
+        // A Dado that writes a draw into its Valor every step.
+        let mut project = Project::new("Dados");
+        let mut die = Entity::new("Dado", None);
+        die.attributes.insert("Valor".into(), Value::Number(0.));
+        die.attributes.insert("Lado".into(), Value::Number(0.));
+        let step = Node::new("event.step", [0.; 2]);
+        let draw = Node::new("random.number", [0.; 2]);
+        let mut keep = Node::new("attribute.set", [0.; 2]);
+        keep.params
+            .insert("attribute".into(), Value::Text("Valor".into()));
+        let edge = |from: &Node, from_port: &str, to: &Node, to_port: &str| Edge {
+            from_node: from.id.clone(),
+            from_port: from_port.into(),
+            to_node: to.id.clone(),
+            to_port: to_port.into(),
+        };
+        die.graph.edges = vec![
+            edge(&step, "exec", &draw, "exec"),
+            edge(&draw, "exec", &keep, "exec"),
+            edge(&draw, "value", &keep, "value"),
+        ];
+        die.graph.nodes = vec![step, draw, keep];
+        let die_id = die.id.clone();
+        project.scenes[0].entities.push(die);
+        let start = |seed| {
+            let options = RuntimeOptions { record: true, seed };
+            Runtime::with_options(&project, &project.start_scene, options).unwrap()
+        };
+        let twin = |seed| Twin {
+            runtime: Some(start(seed)),
+            check: ReplayCheck {
+                identical: true,
+                steps: 0,
+                first_difference: None,
+            },
+        };
+        let spawned = HashMap::new();
+        let compare = |twin: &mut Twin, runtime: &Runtime, steps| {
+            let lookup = Lookup {
+                runtime,
+                source: &project,
+                spawned: &spawned,
+            };
+            twin.compare(lookup, steps);
+        };
+        let frame = InputFrame::default();
+
+        // Another seed: the draws part first, before the attribute they write.
+        let mut main = start(0);
+        let mut other = twin(1);
+        main.advance(FIXED_DT, &frame);
+        other.advance(&frame);
+        compare(&mut other, &main, 1);
+        let random = ReplayDifference {
+            time: 0.0167,
+            object: None,
+            part: "random".into(),
+        };
+        assert_eq!(
+            other.check,
+            ReplayCheck {
+                identical: false,
+                steps: 1,
+                first_difference: Some(random),
+            }
+        );
+        assert!(other.runtime.is_none());
+
+        // The same seed, with an attribute the logic leaves alone changed in the copy only:
+        // the object by name, and the part.
+        let mut main = start(0);
+        let mut copy = twin(0);
+        main.advance(FIXED_DT, &frame);
+        copy.advance(&frame);
+        compare(&mut copy, &main, 1);
+        assert_eq!((copy.check.identical, copy.check.steps), (true, 1));
+        main.advance(FIXED_DT, &frame);
+        copy.advance(&frame);
+        let changed = copy.runtime.as_mut().unwrap().scene_mut();
+        changed
+            .entity_mut(&die_id)
+            .unwrap()
+            .attributes
+            .insert("Lado".into(), Value::Number(1.));
+        compare(&mut copy, &main, 2);
+        let parted = ReplayCheck {
+            identical: false,
+            steps: 2,
+            first_difference: Some(ReplayDifference {
+                time: 0.0333,
+                object: Some(Named {
+                    id: die_id,
+                    name: "Dado".into(),
+                }),
+                part: "attributes.Lado".into(),
+            }),
+        };
+        assert_eq!(copy.check, parted);
+        assert!(copy.runtime.is_none());
+        // Nothing more is compared after the first difference.
+        main.advance(FIXED_DT, &frame);
+        copy.advance(&frame);
+        compare(&mut copy, &main, 3);
+        assert_eq!(copy.check, parted);
     }
 
     #[test]

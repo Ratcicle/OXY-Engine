@@ -14,16 +14,36 @@ fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// FNV-1a fed piece by piece, for data too long to gather first, such as the runtime's state
+/// (see `Runtime::state_hash`). [`hash`] is one with the parts' lengths written in.
+#[derive(Clone, Debug)]
+pub struct Hasher(u64);
+impl Default for Hasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+impl Hasher {
+    pub fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    /// The hash of everything written so far, through the SplitMix64 finalizer.
+    pub fn finish(&self) -> u64 {
+        mix(self.0)
+    }
+}
+
 /// A hash of `parts`: FNV-1a over each part after its length, so ("ab", "c") and ("a", "bc")
 /// differ, then the SplitMix64 finalizer.
 pub fn hash(parts: &[&[u8]]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut hasher = Hasher::default();
     for part in parts {
-        for byte in (part.len() as u64).to_le_bytes().iter().chain(*part) {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        hasher.write(&(part.len() as u64).to_le_bytes());
+        hasher.write(part);
     }
-    mix(hash)
+    hasher.finish()
 }
 
 /// SplitMix64: a small generator whose numbers depend only on its seed.
@@ -121,6 +141,26 @@ mod tests {
         assert!(wide.is_finite() && wide < f64::MAX);
         // The top of the range is never drawn, even when the span rounds up to it.
         assert!(rng.range(1e16, 1e16 + 2.) < 1e16 + 2.);
+    }
+
+    #[test]
+    fn a_hasher_fed_in_pieces_hashes_as_one_write() {
+        let mut whole = Hasher::default();
+        whole.write(b"oxy.state");
+        let mut pieces = Hasher::default();
+        for piece in [&b"oxy"[..], b".", b"", b"state"] {
+            pieces.write(piece);
+        }
+        assert_eq!(whole.finish(), pieces.finish());
+        // `hash` is a hasher given each part's length first. Fixed, as state hashes compared
+        // across processes and versions depend on it.
+        let mut parts = Hasher::default();
+        for part in [&b"ab"[..], b"c"] {
+            parts.write(&(part.len() as u64).to_le_bytes());
+            parts.write(part);
+        }
+        assert_eq!(parts.finish(), hash(&[b"ab", b"c"]));
+        assert_eq!(hash(&[b"oxy"]), 0x94aa_51c5_8d1e_62c8);
     }
 
     #[test]
