@@ -48,13 +48,13 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | Ferramenta | O que faz |
 | --- | --- |
 | `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer |
-| `oxy_project` | Cenas, recursos e ações de entrada |
+| `oxy_project` | Cenas, recursos, ações de entrada (com a tecla e quem usa cada uma), superfícies físicas e nomes dos grupos de colisão |
 | `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
 | `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
-| `oxy_catalog` | Nós da lógica (resumidos, ou com portas e parâmetros para os nós pedidos), componentes, formas e presets |
-| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações…) |
-| `oxy_validate` | Valida o projeto com as regras de salvar |
+| `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets e as teclas que as ações de entrada aceitam |
+| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, atributos, nós, ligações, ações de entrada, superfícies físicas…) |
+| `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo e os objetos observados |
 | `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
 | `oxy_select`, `oxy_frame` | Ao vivo: seleciona e enquadra objetos para você ver do que o agente fala |
@@ -91,23 +91,66 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 
 **Busca** (`oxy_find`): devolve `{objects, total}` e `next_offset` quando há mais, com `offset` e `limit` (50 por padrão).
 
-**Catálogo** (`oxy_catalog`): sem opções, os nós vêm resumidos (operação, nome, categoria e descrição), com a lista de categorias em `categories`. Para montar a lógica, o agente pede os nós que vai usar com `operations` (por exemplo `["event.input", "character."]`, em que o ponto final pega todas as operações que começam assim) ou `category`, e recebe só esses nós, com portas e parâmetros. Com os dois, as operações pedidas precisam ser da categoria; uma que existe em outra categoria é recusada com o nome da categoria dela, e não como desconhecida. `brief` escolhe o formato, e `offset` e `limit` leem os nós por partes.
+**Catálogo** (`oxy_catalog`): sem opções, os nós vêm resumidos (operação, nome, categoria e descrição), com a lista de categorias em `categories`. Para montar a lógica, o agente pede os nós que vai usar com `operations` (por exemplo `["event.input", "character."]`, em que o ponto final pega todas as operações que começam assim) ou `category`, e recebe só esses nós, com portas e parâmetros. Um parâmetro de valores fixos (o modo de uma ação de entrada, o operador de uma conta, o tipo de evento do personagem…) traz a lista em `choices`, com o valor e o nome de cada opção, e `ref` diz o que um parâmetro aponta: uma cena, um áudio, uma animação, um objeto, um atributo, uma ação de entrada, uma superfície ou um marcador. Sem opções, o catálogo traz também as teclas que as ações de entrada aceitam (`input_keys`) e os presets de superfície. Com os dois, as operações pedidas precisam ser da categoria; uma que existe em outra categoria é recusada com o nome da categoria dela, e não como desconhecida. `brief` escolhe o formato, e `offset` e `limit` leem os nós por partes.
 
-**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções; e o `oxy_scene` devolve até 100 objetos por vez, contando os filhos.
+**Projeto** (`oxy_project`):
+- `input_actions`: cada ação de entrada com `id`, `name`, `key` e `used_by`, os objetos que a usam (`{entity, name, role}`, em que `role` é o componente, como `character` ou `controller2d`, ou a operação do nó, como `event.input`).
+- `surfaces`: cada superfície física com os valores dela (`friction`, `traction`, `speed_multiplier`, `conveyor`, `conveyor_space`) e `used_by`, como nas ações (`role` `collider3d`, `character`, a operação do nó ou `attribute <nome>`).
+- `used_by` lista até 10 objetos; quando há mais, `used_by_total` diz quantos são.
+- `collision_groups`: os nomes dos grupos de colisão, `{bit, name}`, em que `bit` é o bit da categoria e da máscara dos colisores. Vêm os três grupos com nome padrão e os que o projeto nomeou; os outros se chamam `Grupo N`, com N = bit + 1. Por enquanto só se leem; os nomes se mudam no editor.
+
+**Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções; o `oxy_scene` devolve até 100 objetos por vez, contando os filhos; e o `oxy_project` lista as ações de entrada como `[{id, name, key, used_by}]`, em vez de um mapa de ID para tecla.
+
+## Comandos do `oxy_apply`
+
+**Resposta.** O lote responde `{created, warnings}`:
+- `created` liga o índice de cada comando que criou algo (contando do 0) aos IDs criados, na ordem, com o nome de cada um: `{"0": [{"id": "…", "name": "Porta"}]}`. O nome de um nó é a operação dele. Os comandos que não criam nada ficam de fora.
+- `warnings` só aparece quando o lote deixa algo que o jogo vai ignorar sem dar erro: um nó que usa uma ação de entrada que o projeto não tem, uma tecla que o jogo não lê ou um parâmetro com valor fora das opções. Vêm só os avisos que o lote criou; o `oxy_validate` lista todos os do projeto.
+- Nos arquivos, a resposta traz também `saved` e `previous_version`.
+
+**IDs criados no mesmo lote.** Num comando, um texto que é inteiro `"$N"` vale o primeiro ID criado pelo comando N, e `"$N.M"`, o M-ésimo (os dois contam do 0):
+- Um preset devolve todas as peças, a raiz primeiro: com o comando 0 criando um jogador em primeira pessoa, `"$0"` é o jogador e `"$0.2"`, a câmera.
+- `duplicate_entities` devolve uma cópia por objeto, na ordem: `"$3.1"` é a segunda cópia.
+- Os marcadores valem em qualquer lugar do comando, inclusive dentro do `patch` do `update_entity` e dos `params` dos nós.
+- Só o texto inteiro conta: `"$10 de bônus"` continua sendo texto. Para escrever o próprio texto `"$5"`, use `"$$5"`.
+- Um marcador que não aponta para um ID criado antes no lote é recusado, com a dica do `$$`.
+
+**Valores fixos.** `add_node` e `set_node_params` recusam valores fora das opções do parâmetro, como o modo `segurando` numa ação de entrada, e a mensagem lista as opções. Antes, o valor era aceito e o nó nunca disparava. O editor usa as mesmas listas.
+
+**Ações de entrada.**
+- `create_input_action {name, key}` cria uma ação. O ID dela é o que os nós e o `oxy_simulate` usam (`"$N"` no mesmo lote).
+- `rename_input_action {action, name}`, `set_input_key {action, key}` e `delete_input_action {action}` aceitam o ID ou o nome da ação.
+- A tecla é uma das de `input_keys` no catálogo: letras, números, as outras teclas do teclado, F1 a F35, Shift, os botões do mouse e a roda. Outras grafias que o jogo entende viram o nome do catálogo (`a` vira `A`, `ArrowUp` vira `Up`). Escape (pausa o jogo e libera o mouse) e F3 (diagnóstico do player) são recusadas.
+- Duas ações não podem ter o mesmo nome, sem diferenciar maiúsculas.
+- Excluir uma ação em uso é recusado, com a lista de quem a usa.
+
+**Superfícies físicas.**
+- `create_surface` cria uma superfície a partir de um preset (`common`, `ice`, `mud` ou `conveyor`; `common` por padrão) e aplica os valores dados: `name`, `friction`, `traction`, `speed_multiplier`, `conveyor` (velocidade da esteira em m/s) e `conveyor_space` (`World` ou `Local`).
+- `update_surface {surface, …}` muda só os valores dados. Valores negativos ou não finitos são recusados.
+- `delete_surface {surface}` é recusado enquanto um colisor, personagem, atributo ou nó usa a superfície.
+- Para aplicar uma superfície, use o `update_entity` em `physics3d.surface` ou `character3d.body.surface`.
+
+Os comandos de ações de entrada e de superfícies valem para o projeto todo e, como os de cena, não recebem `scene`.
+
+**Mudanças em relação à 0.5.0:**
+- O `oxy_apply` responde `{created, warnings}` em vez de `{applied: [{op, created}]}`.
+- Os marcadores também valem dentro do `patch`. Um texto que é inteiro `"$N"` passou a ser marcador também no primeiro comando do lote, onde é recusado; para o texto em si, use `"$$N"`.
+- Um preset devolve todas as peças, não só a raiz.
+- `add_node` e `set_node_params` recusam valores fora das opções.
 
 ## Testes com `oxy_simulate`
 
 O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no editor nem no histórico.
 
 - **Entradas programadas** (`inputs`): ações de entrada com horário. Continuam valendo depois de uma troca de cena ou de reiniciar a cena, e uma tecla segurada continua segurada.
-  - `press` e `release` usam os nomes das ações de entrada do projeto.
+  - `press` e `release` usam o ID ou o nome de uma ação de entrada do projeto (ou `"$N"` de uma ação criada no `setup`). Uma ação que o projeto não tem é recusada, com a lista das ações; na 0.5.0, ela era apertada em vão.
   - `movement` é a intenção de andar, `[direita, frente]` de -1 a 1, e vale até o próximo `movement`.
   - `look` é um movimento do mouse, aplicado uma vez: cada unidade gira a câmera pela sensibilidade dela (no controle de câmera, 0,12° por padrão). `x` positivo vira para a direita e `y` positivo olha para baixo, a menos que a câmera inverta o eixo.
   - `click` clica num objeto ou botão da interface.
 - **Preparar o teste** (`setup` e `spawn`):
   - `setup` aplica comandos do `oxy_apply` só na cópia, por exemplo um objeto de teste ou outro valor de atributo. Os comandos sem cena usam a cena em que o teste começa: a de `scene` ou, sem ela, a cena inicial do projeto. Ao vivo também é assim; o `oxy_apply`, ao contrário, usa a cena aberta no editor.
   - `spawn` coloca um objeto, como o jogador, numa posição do mundo (e virado para um lado) antes de começar.
-  - Os IDs criados no `setup` valem como `"$0"`, `"$1"`… no resto do pedido, e o relatório os lista em `setup`.
+  - Os IDs criados no `setup` valem como `"$0"`, `"$1"`… (`"$0.1"` para o segundo ID do comando 0) no resto do pedido, e o relatório os lista em `setup`.
 - **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, um objeto que some ou um evento (pulo, aterrissagem, entrada numa área…). `seconds` vira o limite, e `stopped_at` diz o que parou o teste e quando. O valor comparado precisa ser do tipo do atributo; num atributo de objeto ou de superfície, o texto é o ID (vale `"$0"`).
 - **Objetos observados** (`watch`): posição, rotação e escala no mundo, visibilidade e atributos (todos, alguns ou nenhum). Para personagens 3D, também velocidade, chão, postura, apoio e direção do olhar. As amostras (`samples`) ficam espaçadas ao longo de `seconds`, então um teste que o `until` para cedo traz menos amostras.
 - **Relatório:**

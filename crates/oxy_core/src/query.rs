@@ -7,8 +7,9 @@ use crate::{
     collision::Aabb,
     document::*,
     graph::{self, Graph, Node, PortType},
+    input_actions,
     scene_view::SceneView,
-    spatial,
+    spatial, surface,
 };
 use glam::{EulerRot, Quat, Vec3};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -126,7 +127,54 @@ impl Page {
     }
 }
 
+/// Uses of an input action or surface listed in the summary; more are only counted.
+const USES_LISTED: usize = 10;
+
+/// `used_by` with the first uses, plus `used_by_total` when some are left out.
+fn uses_json(entry: &mut Json, uses: Vec<input_actions::Use>) {
+    if uses.len() > USES_LISTED {
+        entry["used_by_total"] = json!(uses.len());
+    }
+    entry["used_by"] = json!(uses.into_iter().take(USES_LISTED).collect::<Vec<_>>());
+}
+
 pub fn project_summary(project: &Project) -> Json {
+    let actions: Vec<Json> = project
+        .input_bindings
+        .iter()
+        .map(|(id, key)| {
+            let mut action = json!({
+                "id": id,
+                "name": input_actions::label(project, id),
+                "key": key,
+            });
+            uses_json(&mut action, input_actions::uses(project, id));
+            action
+        })
+        .collect();
+    let surfaces: Vec<Json> = project
+        .surfaces
+        .iter()
+        .map(|s| {
+            let mut surface = json!({
+                "id": s.id,
+                "name": s.name,
+                "friction": s.friction,
+                "traction": s.traction,
+                "speed_multiplier": s.speed_multiplier,
+                "conveyor": s.conveyor,
+                "conveyor_space": s.conveyor_space,
+            });
+            uses_json(&mut surface, surface::uses(project, &s.id));
+            surface
+        })
+        .collect();
+    // The three groups named by default and the ones the project names; the others read
+    // "Grupo N", N being the bit plus 1.
+    let groups: Vec<Json> = (0..32_u8)
+        .filter(|bit| *bit < 3 || project.collision_groups.contains_key(bit))
+        .map(|bit| json!({"bit": bit, "name": project.collision_group_label(bit)}))
+        .collect();
     json!({
         "name": project.name,
         "schema_version": project.schema_version,
@@ -142,8 +190,28 @@ pub fn project_summary(project: &Project) -> Json {
             "name": a.name,
             "kind": format!("{:?}", a.kind),
         })).collect::<Vec<_>>(),
-        "input_actions": project.input_bindings,
+        "input_actions": actions,
+        "surfaces": surfaces,
+        "collision_groups": groups,
     })
+}
+
+/// The project checked with the rules of saving: `valid`, the `error` that blocks saving when
+/// there is one, and `warnings` when the game would ignore something (see
+/// [`crate::command::warnings`]).
+pub fn validation(project: &Project) -> Json {
+    let mut result = match validate_project(project) {
+        Ok(()) => json!({"valid": true}),
+        Err(error) => json!({"valid": false, "error": error}),
+    };
+    let warnings: Vec<String> = crate::command::warnings(project)
+        .into_iter()
+        .map(|w| w.message)
+        .collect();
+    if !warnings.is_empty() {
+        result["warnings"] = json!(warnings);
+    }
+    result
 }
 
 /// What `scene_tree` adds to each object, besides its ID, name, kind, local position, shape,
@@ -861,9 +929,19 @@ pub fn catalog() -> Json {
                 "outputs": op.outputs.iter().map(|p| json!({
                     "id": p.id, "label": p.label, "type": port_type(p.kind),
                 })).collect::<Vec<_>>(),
-                "params": op.params.iter().map(|p| json!({
-                    "id": p.id, "label": p.label, "default": p.default,
-                })).collect::<Vec<_>>(),
+                "params": op.params.iter().map(|p| {
+                    let mut param = json!({"id": p.id, "label": p.label, "default": p.default});
+                    if let Some(choices) = graph::choices(op.id, p.id) {
+                        param["choices"] = choices
+                            .iter()
+                            .map(|(value, label)| json!({"value": value, "label": label}))
+                            .collect();
+                    }
+                    if let Some(reference) = graph::reference(op.id, p) {
+                        param["ref"] = json!(reference);
+                    }
+                    param
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -886,6 +964,8 @@ pub fn catalog() -> Json {
         },
         "ui_elements": ["Text", "Image", "Button", "Bar"],
         "presets": ["first_person", "third_person", "platform"],
+        "surface_presets": ["common", "ice", "mud", "conveyor"],
+        "input_keys": input_actions::keys().collect::<Vec<_>>(),
         "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}.",
     })
 }

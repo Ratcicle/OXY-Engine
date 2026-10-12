@@ -14,6 +14,7 @@ use crate::{
     document::*,
     game_ui::{self, UiState},
     graph::{self, Edge, Graph, PortType},
+    input_actions,
     input_timeline::{InputChange, InputTimeline, TimedInput},
     runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime},
 };
@@ -35,7 +36,8 @@ pub const VIEW_SIZE: [u32; 2] = [960, 540];
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputEvent {
-    /// Starts holding an input action (as named in the project's input actions).
+    /// Starts holding an input action of the project: its ID, its name or `"$N"` from setup.
+    /// Actions the project does not have are refused.
     Press {
         at: f64,
         action: String,
@@ -501,24 +503,15 @@ fn rounded(time: f64) -> f64 {
     (time * 10_000.).round() / 10_000.
 }
 
-/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th; other
-/// text is an ID as it is.
+/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th, and
+/// `"$$N"` for the text "$N" (see [`command::Placeholder`]); other text is an ID as it is.
 pub fn resolve(id: &str, applied: &[Applied]) -> Result<Id, String> {
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    let Some(rest) = id.strip_prefix('$') else {
-        return Ok(id.into());
-    };
-    let (command, nth) = rest.split_once('.').unwrap_or((rest, "0"));
-    if !digits(command) || !digits(nth) {
-        return Ok(id.into());
+    match command::Placeholder::parse(id) {
+        None => Ok(id.into()),
+        Some(placeholder) => placeholder.resolve(applied).ok_or_else(|| {
+            format!("\"{id}\" não se refere a um ID criado pela preparação (setup)")
+        }),
     }
-    command
-        .parse::<usize>()
-        .ok()
-        .zip(nth.parse::<usize>().ok())
-        .and_then(|(command, nth)| applied.get(command)?.created.get(nth))
-        .cloned()
-        .ok_or_else(|| format!("\"{id}\" não se refere a um ID criado pela preparação (setup)"))
 }
 
 /// Finds objects by ID: in the running scene, in another scene of the run, or in the copy the
@@ -1416,8 +1409,13 @@ pub fn run(
     let source: &Project = &copy;
     let mut events = request.inputs.clone();
     for event in &mut events {
-        if let InputEvent::Click { entity, .. } = event {
-            *entity = resolve(entity, &applied)?;
+        match event {
+            InputEvent::Click { entity, .. } => *entity = resolve(entity, &applied)?,
+            // A name the project does not have would be pressed in vain.
+            InputEvent::Press { action, .. } | InputEvent::Release { action, .. } => {
+                *action = input_actions::find(source, &resolve(action, &applied)?)?;
+            }
+            _ => {}
         }
     }
     events.sort_by(|a, b| a.at().total_cmp(&b.at()));

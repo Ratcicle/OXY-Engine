@@ -143,44 +143,6 @@ fn enum_choice(
     named_choice(ui, value, &owned, salt);
 }
 
-const INPUT_MODES: [(&str, &str); 3] = [
-    ("pressed", "Pressionar"),
-    ("held", "Manter"),
-    ("released", "Soltar"),
-];
-const COMPONENTS: [(&str, &str); 5] = [
-    ("collider", "Colisão / área"),
-    ("controller", "Controlador de movimento"),
-    ("visible", "Visibilidade"),
-    ("behavior", "Comportamento visual"),
-    ("animation", "Reprodução da animação"),
-];
-const ARITHMETIC: [(&str, &str); 4] = [
-    ("+", "Somar · A + B"),
-    ("-", "Subtrair · A − B"),
-    ("*", "Multiplicar · A × B"),
-    ("/", "Dividir · A ÷ B"),
-];
-const COMPARISONS: [(&str, &str); 6] = [
-    ("==", "Igual · A = B"),
-    ("!=", "Diferente · A ≠ B"),
-    (">", "Maior · A > B"),
-    (">=", "Maior ou igual · A ≥ B"),
-    ("<", "Menor · A < B"),
-    ("<=", "Menor ou igual · A ≤ B"),
-];
-
-/// Text parameters that store one of a few fixed values, with their labels.
-fn fixed_options(operation: &str, param: &str) -> Option<&'static [(&'static str, &'static str)]> {
-    oxy_core::graph::movement_choices(operation, param).or(match (operation, param) {
-        ("event.input", "mode") => Some(&INPUT_MODES),
-        ("action.component", "component") => Some(&COMPONENTS),
-        ("math.binary", "operator") => Some(&ARITHMETIC),
-        ("condition.compare", "operator") => Some(&COMPARISONS),
-        _ => None,
-    })
-}
-
 /// Name of a parameter in the inspector and in the node, without the option list that
 /// some definitions carry in their label.
 pub(super) fn param_label(operation: &str, param: &ParamDef) -> &'static str {
@@ -237,7 +199,7 @@ pub(super) fn param_summary(
             .map_or_else(|| "superfície removida".into(), |s| s.name.clone()),
         Value::Text(text) if text.is_empty() => "—".into(),
         Value::Text(text) => {
-            if let Some(options) = fixed_options(&node.operation, param.id) {
+            if let Some(options) = oxy_core::graph::choices(&node.operation, param.id) {
                 return Some(
                     options
                         .iter()
@@ -314,7 +276,9 @@ pub(super) fn parameter_editor(
     let target = explicit_target.as_deref().or(context.owner);
     let mut specialized = false;
     if let Value::Text(selected) = &mut value {
-        if let Some(choices) = oxy_core::graph::movement_choices(&node.operation, param.id) {
+        // Fixed values (modes, operators, components, movement options) from the core, which
+        // also refuses others in agent commands.
+        if let Some(choices) = oxy_core::graph::choices(&node.operation, param.id) {
             enum_choice(ui, selected, choices, salt.clone());
             node.params.insert(param.id.into(), value);
             return;
@@ -403,14 +367,6 @@ pub(super) fn parameter_editor(
                     })
                     .collect();
                 named_choice(ui, selected, &choices, salt.clone());
-                specialized = true;
-            }
-            ("event.input", "mode")
-            | ("action.component", "component")
-            | ("math.binary", "operator")
-            | ("condition.compare", "operator") => {
-                let choices = fixed_options(&node.operation, param.id).unwrap_or_default();
-                enum_choice(ui, selected, choices, salt.clone());
                 specialized = true;
             }
             ("event.animation", "marker") => {

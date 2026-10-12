@@ -1,5 +1,6 @@
 //! Live agent channel in the real editor: a client finds the editor through its discovery
-//! file, edits the open project, reads it back (with read options answering as they do on
+//! file, edits the open project (objects, logic and an input action, with the warning the
+//! batch added), reads it back (with read options answering as they do on
 //! files), captures the viewport (with the collider view too, also while the game runs), is
 //! refused edits while the game is running, and undoes its own step.
 use super::*;
@@ -145,6 +146,12 @@ impl NativeQa {
                              "name": "Grupo do agente"},
                             {"op": "set_attribute", "entity": "$0", "name": "vida",
                              "value": {"Number": 3.0}},
+                            // Project-level data in the same undo step, and a warning.
+                            {"op": "create_input_action", "name": "Abrir porta", "key": "o"},
+                            {"op": "add_node", "entity": "$0", "operation": "event.input",
+                             "params": {"action": {"Text": "$2"}}},
+                            {"op": "add_node", "entity": "$0", "operation": "input.read",
+                             "params": {"action": {"Text": "inexistente"}}},
                         ]}),
                     ),
                 ];
@@ -179,7 +186,7 @@ impl NativeQa {
                     return Err(format!("Status inesperado: {status}"));
                 }
                 let applied = get("apply", 0)??;
-                let id = applied["applied"][0]["created"][0]
+                let id = applied["created"]["0"][0]["id"]
                     .as_str()
                     .ok_or("Lote não devolveu o ID criado")?
                     .to_owned();
@@ -193,7 +200,27 @@ impl NativeQa {
                 {
                     return Err("Lote do agente aplicado de forma incompleta".into());
                 }
-                if self.editor.qa_undo_label() != Some("Agente: 2 comandos") {
+                let action = applied["created"]["2"][0]["id"]
+                    .as_str()
+                    .unwrap_or_default();
+                if applied["created"]["2"][0]["name"] != "Abrir porta"
+                    || self
+                        .editor
+                        .state
+                        .project
+                        .input_bindings
+                        .get(action)
+                        .map(String::as_str)
+                        != Some("O")
+                {
+                    return Err(format!("Ação de entrada do agente ausente: {applied}"));
+                }
+                if applied["warnings"].as_array().is_none_or(|w| {
+                    w.len() != 1 || !w[0].as_str().unwrap_or_default().contains("inexistente")
+                }) {
+                    return Err(format!("Lote sem o aviso esperado: {applied}"));
+                }
+                if self.editor.qa_undo_label() != Some("Agente: 5 comandos") {
                     return Err(format!(
                         "Passo de desfazer inesperado: {:?}",
                         self.editor.qa_undo_label()
@@ -302,7 +329,7 @@ impl NativeQa {
                     .ok_or("Sem resposta para undo")?
                     .1
                     .clone()?;
-                if undo["label"] != "Agente: 2 comandos" {
+                if undo["label"] != "Agente: 5 comandos" {
                     return Err(format!("Desfez outro passo: {undo}"));
                 }
                 if self.editor.state.project != self.base.as_ref().ok_or("Sem referência")?.project

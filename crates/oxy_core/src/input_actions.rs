@@ -55,6 +55,138 @@ pub fn label<'a>(project: &'a Project, id: &str) -> std::borrow::Cow<'a, str> {
         |s| std::borrow::Cow::Borrowed(s.as_str()),
     )
 }
+/// The action `text` names: its ID, or the name of exactly one action (case-insensitive).
+pub fn find(project: &Project, text: &str) -> Result<Id, String> {
+    if project.input_bindings.contains_key(text) {
+        return Ok(text.into());
+    }
+    let wanted = text.trim().to_lowercase();
+    let named: Vec<&Id> = project
+        .input_bindings
+        .keys()
+        .filter(|id| label(project, id).to_lowercase() == wanted)
+        .collect();
+    match named.as_slice() {
+        [one] => Ok((*one).clone()),
+        [] => Err(format!(
+            "A ação de entrada \"{text}\" não existe no projeto. Ações: {}",
+            summary(project)
+        )),
+        many => Err(format!(
+            "Há {} ações de entrada chamadas \"{text}\"; use o ID: {}",
+            many.len(),
+            many.iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+/// Up to 30 actions as "ID (name)", for messages.
+fn summary(project: &Project) -> String {
+    if project.input_bindings.is_empty() {
+        return "nenhuma".into();
+    }
+    let mut names: Vec<String> = project
+        .input_bindings
+        .keys()
+        .take(30)
+        .map(|id| format!("{id} ({})", label(project, id)))
+        .collect();
+    if project.input_bindings.len() > 30 {
+        names.push(format!("e mais {}", project.input_bindings.len() - 30));
+    }
+    names.join(", ")
+}
+
+/// Keys an input action can use, by the names the game reads, separated by spaces: letters,
+/// digits, the other keyboard keys, function keys, Shift and the mouse buttons and wheel.
+/// Escape and F3 are left out: the game and the player keep them (pause and diagnostics).
+const KEY_NAMES: &str = "A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 \
+Space Shift Enter Tab Backspace Insert Delete Home End PageUp PageDown Up Down Left Right Copy \
+Cut Paste Colon Comma Minus Period Plus Equals Semicolon OpenBracket CloseBracket \
+OpenCurlyBracket CloseCurlyBracket Backtick Backslash Slash Pipe Questionmark Exclamationmark \
+Quote BrowserBack F1 F2 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 \
+F24 F25 F26 F27 F28 F29 F30 F31 F32 F33 F34 F35 MouseLeft MouseRight MouseMiddle Mouse4 Mouse5 \
+WheelUp WheelDown";
+/// The keys an input action can use, in the order `KEY_NAMES` lists them.
+pub fn keys() -> impl Iterator<Item = &'static str> {
+    KEY_NAMES.split(' ')
+}
+/// Keys the game reads but never hands to input actions: Escape releases the game and F3
+/// opens the player's diagnostics.
+pub const RESERVED_KEYS: [&str; 2] = ["Escape", "F3"];
+/// Other spellings the game reads for the same keys, besides lowercase letters and
+/// Digit0/Numpad0 for digits.
+const KEY_ALIASES: [(&str, &str); 35] = [
+    ("ArrowDown", "Down"),
+    ("ArrowLeft", "Left"),
+    ("ArrowRight", "Right"),
+    ("ArrowUp", "Up"),
+    ("⏷", "Down"),
+    ("⏴", "Left"),
+    ("⏵", "Right"),
+    ("⏶", "Up"),
+    ("Esc", "Escape"),
+    ("Return", "Enter"),
+    ("Help", "Insert"),
+    (" ", "Space"),
+    (":", "Colon"),
+    (",", "Comma"),
+    ("-", "Minus"),
+    ("−", "Minus"),
+    (".", "Period"),
+    ("+", "Plus"),
+    ("=", "Equals"),
+    ("Equal", "Equals"),
+    ("NumpadEqual", "Equals"),
+    (";", "Semicolon"),
+    ("\\", "Backslash"),
+    ("/", "Slash"),
+    ("|", "Pipe"),
+    ("?", "Questionmark"),
+    ("!", "Exclamationmark"),
+    ("[", "OpenBracket"),
+    ("]", "CloseBracket"),
+    ("{", "OpenCurlyBracket"),
+    ("}", "CloseCurlyBracket"),
+    ("`", "Backtick"),
+    ("Backquote", "Backtick"),
+    ("Grave", "Backtick"),
+    ("'", "Quote"),
+];
+/// The name of the key `key` spells, as [`keys`] or [`RESERVED_KEYS`] write it: "a" is "A",
+/// "ArrowLeft" is "Left", "Esc" is "Escape". `None` for a name the game does not read.
+fn key_name(key: &str) -> Option<&'static str> {
+    let known = |name: &str| keys().chain(RESERVED_KEYS).find(|k| *k == name);
+    if let Some(name) = known(key) {
+        return Some(name);
+    }
+    if let Some((_, name)) = KEY_ALIASES.iter().find(|(alias, _)| *alias == key) {
+        return Some(name);
+    }
+    if key.len() == 1 && key.as_bytes()[0].is_ascii_lowercase() {
+        return known(&key.to_ascii_uppercase());
+    }
+    let digit = key
+        .strip_prefix("Digit")
+        .or_else(|| key.strip_prefix("Numpad"))?;
+    (digit.len() == 1).then(|| known(digit)).flatten()
+}
+/// The name an input action stores for `key`, or why it cannot use it.
+pub fn check_key(key: &str) -> Result<&'static str, String> {
+    match key_name(key) {
+        Some("Escape") => Err("Escape é reservada: ela pausa o jogo e libera o mouse".into()),
+        Some("F3") => Err("F3 é reservada ao diagnóstico do player".into()),
+        Some(name) => Ok(name),
+        None => Err(format!("Tecla desconhecida: \"{key}\"")),
+    }
+}
+/// Whether an input action can use `key`: the game reads it and does not keep it.
+pub fn valid_binding(key: &str) -> bool {
+    check_key(key).is_ok()
+}
+
 pub fn create(project: &mut Project, name: &str, key: &str) -> Result<Id, String> {
     if name.trim().is_empty() {
         return Err("Informe o nome da ação.".into());
@@ -74,9 +206,23 @@ pub fn rename(project: &mut Project, id: &str, name: &str) -> Result<(), String>
     project.input_labels.insert(id.into(), name.trim().into());
     Ok(())
 }
-pub fn references(project: &Project, id: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for (scope, entities) in project
+/// One object that uses a project item (an input action or a physics surface).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Use {
+    /// Name of the scene, or of the model, that holds the object.
+    #[serde(skip)]
+    pub scope: String,
+    /// The object's ID and name.
+    pub entity: Id,
+    pub name: String,
+    /// What uses the item: a component (controller2d, character, camera_control,
+    /// collider3d), a node operation, or "attribute <name>".
+    pub role: String,
+}
+
+/// Every object of the scenes and models, with the name of the scene or model holding it.
+pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (&str, &Entity)> {
+    project
         .scenes
         .iter()
         .map(|s| (s.name.as_str(), s.entities.as_slice()))
@@ -86,44 +232,67 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
                 .iter()
                 .filter_map(|a| a.model.as_deref().map(|m| (a.name.as_str(), m))),
         )
-    {
-        for entity in entities {
-            if entity
-                .controller
-                .as_ref()
-                .is_some_and(|c| c.actions.all().iter().any(|(action, _, _)| *action == id))
+        .flat_map(|(scope, entities)| entities.iter().map(move |e| (scope, e)))
+}
+
+/// Where the action `id` is used, in each object's order: 2D controller, 3D character, logic
+/// nodes, character camera.
+pub fn uses(project: &Project, id: &str) -> Vec<Use> {
+    let mut found = Vec::new();
+    for (scope, entity) in every_entity(project) {
+        let mut add = |role: &str| {
+            found.push(Use {
+                scope: scope.into(),
+                entity: entity.id.clone(),
+                name: entity.name.clone(),
+                role: role.into(),
+            })
+        };
+        if entity
+            .controller
+            .as_ref()
+            .is_some_and(|c| c.actions.all().iter().any(|(action, _, _)| *action == id))
+        {
+            add("controller2d");
+        }
+        if entity.character3d.as_ref().is_some_and(|c| {
+            c.sprint_action == id
+                || c.crouch_action == id
+                || c.actions.all().iter().any(|(action, _, _)| *action == id)
+        }) {
+            add("character");
+        }
+        for node in &entity.graph.nodes {
+            if matches!(node.operation.as_str(), "event.input" | "input.read")
+                && node.text("action") == id
             {
-                found.push(format!("{scope} → {} → controlador", entity.name));
+                add(&node.operation);
             }
-            if entity.character3d.as_ref().is_some_and(|c| {
-                c.sprint_action == id
-                    || c.crouch_action == id
-                    || c.actions.all().iter().any(|(action, _, _)| *action == id)
-            }) {
-                found.push(format!("{scope} → {} → personagem 3D", entity.name));
-            }
-            for node in &entity.graph.nodes {
-                if matches!(node.operation.as_str(), "event.input" | "input.read")
-                    && node.text("action") == id
-                {
-                    let node = if node.operation == "input.read" {
-                        "Ler ação de entrada"
-                    } else {
-                        "Ação de entrada"
-                    };
-                    found.push(format!("{scope} → {} → nó {node}", entity.name));
-                }
-            }
-            if entity
-                .camera_rig
-                .as_ref()
-                .is_some_and(|c| c.shoulder_action == id || c.mode_action == id)
-            {
-                found.push(format!("{scope} → {} → câmera de personagem", entity.name));
-            }
+        }
+        if entity
+            .camera_rig
+            .as_ref()
+            .is_some_and(|c| c.shoulder_action == id || c.mode_action == id)
+        {
+            add("camera_control");
         }
     }
     found
+}
+pub fn references(project: &Project, id: &str) -> Vec<String> {
+    uses(project, id)
+        .into_iter()
+        .map(|found| {
+            let role = match found.role.as_str() {
+                "controller2d" => "controlador",
+                "character" => "personagem 3D",
+                "camera_control" => "câmera de personagem",
+                "input.read" => "nó Ler ação de entrada",
+                _ => "nó Ação de entrada",
+            };
+            format!("{} → {} → {role}", found.scope, found.name)
+        })
+        .collect()
 }
 pub fn remove(project: &mut Project, id: &str) -> Result<(), String> {
     let uses = references(project, id);

@@ -313,15 +313,11 @@ impl Editor {
             "catalog" => query::catalog_query(params),
             "validate" => {
                 self.agent_scene(params)?;
-                Ok(match validate_project(&self.state.project) {
-                    Ok(()) => json!({"valid": true}),
-                    Err(error) => json!({"valid": false, "error": error.to_string()}),
-                })
+                Ok(query::validation(&self.state.project))
             }
             "apply" => {
                 let commands = command::parse(&params["commands"])?;
-                let applied = self.execute_agent(&commands)?;
-                Ok(json!({"applied": applied}))
+                self.execute_agent(&commands)
             }
             "undo" | "redo" => {
                 let label = self.agent_undo(method == "redo")?;

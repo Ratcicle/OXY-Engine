@@ -188,7 +188,7 @@ mod tests {
                     let method = request["method"].as_str().unwrap().to_owned();
                     let result = match method.as_str() {
                         "status" => json!({"project": {"name": "Ao vivo"}}),
-                        "apply" => json!({"applied": [{"op": "create_entity", "created": ["x"]}],
+                        "apply" => json!({"created": {"0": [{"id": "x", "name": "Grupo"}]},
                                           "commands": request["params"]["commands"]}),
                         _ => json!({"method": method, "params": request["params"]}),
                     };

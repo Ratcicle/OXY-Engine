@@ -2,7 +2,8 @@
 //! "Agente: …", logged in the console with the Agente origin, and refused while a person is
 //! in the middle of something the batch could collide with.
 use super::*;
-use oxy_core::command::{self, Applied, Command};
+use oxy_core::command::{self, Command};
+use serde_json::Value as Json;
 
 /// Console prefix of messages about agent edits; the console shows it as the line's origin.
 pub(crate) const AGENT_PREFIX: &str = "Agente · ";
@@ -30,13 +31,14 @@ impl Editor {
             || ctx.input(|i| i.pointer.any_down())
             || crate::graph_ui::text_input_active(ctx)
     }
-    /// Applies an agent's batch as one undo step. On failure nothing changes.
-    pub(crate) fn execute_agent(&mut self, commands: &[Command]) -> Result<Vec<Applied>, String> {
+    /// Applies an agent's batch as one undo step and answers with [`command::report`], as the
+    /// MCP server does on files. On failure nothing changes.
+    pub(crate) fn execute_agent(&mut self, commands: &[Command]) -> Result<Json, String> {
         if let Some(reason) = self.agent_busy() {
             return Err(reason.into());
         }
         if commands.is_empty() {
-            return Ok(Vec::new());
+            return Ok(command::report(&self.state.project, &[], &[]));
         }
         let label = match commands {
             [one] => format!("Agente: {}", one.label()),
@@ -44,8 +46,8 @@ impl Editor {
         };
         self.history
             .begin(label, &self.state.project, &self.state.images);
-        match command::apply(&mut self.state.project, &self.scene_id, commands) {
-            Ok(applied) => {
+        match command::apply_and_report(&mut self.state.project, &self.scene_id, commands) {
+            Ok(report) => {
                 if let Err(error) = self
                     .history
                     .commit(&self.state.project, &mut self.state.images)
@@ -56,7 +58,7 @@ impl Editor {
                     self.log(format!("{AGENT_PREFIX}{}", command.label()));
                 }
                 self.after_external_edit();
-                Ok(applied)
+                Ok(report)
             }
             Err(error) => {
                 self.history

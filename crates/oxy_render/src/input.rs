@@ -157,20 +157,6 @@ pub fn accepts_game_click(ctx: &Context) -> bool {
     ctx.data_mut(|d| d.get_temp::<MouseCapture>(egui::Id::new("oxy_relative_mouse")))
         .is_some_and(|s| s.enabled && !s.ignore_click)
 }
-pub fn valid_binding(name: &str) -> bool {
-    Key::from_name(name).is_some()
-        || matches!(
-            name,
-            "Shift"
-                | "MouseLeft"
-                | "MouseRight"
-                | "MouseMiddle"
-                | "Mouse4"
-                | "Mouse5"
-                | "WheelUp"
-                | "WheelDown"
-        )
-}
 pub fn collect_input(
     ctx: &Context,
     bindings: &BTreeMap<String, String>,
@@ -315,6 +301,99 @@ pub fn collect_game_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The core checks input action keys without egui: its names must be the ones read here,
+    /// as egui spells them, and it must read every other spelling egui reads the same way.
+    #[test]
+    fn core_key_names_are_the_keys_read_here() {
+        use oxy_core::input_actions::{RESERVED_KEYS, check_key, keys, valid_binding};
+        let pointer = [
+            "Shift",
+            "MouseLeft",
+            "MouseRight",
+            "MouseMiddle",
+            "Mouse4",
+            "Mouse5",
+            "WheelUp",
+            "WheelDown",
+        ];
+        for key in Key::ALL {
+            let name = key.name();
+            if matches!(key, Key::Escape | Key::F3) {
+                assert!(
+                    RESERVED_KEYS.contains(&name) && !valid_binding(name),
+                    "{name}"
+                );
+                continue;
+            }
+            assert!(
+                keys().any(|k| k == name),
+                "{name} is missing from the core keys"
+            );
+            for spelling in [key.symbol_or_name().to_owned(), name.to_lowercase()] {
+                if Key::from_name(&spelling) == Some(*key) {
+                    assert_eq!(check_key(&spelling), Ok(name), "{spelling}");
+                }
+            }
+        }
+        for name in keys() {
+            assert_eq!(
+                keys().filter(|k| *k == name).count(),
+                1,
+                "{name} listed twice"
+            );
+            if !pointer.contains(&name) {
+                assert_eq!(Key::from_name(name).map(Key::name), Some(name));
+            }
+        }
+        for spelling in [
+            "ArrowDown",
+            "⏴",
+            "Esc",
+            "Return",
+            "Help",
+            " ",
+            ":",
+            ",",
+            "-",
+            "−",
+            ".",
+            "+",
+            "=",
+            "Equal",
+            "NumpadEqual",
+            ";",
+            "\\",
+            "/",
+            "|",
+            "?",
+            "!",
+            "[",
+            "]",
+            "{",
+            "}",
+            "`",
+            "Backquote",
+            "Grave",
+            "'",
+            "Digit0",
+            "Numpad9",
+            "a",
+            "q",
+            "Foo",
+            "F36",
+            "Digit10",
+            "aa",
+            "",
+            "ctrl",
+            "space",
+        ] {
+            let read = Key::from_name(spelling)
+                .filter(|key| !matches!(key, Key::Escape | Key::F3))
+                .map(Key::name);
+            assert_eq!(check_key(spelling).ok(), read, "{spelling:?}");
+        }
+    }
 
     fn mouse_frame(ctx: &Context, enabled: bool, events: Vec<Event>) -> InputFrame {
         let bindings = BTreeMap::from([

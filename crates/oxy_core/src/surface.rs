@@ -1,5 +1,8 @@
 //! Physical surface properties are explicit project data, independent of color/UVs.
-use crate::document::{Id, Project, new_id};
+use crate::{
+    document::{Id, Project, new_id},
+    input_actions::{Use, every_entity},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,7 +27,8 @@ pub struct SurfaceMaterial {
     pub conveyor: [f32; 3],
     pub conveyor_space: VelocitySpace,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SurfacePreset {
     Common,
     Ice,
@@ -66,36 +70,51 @@ impl SurfaceMaterial {
         Ok(())
     }
 }
+/// Where the surface `id` is used: 3D colliders, 3D character bodies, attributes and logic
+/// nodes, in each object's order.
+pub fn uses(project: &Project, id: &str) -> Vec<Use> {
+    let mut found = Vec::new();
+    for (scope, e) in every_entity(project) {
+        let mut add = |role: String| {
+            found.push(Use {
+                scope: scope.into(),
+                entity: e.id.clone(),
+                name: e.name.clone(),
+                role,
+            })
+        };
+        if e.physics3d
+            .as_ref()
+            .is_some_and(|c| c.surface.as_deref() == Some(id))
+        {
+            add("collider3d".into());
+        }
+        if e.character3d
+            .as_ref()
+            .is_some_and(|c| c.body.surface.as_deref() == Some(id))
+        {
+            add("character".into());
+        }
+        for (name, value) in &e.attributes {
+            if value.surface() == Some(id) {
+                add(format!("attribute {name}"));
+            }
+        }
+        for node in &e.graph.nodes {
+            if node.params.values().any(|v| v.surface() == Some(id)) {
+                add(node.operation.clone());
+            }
+        }
+    }
+    found
+}
 pub fn references(project: &Project, id: &str) -> Vec<String> {
-    project
-        .scenes
-        .iter()
-        .map(|s| (s.name.as_str(), s.entities.as_slice()))
-        .chain(
-            project
-                .assets
-                .iter()
-                .filter_map(|a| a.model.as_deref().map(|m| (a.name.as_str(), m))),
-        )
-        .flat_map(|(scope, entities)| {
-            entities
-                .iter()
-                .filter(move |e| {
-                    e.physics3d
-                        .as_ref()
-                        .is_some_and(|c| c.surface.as_deref() == Some(id))
-                        || e.character3d
-                            .as_ref()
-                            .is_some_and(|c| c.body.surface.as_deref() == Some(id))
-                        || e.attributes.values().any(|v| v.surface() == Some(id))
-                        || e.graph
-                            .nodes
-                            .iter()
-                            .flat_map(|n| n.params.values())
-                            .any(|v| v.surface() == Some(id))
-                })
-                .map(move |e| format!("{scope} → {}", e.name))
-        })
+    let mut found = uses(project, id);
+    // One line per object, as the editor lists them.
+    found.dedup_by(|a, b| a.entity == b.entity);
+    found
+        .into_iter()
+        .map(|found| format!("{} → {}", found.scope, found.name))
         .collect()
 }
 pub fn duplicate(project: &mut Project, id: &str) -> Result<Id, String> {

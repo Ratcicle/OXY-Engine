@@ -56,6 +56,10 @@ fn near(a: f64, b: f64) -> bool {
 /// held across the change, and reloads itself on "reiniciar".
 fn menu_and_level() -> (Project, Id) {
     let mut project = Project::new("Troca de cena");
+    // Simulations press only actions the project has.
+    for (action, key) in [("segurar", "H"), ("reiniciar", "R")] {
+        project.input_bindings.insert(action.into(), key.into());
+    }
     project.scenes[0].kind = SceneKind::TwoD;
     let mut level = Scene::new("Fase", SceneKind::TwoD);
     let level_id = level.id.clone();
@@ -757,6 +761,9 @@ fn looks_like_id(text: &str) -> bool {
 #[test]
 fn spawned_copies_removed_in_the_same_step_keep_names_and_the_summary_room() {
     let mut project = Project::new("Arma");
+    for (action, key) in [("gerar", "G"), ("fim", "F")] {
+        project.input_bindings.insert(action.into(), key.into());
+    }
     let scene = &mut project.scenes[0];
     scene.kind = SceneKind::TwoD;
     let mut floor = solid("Chão", [0.; 3]);

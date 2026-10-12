@@ -81,7 +81,8 @@ project's start scene (files).";
 const START_SCENE: &str = "Optional scene the game starts in. Defaults to the project's start \
 scene, also live (not the scene open in the editor); setup commands without a scene use it too.";
 const INPUTS: &str = "Timed inputs at simulated second `at`: {type: press|release, at, action} \
-with the project's input action names (see oxy_project); {type: movement, at, value: [right, \
+with an input action of the project, by ID or name (see oxy_project), or \"$N\" from setup; \
+others are refused; {type: movement, at, value: [right, \
 forward]}, each -1 to 1, held until the next movement; {type: look, at, value: [x, y]}, a mouse \
 displacement applied once: each unit turns the camera by its sensitivity (camera control, 0.12 \
 degrees by default), +x turns right and +y looks down unless the camera inverts an axis; {type: \
@@ -109,10 +110,14 @@ operation's defaults (see oxy_catalog), and edges are text such as \
 and convex/triangle collision geometry come as counts. graph=full and geometry=full give them as \
 stored, the form update_entity patches.";
 const CATALOG_DESCRIPTION: &str = "Catalog of logic nodes, components, shapes, interface \
-elements, presets and the value format. By default the nodes are brief (operation, label, \
-category, description) and categories lists their categories; then ask for the nodes you will \
-use with operations or category to get their ports with types and parameters with defaults \
-(only those nodes come back). Read it before building logic.";
+elements, presets, surface presets, the keys input actions can use (input_keys) and the value \
+format. By default the nodes are brief (operation, label, category, description) and categories \
+lists their categories; then ask for the nodes you will use with operations or category to get \
+their ports with types and parameters with defaults (only those nodes come back). A parameter \
+with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
+any other. ref says what a parameter names: scene, audio, clip, object, attribute, \
+input_action, surface or marker (an ID, or for attribute and marker a name). Read it before \
+building logic.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
@@ -141,7 +146,13 @@ pub fn definitions() -> Json {
         ),
         tool(
             "oxy_project",
-            "Summary of a project: scenes (ID, name, 2D/3D, object count), assets and input actions.",
+            "Summary of a project: scenes (ID, name, 2D/3D, object count), assets, input \
+             actions [{id, name, key, used_by}], physics surfaces [{id, name, friction, traction, \
+             speed_multiplier, conveyor, conveyor_space, used_by}] and collision groups [{bit, \
+             name}] (bit: the bit of collider category and mask; the groups not listed are named \
+             Grupo N, N being bit + 1). used_by lists up to 10 objects {entity, name, role}, role \
+             being a component (controller2d, character, camera_control, collider3d), a node \
+             operation or attribute <name>; used_by_total counts them when there are more.",
             json!({"project": project}),
             json!([])
         ),
@@ -223,7 +234,10 @@ pub fn definitions() -> Json {
         ),
         tool(
             "oxy_validate",
-            "Validates the whole project with the same rules used when saving.",
+            "Validates the whole project with the same rules used when saving: {valid, error?, \
+             warnings?}. warnings lists what the game would ignore without failing: logic nodes \
+             naming an input action the project lacks, keys the game does not read and \
+             parameters outside their choices.",
             json!({"project": project}),
             json!([])
         ),
@@ -375,16 +389,22 @@ pub fn definitions() -> Json {
 const APPLY_DESCRIPTION: &str = "Edits the project with a batch of commands, all-or-nothing: if \
 one fails, nothing changes and the error names it. Live, the batch is one undo step labelled \
 'Agente: …' in the editor and the person saves; on files, the project file is saved (the \
-previous version is kept as project.oxy.json.agente.bak). In later commands, \"$N\" stands for \
-the first ID created by command N (0-based). Commands (field `op`):
+previous version is kept as project.oxy.json.agente.bak). The answer is {created, warnings?}: \
+created maps the index of each command that created something to [{id, name}] (every piece of \
+a preset, its root first; a node's name is its operation), and warnings lists what the batch \
+left that the game will ignore, such as a node naming an input action the project lacks.
+Placeholders: in later commands, a whole string \"$N\" is the first ID created by command N \
+(0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included; \"$$N\" is the \
+text \"$N\" itself. Other text with '$', such as \"$10 de bônus\", stays as it is.
+Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
 - create_entity {kind, name?, parent?, position?: [x,y,z]} where kind is {type: group} | \
 {type: shape, shape: Cube|Sphere|Cylinder|Plane|Pyramid|Cone|Tube (3D) or Rectangle|Circle|Sprite \
 (2D)} | {type: camera} | {type: ui, element: Text|Image|Button|Bar} | {type: preset, preset: \
 first_person|third_person|platform} (3D only)
-- delete_entities {ids}; duplicate_entities {ids}; rename_entity {entity, name}; set_parent {ids, \
-parent?} (keeps world transform)
+- delete_entities {ids}; duplicate_entities {ids} (one copy per root, in order); rename_entity \
+{entity, name}; set_parent {ids, parent?} (keeps world transform)
 - set_transform {entity, position?, rotation? (degrees), scale?}; set_visible {entity, visible}; \
 set_material {entity, color?: [r,g,b,a] 0-1, texture?: asset ID, clear_texture?}
 - set_attribute {entity, name, value?} (no value removes); values are tagged, e.g. {\"Number\": 3}
@@ -394,8 +414,17 @@ camera_control|collider2d|sensor2d|controller2d}
 with graph and geometry full) for fields without a dedicated command
 - add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
-to_node, to_port}
-Every command except the project/scene ones accepts `scene`; the tool's `scene` fills it when absent.";
+to_node, to_port}. A parameter with choices in oxy_catalog takes only those values.
+- create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
+key}; delete_input_action {action}, refused while used (oxy_project lists used_by). action is \
+the ID or the name; key is one of oxy_catalog input_keys (Escape and F3 are reserved); names are \
+unique. Logic nodes and oxy_simulate use the ID.
+- create_surface {preset?: common|ice|mud|conveyor (default common), name?, friction?, traction?, \
+speed_multiplier?, conveyor?: [x,y,z] m/s, conveyor_space?: World|Local}; update_surface \
+{surface, and the same fields but preset}; delete_surface {surface}, refused while used. Assign \
+a surface with update_entity: physics3d.surface or character3d.body.surface.
+Project, scene, input action and surface commands take no `scene`; the others accept it, and \
+the tool's `scene` fills it when absent.";
 
 const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
 the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
@@ -404,7 +433,7 @@ sounds, movement and area events {time, kind: jump|land|leave|side|surface|postu
 area_exit, object, other?} as the game fires them (also when its logic then removes the objects \
 involved or changes scene), the game camera at the end {active, mode, position, forward, fov}, \
 the game interface at the end (ui: texts with their values, bars, buttons) and the watched \
-objects. Inputs use the project's input action names (see oxy_project). To test one \
+objects. Inputs use the project's input actions, by ID or name (see oxy_project). To test one \
 section without editing the project, use setup (commands on the copy), spawn (place the player) \
 and until (stop when something happens). Lists keep the most recent 300 entries and `truncated` \
 counts what was dropped. Times are seconds rounded to 0.1 ms. Set screenshot=true to also get the \
@@ -422,14 +451,22 @@ side spans the image. In 2D scenes top and side both show the scene plane. The t
 time, the scene and the camera used (position, forward, and fov or the visible width and \
 height in metres).";
 
-/// Scene-level commands that do not take a default scene.
-const PROJECT_OPS: [&str; 6] = [
+/// Project-level commands: they take no `scene`, so the tool's default scene is not added
+/// (commands refuse unknown fields).
+const PROJECT_OPS: [&str; 13] = [
     "rename_project",
     "set_start_scene",
     "create_scene",
     "rename_scene",
     "duplicate_scene",
     "delete_scene",
+    "create_input_action",
+    "rename_input_action",
+    "set_input_key",
+    "delete_input_action",
+    "create_surface",
+    "update_surface",
+    "delete_surface",
 ];
 
 fn text_arg(args: &Json, key: &str) -> Option<String> {
@@ -604,12 +641,7 @@ impl Tools {
                     query::answer(p, scene, request, args)
                 })
             }
-            "oxy_validate" => self.read(args, "validate", |p, _| {
-                Ok(match validate_project(p) {
-                    Ok(()) => json!({"valid": true}),
-                    Err(error) => json!({"valid": false, "error": error.to_string()}),
-                })
-            }),
+            "oxy_validate" => self.read(args, "validate", |p, _| Ok(query::validation(p))),
             "oxy_apply" => self.apply(args),
             "oxy_simulate" => self.simulate(args),
             "oxy_screenshot" => self.screenshot(args),
@@ -795,17 +827,15 @@ impl Tools {
                 let parsed = command::parse(&Json::Array(commands))?;
                 let mut project = persistence::load_project(&file).map_err(|e| e.to_string())?;
                 let start = project.start_scene.clone();
-                let applied =
-                    command::apply(&mut project, &start, &parsed).map_err(|e| e.to_string())?;
+                let mut report = command::apply_and_report(&mut project, &start, &parsed)
+                    .map_err(|e| e.to_string())?;
                 let backup = file.with_extension("json.agente.bak");
                 std::fs::copy(&file, &backup)
                     .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))?;
                 persistence::save_project(&file, &project).map_err(|e| e.to_string())?;
-                Ok(Output::json(json!({
-                    "applied": applied,
-                    "saved": file.display().to_string(),
-                    "previous_version": backup.display().to_string(),
-                })))
+                report["saved"] = json!(file.display().to_string());
+                report["previous_version"] = json!(backup.display().to_string());
+                Ok(Output::json(report))
             }
         }
     }
@@ -1304,6 +1334,162 @@ mod tests {
         assert_eq!(entity["world"]["rotation_degrees"], json!([0.0, 90.0, 0.0]));
         let piece = read("oxy_entity", json!({"id": created[6].created[0]}));
         assert_eq!(piece["world"]["rotation_degrees"], json!([0.0, 180.0, 0.0]));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn project_commands_take_no_scene_and_the_others_take_the_tools() {
+        // One command of each project-level op, as an agent writes it.
+        let project_commands = [
+            json!({"op": "rename_project", "name": "P"}),
+            json!({"op": "set_start_scene", "scene": "s"}),
+            json!({"op": "create_scene", "name": "S", "kind": "3d"}),
+            json!({"op": "rename_scene", "scene": "s", "name": "S"}),
+            json!({"op": "duplicate_scene", "scene": "s"}),
+            json!({"op": "delete_scene", "scene": "s"}),
+            json!({"op": "create_input_action", "name": "Pausar", "key": "P"}),
+            json!({"op": "rename_input_action", "action": "a", "name": "B"}),
+            json!({"op": "set_input_key", "action": "a", "key": "K"}),
+            json!({"op": "delete_input_action", "action": "a"}),
+            json!({"op": "create_surface", "preset": "ice"}),
+            json!({"op": "update_surface", "surface": "s", "friction": 0.5}),
+            json!({"op": "delete_surface", "surface": "s"}),
+        ];
+        assert_eq!(project_commands.len(), PROJECT_OPS.len());
+        for command in project_commands {
+            let op = command["op"].as_str().unwrap();
+            assert!(
+                PROJECT_OPS.contains(&op),
+                "{op} is missing from PROJECT_OPS"
+            );
+            command::parse(&command).unwrap();
+            if !command.as_object().unwrap().contains_key("scene") {
+                let mut with_scene = command.clone();
+                with_scene["scene"] = json!("s");
+                assert!(command::parse(&with_scene).is_err(), "{op} takes no scene");
+            }
+        }
+        for command in [
+            json!({"op": "create_entity", "kind": {"type": "group"}, "scene": "s"}),
+            json!({"op": "add_node", "entity": "e", "operation": "event.input", "scene": "s"}),
+        ] {
+            command::parse(&command).unwrap();
+        }
+        assert!(APPLY_DESCRIPTION.contains("\"$$N\""));
+        for text in [
+            "create_input_action",
+            "delete_surface",
+            "warnings",
+            "\"$N.M\"",
+            "input_keys",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(
+            CATALOG_DESCRIPTION.contains("choices") && CATALOG_DESCRIPTION.contains("input_keys")
+        );
+        assert!(INPUTS.contains("by ID or name"));
+    }
+
+    #[test]
+    fn files_take_input_actions_and_surfaces_and_answer_created_ids_and_warnings() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-commands-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Comandos", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // With the tool's scene: project commands must not receive it.
+        let applied = call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "create_input_action", "name": "Reiniciar", "key": "R"},
+                {"op": "create_surface", "preset": "ice", "name": "Gelo"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Pista"},
+                {"op": "add_component", "entity": "$2", "component": "collider3d"},
+                {"op": "update_entity", "entity": "$2", "patch": {"physics3d": {"surface": "$1"}}},
+                {"op": "add_node", "entity": "$2", "operation": "event.input",
+                 "params": {"action": {"Text": "$0"}}},
+                {"op": "add_node", "entity": "$2", "operation": "input.read",
+                 "params": {"action": {"Text": "pausar"}}},
+            ]}),
+        )
+        .unwrap();
+        let created = applied["created"].as_object().unwrap();
+        assert_eq!(
+            created.keys().collect::<Vec<_>>(),
+            ["0", "1", "2", "5", "6"]
+        );
+        assert_eq!(applied["created"]["0"][0]["name"], "Reiniciar");
+        assert_eq!(applied["created"]["1"][0]["name"], "Gelo");
+        assert_eq!(applied["created"]["5"][0]["name"], "event.input");
+        assert!(applied["saved"].is_string() && applied["previous_version"].is_string());
+        let warnings = applied["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].as_str().unwrap().contains("\"pausar\""));
+        let action = applied["created"]["0"][0]["id"].clone();
+        let track = applied["created"]["2"][0]["id"].clone();
+
+        let summary = call("oxy_project", json!({})).unwrap();
+        assert_eq!(summary["input_actions"][0]["id"], action);
+        assert_eq!(summary["input_actions"][0]["key"], "R");
+        assert_eq!(summary["input_actions"][0]["used_by"][0]["entity"], track);
+        assert_eq!(summary["surfaces"][0]["used_by"][0]["role"], "collider3d");
+        assert_eq!(summary["collision_groups"][1]["name"], "Personagens");
+        let validation = call("oxy_validate", json!({})).unwrap();
+        assert_eq!(validation["valid"], true);
+        assert_eq!(validation["warnings"].as_array().unwrap().len(), 1);
+
+        let refused = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "add_node", "entity": track, "operation": "event.input",
+                                 "params": {"mode": {"Text": "segurando"}}}]}),
+        )
+        .unwrap_err();
+        assert!(refused.contains("released (Soltar)"), "{refused}");
+        let unknown = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "inputs": [{"type": "press", "at": 0.0, "action": "voar"}]}),
+        )
+        .unwrap_err();
+        assert!(unknown.contains("\"voar\" não existe"), "{unknown}");
+        call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "inputs": [{"type": "press", "at": 0.0, "action": "reiniciar"}]}),
+        )
+        .unwrap();
+        let catalog = Tools::default()
+            .call("oxy_catalog", &json!({"operations": ["event.input"]}))
+            .unwrap();
+        let catalog: Json = serde_json::from_str(&catalog.text).unwrap();
+        assert_eq!(
+            catalog["nodes"][0]["params"][1]["choices"][0]["value"],
+            "pressed"
+        );
+        let all: Json = serde_json::from_str(
+            &Tools::default()
+                .call("oxy_catalog", &json!({}))
+                .unwrap()
+                .text,
+        )
+        .unwrap();
+        assert!(
+            all["input_keys"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Space"))
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
