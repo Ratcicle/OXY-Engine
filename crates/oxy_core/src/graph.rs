@@ -101,7 +101,7 @@ pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
     Some(match (operation, param.id, &param.default) {
         (_, _, Value::Object(_)) => Reference::Object,
         (_, _, Value::Surface(_)) => Reference::Surface,
-        ("action.scene", "scene", _) => Reference::Scene,
+        ("action.scene" | "value.scene", "scene", _) => Reference::Scene,
         ("action.sound", "asset", _) => Reference::Audio,
         ("action.animation", "clip", _) => Reference::Clip,
         ("event.input" | "input.read", "action", _) => Reference::InputAction,
@@ -204,6 +204,9 @@ pub fn description(operation: &str) -> &'static str {
         "value.text" => "Fornece um texto definido no painel de parâmetros.",
         "value.bool" => "Fornece um valor verdadeiro ou falso.",
         "value.object" => "Fornece a referência de um objeto da cena.",
+        "value.scene" => {
+            "Fornece o identificador da cena escolhida pelo nome, para Mudar de cena e atributos de texto."
+        }
         "attribute.get" => "Lê o atributo escolhido do objeto informado.",
         "attribute.set" => "Altera o atributo escolhido do objeto informado.",
         "math.binary" => {
@@ -409,6 +412,15 @@ fn build_registry() -> Vec<OperationDef> {
             params: vec![param("value", "Valor", default)],
         });
     }
+    // A scene picked by name in the editor, given as the ID that Mudar de cena takes.
+    result.push(OperationDef {
+        id: "value.scene",
+        label: "Referência de cena",
+        category: "Dados",
+        inputs: vec![],
+        outputs: vec![port("value", "Cena", Text)],
+        params: vec![text("scene", "Cena", "")],
+    });
     result.push(OperationDef {
         id: "attribute.get",
         label: "Ler atributo",

@@ -1201,7 +1201,7 @@ fn copies_to_another_level_warn_about_logic_that_opens_the_level_they_left() {
         .unwrap();
     assert!(
         warning.starts_with("Comando 6 (copy_entities, o 7º do lote): estes nós copiados")
-            && warning.contains("ainda abrem Cena 3D, a cena de onde vieram")
+            && warning.contains("ainda nomeiam Cena 3D, a cena de onde vieram")
             && warning.contains(&format!("{{\"Text\": \"{second}\"}}"))
             && warning.contains(&format!(
                 "Controle da fase ({copy}) → nó action.scene ({})",

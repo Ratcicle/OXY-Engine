@@ -447,7 +447,8 @@ fn a_scene_the_input_does_not_name_stops_the_node_with_a_clear_error() {
         (
             text("Segunda"),
             "a entrada Cena recebeu \"Segunda\", o nome de uma cena; a entrada espera o \
-             identificador (para reiniciar, a saída Cena de Cena atual)",
+             identificador (para reiniciar, a saída Cena de Cena atual; para outra cena, \
+             Referência de cena)",
         ),
         (
             Value::Number(2.),
@@ -489,6 +490,109 @@ fn a_scene_the_input_does_not_name_stops_the_node_with_a_clear_error() {
         "{:?}",
         report.logs
     );
+}
+
+/// Two scenes whose "Saída" opens, on "seguir", a scene picked in a Referência de cena: the
+/// first's goes straight into the scene change; the second's is kept in the Text attribute
+/// "Próxima" when the scene starts and read back on "seguir".
+fn next_scene_by_reference() -> (Project, Id, Id) {
+    let mut project = Project::new("Cenas escolhidas");
+    project.input_bindings.insert("seguir".into(), "N".into());
+    project.scenes[0].kind = SceneKind::TwoD;
+    let first = project.scenes[0].id.clone();
+    let second_scene = Scene::new("Segunda", SceneKind::TwoD);
+    let second = second_scene.id.clone();
+    project.scenes.push(second_scene);
+
+    let mut exit = Entity::new("Saída", None);
+    let go = node(&mut exit, "event.input", &[("action", text("seguir"))]);
+    let next = node(&mut exit, "value.scene", &[("scene", text(&second))]);
+    let change = node(&mut exit, "action.scene", &[]);
+    link(&mut exit, &go, &change);
+    wire(&mut exit, &next, "value", &change, "scene");
+    project.scenes[0].entities.push(exit);
+
+    let mut exit = Entity::new("Saída", None);
+    exit.attributes.insert("Próxima".into(), text(""));
+    let start = node(&mut exit, "event.scene_start", &[]);
+    let back = node(&mut exit, "value.scene", &[("scene", text(&first))]);
+    let keep = node(
+        &mut exit,
+        "attribute.set",
+        &[("attribute", text("Próxima")), ("value", text(""))],
+    );
+    link(&mut exit, &start, &keep);
+    wire(&mut exit, &back, "value", &keep, "value");
+    let go = node(&mut exit, "event.input", &[("action", text("seguir"))]);
+    let read = node(
+        &mut exit,
+        "attribute.get",
+        &[("attribute", text("Próxima"))],
+    );
+    let change = node(&mut exit, "action.scene", &[]);
+    link(&mut exit, &go, &change);
+    wire(&mut exit, &read, "value", &change, "scene");
+    project.scenes[1].entities.push(exit);
+    validate_project(&project).unwrap();
+    (project, first, second)
+}
+
+#[test]
+fn a_scene_reference_gives_the_scene_change_the_scene_picked() {
+    let (project, first, second) = next_scene_by_reference();
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": [
+            {"type": "press", "at": 0.5, "action": "seguir"},
+            {"type": "release", "at": 0.6, "action": "seguir"},
+            {"type": "press", "at": 1.0, "action": "seguir"},
+        ]}),
+    );
+    let changes: Vec<_> = report
+        .scene_changes
+        .iter()
+        .map(|c| (c.scene.as_str(), c.name.as_str(), c.reload))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            (second.as_str(), "Segunda", false),
+            (first.as_str(), project.scenes[0].name.as_str(), false)
+        ]
+    );
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+    assert_eq!(report.final_scene, first);
+
+    // A reference left without a scene stops what reads it, naming the node.
+    let mut project = project;
+    let reference = project.scenes[0].entities[0]
+        .graph
+        .nodes
+        .iter_mut()
+        .find(|n| n.operation == "value.scene")
+        .unwrap();
+    reference.params.insert("scene".into(), text(""));
+    validate_project(&project).unwrap();
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "inputs": [{"type": "press", "at": 0.5, "action": "seguir"}]}),
+    );
+    assert!(
+        report.scene_changes.is_empty(),
+        "{:?}",
+        report.scene_changes
+    );
+    let [log] = report.logs.as_slice() else {
+        panic!("{:?}", report.logs);
+    };
+    assert!(
+        log.text
+            .contains("Referência de cena sem cena escolhida: escolha a cena no nó"),
+        "{}",
+        log.text
+    );
+    assert_eq!(log.object.as_ref().unwrap().name, "Saída");
+    assert_eq!(log.node.as_ref().unwrap().operation, "action.scene");
 }
 
 /// "Relógio" runs logic every step and greets at the start; "Quebrado" fails at the start.

@@ -701,7 +701,7 @@ enum Check {
     },
     /// copy_entities copied into `scene` the nodes `nodes` ([object, node, parameter]) whose
     /// scene parameter names `from`, the scene the copies came from, such as action.scene
-    /// without its Cena input (see `opens_scene`).
+    /// without its Cena input or value.scene (see `opens_scene`).
     SceneBack {
         scene: Id,
         from: Id,
@@ -735,8 +735,10 @@ impl Check {
             Self::SceneBack { scene, from, nodes } => {
                 let to = project.scene(scene)?;
                 let mut params: Vec<&str> = Vec::new();
-                // Whether every node listed takes its scene through an input as well.
-                let mut wirable = true;
+                // The operations listed that take their scene through an input as well, those
+                // inputs, and whether every node listed does.
+                let (mut wirable, mut inputs): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+                let mut every = true;
                 let listed: Vec<String> = nodes
                     .iter()
                     .filter_map(|(entity, node, param)| {
@@ -749,8 +751,18 @@ impl Check {
                         if !params.contains(param) {
                             params.push(param);
                         }
-                        wirable &= graph::definition(&n.operation)
-                            .is_some_and(|def| def.inputs.iter().any(|port| port.id == *param));
+                        if graph::definition(&n.operation)
+                            .is_some_and(|def| def.inputs.iter().any(|port| port.id == *param))
+                        {
+                            if !wirable.contains(&n.operation.as_str()) {
+                                wirable.push(&n.operation);
+                            }
+                            if !inputs.contains(param) {
+                                inputs.push(param);
+                            }
+                        } else {
+                            every = false;
+                        }
                         // The copy's ID, which set_node_params takes: the answer gives only
                         // the copied roots.
                         Some(format!(
@@ -763,18 +775,25 @@ impl Check {
                     return None;
                 }
                 let source = project.scene(from).map_or(from.as_str(), |s| &s.name);
-                let params = params.join("/");
-                let wire = if wirable {
-                    format!(
-                        ", ou ligue a saída scene de um scene.current à entrada {params}, para \
-                         que abram a cena em que estiverem"
-                    )
-                } else {
+                let wire = if wirable.is_empty() {
                     String::new()
+                } else {
+                    // Named when only some of the nodes listed have the input.
+                    let which = if every {
+                        String::new()
+                    } else {
+                        format!(", nos nós {},", wirable.join("/"))
+                    };
+                    format!(
+                        ", ou{which} ligue a saída scene de um scene.current à entrada {}, para \
+                         que abram a cena em que estiverem",
+                        inputs.join("/")
+                    )
                 };
+                let params = params.join("/");
                 Some(format!(
-                    "estes nós copiados para {} ainda abrem {source}, a cena de onde vieram; \
-                     para que abram a cena nova (reiniciar a fase, por exemplo), use \
+                    "estes nós copiados para {} ainda nomeiam {source}, a cena de onde vieram; \
+                     para que nomeiem a cena nova (reiniciar a fase, por exemplo), use \
                      set_node_params com {params} {{\"Text\": \"{}\"}}{wire}: {}",
                     to.name,
                     to.id,

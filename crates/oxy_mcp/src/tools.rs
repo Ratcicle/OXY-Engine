@@ -509,21 +509,24 @@ set_parent {ids, parent?} (keeps world transform)
 - copy_entities {ids, to_scene, parent?}: copies objects of `scene`, with everything under them, \
 to another scene, keeping their place in the world and the world path of the animations that \
 move them, under a scaled or turned parent too; answers the copies' roots. Refused while they \
-point to objects or animations left behind (copy those too). action.scene nodes keep their \
-scene: those opening the scene copied from come back in warnings, each with its copy's ID \
-(set_node_params them), unless their scene input is connected
+point to objects or animations left behind (copy those too). action.scene and value.scene nodes \
+keep their scene: those naming the scene copied from come back in warnings, each with its copy's \
+ID (set_node_params them), unless their scene input is connected
 - save_model {entity, name?}: the object and everything under it become a model asset (answers \
 its ID); a name another model has is refused (any case). place_model {model: ID or name, \
 parent?, position?, name?}: places a copy in `scene`, answering every piece, its root first. \
-Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene nodes keep the \
-scene they opened when it was saved, with no warning (a restart saved in level 1 reopens level \
-1): set_node_params them after placing
+Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene and value.scene \
+nodes keep the scene they named when it was saved, with no warning (a restart saved in level 1 \
+reopens level 1): set_node_params them after placing
 - Scene changes without a fixed scene: action.scene's scene input (text) replaces its scene \
 parameter. Restart: connect scene.current.scene -> action.scene.scene, and the logic reopens \
-whatever scene it is in, copied or placed anywhere. Next scene: keep the scene's ID in a Text \
-attribute and connect attribute.get.value -> action.scene.scene. An empty text or one that is \
-not a scene ID stops the node with an error. While the input is connected the parameter is \
-ignored: delete_scene does not refuse over it and empties it
+whatever scene it is in, copied or placed anywhere. Next scene: value.scene gives the ID of the \
+scene its scene param names (people pick it by name in the editor): connect \
+value.scene.value -> action.scene.scene, or keep the ID in a Text attribute (set_attribute, or \
+value.scene.value -> attribute.set.value in logic) and connect attribute.get.value -> \
+action.scene.scene. An empty text or one that is not a scene ID stops the node with an error. \
+While the input is connected the parameter is ignored: delete_scene does not refuse over it and \
+empties it
 - set_transform {entity, position?, rotation? (degrees), scale?, move_tracks?}: keyframes that \
 animate the object follow it (a moved platform keeps its path around its new place) when \
 move_tracks is true; by default when its own animations move it. set_visible {entity, visible}; \
@@ -1537,6 +1540,38 @@ mod tests {
             "attribute.get.value -> action.scene.scene",
             "unless their scene input is connected",
             "delete_scene does not refuse over it and empties it",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_catalog_lists_the_scene_reference_next_to_the_object_reference() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let data = catalog(json!({"category": "Dados", "brief": true}));
+        let listed: Vec<&str> = data["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["operation"].as_str().unwrap())
+            .collect();
+        let object = listed.iter().position(|op| *op == "value.object").unwrap();
+        assert_eq!(listed.get(object + 1), Some(&"value.scene"), "{listed:?}");
+        let reference = catalog(json!({"operations": ["value.scene"]}))["nodes"][0].clone();
+        assert_eq!(reference["inputs"], json!([]));
+        assert_eq!(
+            reference["outputs"],
+            json!([{"id": "value", "label": "Cena", "type": "text"}])
+        );
+        assert_eq!(reference["params"][0]["id"], "scene");
+        assert_eq!(reference["params"][0]["ref"], "scene");
+        for text in [
+            "value.scene.value -> action.scene.scene",
+            "value.scene.value -> attribute.set.value",
+            "action.scene and value.scene nodes keep their scene",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }

@@ -1959,3 +1959,139 @@ fn a_scene_named_only_where_the_input_decides_can_be_deleted() {
         assert_eq!(e.graph.edges.len(), 1);
     }
 }
+
+#[test]
+fn a_scene_reference_holds_its_scene_like_a_scene_change_and_the_catalog_lists_it() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // The scene change takes its scene from the reference, so only the reference names it.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Portal"},
+            {"op": "add_node", "entity": "$1", "operation": "value.scene",
+             "params": {"scene": "$0"}},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene"},
+            {"op": "connect", "entity": "$1", "from_node": "$2", "from_port": "value",
+             "to_node": "$3", "to_port": "scene"},
+        ])),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
+    validate_project(&project).unwrap();
+    let id = |index: &str| {
+        report["created"][index][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (second, portal, reference) = (id("0"), id("1"), id("2"));
+    assert_eq!(
+        editing::scene_references(&project, &second),
+        ["Cena 3D → Portal → Referência de cena"]
+    );
+    let before = project.clone();
+    let error = command::apply(
+        &mut project,
+        &first,
+        &batch(json!({"op": "delete_scene", "scene": second})),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Cena 3D → Portal → Referência de cena"),
+        "{error}"
+    );
+    assert_eq!(project, before);
+
+    // Pointed at the scene it is in and copied to Fase 2, it still gives the first scene.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "set_node_params", "entity": portal, "node": reference,
+             "params": {"scene": first}},
+            {"op": "copy_entities", "ids": [portal], "to_scene": second},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    let copy = report["created"]["1"][0]["id"].as_str().unwrap();
+    let copied = project
+        .scene(&second)
+        .unwrap()
+        .entity(copy)
+        .unwrap()
+        .graph
+        .nodes
+        .iter()
+        .find(|n| n.operation == "value.scene")
+        .unwrap();
+    assert_eq!(copied.text("scene"), first);
+    assert!(
+        warning.contains(&format!("Portal ({copy}) → nó value.scene ({})", copied.id))
+            && warning.contains(&format!("set_node_params com scene {{\"Text\": \"{second}\"}}"))
+            // The reference has no input to wire Cena atual into.
+            && !warning.contains("scene.current"),
+        "{warning}"
+    );
+
+    let catalog = |args: serde_json::Value| query::catalog_query(&args).unwrap();
+    let data = catalog(json!({"category": "Dados"}))["nodes"].clone();
+    let data = data.as_array().unwrap();
+    let at = |operation: &str| {
+        data.iter()
+            .position(|n| n["operation"] == operation)
+            .unwrap()
+    };
+    assert_eq!(at("value.scene"), at("value.object") + 1);
+    let node = &data[at("value.scene")];
+    assert_eq!(node["label"], "Referência de cena");
+    assert_eq!(node["inputs"], json!([]));
+    assert_eq!(
+        node["outputs"],
+        json!([{"id": "value", "label": "Cena", "type": "text"}])
+    );
+    assert_eq!(
+        node["params"],
+        json!([{"id": "scene", "label": "Cena", "default": {"Text": ""}, "ref": "scene"}])
+    );
+}
+
+#[test]
+fn a_copied_scene_reference_leaves_the_wiring_hint_to_the_nodes_with_the_input() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // A restart and a reference to the scene they are in, which only the restart can take from
+    // Cena atual.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Reinício"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": first}},
+            {"op": "add_node", "entity": "$1", "operation": "value.scene",
+             "params": {"scene": first}},
+            {"op": "copy_entities", "ids": ["$1"], "to_scene": "$0"},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("ainda nomeiam Cena 3D, a cena de onde vieram")
+            && warning.contains("nó action.scene")
+            && warning.contains("nó value.scene")
+            && warning.contains(
+                ", ou, nos nós action.scene, ligue a saída scene de um scene.current à entrada \
+                 scene, para que abram a cena em que estiverem"
+            ),
+        "{warning}"
+    );
+}

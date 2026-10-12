@@ -2200,6 +2200,7 @@ mod tests {
         }
         for known in [
             "action.scene.scene",
+            "value.scene.scene",
             "action.sound.asset",
             "action.animation.clip",
             "event.input.action",

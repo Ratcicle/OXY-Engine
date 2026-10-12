@@ -1,4 +1,5 @@
-//! Operations about the game as a whole, exposed by the typed graph adapter: the scene running.
+//! Operations about the game as a whole, exposed by the typed graph adapter: the scene running
+//! and the scenes logic names.
 use super::*;
 impl Runtime {
     pub(super) fn game_data(
@@ -16,6 +17,15 @@ impl Runtime {
                 "scene" => Ok(Value::Text(self.scene_id.clone())),
                 "name" => Ok(Value::Text(self.scene().name.clone())),
                 _ => Err(format!("Cena atual não tem a saída {output}")),
+            },
+            // An empty scene is a node left unset; validation refuses a scene the project lacks
+            // before the game runs, and the node refuses it as well.
+            "value.scene" => match node.text("scene") {
+                "" => Err("Referência de cena sem cena escolhida: escolha a cena no nó".into()),
+                scene if self.source.scene(scene).is_none() => {
+                    Err("Referência de cena nomeia uma cena que o projeto não tem".into())
+                }
+                scene => Ok(Value::Text(scene.into())),
             },
             _ => self.math_data(graph, node, output, context, budget, depth),
         }
@@ -45,7 +55,7 @@ impl Runtime {
             // The name of a scene is the likely mix-up: Cena atual gives both.
             let hint = if self.source.scenes.iter().any(|s| s.name == scene) {
                 ", o nome de uma cena; a entrada espera o identificador (para reiniciar, a saída \
-                 Cena de Cena atual)"
+                 Cena de Cena atual; para outra cena, Referência de cena)"
             } else {
                 ""
             };

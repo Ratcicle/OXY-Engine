@@ -16,7 +16,7 @@ pub fn game_help(id: &str) -> Option<(&'static str, &'static str, &'static str)>
         "scene.current" => (
             "Fornece a cena em que o objeto está: o identificador, para Mudar de cena, e o nome, para chaves e textos.",
             "Ligue a saída Cena à entrada Cena de Mudar de cena para reiniciar a cena. A mesma lógica, copiada para outra cena ou colocada a partir de um modelo, reinicia a cena em que estiver.",
-            "Cena é o identificador estável, que não muda ao renomear a cena: é o que Mudar de cena espera. Nome é o texto mostrado, que pode mudar ou se repetir: use-o em textos e chaves, não como destino.",
+            "Cena é o identificador estável, que não muda ao renomear a cena: é o que Mudar de cena espera. Nome é o texto mostrado, que pode mudar ou se repetir: use-o em textos e chaves, não como destino. Para abrir outra cena, escolhida pelo nome, use Referência de cena.",
         ),
         _ => return None,
     })
