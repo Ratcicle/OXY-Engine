@@ -4,17 +4,25 @@
 //!
 //! A batch is all-or-nothing: commands run in order on a copy of the project, the project is
 //! validated after each one, and only a fully valid copy replaces the original. A string
-//! such as `"$0"` in a later command stands for the first ID created by command 0.
+//! such as `"$0"` in a later command stands for the first ID created by command 0 (see
+//! [`Placeholder`]); commands are counted from 0 in errors and answers too.
 use crate::{
+    animation::{AnimationEvent, Clip, Interpolation, Keyframe, Track},
     authoring::{self, ComponentKind},
+    character::MovementProfile,
     document::*,
     editing,
-    graph::{self, Edge, Node},
-    movement_presets::{self, MovementPreset},
+    graph::{self, Edge, Node, OperationDef, PortType, Reference},
+    input_actions::{self, every_entity},
+    movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
+    physics3d::CollisionShape,
+    spatial,
+    surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace},
 };
+use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
-use std::collections::{BTreeMap, HashSet};
+use serde_json::{Map, Value as Json, json};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Dimension {
@@ -58,7 +66,170 @@ pub enum EntityKind {
     /// Ready-made assembly with components, pieces and logic (3D scenes only).
     Preset {
         preset: Preset,
+        /// Platform: how far it goes from its position, in metres (default [4, 0, 0]).
+        #[serde(default)]
+        travel: Option<[f32; 3]>,
+        /// Platform: seconds for the way there and back (default 4).
+        #[serde(default)]
+        period: Option<f32>,
+        /// Characters: the camera that follows the player (default create).
+        #[serde(default)]
+        camera: Option<PresetCamera>,
     },
+}
+
+/// A keyframe of [`Command::SetClip`]. The channels left out are the target's rest transform,
+/// and the target's pivot is kept.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeySpec {
+    /// Seconds from the start of the clip, 0 to its duration.
+    pub time: f32,
+    /// Local position.
+    #[serde(default)]
+    pub position: Option<[f32; 3]>,
+    /// Local rotation in degrees.
+    #[serde(default)]
+    pub rotation: Option<[f32; 3]>,
+    #[serde(default)]
+    pub scale: Option<[f32; 3]>,
+    /// How the clip goes on to the next keyframe (default linear).
+    #[serde(default)]
+    pub interpolation: Option<KeyInterpolation>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyInterpolation {
+    Linear,
+    /// Keeps this keyframe until the next one.
+    Hold,
+}
+/// The keyframes of one object in [`Command::SetClip`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackSpec {
+    /// `"self"` (the default) for the clip's object, or the ID of a piece under it.
+    #[serde(default)]
+    pub target: Option<Id>,
+    pub keyframes: Vec<KeySpec>,
+}
+/// A marker of [`Command::SetClip`]: `event.animation` nodes start at it by name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarkerSpec {
+    pub time: f32,
+    pub name: String,
+}
+
+/// A logic node parameter or an attribute value as a command gives it: tagged with its type,
+/// such as `{"Number": 3}`, or plain. A plain value counts only for a node parameter whose
+/// type the catalog knows and only in the obvious reading (a number for Number, a text for
+/// Text, true or false for Bool); a parameter that takes any type (its input port is Any)
+/// reads a plain number, text or true/false by that form. Anything else is refused with the
+/// tagged form expected.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ParamValue {
+    Tagged(Value),
+    /// Read when the command runs, against the parameter's type.
+    Plain(Json),
+}
+impl ParamValue {
+    /// The value, a plain one read as `expected` (the type the catalog gives or, for a
+    /// parameter of any type, [`Self::form`]; None for attributes, which have none). `what`
+    /// names it in the error, such as "O parâmetro volume do nó action.sound".
+    fn value(&self, expected: Option<&Value>, what: &str) -> Result<Value, String> {
+        let plain = match self {
+            Self::Tagged(value) => return Ok(value.clone()),
+            Self::Plain(plain) => plain,
+        };
+        match (expected, plain) {
+            (Some(Value::Number(_)), Json::Number(n)) if n.as_f64().is_some() => {
+                return Ok(Value::Number(n.as_f64().unwrap_or_default()));
+            }
+            (Some(Value::Text(_)), Json::String(text)) => return Ok(Value::Text(text.clone())),
+            (Some(Value::Bool(_)), Json::Bool(b)) => return Ok(Value::Bool(*b)),
+            _ => {}
+        }
+        let (example, case) = tagged_example(expected, plain);
+        Err(format!(
+            "{what} precisa de um valor marcado com o tipo, como {example}; recebeu {plain}{}",
+            if case {
+                " (o nome do tipo começa com maiúscula)"
+            } else {
+                ""
+            }
+        ))
+    }
+    /// The type a plain number, text or true/false has by its form, for a parameter that takes
+    /// any type; None for a tagged value and other forms, which stay refused.
+    fn form(&self) -> Option<Value> {
+        match self {
+            Self::Plain(Json::Number(_)) => Some(Value::Number(0.)),
+            Self::Plain(Json::String(_)) => Some(Value::Text(String::new())),
+            Self::Plain(Json::Bool(_)) => Some(Value::Bool(false)),
+            _ => None,
+        }
+    }
+}
+
+/// The tags of [`Value`], as values are written.
+const VALUE_TAGS: [&str; 7] = [
+    "Number", "Text", "Bool", "Object", "Vector2", "Vector3", "Surface",
+];
+
+/// How `plain` reads tagged as `expected` or, without a type, as its JSON form suggests, for
+/// messages; true when `plain` is a tag written in another case, such as {"number": 3}.
+fn tagged_example(expected: Option<&Value>, plain: &Json) -> (String, bool) {
+    let tagged = |tag: &str, inner: Json| {
+        Json::Object(Map::from_iter([(tag.to_owned(), inner)])).to_string()
+    };
+    // A tag, in any case, around a value: the example shows the tag as written and the value
+    // in its form.
+    let mut plain = plain;
+    let mut known = None;
+    let mut case = false;
+    if let Json::Object(map) = plain
+        && map.len() == 1
+        && let Some((key, inner)) = map.iter().next()
+        && let Some(tag) = VALUE_TAGS.iter().find(|tag| tag.eq_ignore_ascii_case(key))
+    {
+        known = Some(*tag);
+        case = *tag != key.as_str();
+        plain = inner;
+    }
+    // The catalog's type first, then the tag given, then what the JSON looks like.
+    let typed = expected.map(|value| match value {
+        Value::Number(_) => "Number",
+        Value::Text(_) => "Text",
+        Value::Bool(_) => "Bool",
+        Value::Object(_) => "Object",
+        Value::Vector2(_) => "Vector2",
+        Value::Vector3(_) => "Vector3",
+        Value::Surface(_) => "Surface",
+    });
+    let tag = typed.or(known).unwrap_or(match plain {
+        Json::Number(_) => "Number",
+        Json::Bool(_) => "Bool",
+        Json::Array(items) if items.len() == 2 => "Vector2",
+        Json::Array(items) if items.len() == 3 => "Vector3",
+        _ => "Text",
+    });
+    let inner = match (tag, plain) {
+        ("Number", Json::Number(_))
+        | ("Bool", Json::Bool(_))
+        | ("Text" | "Object" | "Surface", Json::String(_)) => plain.clone(),
+        ("Vector2", Json::Array(items)) if items.len() == 2 => plain.clone(),
+        ("Vector3", Json::Array(items)) if items.len() == 3 => plain.clone(),
+        ("Number", _) => json!(1),
+        ("Bool", _) => json!(true),
+        ("Object", _) => json!("<ID do objeto>"),
+        ("Surface", _) => json!("<ID da superfície>"),
+        ("Vector2", _) => json!([0, 0]),
+        ("Vector3", _) => json!([0, 0, 0]),
+        _ => json!("texto"),
+    };
+    (tagged(tag, inner), case)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,10 +273,49 @@ pub enum Command {
         scene: Option<Id>,
         ids: Vec<Id>,
     },
+    /// Copies the objects `count` times (default 1); copy k moves k × `offset` from the
+    /// original, relative to its parent (default [0.5, 0, 0]). Keyframes that animate a copied
+    /// object move with it.
     DuplicateEntities {
         #[serde(default)]
         scene: Option<Id>,
         ids: Vec<Id>,
+        #[serde(default)]
+        offset: Option<[f32; 3]>,
+        #[serde(default)]
+        count: Option<usize>,
+    },
+    /// Copies objects of `scene`, with everything under them, to `to_scene` (under `parent`,
+    /// or at its root), keeping their place in the world and the world path of the animations
+    /// that move them. To another scene, their references must stay inside the copy.
+    CopyEntities {
+        #[serde(default)]
+        scene: Option<Id>,
+        ids: Vec<Id>,
+        to_scene: Id,
+        #[serde(default)]
+        parent: Option<Id>,
+    },
+    /// Saves an object and everything under it as a model asset that any scene can place.
+    SaveModel {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        /// Default: the object's name.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Places a copy of a model (its ID or name). Position is relative to the parent.
+    PlaceModel {
+        #[serde(default)]
+        scene: Option<Id>,
+        model: Id,
+        #[serde(default)]
+        parent: Option<Id>,
+        #[serde(default)]
+        position: Option<[f32; 3]>,
+        #[serde(default)]
+        name: Option<String>,
     },
     RenameEntity {
         #[serde(default)]
@@ -121,7 +331,9 @@ pub enum Command {
         #[serde(default)]
         parent: Option<Id>,
     },
-    /// Local transform. Rotation is in degrees.
+    /// Local transform. Rotation is in degrees. With `move_tracks`, the keyframes that animate
+    /// the object follow it ([`editing::carry_tracks`]); by default they do when its own
+    /// animations move it, as a moving platform's do.
     SetTransform {
         #[serde(default)]
         scene: Option<Id>,
@@ -132,6 +344,32 @@ pub enum Command {
         rotation: Option<[f32; 3]>,
         #[serde(default)]
         scale: Option<[f32; 3]>,
+        #[serde(default)]
+        move_tracks: Option<bool>,
+    },
+    /// Creates an animation of `entity`, or replaces its animation `clip` (ID or name) keeping
+    /// the ID that logic nodes use.
+    SetClip {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        #[serde(default)]
+        clip: Option<Id>,
+        name: String,
+        /// Seconds.
+        duration: f32,
+        #[serde(default)]
+        looping: bool,
+        tracks: Vec<TrackSpec>,
+        #[serde(default)]
+        events: Vec<MarkerSpec>,
+    },
+    /// Refused while an `action.animation` node plays the clip.
+    DeleteClip {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        clip: Id,
     },
     SetVisible {
         #[serde(default)]
@@ -151,14 +389,15 @@ pub enum Command {
         #[serde(default)]
         clear_texture: bool,
     },
-    /// Sets an attribute, or removes it when `value` is absent.
+    /// Sets an attribute, or removes it when `value` is absent. Attributes have no type in
+    /// the catalog, so the value is always tagged.
     SetAttribute {
         #[serde(default)]
         scene: Option<Id>,
         entity: Id,
         name: String,
         #[serde(default)]
-        value: Option<Value>,
+        value: Option<ParamValue>,
     },
     AddComponent {
         #[serde(default)]
@@ -172,6 +411,25 @@ pub enum Command {
         entity: Id,
         component: ComponentKind,
     },
+    /// Fits the object's box collider to its shape or, with `children`, to its shape and the
+    /// pieces under it, plus `margin` metres on every side (see [`spatial::fit_collider`]).
+    FitCollider {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        #[serde(default)]
+        children: bool,
+        #[serde(default)]
+        margin: Option<f32>,
+    },
+    /// Writes a movement profile's values into a 3D character (see
+    /// [`crate::character::PROFILE_FIELDS`]); they stay editable.
+    ApplyMovementProfile {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        profile: MovementProfile,
+    },
     /// JSON merge patch (RFC 7386) over the object's document form, for fields without a
     /// dedicated command. The ID cannot change.
     UpdateEntity {
@@ -180,6 +438,7 @@ pub enum Command {
         entity: Id,
         patch: Json,
     },
+    /// An input action parameter takes the action's ID or its name, and keeps the ID.
     AddNode {
         #[serde(default)]
         scene: Option<Id>,
@@ -188,7 +447,7 @@ pub enum Command {
         #[serde(default)]
         position: Option<[f32; 2]>,
         #[serde(default)]
-        params: BTreeMap<String, Value>,
+        params: BTreeMap<String, ParamValue>,
     },
     /// Removes a node and its connections.
     RemoveNode {
@@ -202,7 +461,7 @@ pub enum Command {
         scene: Option<Id>,
         entity: Id,
         node: Id,
-        params: BTreeMap<String, Value>,
+        params: BTreeMap<String, ParamValue>,
     },
     Connect {
         #[serde(default)]
@@ -221,6 +480,63 @@ pub enum Command {
         from_port: String,
         to_node: Id,
         to_port: String,
+    },
+    /// New input action (Ações de entrada) bound to `key`, one of
+    /// [`input_actions::keys`]. Its ID is what logic nodes and simulations use.
+    CreateInputAction {
+        name: String,
+        key: String,
+    },
+    /// `action` is the action's ID or its name.
+    RenameInputAction {
+        action: Id,
+        name: String,
+    },
+    SetInputKey {
+        action: Id,
+        key: String,
+    },
+    /// Refused while a component or logic node uses the action.
+    DeleteInputAction {
+        action: Id,
+    },
+    /// New physics surface: the preset's values (common by default), then the ones given.
+    CreateSurface {
+        #[serde(default)]
+        preset: Option<SurfacePreset>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        friction: Option<f32>,
+        #[serde(default)]
+        traction: Option<f32>,
+        #[serde(default)]
+        speed_multiplier: Option<f32>,
+        /// Conveyor velocity in m/s.
+        #[serde(default)]
+        conveyor: Option<[f32; 3]>,
+        #[serde(default)]
+        conveyor_space: Option<VelocitySpace>,
+    },
+    /// Changes the values given; the others stay.
+    UpdateSurface {
+        surface: Id,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        friction: Option<f32>,
+        #[serde(default)]
+        traction: Option<f32>,
+        #[serde(default)]
+        speed_multiplier: Option<f32>,
+        #[serde(default)]
+        conveyor: Option<[f32; 3]>,
+        #[serde(default)]
+        conveyor_space: Option<VelocitySpace>,
+    },
+    /// Refused while a collider, character, attribute or logic node uses the surface.
+    DeleteSurface {
+        surface: Id,
     },
 }
 impl Command {
@@ -243,30 +559,63 @@ impl Command {
             Self::CreateEntity { .. } => "Criar objeto",
             Self::DeleteEntities { .. } => "Excluir objetos",
             Self::DuplicateEntities { .. } => "Duplicar objetos",
+            Self::CopyEntities { .. } => "Copiar objetos para outra cena",
+            Self::SaveModel { .. } => "Salvar modelo",
+            Self::PlaceModel { .. } => "Colocar modelo",
             Self::RenameEntity { .. } => "Renomear objeto",
             Self::SetParent { .. } => "Mudar pai",
             Self::SetTransform { .. } => "Transformar objeto",
+            Self::SetClip { .. } => "Definir animação",
+            Self::DeleteClip { .. } => "Excluir animação",
             Self::SetVisible { .. } => "Mudar visibilidade",
             Self::SetMaterial { .. } => "Mudar material",
             Self::SetAttribute { .. } => "Mudar atributo",
             Self::AddComponent { .. } => "Adicionar componente",
             Self::RemoveComponent { .. } => "Remover componente",
+            Self::FitCollider { .. } => "Ajustar colisor",
+            Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
             Self::AddNode { .. } => "Adicionar nó",
             Self::RemoveNode { .. } => "Remover nó",
             Self::SetNodeParams { .. } => "Mudar parâmetros do nó",
             Self::Connect { .. } => "Ligar portas",
             Self::Disconnect { .. } => "Desligar portas",
+            Self::CreateInputAction { .. } => "Criar ação de entrada",
+            Self::RenameInputAction { .. } => "Renomear ação de entrada",
+            Self::SetInputKey { .. } => "Mudar tecla da ação",
+            Self::DeleteInputAction { .. } => "Excluir ação de entrada",
+            Self::CreateSurface { .. } => "Criar superfície física",
+            Self::UpdateSurface { .. } => "Editar superfície física",
+            Self::DeleteSurface { .. } => "Excluir superfície física",
         }
     }
 }
 
 /// What one command did.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Applied {
     pub op: String,
     /// IDs the command created, in order (objects, scenes or nodes).
     pub created: Vec<Id>,
+    /// The name of each created ID right after the command (a node's is its operation), for
+    /// the answer to name what a later command of the batch removed.
+    #[serde(skip)]
+    pub names: Vec<Option<String>>,
+    /// What the command left that the game takes otherwise than it may seem, as the batch
+    /// ended (see [`Check`]).
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+}
+
+/// Which command of a batch, as errors and warnings name it: its index, counted from 0 as
+/// `"$N"` and `created` count, its op and its place in words, "Comando 1 (set_node_params, o
+/// 2º do lote)".
+fn which(index: usize, op: &str) -> String {
+    if op.is_empty() {
+        format!("Comando {index} (o {}º do lote)", index + 1)
+    } else {
+        format!("Comando {index} ({op}, o {}º do lote)", index + 1)
+    }
 }
 
 /// A command that failed; nothing in its batch was applied.
@@ -278,12 +627,12 @@ pub struct CommandError {
 }
 impl std::fmt::Display for CommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Messages written as sentences end in a period already.
         write!(
             f,
-            "Comando {} ({}): {}. Nada foi alterado.",
-            self.index + 1,
-            self.op,
-            self.message
+            "{}: {}. Nada foi alterado.",
+            which(self.index, &self.op),
+            self.message.trim_end().trim_end_matches('.')
         )
     }
 }
@@ -298,6 +647,7 @@ pub fn apply(
 ) -> Result<Vec<Applied>, CommandError> {
     let mut draft = project.clone();
     let mut applied: Vec<Applied> = Vec::with_capacity(commands.len());
+    let mut checks: Vec<(usize, Check)> = Vec::new();
     for (index, command) in commands.iter().enumerate() {
         let fail = |message: String| CommandError {
             index,
@@ -305,15 +655,383 @@ pub fn apply(
             message,
         };
         let command = resolve_placeholders(command, &applied).map_err(fail)?;
-        let created = apply_one(&mut draft, default_scene, &command).map_err(fail)?;
+        let mut raised = Vec::new();
+        let created = apply_one(&mut draft, default_scene, &command, &mut raised).map_err(fail)?;
         validate_project(&draft).map_err(|e| fail(e.to_string()))?;
+        checks.extend(raised.into_iter().map(|check| (index, check)));
+        let names = if created.is_empty() {
+            Vec::new()
+        } else {
+            let wanted: HashSet<&str> = created.iter().map(String::as_str).collect();
+            let found = names_of(&draft, &wanted);
+            created
+                .iter()
+                .map(|id| found.get(id.as_str()).cloned())
+                .collect()
+        };
         applied.push(Applied {
             op: command.op(),
             created,
+            names,
+            warnings: Vec::new(),
         });
+    }
+    // Checked on the final project: a later command may have settled them.
+    for (index, check) in checks {
+        if let Some(message) = check.message(&draft) {
+            let command = &mut applied[index];
+            command
+                .warnings
+                .push(format!("{}: {message}", which(index, &command.op)));
+        }
     }
     *project = draft;
     Ok(applied)
+}
+
+/// Something a command left that the batch checks once it ends, since a later command may
+/// settle it.
+enum Check {
+    /// update_entity gave an object other dimensions while its box collider kept `size`, which
+    /// wrapped the old shape.
+    StaleCollider {
+        scene: Id,
+        entity: Id,
+        size: [f32; 3],
+    },
+    /// copy_entities copied into `scene` the action.scene nodes `nodes` ([object, node]),
+    /// which open `from`, the scene the copies came from.
+    SceneBack {
+        scene: Id,
+        from: Id,
+        nodes: Vec<(Id, Id)>,
+    },
+}
+impl Check {
+    /// The warning, when what was checked is still so in `project`.
+    fn message(&self, project: &Project) -> Option<String> {
+        match self {
+            Self::StaleCollider {
+                scene,
+                entity,
+                size,
+            } => {
+                let level = project.scene(scene)?;
+                if box_fit(level, entity) != Some((*size, false)) {
+                    return None;
+                }
+                let e = level.entity(entity)?;
+                let shown = |v: [f32; 3]| format!("[{}, {}, {}]", v[0], v[1], v[2]);
+                Some(format!(
+                    "{} ({entity}) agora mede {}, mas o colisor de caixa continua com {}; no \
+                     jogo, a colisão não acompanha a forma. Para ajustá-lo, use fit_collider \
+                     {{\"entity\": \"{entity}\"}}",
+                    e.name,
+                    shown(e.dimensions),
+                    shown(*size)
+                ))
+            }
+            Self::SceneBack { scene, from, nodes } => {
+                let to = project.scene(scene)?;
+                let listed: Vec<String> = nodes
+                    .iter()
+                    .filter_map(|(entity, node)| {
+                        let e = to.entity(entity)?;
+                        e.graph
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == *node && n.text("scene") == from)
+                            // The copy's ID, which set_node_params takes: the answer gives only
+                            // the copied roots.
+                            .map(|n| format!("{} ({}) → nó action.scene ({})", e.name, e.id, n.id))
+                    })
+                    .collect();
+                if listed.is_empty() {
+                    return None;
+                }
+                let source = project.scene(from).map_or(from.as_str(), |s| &s.name);
+                Some(format!(
+                    "estes nós copiados para {} ainda abrem {source}, a cena de onde vieram; \
+                     para que abram a cena nova (reiniciar a fase, por exemplo), use \
+                     set_node_params com scene {{\"Text\": \"{}\"}}: {}",
+                    to.name,
+                    to.id,
+                    listed.join("; ")
+                ))
+            }
+        }
+    }
+}
+
+/// The size of an object's box collider: its 3D box collider or, without one, its 2D box
+/// collider. None for other shapes and for 3D characters, whose body is their collider.
+fn box_size(e: &Entity) -> Option<[f32; 3]> {
+    if e.character3d.is_some() {
+        return None;
+    }
+    match &e.physics3d {
+        Some(collider) => match collider.shape {
+            CollisionShape::Box { size } => Some(size),
+            _ => None,
+        },
+        None => e.collider.as_ref().map(|c| c.size),
+    }
+}
+
+/// The size of the box collider of `entity` and whether it wraps the object's own shape
+/// ([`spatial::fits_shape`]); None without a box collider.
+fn box_fit(scene: &Scene, entity: &str) -> Option<([f32; 3], bool)> {
+    let e = scene.entity(entity)?;
+    let size = box_size(e)?;
+    let scale = spatial::physical_scale(scene.world_matrix(entity).ok()?);
+    Some((size, spatial::fits_shape(e, size, scale)))
+}
+
+/// Whether two sizes are the same but for f32 rounding.
+fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1e-4)
+}
+
+/// Applies `commands` like [`apply`] and answers as an agent reads the result: see [`report`].
+pub fn apply_and_report(
+    project: &mut Project,
+    default_scene: &str,
+    commands: &[Command],
+) -> Result<Json, CommandError> {
+    let before = batch_warnings(project);
+    let applied = apply(project, default_scene, commands)?;
+    Ok(report(project, &applied, &before))
+}
+
+/// The names of the `wanted` IDs in `project`: scenes, objects of scenes and models, nodes
+/// (by their operation), animations, input actions, surfaces and assets.
+fn names_of<'a>(project: &Project, wanted: &HashSet<&'a str>) -> HashMap<&'a str, String> {
+    let mut names = HashMap::new();
+    let mut found = |id: &str, name: &str| {
+        if let Some(id) = wanted.get(id) {
+            names.insert(*id, name.to_owned());
+        }
+    };
+    for scene in &project.scenes {
+        found(&scene.id, &scene.name);
+    }
+    for (_, e) in every_entity(project) {
+        found(&e.id, &e.name);
+        for node in &e.graph.nodes {
+            found(&node.id, &node.operation);
+        }
+        for clip in &e.clips {
+            found(&clip.id, &clip.name);
+        }
+    }
+    for id in project.input_bindings.keys() {
+        found(id, &input_actions::label(project, id));
+    }
+    for surface in &project.surfaces {
+        found(&surface.id, &surface.name);
+    }
+    for asset in &project.assets {
+        found(&asset.id, &asset.name);
+    }
+    names
+}
+
+/// A batch's result for agents: `created` maps the index of each command that created
+/// something to the IDs it created, in order (a preset's root first), with their names (a
+/// node's is its operation; what a later command removed keeps the name it was created
+/// with); `warnings`, present when the batch added any, lists what the game will ignore
+/// without failing, the action names and keys it left shared (see [`batch_warnings`]) and
+/// what its commands left that the game takes otherwise than it may seem (see [`Check`]);
+/// `before` are the project's [`batch_warnings`] before the batch, which are not repeated (a
+/// shared name or key comes back only when the batch added an action to it).
+pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Json {
+    let wanted: HashSet<&str> = applied
+        .iter()
+        .flat_map(|a| a.created.iter().map(String::as_str))
+        .collect();
+    let names = names_of(project, &wanted);
+    let created: Map<String, Json> = applied
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !a.created.is_empty())
+        .map(|(index, a)| {
+            let ids: Vec<Json> = a
+                .created
+                .iter()
+                .enumerate()
+                .map(|(nth, id)| {
+                    let name = names
+                        .get(id.as_str())
+                        .or_else(|| a.names.get(nth).and_then(Option::as_ref));
+                    json!({"id": id, "name": name})
+                })
+                .collect();
+            (index.to_string(), Json::Array(ids))
+        })
+        .collect();
+    let mut result = json!({"created": created});
+    let known: HashSet<&str> = before
+        .iter()
+        .flat_map(|w| w.about.iter().map(String::as_str))
+        .collect();
+    let mut new: Vec<String> = batch_warnings(project)
+        .into_iter()
+        .filter(|w| w.about.iter().any(|about| !known.contains(about.as_str())))
+        .map(|w| w.message)
+        .collect();
+    new.extend(applied.iter().flat_map(|a| a.warnings.iter().cloned()));
+    if !new.is_empty() {
+        result["warnings"] = json!(new);
+    }
+    result
+}
+
+/// Something the game will ignore without failing, or that a batch should hear about; see
+/// [`batch_warnings`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Warning {
+    /// What it is about, by IDs and values only, so renaming an object does not make it new:
+    /// one entry per action of a shared name or key, so a batch makes the warning new only when
+    /// it adds an action to them, not when it takes one away.
+    pub about: Vec<String>,
+    pub message: String,
+}
+
+/// What the game will ignore without failing, so validation lets it through: input actions
+/// bound to keys the game does not read (or keeps, Escape and F3), logic nodes that name an
+/// input action the project does not have (or name it instead of giving its ID, as nodes
+/// stored before commands kept the ID), and fixed-choice parameters holding another value
+/// (set by update_entity or by hand).
+pub fn warnings(project: &Project) -> Vec<Warning> {
+    let mut found = Vec::new();
+    for (id, key) in &project.input_bindings {
+        if let Err(error) = input_actions::check_key(key) {
+            found.push(Warning {
+                about: vec![format!("key {id} {key}")],
+                message: format!(
+                    "Ação de entrada {} ({id}): {error}",
+                    input_actions::label(project, id)
+                ),
+            });
+        }
+    }
+    for (scope, e) in every_entity(project) {
+        for node in &e.graph.nodes {
+            let place = || format!("{scope} → {} → nó {} ({})", e.name, node.operation, node.id);
+            let action = node.text("action");
+            if matches!(node.operation.as_str(), "event.input" | "input.read")
+                && !project.input_bindings.contains_key(action)
+            {
+                // The game reads only IDs: a name the project knows is still never pressed.
+                let message = match input_actions::find_named(project, action) {
+                    Ok(Some(id)) => format!(
+                        "{}: \"{action}\" é o nome da ação de entrada {id}, e o jogo lê o ID; \
+                         set_node_params com o nome guarda o ID",
+                        place()
+                    ),
+                    Ok(None) => format!(
+                        "{}: a ação de entrada \"{action}\" não existe no projeto",
+                        place()
+                    ),
+                    // A name several actions share, which only their IDs tell apart.
+                    Err(_) => {
+                        let wanted = action.trim().to_lowercase();
+                        let named: Vec<&str> = project
+                            .input_bindings
+                            .keys()
+                            .filter(|id| input_actions::label(project, id).to_lowercase() == wanted)
+                            .map(String::as_str)
+                            .collect();
+                        format!(
+                            "{}: \"{action}\" é o nome de {} ações de entrada ({}), e o jogo lê \
+                             o ID; use set_node_params com o ID da ação certa",
+                            place(),
+                            named.len(),
+                            named.join(", ")
+                        )
+                    }
+                };
+                found.push(Warning {
+                    about: vec![format!("action {} {action}", node.id)],
+                    message,
+                });
+            }
+            // An empty mode is an event.input never configured, which the game reads as
+            // pressed; any other empty choice never matches, like any other wrong value.
+            let set = node.params.iter().filter(|(key, v)| {
+                !(node.operation == "event.input"
+                    && key.as_str() == "mode"
+                    && matches!(v, Value::Text(t) if t.is_empty()))
+            });
+            if let Err(error) = graph::check_choices(&node.operation, set) {
+                found.push(Warning {
+                    about: vec![format!("choice {} {error}", node.id)],
+                    message: format!("{}: {error}", place()),
+                });
+            }
+        }
+    }
+    found
+}
+
+/// [`warnings`], plus the input action names that stand for several actions and the keys
+/// bound to several actions. By name, commands and simulations refuse a name two actions
+/// share and take first the action whose ID it is. create and rename keep names apart, but
+/// the default actions of presets and components (Pular, Correr…) arrive without that check.
+/// A key fires every action bound to it, which simulations, pressing actions, never show. The
+/// game itself tells names apart, and projects may share a name or a key on purpose (one label
+/// for keys 1, 2 and 3; jump and confirm on Space), so only the batch that leaves a name or a
+/// key shared reports it, not validation.
+pub fn batch_warnings(project: &Project) -> Vec<Warning> {
+    let mut found = warnings(project);
+    let mut named: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for id in project.input_bindings.keys() {
+        let label = input_actions::label(project, id).trim().to_lowercase();
+        for name in [label, id.to_lowercase()] {
+            let ids = named.entry(name).or_default();
+            if !ids.contains(&id.as_str()) {
+                ids.push(id);
+            }
+        }
+    }
+    for (name, ids) in named.into_iter().filter(|(_, ids)| ids.len() > 1) {
+        let listed: Vec<String> = ids
+            .iter()
+            .map(|id| format!("{id} ({})", input_actions::label(project, id)))
+            .collect();
+        found.push(Warning {
+            about: ids
+                .iter()
+                .map(|id| format!("action name {name} {id}"))
+                .collect(),
+            message: format!(
+                "{} ações de entrada atendem pelo nome \"{name}\": {}. Pelo nome, os comandos e o \
+                 oxy_simulate não as distinguem; renomeie uma delas ou use o ID",
+                ids.len(),
+                listed.join(", ")
+            ),
+        });
+    }
+    for (key, ids) in input_actions::shared_keys(project) {
+        let listed: Vec<String> = ids
+            .iter()
+            .map(|id| format!("{id} ({})", input_actions::label(project, id)))
+            .collect();
+        found.push(Warning {
+            about: ids
+                .iter()
+                .map(|id| format!("shared key {key} {id}"))
+                .collect(),
+            message: format!(
+                "A tecla {key} é de {} ações de entrada: {}. No jogo, apertá-la dispara todas; \
+                 o oxy_simulate aperta ações, não teclas, e não mostra isso. Se não for de \
+                 propósito, mude a tecla de uma delas com set_input_key",
+                ids.len(),
+                listed.join(", ")
+            ),
+        });
+    }
+    found
 }
 
 /// Parses a JSON array (or a single object) of commands.
@@ -325,49 +1043,206 @@ pub fn parse(json: &Json) -> Result<Vec<Command>, String> {
     list.into_iter()
         .enumerate()
         .map(|(i, item)| {
-            serde_json::from_value(item)
-                .map_err(|e| format!("Comando {} não reconhecido: {e}", i + 1))
+            let op = item["op"].as_str().unwrap_or_default().to_owned();
+            serde_json::from_value(item).map_err(|e| {
+                format!(
+                    "{} não reconhecido: {}",
+                    which(i, &op),
+                    explain(&e.to_string())
+                )
+            })
         })
         .collect()
 }
 
-/// Replaces `"$N"` strings with the first ID created by command N.
+/// A serde message about an unknown value, an unknown field or a missing one, in Portuguese,
+/// with the accepted spelling when only the case differs ("Parkour" for `parkour`), and one
+/// about a wrong type or length (see [`wrong_shape`]); other messages as they are.
+fn explain(message: &str) -> String {
+    if let Some(text) = wrong_shape(message) {
+        return text;
+    }
+    // The names serde quotes between backticks: the one given, then the ones accepted.
+    let quoted: Vec<&str> = message.split('`').skip(1).step_by(2).collect();
+    let listed = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let (what, given, accepted) = match quoted.as_slice() {
+        [given, accepted @ ..] if message.starts_with("unknown variant") => {
+            ("valor", *given, accepted)
+        }
+        [given, accepted @ ..] if message.starts_with("unknown field") => {
+            ("campo", *given, accepted)
+        }
+        [missing] if message.starts_with("missing field") => {
+            return format!("falta o campo `{missing}`");
+        }
+        _ => return message.to_owned(),
+    };
+    let mut text = format!("{what} `{given}` desconhecido");
+    if !accepted.is_empty() {
+        text.push_str(&format!("; os aceitos são {}", listed(accepted)));
+    }
+    if let Some(right) = accepted.iter().find(|a| a.eq_ignore_ascii_case(given)) {
+        text.push_str(&format!(
+            " (maiúsculas e minúsculas contam: escreva `{right}`)"
+        ));
+    }
+    text
+}
+
+/// A serde message about a value of the wrong type or length, in Portuguese: "invalid type:
+/// sequence, expected a map" is "tipo errado: recebeu uma lista, esperava um objeto". Phrases
+/// it does not know stay as serde wrote them; None for other messages.
+fn wrong_shape(message: &str) -> Option<String> {
+    let items = |n: &str| format!("{n} {}", if n == "1" { "item" } else { "itens" });
+    let expected = |what: &str| -> String {
+        let fixed = match what {
+            "a map" => "um objeto",
+            "a sequence" => "uma lista",
+            "a string" => "um texto",
+            "a boolean" => "true ou false",
+            "f32" | "f64" => "um número",
+            "u8" | "u16" | "u32" | "u64" | "usize" => "um número inteiro, 0 ou mais",
+            "i8" | "i16" | "i32" | "i64" | "isize" => "um número inteiro",
+            "fewer elements in array" => "menos itens",
+            "internally tagged enum Command" => "um comando, um objeto com op",
+            _ => "",
+        };
+        if !fixed.is_empty() {
+            return fixed.into();
+        }
+        if let Some(n) = what
+            .strip_prefix("an array of length ")
+            .or_else(|| what.strip_prefix("a tuple of size "))
+        {
+            return format!("uma lista de {}", items(n));
+        }
+        if let Some(name) = what
+            .strip_prefix("internally tagged enum ")
+            .or_else(|| what.strip_prefix("struct "))
+        {
+            return format!("um objeto ({name})");
+        }
+        match what.strip_prefix("enum ") {
+            Some(name) => format!("um dos valores de {name}"),
+            None => what.into(),
+        }
+    };
+    if let Some(rest) = message.strip_prefix("invalid length ") {
+        let (length, what) = rest.split_once(", expected ")?;
+        return Some(format!(
+            "tamanho errado: {}, esperava {}",
+            items(length),
+            expected(what)
+        ));
+    }
+    let (start, rest) = match message.strip_prefix("invalid type: ") {
+        Some(rest) => ("tipo errado", rest),
+        None => ("valor inválido", message.strip_prefix("invalid value: ")?),
+    };
+    // A text given may hold ", expected " itself; what serde expects never does.
+    let (given, what) = rest.rsplit_once(", expected ")?;
+    let given = [
+        ("string ", "o texto "),
+        ("integer ", "o número "),
+        ("floating point ", "o número "),
+        ("boolean ", "o valor "),
+    ]
+    .iter()
+    .find_map(|(en, pt)| given.strip_prefix(en).map(|value| format!("{pt}{value}")))
+    .unwrap_or_else(|| {
+        match given {
+            "sequence" => "uma lista",
+            "map" => "um objeto",
+            "unit value" | "null" => "null",
+            other => other,
+        }
+        .into()
+    });
+    Some(format!(
+        "{start}: recebeu {given}, esperava {}",
+        expected(what)
+    ))
+}
+
+/// A text that stands for an ID created earlier in a batch. Only a whole text of this form
+/// counts, so "$10 de bônus" stays text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placeholder<'a> {
+    /// `"$N"` (`nth` 0) or `"$N.M"`: the M-th ID created by command N, both counted from 0.
+    Created { command: usize, nth: usize },
+    /// `"$$N"` or `"$$N.M"`: the text itself without its first '$', such as "$10".
+    Escaped(&'a str),
+}
+impl<'a> Placeholder<'a> {
+    pub fn parse(text: &'a str) -> Option<Self> {
+        let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        let pattern = |rest: &str| match rest.split_once('.') {
+            Some((command, nth)) => digits(command) && digits(nth),
+            None => digits(rest),
+        };
+        if let Some(rest) = text.strip_prefix("$$") {
+            return pattern(rest).then(|| Self::Escaped(&text[1..]));
+        }
+        let rest = text.strip_prefix('$').filter(|rest| pattern(rest))?;
+        let (command, nth) = rest.split_once('.').unwrap_or((rest, "0"));
+        // A number too long for usize names a command that cannot exist.
+        let number = |s: &str| s.parse().unwrap_or(usize::MAX);
+        Some(Self::Created {
+            command: number(command),
+            nth: number(nth),
+        })
+    }
+    /// The ID or text it stands for after the commands `applied`; `None` when command N did
+    /// not run before or created fewer IDs.
+    pub fn resolve(self, applied: &[Applied]) -> Option<String> {
+        match self {
+            Self::Created { command, nth } => applied.get(command)?.created.get(nth).cloned(),
+            Self::Escaped(text) => Some(text.into()),
+        }
+    }
+}
+
+/// Replaces placeholders anywhere in `command`, patches included.
 fn resolve_placeholders(command: &Command, applied: &[Applied]) -> Result<Command, String> {
-    fn walk(value: &mut Json, applied: &[Applied]) -> Result<(), String> {
+    fn walk(value: &mut Json, applied: &[Applied], changed: &mut bool) -> Result<(), String> {
         match value {
             Json::String(text) => {
-                if let Some(index) = text.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) {
-                    let id = applied
-                        .get(index)
-                        .and_then(|a| a.created.first())
-                        .ok_or_else(|| {
-                            format!("\"{text}\" não se refere a um objeto criado antes no lote")
-                        })?;
-                    *text = id.clone();
+                if let Some(placeholder) = Placeholder::parse(text) {
+                    *text = placeholder.resolve(applied).ok_or_else(|| {
+                        format!(
+                            "\"{text}\" não se refere a um ID criado antes no lote (para o \
+                             texto \"{text}\" em si, escreva \"${text}\")"
+                        )
+                    })?;
+                    *changed = true;
                 }
             }
             Json::Array(items) => {
                 for item in items {
-                    walk(item, applied)?;
+                    walk(item, applied, changed)?;
                 }
             }
             Json::Object(map) => {
-                for (key, item) in map.iter_mut() {
-                    // A patch may legitimately contain text starting with '$'.
-                    if key != "patch" {
-                        walk(item, applied)?;
-                    }
+                for item in map.values_mut() {
+                    walk(item, applied, changed)?;
                 }
             }
             _ => {}
         }
         Ok(())
     }
-    if applied.is_empty() {
+    let mut value = serde_json::to_value(command).map_err(|e| e.to_string())?;
+    let mut changed = false;
+    walk(&mut value, applied, &mut changed)?;
+    if !changed {
         return Ok(command.clone());
     }
-    let mut value = serde_json::to_value(command).map_err(|e| e.to_string())?;
-    walk(&mut value, applied)?;
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
@@ -403,7 +1278,14 @@ fn finite(values: &[f32], what: &str) -> Result<(), String> {
     }
 }
 
-fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<Vec<Id>, String> {
+/// Applies one command to `project`, answering the IDs it created; `checks` takes what the
+/// batch checks once it ends.
+fn apply_one(
+    project: &mut Project,
+    default: &str,
+    command: &Command,
+    checks: &mut Vec<Check>,
+) -> Result<Vec<Id>, String> {
     use Command as C;
     match command {
         C::RenameProject { name } => {
@@ -470,11 +1352,96 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             }
             Ok(vec![])
         }
-        C::DuplicateEntities { scene, ids } => {
+        C::DuplicateEntities {
+            scene,
+            ids,
+            offset,
+            count,
+        } => {
             let id = scene_id(project, scene, default)?;
             let scene = scene_mut(project, &id);
             check_entities(scene, ids)?;
-            editing::duplicate_selection(scene, ids)
+            editing::duplicate_repeated(
+                scene,
+                ids,
+                offset.unwrap_or(editing::DUPLICATE_OFFSET),
+                count.unwrap_or(1),
+            )
+        }
+        C::CopyEntities {
+            scene,
+            ids,
+            to_scene,
+            parent,
+        } => {
+            let from = scene_id(project, scene, default)?;
+            let to = scene_id(project, &Some(to_scene.clone()), default)?;
+            let roots = copy_entities(project, &from, ids, &to, parent.as_ref())?;
+            // Logic that opens the scene it came from, such as a restart, still opens it.
+            let target = project.scene(&to).unwrap();
+            let nodes: Vec<(Id, Id)> = roots
+                .iter()
+                .flat_map(|root| target.descendants(root))
+                .filter_map(|id| target.entity(&id))
+                .flat_map(|e| {
+                    e.graph
+                        .nodes
+                        .iter()
+                        .filter(|n| n.operation == "action.scene" && n.text("scene") == from)
+                        .map(|n| (e.id.clone(), n.id.clone()))
+                })
+                .collect();
+            if from != to && !nodes.is_empty() {
+                checks.push(Check::SceneBack {
+                    scene: to,
+                    from,
+                    nodes,
+                });
+            }
+            Ok(roots)
+        }
+        C::SaveModel {
+            scene,
+            entity,
+            name,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let source = project.scene(&id).unwrap();
+            check_entities(source, std::slice::from_ref(entity))?;
+            let name = match name {
+                Some(name) if name.trim().is_empty() => {
+                    return Err("Informe um nome para o modelo".into());
+                }
+                Some(name) => name.trim().to_owned(),
+                None => source.entity(entity).unwrap().name.clone(),
+            };
+            // place_model takes a model by name, which two models would share.
+            if let Some(other) = project.model_named(&name) {
+                return Err(format!(
+                    "Já existe um modelo chamado \"{}\" ({}); escolha outro nome com name",
+                    other.name, other.id
+                ));
+            }
+            let pieces: HashSet<Id> = source.descendants(entity).into_iter().collect();
+            refuse_outside(source, &pieces, "do modelo")?;
+            Ok(vec![project.save_model(&id, entity, name)?])
+        }
+        C::PlaceModel {
+            scene,
+            model,
+            parent,
+            position,
+            name,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            place_model(
+                project,
+                &id,
+                model,
+                parent.as_ref(),
+                *position,
+                name.as_deref(),
+            )
         }
         C::RenameEntity {
             scene,
@@ -503,9 +1470,12 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             position,
             rotation,
             scale,
+            move_tracks,
         } => {
             let id = scene_id(project, scene, default)?;
-            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let scene = scene_mut(project, &id);
+            let e = entity_mut(scene, entity)?;
+            let before = e.transform.clone();
             if let Some(p) = position {
                 finite(p, "Posição")?;
                 e.transform.position = *p;
@@ -521,6 +1491,60 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
                 }
                 e.transform.scale = *s;
             }
+            let after = e.transform.clone();
+            if move_tracks.unwrap_or_else(|| editing::animates_itself(e)) && after != before {
+                editing::carry_tracks(&mut scene.entities, entity, &before, &after);
+            }
+            Ok(vec![])
+        }
+        C::SetClip {
+            scene,
+            entity,
+            clip,
+            name,
+            duration,
+            looping,
+            tracks,
+            events,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            set_clip(
+                scene_mut(project, &id),
+                entity,
+                clip.as_deref(),
+                ClipSpec {
+                    name,
+                    duration: *duration,
+                    looping: *looping,
+                    tracks,
+                    events,
+                },
+            )
+        }
+        C::DeleteClip {
+            scene,
+            entity,
+            clip,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let owner = project
+                .scene(&id)
+                .unwrap()
+                .entity(entity)
+                .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?;
+            let index = find_clip(owner, clip)?;
+            let found = &owner.clips[index];
+            let uses = clip_uses(project, &found.id);
+            if !uses.is_empty() {
+                return Err(format!(
+                    "Altere estes nós antes de excluir a animação {}:\n{}",
+                    found.name,
+                    uses.join("\n")
+                ));
+            }
+            entity_mut(scene_mut(project, &id), entity)?
+                .clips
+                .remove(index);
             Ok(vec![])
         }
         C::SetVisible {
@@ -572,7 +1596,8 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             let e = entity_mut(scene_mut(project, &id), entity)?;
             match value {
                 Some(value) => {
-                    e.attributes.insert(name.trim().into(), value.clone());
+                    let value = value.value(None, &format!("O atributo {}", name.trim()))?;
+                    e.attributes.insert(name.trim().into(), value);
                 }
                 None => {
                     if e.attributes.remove(name.trim()).is_none() {
@@ -608,19 +1633,67 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             authoring::remove(entity_mut(scene_mut(project, &id), entity)?, *component)?;
             Ok(vec![])
         }
+        C::FitCollider {
+            scene,
+            entity,
+            children,
+            margin,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            spatial::fit_collider(
+                scene_mut(project, &id),
+                entity,
+                *children,
+                margin.unwrap_or(0.),
+            )?;
+            Ok(vec![])
+        }
+        C::ApplyMovementProfile {
+            scene,
+            entity,
+            profile,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let name = e.name.clone();
+            e.character3d
+                .as_mut()
+                .ok_or_else(|| {
+                    format!("{name} não é um personagem 3D: adicione o componente character antes")
+                })?
+                .apply_profile(*profile);
+            Ok(vec![])
+        }
         C::UpdateEntity {
             scene,
             entity,
             patch,
         } => {
             let id = scene_id(project, scene, default)?;
-            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let scene = scene_mut(project, &id);
+            let fitted = box_fit(scene, entity);
+            let e = entity_mut(scene, entity)?;
             let mut value = serde_json::to_value(&*e).map_err(|e| e.to_string())?;
             merge_patch(&mut value, patch);
             if value.get("id").and_then(Json::as_str) != Some(entity.as_str()) {
                 return Err("O patch não pode mudar o ID do objeto".into());
             }
+            let dimensions = e.dimensions;
             *e = serde_json::from_value(value).map_err(|e| format!("Patch inválido: {e}"))?;
+            let resized = !near(e.dimensions, dimensions);
+            // A box collider follows the object's scale but not its dimensions: one that fit
+            // the old shape (its dimensions or fit_collider's box, margin and all), and that
+            // the patch left as it was, no longer fits the new one.
+            if let Some((size, true)) = fitted
+                && resized
+                && box_fit(scene, entity) == Some((size, false))
+            {
+                checks.push(Check::StaleCollider {
+                    scene: id,
+                    entity: entity.clone(),
+                    size,
+                });
+            }
             Ok(vec![])
         }
         C::AddNode {
@@ -635,12 +1708,7 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
                 .iter()
                 .find(|op| op.id == operation)
                 .ok_or_else(|| format!("Nó {operation} não existe no catálogo"))?;
-            if let Some(key) = params
-                .keys()
-                .find(|k| !def.params.iter().any(|p| p.id == *k))
-            {
-                return Err(format!("O nó {operation} não tem o parâmetro {key}"));
-            }
+            let params = node_params(project, def, params)?;
             let e = entity_mut(scene_mut(project, &id), entity)?;
             let position = position.unwrap_or_else(|| {
                 // To the right of the rightmost node, so new nodes do not overlap.
@@ -658,7 +1726,7 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             });
             finite(&position, "Posição do nó")?;
             let mut node = Node::new(operation, position);
-            node.params.extend(params.clone());
+            node.params.extend(params);
             let node_id = node.id.clone();
             e.graph.nodes.push(node);
             Ok(vec![node_id])
@@ -687,27 +1755,27 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             params,
         } => {
             let id = scene_id(project, scene, default)?;
-            let e = entity_mut(scene_mut(project, &id), entity)?;
-            let target = e
+            let operation = project
+                .scene(&id)
+                .unwrap()
+                .entity(entity)
+                .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?
                 .graph
                 .nodes
-                .iter_mut()
+                .iter()
                 .find(|n| n.id == *node)
-                .ok_or_else(|| format!("Nó {node} não existe neste objeto"))?;
+                .ok_or_else(|| format!("Nó {node} não existe neste objeto"))?
+                .operation
+                .clone();
             let def = graph::registry()
                 .iter()
-                .find(|op| op.id == target.operation)
+                .find(|op| op.id == operation)
                 .ok_or("Nó com operação desconhecida")?;
-            if let Some(key) = params
-                .keys()
-                .find(|k| !def.params.iter().any(|p| p.id == *k))
-            {
-                return Err(format!(
-                    "O nó {} não tem o parâmetro {key}",
-                    target.operation
-                ));
+            let params = node_params(project, def, params)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            if let Some(target) = e.graph.nodes.iter_mut().find(|n| n.id == *node) {
+                target.params.extend(params);
             }
-            target.params.extend(params.clone());
             Ok(vec![])
         }
         C::Connect {
@@ -761,6 +1829,194 @@ fn apply_one(project: &mut Project, default: &str, command: &Command) -> Result<
             }
             Ok(vec![])
         }
+        C::CreateInputAction { name, key } => {
+            let key = input_actions::check_key(key)?;
+            unique_action_name(project, name, None)?;
+            Ok(vec![input_actions::create(project, name, key)?])
+        }
+        C::RenameInputAction { action, name } => {
+            let action = input_actions::find(project, action)?;
+            unique_action_name(project, name, Some(&action))?;
+            input_actions::rename(project, &action, name)?;
+            Ok(vec![])
+        }
+        C::SetInputKey { action, key } => {
+            let action = input_actions::find(project, action)?;
+            let key = input_actions::check_key(key)?;
+            project.input_bindings.insert(action, key.into());
+            Ok(vec![])
+        }
+        C::DeleteInputAction { action } => {
+            let action = input_actions::find(project, action)?;
+            input_actions::remove(project, &action)?;
+            Ok(vec![])
+        }
+        C::CreateSurface {
+            preset,
+            name,
+            friction,
+            traction,
+            speed_multiplier,
+            conveyor,
+            conveyor_space,
+        } => {
+            let mut created = SurfaceMaterial::preset(preset.unwrap_or(SurfacePreset::Common));
+            SurfaceValues {
+                name,
+                friction: *friction,
+                traction: *traction,
+                speed_multiplier: *speed_multiplier,
+                conveyor: *conveyor,
+                conveyor_space: *conveyor_space,
+            }
+            .set(&mut created)?;
+            let id = created.id.clone();
+            project.surfaces.push(created);
+            Ok(vec![id])
+        }
+        C::UpdateSurface {
+            surface,
+            name,
+            friction,
+            traction,
+            speed_multiplier,
+            conveyor,
+            conveyor_space,
+        } => {
+            let target = surface_mut(project, surface)?;
+            SurfaceValues {
+                name,
+                friction: *friction,
+                traction: *traction,
+                speed_multiplier: *speed_multiplier,
+                conveyor: *conveyor,
+                conveyor_space: *conveyor_space,
+            }
+            .set(target)?;
+            Ok(vec![])
+        }
+        C::DeleteSurface { surface } => {
+            surface_mut(project, surface)?;
+            surface::remove(project, surface)?;
+            Ok(vec![])
+        }
+    }
+}
+
+/// The parameters `given` to a node of `def`, as the node keeps them: plain values read by the
+/// catalog's types (by their form where the input port takes any type), fixed choices checked,
+/// and an input action given by name kept by its ID, which is what the game reads. An action
+/// the project lacks stays as given, and the batch warns about it; a name two actions share is
+/// refused, as by input action commands.
+fn node_params(
+    project: &Project,
+    def: &OperationDef,
+    given: &BTreeMap<String, ParamValue>,
+) -> Result<BTreeMap<String, Value>, String> {
+    let mut params = BTreeMap::new();
+    for (key, value) in given {
+        let param = def
+            .params
+            .iter()
+            .find(|p| p.id == key)
+            .ok_or_else(|| format!("O nó {} não tem o parâmetro {key}", def.id))?;
+        // An Any input takes every attribute type (attribute.set's value, condition.compare's
+        // a and b), so its default is only where it starts, not its type.
+        let any = def
+            .inputs
+            .iter()
+            .any(|port| port.id == key && port.kind == PortType::Any);
+        let expected = if any {
+            value.form()
+        } else {
+            Some(param.default.clone())
+        };
+        let mut value = value.value(
+            expected.as_ref(),
+            &format!("O parâmetro {key} do nó {}", def.id),
+        )?;
+        if graph::reference(def.id, param) == Some(Reference::InputAction)
+            && let Value::Text(action) = &mut value
+            && let Some(id) = input_actions::find_named(project, action)?
+        {
+            *action = id;
+        }
+        params.insert(key.clone(), value);
+    }
+    graph::check_choices(def.id, &params)?;
+    Ok(params)
+}
+
+/// Two actions with one name could not be told apart by name, as simulations allow, and a
+/// name that is another action's ID would reach that action, which [`input_actions::find`]
+/// takes first.
+fn unique_action_name(project: &Project, name: &str, renamed: Option<&str>) -> Result<(), String> {
+    let wanted = name.trim().to_lowercase();
+    let mut others = project
+        .input_bindings
+        .keys()
+        .filter(|id| Some(id.as_str()) != renamed);
+    if let Some(id) = others
+        .clone()
+        .find(|id| input_actions::label(project, id).to_lowercase() == wanted)
+    {
+        return Err(format!(
+            "Já existe uma ação de entrada chamada \"{}\" ({id})",
+            name.trim()
+        ));
+    }
+    match others.find(|id| id.to_lowercase() == wanted) {
+        Some(id) => Err(format!(
+            "\"{}\" é o ID da ação de entrada {}; por esse nome, os comandos e o oxy_simulate \
+             chegariam a ela. Escolha outro nome",
+            name.trim(),
+            input_actions::label(project, id)
+        )),
+        None => Ok(()),
+    }
+}
+
+fn surface_mut<'a>(project: &'a mut Project, id: &str) -> Result<&'a mut SurfaceMaterial, String> {
+    project
+        .surfaces
+        .iter_mut()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("Superfície {id} não existe no projeto"))
+}
+
+/// The values a surface command sets; absent ones stay as they are.
+struct SurfaceValues<'a> {
+    name: &'a Option<String>,
+    friction: Option<f32>,
+    traction: Option<f32>,
+    speed_multiplier: Option<f32>,
+    conveyor: Option<[f32; 3]>,
+    conveyor_space: Option<VelocitySpace>,
+}
+impl SurfaceValues<'_> {
+    fn set(&self, surface: &mut SurfaceMaterial) -> Result<(), String> {
+        if let Some(name) = self.name {
+            if name.trim().is_empty() {
+                return Err("Informe um nome para a superfície".into());
+            }
+            surface.name = name.trim().into();
+        }
+        for (value, field) in [
+            (self.friction, &mut surface.friction),
+            (self.traction, &mut surface.traction),
+            (self.speed_multiplier, &mut surface.speed_multiplier),
+        ] {
+            if let Some(value) = value {
+                *field = value;
+            }
+        }
+        if let Some(conveyor) = self.conveyor {
+            surface.conveyor = conveyor;
+        }
+        if let Some(space) = self.conveyor_space {
+            surface.conveyor_space = space;
+        }
+        surface.validate()
     }
 }
 
@@ -780,71 +2036,561 @@ fn create_entity(
         finite(&p, "Posição")?;
     }
     let name = name.map(str::trim).filter(|n| !n.is_empty());
-    let id = if let EntityKind::Preset { preset } = kind {
-        let preset = match preset {
-            Preset::FirstPerson => MovementPreset::FirstPerson,
-            Preset::ThirdPerson => MovementPreset::ThirdPerson,
-            Preset::Platform => MovementPreset::Platform,
-        };
-        let at = position.unwrap_or([0., 0.02, 0.]);
-        let id = movement_presets::create(project, scene, preset, glam::Vec3::from(at))?;
-        let e = entity_mut(scene_mut(project, scene), &id)?;
-        if let Some(name) = name {
-            e.name = name.into();
+    let mut entity = match kind {
+        EntityKind::Preset {
+            preset,
+            travel,
+            period,
+            camera,
+        } => {
+            let platform = *preset == Preset::Platform;
+            if !platform && (travel.is_some() || period.is_some()) {
+                return Err("travel e period valem só para o preset platform".into());
+            }
+            if platform && camera.is_some() {
+                return Err("camera vale só para os presets first_person e third_person".into());
+            }
+            if let Some(travel) = travel {
+                finite(travel, "travel")?;
+            }
+            let defaults = PresetOptions::default();
+            let options = PresetOptions {
+                travel: travel.map_or(defaults.travel, Vec3::from),
+                period: period.unwrap_or(defaults.period),
+                camera: camera.unwrap_or_default(),
+            };
+            let preset = match preset {
+                Preset::FirstPerson => MovementPreset::FirstPerson,
+                Preset::ThirdPerson => MovementPreset::ThirdPerson,
+                Preset::Platform => MovementPreset::Platform,
+            };
+            let at = position.unwrap_or([0., 0.02, 0.]);
+            let before = scene_mut(project, scene).entities.len();
+            let id =
+                movement_presets::create_with(project, scene, preset, Vec3::from(at), options)?;
+            let e = entity_mut(scene_mut(project, scene), &id)?;
+            if let Some(name) = name {
+                e.name = name.into();
+            }
+            e.parent = parent.cloned();
+            // Every piece of the assembly, its root first.
+            let mut created: Vec<Id> = scene_mut(project, scene).entities[before..]
+                .iter()
+                .map(|e| e.id.clone())
+                .collect();
+            created.sort_by_key(|piece| *piece != id);
+            return Ok(created);
         }
-        e.parent = parent.cloned();
-        id
-    } else {
-        let mut entity = match kind {
-            EntityKind::Group => Entity::new(name.unwrap_or("Grupo"), None),
-            EntityKind::Shape { shape } => {
-                let two_d = matches!(
-                    shape,
-                    Primitive::Rectangle | Primitive::Circle | Primitive::Sprite
-                );
-                if two_d != (scene_kind == SceneKind::TwoD) {
-                    return Err(format!(
-                        "A forma {shape:?} não pertence a uma cena {}",
-                        if scene_kind == SceneKind::TwoD {
-                            "2D"
-                        } else {
-                            "3D"
-                        }
-                    ));
-                }
-                let mut e = Entity::new(name.unwrap_or(shape_label(*shape)), Some(*shape));
-                e.segments = match shape {
-                    Primitive::Pyramid => 4,
-                    Primitive::Sphere | Primitive::Circle => 16,
-                    _ => 8,
-                };
-                e.primitive_parameters = Some(crate::geometry::primitives::Parameters::default());
-                e
+        EntityKind::Group => Entity::new(name.unwrap_or("Grupo"), None),
+        EntityKind::Shape { shape } => {
+            if flat(*shape) != (scene_kind == SceneKind::TwoD) {
+                return Err(format!(
+                    "A forma {shape:?} não pertence a uma cena {}",
+                    if scene_kind == SceneKind::TwoD {
+                        "2D"
+                    } else {
+                        "3D"
+                    }
+                ));
             }
-            EntityKind::Camera => {
-                let mut e = Entity::new(name.unwrap_or("Câmera"), None);
-                e.camera = Some(Camera::default());
-                e
-            }
-            EntityKind::Ui { element } => {
-                let mut e = Entity::new(name.unwrap_or(ui_label(*element)), None);
-                e.ui = Some(UiElement {
-                    kind: *element,
-                    ..Default::default()
-                });
-                e
-            }
-            EntityKind::Preset { .. } => unreachable!(),
-        };
-        entity.parent = parent.cloned();
-        if let Some(p) = position {
-            entity.transform.position = p;
+            let mut e = Entity::new(name.unwrap_or(shape_label(*shape)), Some(*shape));
+            e.segments = match shape {
+                Primitive::Pyramid => 4,
+                Primitive::Sphere | Primitive::Circle => 16,
+                _ => 8,
+            };
+            e.primitive_parameters = Some(crate::geometry::primitives::Parameters::default());
+            e
         }
-        let id = entity.id.clone();
-        scene_mut(project, scene).entities.push(entity);
-        id
+        EntityKind::Camera => {
+            let mut e = Entity::new(name.unwrap_or("Câmera"), None);
+            e.camera = Some(Camera::default());
+            e
+        }
+        EntityKind::Ui { element } => {
+            let mut e = Entity::new(name.unwrap_or(ui_label(*element)), None);
+            e.ui = Some(UiElement {
+                kind: *element,
+                ..Default::default()
+            });
+            e
+        }
     };
+    entity.parent = parent.cloned();
+    if let Some(p) = position {
+        entity.transform.position = p;
+    }
+    let id = entity.id.clone();
+    scene_mut(project, scene).entities.push(entity);
     Ok(vec![id])
+}
+
+/// Whether the shape belongs to 2D scenes.
+fn flat(shape: Primitive) -> bool {
+    matches!(
+        shape,
+        Primitive::Rectangle | Primitive::Circle | Primitive::Sprite
+    )
+}
+
+/// Shapes go only to scenes of their kind, as create_entity requires; validation checks the
+/// components.
+fn check_kind(entities: &[Entity], kind: SceneKind, scene: &str) -> Result<(), String> {
+    let wanted = kind == SceneKind::TwoD;
+    for e in entities {
+        let two_d = match (e.primitive, &e.mesh) {
+            (Some(shape), _) => flat(shape),
+            (None, Some(_)) => false,
+            (None, None) => continue,
+        };
+        if two_d != wanted {
+            let [is, scene_is] = if two_d { ["2D", "3D"] } else { ["3D", "2D"] };
+            return Err(format!(
+                "{} é uma forma {is}, e a cena {scene} é {scene_is}",
+                e.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses to take `pieces` out of `scene`, into a model or another scene, while they point to
+/// objects or animations left behind, which would not exist where they go. `what` completes
+/// "fora": "do modelo", "da cópia".
+fn refuse_outside(scene: &Scene, pieces: &HashSet<Id>, what: &str) -> Result<(), String> {
+    let named = |id: &str| {
+        scene
+            .entity(id)
+            .map_or_else(|| id.to_owned(), |e| format!("{} ({id})", e.name))
+    };
+    let taken: Vec<&Entity> = scene
+        .entities
+        .iter()
+        .filter(|e| pieces.contains(&e.id))
+        .collect();
+    let clips: HashSet<&str> = taken
+        .iter()
+        .flat_map(|e| e.clips.iter().map(|clip| clip.id.as_str()))
+        .collect();
+    let mut found = Vec::new();
+    for e in taken {
+        // What the object points to: (where, target).
+        let mut links: Vec<(String, &str)> = Vec::new();
+        for (key, value) in &e.attributes {
+            if let Some(target) = value.object() {
+                links.push((format!("atributo {key}"), target));
+            }
+        }
+        if let Some(target) = e.ui.as_ref().and_then(|ui| ui.binding_object.as_deref()) {
+            links.push(("vínculo da interface".into(), target));
+        }
+        if let Some(rig) = &e.camera_rig {
+            if let Some(target) = rig.target.as_deref() {
+                links.push(("alvo da câmera".into(), target));
+            }
+            for hidden in &rig.hidden {
+                links.push(("peça oculta pela câmera".into(), hidden));
+            }
+        }
+        for node in &e.graph.nodes {
+            for (key, value) in &node.params {
+                if let Some(target) = value.object() {
+                    links.push((format!("nó {} ({key})", node.operation), target));
+                }
+            }
+            let clip = node.text("clip");
+            if node.operation == "action.animation" && !clip.is_empty() && !clips.contains(clip) {
+                found.push(format!(
+                    "{} → nó action.animation → animação de outro objeto ({clip})",
+                    e.name
+                ));
+            }
+        }
+        for clip in &e.clips {
+            for track in &clip.tracks {
+                links.push((format!("animação {}", clip.name), &track.target));
+            }
+        }
+        for (link, target) in links {
+            if !pieces.contains(target) {
+                found.push(format!("{} → {link} → {}", e.name, named(target)));
+            }
+        }
+    }
+    if found.is_empty() {
+        return Ok(());
+    }
+    let more = found.len().saturating_sub(10);
+    found.truncate(10);
+    if more > 0 {
+        found.push(format!("… e mais {more}"));
+    }
+    Err(format!(
+        "Estas referências apontam para fora {what}; leve junto os objetos e animações \
+         que elas usam ou tire as referências antes:\n{}",
+        found.join("\n")
+    ))
+}
+
+/// Copies `ids` of the scene `from`, with everything under them, to the scene `to`. The copied
+/// roots go under `parent` (or to the root of `to`) keeping their world transform, and the
+/// keyframes that animate them change parent space with them, so they play the same path in
+/// the world ([`editing::rebase_tracks`]). Answers the new roots, in order.
+fn copy_entities(
+    project: &mut Project,
+    from: &str,
+    ids: &[Id],
+    to: &str,
+    parent: Option<&Id>,
+) -> Result<Vec<Id>, String> {
+    let source = project.scene(from).unwrap();
+    let destination = project.scene(to).unwrap();
+    check_entities(source, ids)?;
+    if let Some(parent) = parent
+        && destination.entity(parent).is_none()
+    {
+        return Err(format!(
+            "Objeto {parent} não existe na cena {}",
+            destination.name
+        ));
+    }
+    let roots = editing::selection_roots(source, ids);
+    let copied: HashSet<Id> = roots.iter().flat_map(|id| source.descendants(id)).collect();
+    if from != to {
+        refuse_outside(source, &copied, "da cópia")?;
+    }
+    let mut copies: Vec<Entity> = source
+        .entities
+        .iter()
+        .filter(|e| copied.contains(&e.id))
+        .cloned()
+        .collect();
+    check_kind(&copies, destination.kind, &destination.name)?;
+    let parent_world = match parent {
+        Some(parent) => destination.world_matrix(parent)?,
+        None => Mat4::IDENTITY,
+    };
+    if parent_world.determinant().abs() < 1e-8 {
+        return Err("A transformação do pai de destino não pode ser invertida".into());
+    }
+    // Each root's old parent space, which the copy leaves for the destination's.
+    let spaces = roots
+        .iter()
+        .map(|id| {
+            let parent = source.entity(id).and_then(|e| e.parent.as_deref());
+            Ok(match parent {
+                Some(parent) => source.world_matrix(parent)?,
+                None => Mat4::IDENTITY,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
+    remap_entities(&mut copies, &map)?;
+    for (root, space) in roots.iter().zip(spaces) {
+        let id = &map[root];
+        let entity = copies.iter_mut().find(|e| e.id == *id).unwrap();
+        let name = entity.name.clone();
+        let before = entity.transform.clone();
+        let change = parent_world.inverse() * space;
+        let local = change * before.matrix();
+        // An unchanged local transform stays exact, without the rounding of the matrices, and
+        // so do the keyframes that animate it.
+        if before.matrix().abs_diff_eq(local, 1e-6) {
+            entity.parent = parent.cloned();
+            continue;
+        }
+        let mut after = Transform::from_matrix(local, before.pivot);
+        after.rotation = editing::angles_near(after.quaternion(), before.rotation);
+        if !after.finite() || !after.matrix().abs_diff_eq(local, 0.0001) {
+            return Err(format!(
+                "{name} ficaria deformado sob o pai de destino (cisalhamento); escolha outro \
+                 pai ou ajuste a escala não uniforme dele"
+            ));
+        }
+        entity.parent = parent.cloned();
+        entity.transform = after.clone();
+        // A change of parent space, not an edit: the path scales and turns with the space.
+        editing::rebase_tracks(&mut copies, id, change, &before, &after).map_err(|_| {
+            format!(
+                "A animação de {name} ficaria deformada sob o pai de destino (cisalhamento); \
+                 escolha outro pai ou ajuste a escala não uniforme dele"
+            )
+        })?;
+    }
+    let created = roots.iter().map(|root| map[root].clone()).collect();
+    scene_mut(project, to).entities.extend(copies);
+    Ok(created)
+}
+
+/// A model asset by ID or, when no asset has that ID, by name (ignoring case).
+fn find_model(project: &Project, model: &str) -> Result<Id, String> {
+    if let Some(asset) = project.asset(model) {
+        return if asset.kind == AssetKind::Model && asset.model.is_some() {
+            Ok(asset.id.clone())
+        } else {
+            Err(format!("O recurso {} não é um modelo", asset.name))
+        };
+    }
+    let wanted = model.trim().to_lowercase();
+    let named: Vec<&Asset> = project
+        .assets
+        .iter()
+        .filter(|a| a.kind == AssetKind::Model && a.name.trim().to_lowercase() == wanted)
+        .collect();
+    match named.as_slice() {
+        [one] => Ok(one.id.clone()),
+        [] => {
+            let models: Vec<String> = project
+                .assets
+                .iter()
+                .filter(|a| a.kind == AssetKind::Model)
+                .map(|a| format!("{} ({})", a.name, a.id))
+                .collect();
+            Err(if models.is_empty() {
+                format!(
+                    "Modelo {model} não existe no projeto, que não tem modelos; crie um com \
+                     save_model"
+                )
+            } else {
+                format!(
+                    "Modelo {model} não existe no projeto. Modelos: {}",
+                    models.join(", ")
+                )
+            })
+        }
+        many => Err(format!(
+            "{} modelos se chamam \"{}\"; use o ID",
+            many.len(),
+            model.trim()
+        )),
+    }
+}
+
+/// Places a copy of `model` (ID or name) in `scene`, its root under `parent` at `position`.
+/// Answers every piece, the root first.
+fn place_model(
+    project: &mut Project,
+    scene: &str,
+    model: &str,
+    parent: Option<&Id>,
+    position: Option<[f32; 3]>,
+    name: Option<&str>,
+) -> Result<Vec<Id>, String> {
+    let asset = find_model(project, model)?;
+    let target = project.scene(scene).unwrap();
+    if let Some(parent) = parent {
+        check_entities(target, std::slice::from_ref(parent))?;
+    }
+    if let Some(p) = position {
+        finite(&p, "Posição")?;
+    }
+    if name.is_some_and(|n| n.trim().is_empty()) {
+        return Err("Informe um nome para o objeto".into());
+    }
+    let pieces = project
+        .asset(&asset)
+        .and_then(|a| a.model.as_deref())
+        .unwrap_or_default();
+    check_kind(pieces, target.kind, &target.name)?;
+    let before = target.entities.len();
+    let root = project.instantiate_model(&asset, scene)?;
+    let placed = &mut scene_mut(project, scene).entities[before..];
+    let index = placed
+        .iter()
+        .position(|e| e.id == root)
+        .ok_or("Modelo sem raiz")?;
+    if let Some(p) = position {
+        let rest = placed[index].transform.clone();
+        let mut moved = rest.clone();
+        moved.position = p;
+        placed[index].transform = moved.clone();
+        editing::carry_tracks(placed, &root, &rest, &moved);
+    }
+    let e = &mut placed[index];
+    e.parent = parent.cloned();
+    if let Some(name) = name {
+        e.name = name.trim().into();
+    }
+    let mut created: Vec<Id> = placed.iter().map(|e| e.id.clone()).collect();
+    created.sort_by_key(|piece| *piece != root);
+    Ok(created)
+}
+
+/// The index of `entity`'s animation `clip`, by ID or, failing that, by name (ignoring case).
+fn find_clip(entity: &Entity, clip: &str) -> Result<usize, String> {
+    let wanted = clip.trim().to_lowercase();
+    entity
+        .clips
+        .iter()
+        .position(|c| c.id == clip)
+        .or_else(|| {
+            entity
+                .clips
+                .iter()
+                .position(|c| c.name.trim().to_lowercase() == wanted)
+        })
+        .ok_or_else(|| format!("{} não tem a animação {clip}", entity.name))
+}
+
+/// The logic nodes that play the animation `id`, in scenes and models.
+fn clip_uses(project: &Project, id: &str) -> Vec<String> {
+    every_entity(project)
+        .flat_map(|(scope, e)| {
+            e.graph
+                .nodes
+                .iter()
+                .filter(|n| n.operation == "action.animation" && n.text("clip") == id)
+                .map(move |n| format!("{scope} → {} → Reproduzir animação ({})", e.name, n.id))
+        })
+        .collect()
+}
+
+/// What [`Command::SetClip`] asks for, besides where.
+struct ClipSpec<'a> {
+    name: &'a str,
+    duration: f32,
+    looping: bool,
+    tracks: &'a [TrackSpec],
+    events: &'a [MarkerSpec],
+}
+
+/// Builds the animation `spec` of `owner`, or replaces its animation `replaced` (ID or name)
+/// keeping the ID. Answers the new animation's ID, or nothing when it replaced one.
+fn set_clip(
+    scene: &mut Scene,
+    owner: &str,
+    replaced: Option<&str>,
+    spec: ClipSpec,
+) -> Result<Vec<Id>, String> {
+    let entity = scene
+        .entity(owner)
+        .ok_or_else(|| format!("Objeto {owner} não existe nesta cena"))?;
+    let name = spec.name.trim();
+    if name.is_empty() {
+        return Err("Informe um nome para a animação".into());
+    }
+    if !spec.duration.is_finite() || spec.duration <= 0. {
+        return Err("A duração da animação precisa ser um número de segundos maior que 0".into());
+    }
+    let index = replaced.map(|clip| find_clip(entity, clip)).transpose()?;
+    if let Some((_, other)) = entity.clips.iter().enumerate().find(|(i, clip)| {
+        Some(*i) != index && clip.name.trim().to_lowercase() == name.to_lowercase()
+    }) {
+        return Err(format!(
+            "{} já tem uma animação chamada \"{name}\" ({}); para substituí-la, informe clip",
+            entity.name, other.id
+        ));
+    }
+    let pieces: HashSet<Id> = scene.descendants(owner).into_iter().collect();
+    let mut clip = Clip {
+        id: index.map_or_else(new_id, |i| entity.clips[i].id.clone()),
+        name: name.into(),
+        duration: spec.duration,
+        looping: spec.looping,
+        tracks: Vec::new(),
+        events: Vec::new(),
+    };
+    for track in spec.tracks {
+        let target = match track.target.as_deref() {
+            None | Some("self") => owner,
+            Some(id) => id,
+        };
+        let piece = scene
+            .entity(target)
+            .filter(|_| pieces.contains(target))
+            .ok_or_else(|| {
+                format!(
+                    "Uma trilha anima o próprio objeto (\"self\") ou uma peça dentro de {}; \
+                     {target} não é",
+                    entity.name
+                )
+            })?;
+        if clip.tracks.iter().any(|t| t.target == target) {
+            return Err(format!(
+                "Duas trilhas animam {}; junte os quadros-chave numa trilha só",
+                piece.name
+            ));
+        }
+        if track.keyframes.is_empty() {
+            return Err(format!("A trilha de {} não tem quadros-chave", piece.name));
+        }
+        let mut keyframes = Vec::with_capacity(track.keyframes.len());
+        for key in &track.keyframes {
+            check_time(key.time, spec.duration, "Quadro-chave")?;
+            // Channels left out keep the rest pose, and the pivot stays the piece's.
+            let mut transform = piece.transform.clone();
+            if let Some(p) = key.position {
+                finite(&p, "Posição do quadro-chave")?;
+                transform.position = p;
+            }
+            if let Some(r) = key.rotation {
+                finite(&r, "Rotação do quadro-chave")?;
+                transform.rotation = r.map(f32::to_radians);
+            }
+            if let Some(s) = key.scale {
+                finite(&s, "Escala do quadro-chave")?;
+                if s.iter().any(|v| v.abs() < 0.0001) {
+                    return Err("Escala não pode ser zero".into());
+                }
+                transform.scale = s;
+            }
+            keyframes.push(Keyframe {
+                time: key.time,
+                transform,
+                interpolation: match key.interpolation {
+                    Some(KeyInterpolation::Hold) => Interpolation::Hold,
+                    _ => Interpolation::Linear,
+                },
+            });
+        }
+        keyframes.sort_by(|a, b| a.time.total_cmp(&b.time));
+        if let Some(pair) = keyframes
+            .windows(2)
+            .find(|pair| pair[0].time >= pair[1].time)
+        {
+            return Err(format!(
+                "A trilha de {} tem dois quadros-chave no tempo {} s",
+                piece.name, pair[1].time
+            ));
+        }
+        clip.tracks.push(Track {
+            target: target.into(),
+            keyframes,
+        });
+    }
+    for event in spec.events {
+        check_time(event.time, spec.duration, "Marcador")?;
+        if event.name.trim().is_empty() {
+            return Err("Informe o nome do marcador".into());
+        }
+        clip.events.push(AnimationEvent {
+            time: event.time,
+            name: event.name.trim().into(),
+        });
+    }
+    clip.events.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let id = clip.id.clone();
+    let clips = &mut scene.entity_mut(owner).unwrap().clips;
+    match index {
+        Some(i) => {
+            clips[i] = clip;
+            Ok(vec![])
+        }
+        None => {
+            clips.push(clip);
+            Ok(vec![id])
+        }
+    }
+}
+
+fn check_time(time: f32, duration: f32, what: &str) -> Result<(), String> {
+    if time.is_finite() && (0. ..=duration).contains(&time) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what} em {time} s fica fora da animação, que dura {duration} s"
+        ))
+    }
 }
 
 fn shape_label(shape: Primitive) -> &'static str {

@@ -1,4 +1,5 @@
 use super::*;
+use oxy_core::animation::Clip;
 use oxy_core::geometry::snap::{self, Method};
 use oxy_render::{ScenePicker, collider_debug::project};
 struct Point {
@@ -9,7 +10,10 @@ struct Point {
 pub(super) struct Snap {
     pub selection: Selection,
     pub selected: Option<Id>,
+    /// Where the moved pieces started: their transforms and the animations of every object
+    /// with tracks for them, whose keyframes follow a piece that animates itself.
     base: Vec<(Id, Transform)>,
+    clips: Vec<(Id, Vec<Clip>)>,
     points: Vec<Point>,
     source: Option<usize>,
     target: Option<usize>,
@@ -50,6 +54,7 @@ impl Editor {
             .iter()
             .filter_map(|id| scene.entity(id).map(|e| (id.clone(), e.transform.clone())))
             .collect::<Vec<_>>();
+        let clips = animations_of(self.scene(), &roots);
         let pivot = if roots.len() == 1 {
             let e = scene.entity(&roots[0]).unwrap();
             view.world_matrix(&e.id)
@@ -97,6 +102,7 @@ impl Editor {
             selection: self.selection.clone(),
             selected: self.selected.clone(),
             base,
+            clips,
             points,
             source: None,
             target: None,
@@ -109,25 +115,7 @@ impl Editor {
         let Some(mut state) = self.modeling.snap.take() else {
             return;
         };
-        for (id, t) in &state.base {
-            if let Some(e) = self.scene_mut().entity_mut(id) {
-                e.transform = t.clone();
-            }
-        }
-        if let (Some(a), Some(b)) = (state.source, state.target) {
-            let method = state.axis.map_or(Method::Move, |axis| Method::Scale {
-                axis,
-                pivot: state.pivot,
-            });
-            state.error = snap::apply(
-                self.scene_mut(),
-                &state.selection.ids,
-                state.points[a].position,
-                state.points[b].position,
-                method,
-            )
-            .err();
-        }
+        state.preview(self.scene_mut());
         self.modeling.snap = Some(state);
     }
     pub(crate) fn snap_panel(&mut self, ui: &mut egui::Ui) -> bool {
@@ -315,6 +303,54 @@ impl Editor {
     }
 }
 
+impl Snap {
+    /// Puts the pieces back where the snap began, keyframes included, and previews the chosen
+    /// points from there. Moving a piece that animates itself carries its keyframes, so putting
+    /// back only the transforms would leave them where the last preview took them, and each
+    /// new preview would add its shift to theirs.
+    fn preview(&mut self, scene: &mut Scene) {
+        for (id, transform) in &self.base {
+            if let Some(e) = scene.entity_mut(id) {
+                e.transform = transform.clone();
+            }
+        }
+        for (id, clips) in &self.clips {
+            if let Some(e) = scene.entity_mut(id) {
+                e.clips = clips.clone();
+            }
+        }
+        if let (Some(a), Some(b)) = (self.source, self.target) {
+            let method = self.axis.map_or(Method::Move, |axis| Method::Scale {
+                axis,
+                pivot: self.pivot,
+            });
+            self.error = snap::apply(
+                scene,
+                &self.selection.ids,
+                self.points[a].position,
+                self.points[b].position,
+                method,
+            )
+            .err();
+        }
+    }
+}
+
+/// The animations of every object with a track for one of `roots`: what moving them may change.
+fn animations_of(scene: &Scene, roots: &[Id]) -> Vec<(Id, Vec<Clip>)> {
+    scene
+        .entities
+        .iter()
+        .filter(|e| {
+            e.clips
+                .iter()
+                .flat_map(|c| &c.tracks)
+                .any(|t| roots.contains(&t.target))
+        })
+        .map(|e| (e.id.clone(), e.clips.clone()))
+        .collect()
+}
+
 /// Numbered step of the snap: done, waiting for a click, or still ahead.
 fn snap_step(
     ui: &mut egui::Ui,
@@ -374,4 +410,91 @@ fn snap_step(
         egui::FontId::monospace(11.5),
         theme::TEXT_MUTED,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A moving platform at [0, 1, 0], its path 4 m along X and back, and a snap of it whose
+    /// source point is at the origin and whose targets are 2 m and 3 m along X.
+    fn platform() -> (Scene, Id, Snap) {
+        let mut project = editing::blank_project("Encaixe", SceneKind::ThreeD).unwrap();
+        let scene = project.start_scene.clone();
+        let commands = oxy_core::command::parse(&serde_json::json!({
+            "op": "create_entity", "kind": {"type": "preset", "preset": "platform"},
+            "position": [0.0, 1.0, 0.0],
+        }))
+        .unwrap();
+        let applied = oxy_core::command::apply(&mut project, &scene, &commands).unwrap();
+        let id = applied[0].created[0].clone();
+        let scene = project.scene(&scene).unwrap().clone();
+        assert!(editing::animates_itself(scene.entity(&id).unwrap()));
+        let point = |x: f32, moving: bool| Point {
+            entity: id.clone(),
+            position: Vec3::new(x, 0., 0.),
+            moving,
+        };
+        let snap = Snap {
+            selection: Selection {
+                ids: vec![id.clone()],
+                anchor: Some(id.clone()),
+            },
+            selected: Some(id.clone()),
+            base: vec![(id.clone(), scene.entity(&id).unwrap().transform.clone())],
+            clips: animations_of(&scene, std::slice::from_ref(&id)),
+            points: vec![point(0., true), point(2., false), point(3., false)],
+            source: None,
+            target: None,
+            axis: None,
+            pivot: Vec3::new(-1., 0., 0.),
+            error: None,
+        };
+        (scene, id, snap)
+    }
+
+    fn keys(scene: &Scene, id: &str) -> Vec<[f32; 3]> {
+        scene.entity(id).unwrap().clips[0].tracks[0]
+            .keyframes
+            .iter()
+            .map(|k| k.transform.position)
+            .collect()
+    }
+
+    #[test]
+    fn each_preview_moves_a_moving_platform_and_its_path_once() {
+        let (mut scene, id, mut snap) = platform();
+        let original = scene.entity(&id).unwrap().clone();
+        let path = keys(&scene, &id);
+        assert_eq!(path, [[0., 1., 0.], [4., 1., 0.], [0., 1., 0.]]);
+        snap.source = Some(0);
+        // Target A, then B, then A again: the path follows the last preview only.
+        for (target, shift) in [(1, 2.), (2, 3.), (1, 2.)] {
+            snap.target = Some(target);
+            snap.preview(&mut scene);
+            assert_eq!(snap.error, None);
+            let platform = scene.entity(&id).unwrap();
+            assert_eq!(platform.transform.position, [shift, 1., 0.]);
+            let moved: Vec<_> = path.iter().map(|p| [p[0] + shift, p[1], p[2]]).collect();
+            assert_eq!(keys(&scene, &id), moved);
+            assert_eq!(keys(&scene, &id)[0], platform.transform.position);
+        }
+        // A scale preview, then a move again, still starts from where the snap began.
+        snap.axis = Some(0);
+        snap.preview(&mut scene);
+        assert_eq!(snap.error, None);
+        assert_eq!(scene.entity(&id).unwrap().transform.scale, [3., 1., 1.]);
+        snap.axis = None;
+        snap.target = Some(2);
+        snap.preview(&mut scene);
+        let platform = scene.entity(&id).unwrap();
+        assert_eq!(platform.transform.scale, original.transform.scale);
+        assert_eq!(platform.transform.position, [3., 1., 0.]);
+        assert_eq!(keys(&scene, &id)[1], [7., 1., 0.]);
+        // "Outros pontos" puts everything back, keyframes included.
+        snap.source = None;
+        snap.target = None;
+        snap.preview(&mut scene);
+        assert_eq!(scene.entity(&id).unwrap(), &original);
+    }
 }

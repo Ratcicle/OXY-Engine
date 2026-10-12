@@ -1,5 +1,10 @@
 //! The physical AABB convention shared by simulation and authoring tools.
-use crate::{collision::Aabb, document::*};
+use crate::{
+    collision::Aabb,
+    document::*,
+    physics3d::{Collider3d, CollisionShape},
+    scene_view::SceneView,
+};
 use glam::{Mat4, Vec3};
 
 pub fn invertible_world(scene: &Scene, id: &str) -> Result<Mat4, String> {
@@ -83,7 +88,10 @@ pub fn resize_box(mut bounds: Aabb, edges: [i8; 3], delta: Vec3, snap: Option<f3
 }
 
 pub fn visual_bounds(scene: &Scene, ids: &[Id]) -> Result<Aabb, String> {
-    let view = crate::scene_view::SceneView::new(scene);
+    visual_bounds_in(&SceneView::new(scene), ids)
+}
+/// `visual_bounds` over an already evaluated hierarchy, for many boxes in one scene.
+pub fn visual_bounds_in(view: &SceneView, ids: &[Id]) -> Result<Aabb, String> {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for id in ids {
@@ -98,28 +106,10 @@ pub fn visual_bounds(scene: &Scene, ids: &[Id]) -> Result<Aabb, String> {
                     .into(),
             );
         }
-        if let Some(mesh) = &e.mesh {
-            for vertex in &mesh.data().vertices {
-                let p = world.transform_point3(Vec3::from(vertex.position));
-                min = min.min(p);
-                max = max.max(p);
-            }
-            continue;
-        }
-        let mut half = Vec3::from(e.dimensions) * 0.5;
-        match e.primitive {
-            Some(Primitive::Plane) => half.y = 0.,
-            Some(Primitive::Rectangle | Primitive::Sprite | Primitive::Circle) => half.z = 0.,
-            _ => {}
-        }
-        for x in [-1., 1.] {
-            for y in [-1., 1.] {
-                for z in [-1., 1.] {
-                    let p = world.transform_point3(half * Vec3::new(x, y, z));
-                    min = min.min(p);
-                    max = max.max(p);
-                }
-            }
+        for point in shape_points(e) {
+            let p = world.transform_point3(point);
+            min = min.min(p);
+            max = max.max(p);
         }
     }
     if !min.is_finite() || !max.is_finite() {
@@ -132,6 +122,246 @@ pub fn visual_bounds(scene: &Scene, ids: &[Id]) -> Result<Aabb, String> {
         (min + max) * 0.5,
         ((max - min) * 0.5).max(Vec3::splat(0.0005)),
     ))
+}
+
+/// Points that bound an object's own shape in its local space: a mesh's vertices, or the
+/// corners of its dimensions, flat shapes having no depth along their normal.
+fn shape_points(e: &Entity) -> Vec<Vec3> {
+    if let Some(mesh) = &e.mesh {
+        return mesh
+            .data()
+            .vertices
+            .iter()
+            .map(|vertex| Vec3::from(vertex.position))
+            .collect();
+    }
+    let mut half = Vec3::from(e.dimensions) * 0.5;
+    match e.primitive {
+        Some(Primitive::Plane) => half.y = 0.,
+        Some(Primitive::Rectangle | Primitive::Sprite | Primitive::Circle) => half.z = 0.,
+        _ => {}
+    }
+    let mut corners = Vec::with_capacity(8);
+    for x in [-1., 1.] {
+        for y in [-1., 1.] {
+            for z in [-1., 1.] {
+                corners.push(half * Vec3::new(x, y, z));
+            }
+        }
+    }
+    corners
+}
+
+/// Smallest side of a fitted box, so a flat shape (a plane) still gets a valid collider.
+const FIT_MIN_SIZE: f32 = 0.001;
+
+/// Whether a box collider of `size`, in `e`'s axes under the world `scale`, wraps `e`'s own
+/// shape as [`fit_collider`] does, or as a box the size of its dimensions does: each side the
+/// shape's, plus the same metres on every side (the margin, 0 or more). Along a flat shape's
+/// normal (a plane's height) the box may have any size, since the fit only keeps it valid.
+pub fn fits_shape(e: &Entity, size: [f32; 3], scale: Vec3) -> bool {
+    let (min, max) = shape_points(e).into_iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(min, max), p| (min.min(p), max.max(p)),
+    );
+    let side = max - min;
+    let mut margin = None;
+    for axis in 0..3 {
+        if !side[axis].is_finite() || side[axis] < FIT_MIN_SIZE {
+            continue;
+        }
+        // Metres on each side, in the world.
+        let room = (size[axis] - side[axis]) * scale[axis] * 0.5;
+        let tolerance = 1e-4 * (1. + side[axis] * scale[axis]);
+        match margin {
+            _ if room < -tolerance => return false,
+            None => margin = Some(room),
+            Some(first) if (room - first).abs() > tolerance => return false,
+            Some(_) => {}
+        }
+    }
+    margin.is_some()
+}
+
+/// Fits the collider of `id` to its shape or, with `children`, to its shape and every piece
+/// under it, as the editor's Ajustar ao objeto and Ajustar ao grupo/filhos do (cameras and
+/// interface elements left out), with `margin` metres more on every side. A 3D box collider
+/// (solid or sensor) stays turned with the object and takes the box of the pieces in the
+/// object's own axes, its size and center; the 2D box collider takes their world box.
+/// Capsules, spheres, convex and triangle shapes and the 3D character's body are refused.
+pub fn fit_collider(
+    scene: &mut Scene,
+    id: &str,
+    children: bool,
+    margin: f32,
+) -> Result<(), String> {
+    if !margin.is_finite() || margin < 0. {
+        return Err("margin precisa ser um número finito de metros, 0 ou mais".into());
+    }
+    let e = scene
+        .entity(id)
+        .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))?;
+    let name = e.name.clone();
+    if e.character3d.is_some() {
+        return Err(format!(
+            "{name} é um Personagem 3D: a colisão dele é o corpo (character3d.body), com altura \
+             e raio próprios, que se mudam com update_entity"
+        ));
+    }
+    let box3d = match e.physics3d.as_ref().map(|c| &c.shape) {
+        Some(CollisionShape::Box { .. }) => true,
+        Some(shape) => {
+            let what = match shape {
+                CollisionShape::Capsule { .. } => "uma cápsula",
+                CollisionShape::Sphere { .. } => "uma esfera",
+                CollisionShape::Convex { .. } => "o convexo da peça",
+                _ => "a malha estática da peça",
+            };
+            return Err(format!(
+                "O colisor 3D de {name} é {what}, e fit_collider ajusta só caixas. Para uma \
+                 caixa, remova o componente e adicione-o de novo (remove_component e \
+                 add_component), ou troque a forma no editor"
+            ));
+        }
+        None if e.collider.is_some() => false,
+        None => {
+            return Err(format!(
+                "{name} não tem colisor: adicione um com add_component (collider3d ou sensor3d \
+                 numa cena 3D, collider2d ou sensor2d numa cena 2D)"
+            ));
+        }
+    };
+    let ids = if children {
+        scene.descendants(id)
+    } else {
+        vec![id.to_owned()]
+    };
+    let pieces: Vec<Id> = ids
+        .into_iter()
+        .filter(|piece| {
+            scene
+                .entity(piece)
+                .is_some_and(|e| e.has_geometry() && e.camera.is_none() && e.ui.is_none())
+        })
+        .collect();
+    if pieces.is_empty() {
+        return Err(if children {
+            format!("Nem {name} nem as peças dentro dele têm forma para o colisor envolver")
+        } else {
+            format!(
+                "{name} não tem forma própria; com children: true, o colisor envolve as peças \
+                 dentro dele"
+            )
+        });
+    }
+    if !box3d {
+        let mut bounds = visual_bounds(scene, &pieces)?;
+        bounds.min -= Vec3::splat(margin);
+        bounds.max += Vec3::splat(margin);
+        return set_collider_bounds(scene, id, bounds);
+    }
+    let world = invertible_world(scene, id)?;
+    let inverse = world.inverse();
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for piece in &pieces {
+        // The object's own shape is read as it is, without the rounding of the matrices.
+        let into = if piece == id {
+            Mat4::IDENTITY
+        } else {
+            inverse * invertible_world(scene, piece)?
+        };
+        for point in shape_points(scene.entity(piece).ok_or("Peça não encontrada")?) {
+            let p = into.transform_point3(point);
+            min = min.min(p);
+            max = max.max(p);
+        }
+    }
+    // The margin is in metres of the world; the box is in the object's scaled axes.
+    let room = Vec3::splat(margin) / physical_scale(world);
+    let size = (max - min).max(Vec3::splat(FIT_MIN_SIZE)) + room * 2.;
+    let center = (min + max) * 0.5;
+    if !size.is_finite() || !center.is_finite() {
+        return Err("Não foi possível medir as peças para o colisor".into());
+    }
+    let collider = scene
+        .entity_mut(id)
+        .and_then(|e| e.physics3d.as_mut())
+        .ok_or("Objeto sem colisor")?;
+    collider.shape = CollisionShape::Box {
+        size: size.to_array(),
+    };
+    collider.center = center.to_array();
+    Ok(())
+}
+
+/// World box of what `id` and its children show, hidden pieces included. Cameras, interface
+/// elements and pieces squashed to nothing add nothing; None when nothing is left.
+pub fn shown_bounds(view: &SceneView, id: &str) -> Option<Aabb> {
+    let shown: Vec<Id> = view
+        .descendants(id)
+        .into_iter()
+        .filter(|id| {
+            view.entity(id)
+                .is_some_and(|e| e.has_geometry() && e.camera.is_none() && e.ui.is_none())
+                && view
+                    .world_matrix(id)
+                    .is_ok_and(|m| m.is_finite() && m.determinant().abs() >= 1e-8)
+        })
+        .collect();
+    if shown.is_empty() {
+        return None;
+    }
+    visual_bounds_in(view, &shown).ok()
+}
+
+/// World box of a 3D collider placed by `world`, and the world point of its center, as the
+/// physics world places them: the center and the shape follow the whole matrix, and spheres
+/// and capsules scale their radius by its (uniform) scale. Disabled colliders and sensors
+/// have the same box.
+pub fn collider3d_bounds(collider: &Collider3d, world: Mat4) -> Result<(Aabb, Vec3), String> {
+    if !world.is_finite() {
+        return Err("Transformação inválida no colisor.".into());
+    }
+    let center = Vec3::from(collider.center);
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    let mut add = |point: Vec3, reach: f32| {
+        min = min.min(point - reach);
+        max = max.max(point + reach);
+    };
+    let radius = |r: f32| r * physical_scale(world).max_element();
+    match &collider.shape {
+        CollisionShape::Box { size } => {
+            let half = Vec3::from(*size) * 0.5;
+            for x in [-1., 1.] {
+                for y in [-1., 1.] {
+                    for z in [-1., 1.] {
+                        add(
+                            world.transform_point3(center + half * Vec3::new(x, y, z)),
+                            0.,
+                        );
+                    }
+                }
+            }
+        }
+        CollisionShape::Sphere { radius: r } => add(world.transform_point3(center), radius(*r)),
+        CollisionShape::Capsule { height, radius: r } => {
+            let tip = Vec3::Y * (height * 0.5 - r).max(0.);
+            for end in [center - tip, center + tip] {
+                add(world.transform_point3(end), radius(*r));
+            }
+        }
+        CollisionShape::Convex { geometry } | CollisionShape::TriMesh { geometry } => {
+            for vertex in &geometry.vertices {
+                add(world.transform_point3(center + Vec3::from(*vertex)), 0.);
+            }
+        }
+    }
+    if !min.is_finite() || !max.is_finite() {
+        return Err("Colisor sem geometria.".into());
+    }
+    Ok((Aabb { min, max }, world.transform_point3(center)))
 }
 
 fn check_tracks(scene: &Scene, ids: &std::collections::HashSet<Id>) -> Result<(), String> {
@@ -395,6 +625,180 @@ mod tests {
         set_collider_bounds(&mut scene, &id, b).unwrap();
         let actual = collider_bounds(&scene, &id).unwrap();
         assert!(actual.min.abs_diff_eq(b.min, 0.0001) && actual.max.abs_diff_eq(b.max, 0.0001));
+    }
+    /// The box of each 3D shape touches the shape the physics world builds: a ray through the
+    /// center along each axis meets it on the box's face.
+    #[test]
+    fn collider3d_bounds_touch_the_shapes_the_physics_world_builds() {
+        use crate::physics3d::{CollisionGeometry, PhysicsWorld, QueryOptions};
+        use std::sync::Arc;
+        let mut scene = Scene::new("Formas", SceneKind::ThreeD);
+        let mut parent = Entity::new("Pai", None);
+        parent.transform.position = [3., 1., -2.];
+        parent.transform.rotation = [0., 30f32.to_radians(), 0.];
+        parent.transform.scale = [2.; 3];
+        let child = |name: &str, shape: CollisionShape, center: [f32; 3], rotation: [f32; 3]| {
+            let mut e = Entity::new(name, None);
+            e.parent = Some(parent.id.clone());
+            e.transform.rotation = rotation;
+            e.transform.position = [1., 0., 0.5];
+            e.physics3d = Some(Collider3d {
+                shape,
+                center,
+                ..Default::default()
+            });
+            e
+        };
+        // 30° + 15°: the square box's corners lie on the axes through its center.
+        let cube = child(
+            "Caixa",
+            CollisionShape::Box {
+                size: [1., 0.5, 1.],
+            },
+            [0., 0.25, 0.],
+            [0., 15f32.to_radians(), 0.],
+        );
+        let ball = child(
+            "Bola",
+            CollisionShape::Sphere { radius: 0.5 },
+            [0., 1., 0.],
+            [0.; 3],
+        );
+        let mut capsule = Entity::new("Cápsula", None);
+        capsule.transform.position = [-4., 2., 1.];
+        capsule.transform.rotation = [0., 0., 90f32.to_radians()];
+        capsule.transform.scale = [2.; 3];
+        capsule.physics3d = Some(Collider3d {
+            shape: CollisionShape::Capsule {
+                height: 2.,
+                radius: 0.5,
+            },
+            ..Default::default()
+        });
+        let ids = [cube.id.clone(), ball.id.clone(), capsule.id.clone()];
+        scene.entities.extend([parent, cube, ball, capsule]);
+        for id in &ids {
+            let world = scene.world_matrix(id).unwrap();
+            let entity = scene.entity(id).unwrap();
+            let (bounds, center) =
+                collider3d_bounds(entity.physics3d.as_ref().unwrap(), world).unwrap();
+            let mut physics = PhysicsWorld::new();
+            physics.sync_entity(entity, world, None).unwrap();
+            physics.flush();
+            for axis in 0..3 {
+                for sign in [-1f32, 1.] {
+                    let mut direction = Vec3::ZERO;
+                    direction[axis] = sign;
+                    let middle = (bounds.min + bounds.max) * 0.5;
+                    let hit = physics
+                        .ray(
+                            middle + direction * 50.,
+                            -direction,
+                            100.,
+                            &QueryOptions::default(),
+                        )
+                        .unwrap()
+                        .unwrap_or_else(|| panic!("{} missed", entity.name));
+                    let face = if sign > 0. { bounds.max } else { bounds.min };
+                    assert!(
+                        (hit.point[axis] - face[axis]).abs() < 1e-3,
+                        "{} axis {axis} sign {sign}: {} vs {}",
+                        entity.name,
+                        hit.point[axis],
+                        face[axis]
+                    );
+                }
+            }
+            assert!(center.abs_diff_eq((bounds.min + bounds.max) * 0.5, 1e-4));
+        }
+        // Capsule tips: 2 m tall doubled, lying along X; the radius doubled too.
+        let capsule = scene.entity(&ids[2]).unwrap();
+        let (bounds, _) = collider3d_bounds(
+            capsule.physics3d.as_ref().unwrap(),
+            scene.world_matrix(&ids[2]).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            bounds.min.abs_diff_eq(Vec3::new(-6., 1., 0.), 1e-4),
+            "{bounds:?}"
+        );
+        assert!(
+            bounds.max.abs_diff_eq(Vec3::new(-2., 3., 2.), 1e-4),
+            "{bounds:?}"
+        );
+        // Convex and triangle geometry: every vertex, moved by the center and the matrix.
+        let geometry = Arc::new(CollisionGeometry {
+            vertices: vec![[0., 0., 0.], [1., 0., 0.], [0., 2., 0.], [0., 0., 3.]],
+            triangles: vec![[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
+            source_fingerprint: None,
+        });
+        let world =
+            Mat4::from_translation(Vec3::new(1., 1., 1.)) * Mat4::from_scale(Vec3::splat(2.));
+        for shape in [
+            CollisionShape::Convex {
+                geometry: geometry.clone(),
+            },
+            CollisionShape::TriMesh {
+                geometry: geometry.clone(),
+            },
+        ] {
+            let collider = Collider3d {
+                shape,
+                center: [0.5, 0., 0.],
+                ..Default::default()
+            };
+            let (bounds, center) = collider3d_bounds(&collider, world).unwrap();
+            assert!(
+                bounds.min.abs_diff_eq(Vec3::new(2., 1., 1.), 1e-5),
+                "{bounds:?}"
+            );
+            assert!(
+                bounds.max.abs_diff_eq(Vec3::new(4., 5., 7.), 1e-5),
+                "{bounds:?}"
+            );
+            assert!(center.abs_diff_eq(Vec3::new(2., 1., 1.), 1e-5));
+        }
+        assert!(collider3d_bounds(&Collider3d::default(), Mat4::from_scale(Vec3::NAN)).is_err());
+    }
+    #[test]
+    fn shown_bounds_cover_children_and_skip_cameras_and_flattened_pieces() {
+        let mut scene = Scene::new("Grupo", SceneKind::ThreeD);
+        let group = Entity::new("Grupo", None);
+        let mut a = Entity::new("A", Some(Primitive::Cube));
+        a.parent = Some(group.id.clone());
+        a.transform.position = [-2., 0., 0.];
+        let mut b = Entity::new("B", Some(Primitive::Cube));
+        b.parent = Some(group.id.clone());
+        b.transform.position = [3., 0., 0.];
+        b.visible = false;
+        let mut camera = Entity::new("Câmera", Some(Primitive::Cube));
+        camera.parent = Some(group.id.clone());
+        camera.transform.position = [50., 0., 0.];
+        camera.camera = Some(Camera::default());
+        let mut flat = Entity::new("Achatada", Some(Primitive::Cube));
+        flat.parent = Some(group.id.clone());
+        flat.transform.position = [-40., 0., 0.];
+        flat.transform.scale = [0., 1., 1.];
+        let empty = Entity::new("Vazio", None);
+        let (group_id, a_id, empty_id) = (group.id.clone(), a.id.clone(), empty.id.clone());
+        scene.entities.extend([group, a, b, camera, flat, empty]);
+        let view = SceneView::new(&scene);
+        let bounds = shown_bounds(&view, &group_id).unwrap();
+        assert!(
+            bounds.min.abs_diff_eq(Vec3::new(-2.5, -0.5, -0.5), 1e-5),
+            "{bounds:?}"
+        );
+        assert!(
+            bounds.max.abs_diff_eq(Vec3::new(3.5, 0.5, 0.5), 1e-5),
+            "{bounds:?}"
+        );
+        let own = shown_bounds(&view, &a_id).unwrap();
+        assert_eq!(
+            own,
+            visual_bounds(&scene, std::slice::from_ref(&a_id)).unwrap()
+        );
+        assert!(shown_bounds(&view, &empty_id).is_none());
+        assert!(shown_bounds(&view, "fantasma").is_none());
     }
     #[test]
     fn empty_invisible_group_uses_runtime_box_including_pivot_and_mirror() {

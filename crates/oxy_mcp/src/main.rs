@@ -16,11 +16,17 @@ const INSTRUCTIONS: &str = "OXY Engine is a desktop game editor (Rust). A projec
 (2D or 3D); a scene is a flat list of objects with parent links; objects have a transform, an \
 optional shape, material, attributes, components (colliders, character, platform, camera \
 control, 2D movement), a logic graph of nodes and animation clips. Start with oxy_status, then \
-oxy_project and oxy_scene. Read oxy_catalog before building logic. Edit only through oxy_apply \
-(atomic batches, validated with the editor's own rules). When the project is open in the editor \
-your edits appear live and the person can undo them; you never save there, the person does. \
-After changes, check them with oxy_simulate and oxy_screenshot. Messages from the engine are in \
-Portuguese; answer the person in their language.";
+oxy_project and oxy_scene. Read oxy_catalog before building logic. Reads are compact JSON with \
+floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long \
+lists come in pages (limit, offset, next_offset), oxy_entity \
+summarizes logic and geometry unless asked in full, and world positions and boxes (oxy_scene \
+fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
+(atomic batches, validated with the editor's own rules) and oxy_import (PNG and WAV files the \
+person points you to). When the project is open in the editor your edits appear live and the \
+person can undo them; you never save there, the person does. After changes, check them with \
+oxy_simulate and oxy_screenshot; when the person tested the game in the editor, oxy_console has \
+what that test logged. Messages from the engine are in Portuguese; answer the person in their \
+language.";
 
 fn handle(tools: &mut tools::Tools, request: &Json) -> Option<Json> {
     let id = request.get("id").cloned()?;
@@ -133,7 +139,7 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(
-            names.contains(&"oxy_apply".to_owned()) && names.len() == 14,
+            names.contains(&"oxy_apply".to_owned()) && names.len() == 16,
             "{names:?}"
         );
         let call = handle(
@@ -184,9 +190,9 @@ mod tests {
                     let method = request["method"].as_str().unwrap().to_owned();
                     let result = match method.as_str() {
                         "status" => json!({"project": {"name": "Ao vivo"}}),
-                        "apply" => json!({"applied": [{"op": "create_entity", "created": ["x"]}],
+                        "apply" => json!({"created": {"0": [{"id": "x", "name": "Grupo"}]},
                                           "commands": request["params"]["commands"]}),
-                        _ => json!({}),
+                        _ => json!({"method": method, "params": request["params"]}),
                     };
                     methods.push(method);
                     writeln!(writer, "{}", json!({"id": request["id"], "result": result})).unwrap();
@@ -207,6 +213,58 @@ mod tests {
         // SAFETY: this test is the only one that reads OXY_AGENT_DIR in this process.
         unsafe { std::env::set_var("OXY_AGENT_DIR", &dir) };
         let mut tools = tools::Tools::default();
+        // Reads reach the editor with their options as given, for the editor to answer through
+        // the same query::answer as files; bad options never reach it.
+        let mut echo = |tool: &str, args: Json| {
+            let output = tools.call(tool, &args).unwrap();
+            serde_json::from_str::<Json>(&output.text).unwrap()
+        };
+        let tree = echo(
+            "oxy_scene",
+            json!({"fields": ["bounds"], "root": "grupo", "depth": 1, "limit": 5}),
+        );
+        assert_eq!(tree["method"], "scene_tree");
+        assert_eq!(
+            tree["params"],
+            json!({"fields": ["bounds"], "root": "grupo", "depth": 1, "limit": 5})
+        );
+        let entity = echo(
+            "oxy_entity",
+            json!({"ids": ["a", "b"], "fields": ["world"], "graph": "full"}),
+        );
+        assert_eq!(entity["method"], "entity");
+        assert_eq!(
+            entity["params"],
+            json!({"ids": ["a", "b"], "fields": ["world"], "graph": "full"})
+        );
+        let found = echo("oxy_find", json!({"text": "porta", "offset": 2}));
+        assert_eq!(found["params"], json!({"text": "porta", "offset": 2}));
+        // The console and imports reach the editor, which reads the file itself; the project
+        // argument does not.
+        let console = echo(
+            "oxy_console",
+            json!({"since": 7, "origin": ["jogo", "logica"]}),
+        );
+        assert_eq!(console["method"], "console");
+        assert_eq!(
+            console["params"],
+            json!({"since": 7, "origin": ["jogo", "logica"], "limit": null})
+        );
+        let image = std::env::temp_dir().join("placa.png").display().to_string();
+        let import = echo(
+            "oxy_import",
+            json!({"project": "C:/ao-vivo/project.oxy.json", "path": image, "apply_to": "e",
+                   "scene": "cena-1"}),
+        );
+        assert_eq!(import["method"], "import");
+        assert_eq!(
+            import["params"],
+            json!({"path": image, "apply_to": "e", "scene": "cena-1"})
+        );
+        let error = tools
+            .call("oxy_entity", &json!({"id": "a", "geometry": "toda"}))
+            .unwrap_err();
+        assert!(error.contains("geometry inválido"), "{error}");
         let output = tools
             .call(
                 "oxy_apply",
@@ -219,6 +277,11 @@ mod tests {
         drop(tools);
         let methods = server.join().unwrap();
         assert!(methods.contains(&"status".to_owned()) && methods.contains(&"apply".to_owned()));
+        assert_eq!(
+            methods.iter().filter(|m| *m == "entity").count(),
+            1,
+            "{methods:?}"
+        );
         let result: Json = serde_json::from_str(&output.text).unwrap();
         assert_eq!(result["commands"][0]["scene"], "cena-1");
         assert!(
@@ -272,6 +335,128 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("Nada foi alterado"), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn simulation_setup_and_spawn_never_touch_the_project_file() {
+        use oxy_core::{document::SceneKind, editing, persistence};
+        let simulate = tools::definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_simulate")
+            .cloned()
+            .unwrap();
+        for option in [
+            "setup",
+            "spawn",
+            "until",
+            "actions",
+            "actions_filter",
+            "watch",
+        ] {
+            assert!(
+                simulate["inputSchema"]["properties"].get(option).is_some(),
+                "{option}"
+            );
+        }
+        // The game starts in the start scene, live too; editing tools default to the open one.
+        let scene_of = |tool: &str| {
+            tools::definitions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == tool)
+                .unwrap()["inputSchema"]["properties"]["scene"]["description"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        for tool in ["oxy_simulate", "oxy_screenshot"] {
+            let scene = scene_of(tool);
+            assert!(
+                scene.contains("start scene, also live") && scene.contains("setup"),
+                "{tool}: {scene}"
+            );
+        }
+        assert!(scene_of("oxy_apply").contains("open in the editor (live)"));
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-sim-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Simulação", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let saved = std::fs::read(&file).unwrap();
+        let mut tools = tools::Tools::default();
+        let project_arg = dir.display().to_string();
+        let output = tools
+            .call(
+                "oxy_simulate",
+                &json!({"project": project_arg, "seconds": 5.0,
+                    "setup": [
+                        {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                         "name": "Teste"},
+                        {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                        {"op": "add_node", "entity": "$0", "operation": "control.wait",
+                         "params": {"seconds": {"Number": 0.25}}},
+                        {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                         "params": {"message": {"Text": "pronto"}}},
+                        {"op": "connect", "entity": "$0", "from_node": "$1", "from_port": "exec",
+                         "to_node": "$2", "to_port": "exec"},
+                        {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+                         "to_node": "$3", "to_port": "exec"},
+                    ],
+                    "spawn": {"entity": "$0", "position": [1.0, 2.0, 3.0]},
+                    "watch": [{"id": "$0", "fields": ["position"]}],
+                    "until": {"log_contains": "pronto"}}),
+            )
+            .unwrap();
+        let report: Json = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "log_contains", "{report}");
+        assert!((report["stopped_at"]["time"].as_f64().unwrap() - 0.25).abs() < 0.05);
+        assert_eq!(report["logs"][0]["text"], "pronto");
+        assert_eq!(report["logs"][0]["object"]["name"], "Teste");
+        assert_eq!(report["setup"].as_array().unwrap().len(), 6);
+        let position = &report["watched"][0]["samples"][0]["position"];
+        for (axis, expected) in [1.0, 2.0, 3.0].into_iter().enumerate() {
+            assert!(
+                (position[axis].as_f64().unwrap() - expected).abs() < 1e-4,
+                "{position}"
+            );
+        }
+        assert!(
+            report["actions"][0]["count"].is_number(),
+            "summary by default"
+        );
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            saved,
+            "setup changes only the copy"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no backup either"
+        );
+        for (args, expected) in [
+            (
+                json!({"setup": [{"op": "voar"}]}),
+                "Preparação (setup): Comando 0 (voar, o 1º do lote) não reconhecido",
+            ),
+            (
+                json!({"watch": [{"id": "x", "campos": []}]}),
+                "Objetos observados inválidos",
+            ),
+            (json!({"until": {"cena": true}}), "until"),
+            (json!({"actions": "tudo"}), "Modo de ações inválido"),
+            (json!({"spawn": {"entity": "x"}}), "spawn inválido"),
+        ] {
+            let mut args = args;
+            args["project"] = json!(project_arg);
+            args["seconds"] = json!(1.0);
+            let error = tools.call("oxy_simulate", &args).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

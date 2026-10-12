@@ -65,6 +65,8 @@ impl Characters {
         self.pending_records
             .retain(|record| !ids.contains(&record.object));
         self.reported.retain(|id, _| !ids.contains(id));
+        self.released
+            .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
         if let Some(world) = &mut self.world {
             for id in ids {
                 world.remove(id);
@@ -215,6 +217,7 @@ impl Runtime {
                 .get(&crossing.area)
                 .copied()
                 .unwrap_or_else(|| self.activate_area(&crossing.area));
+            self.record_crossing(&crossing.area, &crossing.object, crossing.entered);
             self.emit(if crossing.entered {
                 RuntimeEvent::AreaEnter {
                     area: crossing.area.clone(),

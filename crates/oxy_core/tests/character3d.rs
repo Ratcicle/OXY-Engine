@@ -706,13 +706,165 @@ fn platform_discontinuity_detaches_without_launch_and_diagnostics_are_bounded() 
         !s.grounded && s.velocity.x.abs() < 0.001 && (s.position.x - before.x).abs() < 0.01,
         "{s:?}"
     );
-    assert!(!rt.logs.is_empty());
+    // The character it dropped reports it, naming the platform.
+    assert_eq!(
+        rt.logs,
+        [format!(
+            "Personagem {BODY}: Apoio em Chão liberado sem herdar velocidade, porque a \
+             plataforma girou, mudou de escala ou saltou de posição."
+        )]
+    );
     for _ in 0..10 {
         rt.scene_mut().entities[0].transform.rotation[1] += 0.2;
         rt.advance(FIXED_DT, &InputFrame::default());
     }
     assert_eq!(rt.logs.len(), 1);
     assert!(rt.character_state(BODY).unwrap().velocity.length() < 10.);
+}
+
+#[test]
+fn a_platform_that_turns_with_nobody_on_it_reports_nothing() {
+    use oxy_core::surface::*;
+    let mut project = fixture();
+    let mut wheel = Entity::new("Roda", None);
+    wheel.id = "wheel".into();
+    wheel.transform.position = [10., 0.5, 0.];
+    wheel.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [2., 0.2, 2.],
+        },
+        ..Default::default()
+    });
+    wheel.platform = Some(TranslationPlatform::default());
+    project.scenes[0].entities.push(wheel);
+    // "reiniciar" restarts the scene: each start is checked too.
+    let mut restart = oxy_core::graph::Node::new("event.input", [0.; 2]);
+    restart
+        .params
+        .insert("action".into(), Value::Text("reiniciar".into()));
+    let mut change = oxy_core::graph::Node::new("action.scene", [0.; 2]);
+    change
+        .params
+        .insert("scene".into(), Value::Text(project.start_scene.clone()));
+    let body = project.scenes[0].entity_mut(BODY).unwrap();
+    body.graph.edges.push(oxy_core::graph::Edge {
+        from_node: restart.id.clone(),
+        from_port: "exec".into(),
+        to_node: change.id.clone(),
+        to_port: "exec".into(),
+    });
+    body.graph.nodes = vec![restart, change];
+    let mut rt = runtime(&project);
+    for round in 0..2 {
+        settle(&mut rt);
+        for _ in 0..10 {
+            let wheel = rt.scene_mut().entity_mut("wheel").unwrap();
+            wheel.transform.rotation[1] += 0.2;
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        assert!(rt.logs.is_empty(), "round {round}: {:?}", rt.logs);
+        let press = InputFrame {
+            pressed: ["reiniciar".to_owned()].into(),
+            ..Default::default()
+        };
+        rt.advance(FIXED_DT, &press);
+    }
+    assert_eq!(rt.scene_starts.len(), 2);
+}
+
+#[test]
+fn a_character_on_the_seam_of_turning_planks_is_warned_once_per_platform() {
+    use oxy_core::surface::*;
+    let warning = |platform: &str| {
+        format!(
+            "Personagem {BODY}: Apoio em {platform} liberado sem herdar velocidade, porque a \
+             plataforma girou, mudou de escala ou saltou de posição."
+        )
+    };
+    // Two 2 m planks side by side, either the children of one turning platform ("Ponte") or
+    // each a turning platform of its own. On the seam, the support probe hits one plank or the
+    // other from step to step.
+    for grouped in [true, false] {
+        for (x, walking) in [(0., false), (0.05, false), (-0.6, true)] {
+            let mut project = fixture();
+            let scene = &mut project.scenes[0];
+            let mut bridge = Entity::new("Ponte", None);
+            bridge.id = "bridge".into();
+            bridge.transform.position = [0., 0.4, 0.];
+            bridge.platform = Some(TranslationPlatform::default());
+            if grouped {
+                scene.entities.push(bridge);
+            }
+            for (id, name, side) in [("plank_a", "Tábua A", -1.), ("plank_b", "Tábua B", 1.)] {
+                let mut plank = Entity::new(name, None);
+                plank.id = id.into();
+                plank.physics3d = Some(Collider3d {
+                    shape: CollisionShape::Box {
+                        size: [2., 0.2, 2.],
+                    },
+                    ..Default::default()
+                });
+                if grouped {
+                    plank.parent = Some("bridge".into());
+                    plank.transform.position = [side, 0., 0.];
+                } else {
+                    plank.transform.position = [side, 0.4, 0.];
+                    plank.platform = Some(TranslationPlatform::default());
+                }
+                scene.entities.push(plank);
+            }
+            let body = scene.entity_mut(BODY).unwrap();
+            body.transform.position = [x, 0.52, 0.];
+            // Slowly, so that walking crosses the seam without leaving the planks.
+            body.character3d.as_mut().unwrap().horizontal_limit = 0.5;
+            let mut rt = runtime(&project);
+            settle(&mut rt);
+            assert!(rt.character_state(BODY).unwrap().grounded);
+            let turning: &[&str] = if grouped {
+                &["bridge"]
+            } else {
+                &["plank_a", "plank_b"]
+            };
+            for _ in 0..120 {
+                for id in turning {
+                    rt.scene_mut().entity_mut(id).unwrap().transform.rotation[1] += 0.01;
+                }
+                let mut input = InputFrame::default();
+                if walking {
+                    input.held.insert("mover_direita".into());
+                }
+                rt.advance(FIXED_DT, &input);
+            }
+            let case = format!("grouped {grouped}, x {x}, walking {walking}");
+            let state = rt.character_state(BODY).unwrap();
+            assert!(
+                !state.grounded && state.position.y > 0.4,
+                "{case}: {state:?}"
+            );
+            if walking {
+                assert!(
+                    state.position.x > 0.2,
+                    "{case}: crosses the seam, {state:?}"
+                );
+            }
+            // Once per platform that dropped the character: the group, named as such, or
+            // each plank.
+            if grouped {
+                assert_eq!(rt.logs, [warning("Ponte")], "{case}");
+            } else {
+                assert!(
+                    !rt.logs.is_empty()
+                        && rt.logs.len() <= 2
+                        && rt
+                            .logs
+                            .iter()
+                            .all(|l| *l == warning("Tábua A") || *l == warning("Tábua B")),
+                    "{case}: {:?}",
+                    rt.logs
+                );
+            }
+        }
+    }
 }
 
 #[test]

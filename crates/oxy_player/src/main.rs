@@ -90,9 +90,8 @@ impl Player {
                 self.error = None;
                 self.diagnostics.clear();
                 for (action, key) in &runtime.project().input_bindings {
-                    if !oxy_render::input::valid_binding(key) {
-                        self.diagnostics
-                            .push(format!("Ação {action}: tecla desconhecida '{key}'"));
+                    if let Err(error) = oxy_core::input_actions::check_key(key) {
+                        self.diagnostics.push(format!("Ação {action}: {error}"));
                     }
                 }
                 let mut runtime = runtime;

@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod asset_import;
 pub mod audio;
 pub mod authoring;
 pub mod broadphase;
@@ -10,6 +11,7 @@ pub mod document;
 pub mod edit_history;
 pub mod editing;
 pub mod encoding;
+pub mod game_ui;
 pub mod geometry;
 pub mod graph;
 pub mod guide;

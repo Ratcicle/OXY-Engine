@@ -10,6 +10,7 @@ name = "oxy-mcp"
 path = "src/main.rs"
 
 [dependencies]
+glam.workspace = true
 oxy_core.workspace = true
 oxy_render.workspace = true
 serde_json.workspace = true

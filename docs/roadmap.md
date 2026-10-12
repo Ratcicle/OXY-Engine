@@ -29,9 +29,36 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
      - validar;
      - rodar o jogo sem janela;
      - capturar telas.
-3. **0.6: parkour.** Feito com ajuda do MCP, que serve de teste do próprio MCP. Inclui determinismo: gerador aleatório semeado e passo fixo, para replays reproduzíveis. O que faltar ou der trabalho vira escopo das versões seguintes.
-4. **0.7: FPS.**
-5. **Depois:**
+3. **0.5.1: MCP pronto para o parkour.** Uma análise com agentes (12 de outubro de 2026) montou um trecho de pista pelo MCP e conferiu 88 lacunas no código. Antes da 0.6 entram as que impedem um agente de construir e conferir o próprio trabalho:
+   - **Simulação confiável e legível:**
+     - entradas que sobrevivem à troca de cena;
+     - resumo das ações e logs com nomes;
+     - velocidade, chão, postura e câmera do personagem, com eventos de pulo, aterrissagem e áreas;
+     - preparar o teste numa cópia e parar quando algo acontecer;
+     - estado da interface do jogo.
+   - **Enxergar o nível:** posições no mundo e caixas envolventes; capturas com colisores e de qualquer ângulo.
+   - **Construir sem adivinhar:**
+     - opções válidas no catálogo, recusando valores fora delas;
+     - ações de entrada, superfícies e grupos de colisão por comando;
+     - presets e perfis que se descrevem;
+     - modelos entre fases e duplicação em série;
+     - plataformas móveis por animação;
+     - importar PNG/WAV.
+   - **Contexto e diagnóstico:** respostas compactas; Console e estado do teste no editor ao vivo.
+4. **0.6: parkour.** Feito com ajuda do MCP, que serve de teste do próprio MCP. Lacunas da engine que o parkour exige, encontradas na mesma análise:
+   - dados salvos entre partidas (melhor tempo);
+   - estado que sobrevive à troca de cena;
+   - menu de pausa controlado pelo jogo;
+   - ligar e desligar colisores, sensores e plataformas 3D pela lógica;
+   - som em loop e canais de música/efeitos;
+   - formatação de cronômetro (mm:ss.cc) e mais matemática (piso, resto, mín/máx);
+   - determinismo: gerador aleatório semeado, IDs estáveis para objetos criados no jogo e checagem de replay;
+   - transformar objetos pela lógica e plataformas que giram carregando o jogador;
+   - exportar o jogo pelo editor.
+
+   Do lado do MCP, durante a 0.6 entram as melhorias que o uso real pedir: iniciar e parar o teste no editor sem tomar o mouse da pessoa, entradas de "bot" que seguem um caminho, interface do jogo desenhada nas capturas, lógica compacta com layout legível, colisores a partir da forma da peça, salvar ao vivo opcional (preferência própria, desligada).
+5. **0.7: FPS.** Lacunas da engine já identificadas: origem do tiro pela câmera, criar inimigos a partir de modelos em posições calculadas, navegação/busca de caminho, eventos de mudança de atributo e de timer.
+6. **Depois:**
    - tabelas de dados e módulos de jogo em Rust (o terreno do Shadow Duel);
    - automação/tower defense;
    - port do Shadow Duel;

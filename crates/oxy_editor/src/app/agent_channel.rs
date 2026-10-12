@@ -5,7 +5,9 @@
 //! `%LOCALAPPDATA%\OXY Engine`. A client sends one JSON line `{"token": "..."}`, then
 //! requests `{"id": 1, "method": "...", "params": {...}}`, one per line, and receives
 //! `{"id": 1, "result": ...}` or `{"id": 1, "error": "..."}`. Requests run on the UI thread
-//! in the next frame, and edits wait while a person is dragging or typing.
+//! in the next frame, and edits wait while a person is dragging or typing. Besides edits and
+//! reads, an agent can import a PNG or WAV (`import`) and read the console (`console`), and
+//! `status` says whether the person is testing the game.
 use super::*;
 use oxy_core::{command, query};
 use serde_json::{Value as Json, json};
@@ -215,13 +217,18 @@ fn serve(
 
 /// Requests that change the project, and therefore wait for a person's gesture to end.
 fn edits(method: &str) -> bool {
-    matches!(method, "apply" | "undo" | "redo" | "select" | "frame")
+    matches!(
+        method,
+        "apply" | "import" | "undo" | "redo" | "select" | "frame"
+    )
 }
 
 impl Editor {
     /// Starts or stops the channel with the preference, advertises the open project and
     /// answers queued requests. Called once per frame.
     pub(crate) fn agent_frame(&mut self, ctx: &egui::Context) {
+        // Before anything else this frame, so the lines of the last frame's test are kept.
+        self.sync_console_feed();
         if self.preferences.allow_agents != self.agents.is_some() {
             self.agents = if self.preferences.allow_agents {
                 match AgentChannel::start(ctx) {
@@ -260,7 +267,7 @@ impl Editor {
                 break;
             }
             let request = self.agents.as_mut().unwrap().queue.pop_front().unwrap();
-            let result = self.agent_request(&request.method, &request.params);
+            let result = self.agent_request(ctx, &request.method, &request.params);
             let _ = request.reply.send(result);
         }
     }
@@ -276,13 +283,12 @@ impl Editor {
             .map(str::to_owned)
             .unwrap_or_else(|| self.scene_id.clone()))
     }
-    fn agent_request(&mut self, method: &str, params: &Json) -> Result<Json, String> {
-        let text = |key: &str| {
-            params[key]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| format!("Parâmetro {key} ausente"))
-        };
+    fn agent_request(
+        &mut self,
+        ctx: &egui::Context,
+        method: &str,
+        params: &Json,
+    ) -> Result<Json, String> {
         match method {
             "status" => Ok(json!({
                 "editor": env!("OXY_APP_VERSION"),
@@ -301,39 +307,40 @@ impl Editor {
                 "busy": self.agent_busy(),
                 "undo": self.history.undo_label(),
                 "redo": self.history.redo_label(),
+                // A test the person is running: edits are refused until it stops.
+                "play": match &self.play.runtime {
+                    Some(runtime) => json!({
+                        "running": true,
+                        "paused": runtime.paused,
+                        "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
+                        "time": runtime.time,
+                    }),
+                    None => json!({"running": false}),
+                },
             })),
+            "console" => self.console_answer(params),
             "document" => {
                 self.agent_scene(params)?;
                 serde_json::to_value(&self.state.project).map_err(|e| e.to_string())
             }
-            "summary" => {
-                self.agent_scene(params)?;
-                Ok(query::project_summary(&self.state.project))
-            }
-            "scene_tree" => {
+            // The same answers, with the same arguments, as the MCP server gives on files.
+            "summary" | "scene_tree" | "entity" | "find" => {
                 let scene = self.agent_scene(params)?;
-                query::scene_tree(&self.state.project, &scene)
+                query::answer(&self.state.project, &scene, method, params)
             }
-            "entity" => {
-                let scene = self.agent_scene(params)?;
-                query::entity(&self.state.project, &scene, &text("id")?)
-            }
-            "find" => {
-                self.agent_scene(params)?;
-                Ok(query::find(&self.state.project, &text("text")?))
-            }
-            "catalog" => Ok(query::catalog()),
+            "catalog" => query::catalog_query(params),
             "validate" => {
                 self.agent_scene(params)?;
-                Ok(match validate_project(&self.state.project) {
-                    Ok(()) => json!({"valid": true}),
-                    Err(error) => json!({"valid": false, "error": error.to_string()}),
-                })
+                Ok(query::validation(&self.state.project))
             }
             "apply" => {
                 let commands = command::parse(&params["commands"])?;
-                let applied = self.execute_agent(&commands)?;
-                Ok(json!({"applied": applied}))
+                self.execute_agent(&commands)
+            }
+            "import" => {
+                let scene = self.agent_scene(params)?;
+                let request = oxy_core::asset_import::ImportRequest::parse(params)?;
+                self.import_agent(&request, &scene)
             }
             "undo" | "redo" => {
                 let label = self.agent_undo(method == "redo")?;
@@ -361,13 +368,19 @@ impl Editor {
             }
             "screenshot" => {
                 self.agent_scene(params)?;
-                let (pixels, size) = self.renderer.read_pixels(&self.render_state)?;
+                let colliders = params["colliders"].as_bool() == Some(true);
+                let (pixels, size) = if colliders {
+                    self.agent_capture_colliders(ctx.pixels_per_point())?
+                } else {
+                    self.renderer.read_pixels(&self.render_state)?
+                };
                 let png = oxy_render::offscreen::encode_png(pixels, size)?;
                 Ok(json!({
                     "png_base64": oxy_core::encoding::base64(&png),
                     "width": size[0],
                     "height": size[1],
                     "view": if self.showing_game() { "game" } else { "editor_viewport" },
+                    "colliders": colliders,
                 }))
             }
             "frame" => {
@@ -377,5 +390,54 @@ impl Editor {
             }
             other => Err(format!("Pedido desconhecido: {other}")),
         }
+    }
+    /// The view on screen drawn again with the collider view on top, as with the debug view
+    /// on: the game camera while the game runs, the editor camera otherwise (without the
+    /// Studio's modeling marks). The frame shown to the person is not touched.
+    fn agent_capture_colliders(
+        &mut self,
+        pixels_per_point: f32,
+    ) -> Result<(Vec<u8>, [u32; 2]), String> {
+        use oxy_render::offscreen::ColliderOverlay;
+        let size = self.renderer.target_size();
+        let root = self.root();
+        let show_disabled = self.view.show_disabled_colliders;
+        if self.showing_game()
+            && let Some(runtime) = &self.play.runtime
+        {
+            self.renderer.show_grid = false;
+            return self.renderer.capture(
+                &self.render_state,
+                &self.state.project,
+                runtime.scene(),
+                &root,
+                &CameraState::for_runtime(runtime),
+                size,
+                None,
+                Some(ColliderOverlay {
+                    selected: &[],
+                    show_disabled,
+                    runtime_world: runtime.physics_world(),
+                    pixels_per_point,
+                }),
+            );
+        }
+        let scene = self.view_scene();
+        self.renderer.show_grid = self.view.grid;
+        self.renderer.capture(
+            &self.render_state,
+            &self.state.project,
+            &scene,
+            &root,
+            &self.camera,
+            size,
+            self.selected.clone(),
+            Some(ColliderOverlay {
+                selected: &self.selection.ids,
+                show_disabled,
+                runtime_world: None,
+                pixels_per_point,
+            }),
+        )
     }
 }

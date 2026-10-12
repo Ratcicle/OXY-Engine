@@ -74,6 +74,33 @@ pub struct NodeTrace {
     pub operation: String,
     pub time: f64,
 }
+/// An area crossing as the runtime emits it, for 2D triggers and 3D sensors alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AreaCrossing {
+    pub area: Id,
+    pub other: Id,
+    pub entered: bool,
+}
+/// An object created by `action.spawn`, enough to name it and read its logic once it is gone.
+#[derive(Clone, Debug)]
+pub struct SpawnedObject {
+    pub id: Id,
+    pub name: String,
+    pub graph: crate::graph::Graph,
+}
+/// Kept only for a host that reports a run (see `Runtime::recorded`). The lists fill as things
+/// happen, so logic that later in the same step removes the objects involved or changes scene
+/// cannot erase them. The host takes them after each step.
+#[derive(Debug, Default)]
+pub struct Recording {
+    /// The crossings the runtime emits, in order. 2D exits are kept under the same rules even
+    /// when no logic listens for them (the runtime then skips emitting them).
+    pub crossings: Vec<AreaCrossing>,
+    /// Movement records of 3D characters, taken right after they move.
+    pub movements: Vec<crate::character::MovementRecord>,
+    /// Every object of each spawned copy.
+    pub spawned: Vec<SpawnedObject>,
+}
 #[derive(Clone, Debug)]
 struct Context {
     owner: Id,
@@ -110,7 +137,21 @@ pub struct Runtime {
     pub paused: bool,
     pub logs: Vec<String>,
     pub traces: Vec<NodeTrace>,
+    /// Lines ever added to `logs` and `traces`, those dropped or taken included: a host that
+    /// reads them across frames finds the new ones with [`Runtime::logs_written`].
+    logs_written: u64,
+    traces_written: u64,
+    /// Sounds requested since the host last took them, scene changes included: a sound
+    /// played right before a restart is heard.
     pub sounds: Vec<SoundRequest>,
+    /// How many of `sounds` came before the first `action.scene` of this step. A later one in
+    /// the same step drops the rest: they belong to scenes that started and ended within the
+    /// step, as in a scene that restarts itself as it starts until the work budget runs out.
+    sounds_before_change: Option<usize>,
+    /// Scenes started by `change_scene` (reloads included), oldest first, until a host takes them.
+    pub scene_starts: Vec<Id>,
+    /// Off unless the runtime was created with `recorded`.
+    pub recording: Option<Recording>,
     pub time: f64,
     source: Project,
     accumulator: f32,
@@ -141,6 +182,17 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(project: &Project, scene_id: &str) -> Result<Self, String> {
+        Self::start(project, scene_id, None)
+    }
+    /// `new` with a `Recording`, kept from the scene start logic on.
+    pub fn recorded(project: &Project, scene_id: &str) -> Result<Self, String> {
+        Self::start(project, scene_id, Some(Recording::default()))
+    }
+    fn start(
+        project: &Project,
+        scene_id: &str,
+        recording: Option<Recording>,
+    ) -> Result<Self, String> {
         validate_project(project)?;
         if project.scene(scene_id).is_none() {
             return Err("Cena solicitada não existe.".into());
@@ -153,7 +205,12 @@ impl Runtime {
             paused: false,
             logs: Vec::new(),
             traces: Vec::new(),
+            logs_written: 0,
+            traces_written: 0,
             sounds: Vec::new(),
+            sounds_before_change: None,
+            scene_starts: Vec::new(),
+            recording,
             time: 0.0,
             source: project.clone(),
             accumulator: 0.0,
@@ -331,6 +388,7 @@ impl Runtime {
     fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
         self.step_input = input.clone();
         self.query_work = 0;
+        self.sounds_before_change = None;
         crate::metrics::timed(|| self.begin_camera_input(input), |c, ns| c.input_ns += ns);
         self.collect_activations();
         crate::metrics::count(|c| c.steps += 1);
@@ -362,6 +420,12 @@ impl Runtime {
             || self.move_characters(&movement_input),
             |c, ns| c.movement_ns += ns,
         );
+        if let Some(mut recording) = self.recording.take() {
+            recording
+                .movements
+                .extend_from_slice(self.movement_records());
+            self.recording = Some(recording);
+        }
         if self.event_used("event.character") {
             for record in self.movement_records().to_vec() {
                 self.emit(RuntimeEvent::Movement(record));
@@ -384,7 +448,17 @@ impl Runtime {
     ) -> Result<(), String> {
         self.input_timeline.push(event, self.time)
     }
+    /// Log lines written since the runtime started; the last `logs.len()` of them are in
+    /// `logs`.
+    pub fn logs_written(&self) -> u64 {
+        self.logs_written
+    }
+    /// Node traces written since the runtime started; the last `traces.len()` are in `traces`.
+    pub fn traces_written(&self) -> u64 {
+        self.traces_written
+    }
     fn log(&mut self, message: String) {
+        self.logs_written += 1;
         self.logs.push(message);
         if self.logs.len() > 500 {
             self.logs.drain(..100);
@@ -806,6 +880,7 @@ impl Runtime {
         };
         let node = graph.node(&task.node).ok_or("Nó não encontrado")?;
         let mut context = task.context;
+        self.traces_written += 1;
         self.traces.push(NodeTrace {
             object: task.owner.clone(),
             node: node.id.clone(),
@@ -948,6 +1023,20 @@ impl Runtime {
                     node.number("z", 0.0) as f32,
                 );
                 let descendants: HashSet<_> = self.scene().descendants(&root).into_iter().collect();
+                if let Some(mut recording) = self.recording.take() {
+                    recording.spawned.extend(
+                        self.scene()
+                            .entities
+                            .iter()
+                            .filter(|entity| descendants.contains(&entity.id))
+                            .map(|entity| SpawnedObject {
+                                id: entity.id.clone(),
+                                name: entity.name.clone(),
+                                graph: entity.graph.clone(),
+                            }),
+                    );
+                    self.recording = Some(recording);
+                }
                 let entity = self.entity_mut(&root).unwrap();
                 entity.transform.position =
                     (Vec3::from(entity.transform.position) + delta).to_array();
@@ -1010,6 +1099,12 @@ impl Runtime {
             }
             "action.scene" => {
                 self.change_scene(node.text("scene"))?;
+                // A sound played right before the first change of the step is heard; those
+                // of a scene that starts and ends within the step are not.
+                match self.sounds_before_change {
+                    Some(kept) => self.sounds.truncate(kept),
+                    None => self.sounds_before_change = Some(self.sounds.len()),
+                }
                 return Ok(());
             }
             _ => {
@@ -1063,6 +1158,10 @@ impl Runtime {
             .scene_mut(id)
             .ok_or("Cena de destino não existe")? = scene;
         self.scene_id = id.into();
+        self.scene_starts.push(id.into());
+        if self.scene_starts.len() > 64 {
+            self.scene_starts.drain(..32);
+        }
         self.input_timeline = Default::default();
         self.characters = Default::default();
         self.cameras = Default::default();
@@ -1079,7 +1178,8 @@ impl Runtime {
         self.area_hits.clear();
         self.pending_pressed.clear();
         self.pending_released.clear();
-        self.sounds.clear();
+        // Sounds already requested still play ("play a sound, then restart"): the host takes
+        // them after the step. action.scene drops those of scenes left within the step.
         self.physics_dirty = true;
         self.step_input = InputFrame::default();
         self.query_work = 0;
@@ -1090,6 +1190,15 @@ impl Runtime {
     }
     pub fn collider_box(&self, id: &str) -> Option<Aabb> {
         collider_box(self.scene(), id)
+    }
+    fn record_crossing(&mut self, area: &str, other: &str, entered: bool) {
+        if let Some(recording) = &mut self.recording {
+            recording.crossings.push(AreaCrossing {
+                area: area.into(),
+                other: other.into(),
+                entered,
+            });
+        }
     }
     fn move_controllers(&mut self, input: &InputFrame) {
         let controllers: Vec<_> = self
@@ -1356,8 +1465,9 @@ impl Runtime {
             }
         }
         // Preserve pair state for future listeners, but do not compute a full
-        // difference of dense sets when no graph consumes exit events.
-        if self.event_used("event.area_exit") {
+        // difference of dense sets when no graph consumes exit events (or records them).
+        let listened = self.event_used("event.area_exit");
+        if listened || self.recording.is_some() {
             let mut exited: Vec<_> = self
                 .overlap_pairs
                 .difference(&pairs)
@@ -1384,6 +1494,18 @@ impl Runtime {
         }
         self.overlap_pairs = pairs;
         for event in events {
+            match &event {
+                RuntimeEvent::AreaEnter { area, other, .. } => {
+                    self.record_crossing(area, other, true);
+                }
+                RuntimeEvent::AreaExit { area, other, .. } => {
+                    self.record_crossing(area, other, false);
+                    if !listened {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
             self.emit(event);
         }
     }
@@ -1477,6 +1599,12 @@ mod tests {
         let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
         runtime.change_scene(&next_id).unwrap();
         assert_eq!(runtime.pending_tasks(), 0);
+        // Hosts that never take the scene starts keep a bounded list.
+        for _ in 0..100 {
+            runtime.change_scene(&next_id).unwrap();
+        }
+        assert!(runtime.scene_starts.len() <= 64);
+        assert!(runtime.scene_starts.iter().all(|id| *id == next_id));
     }
     #[test]
     fn controller_falls_lands_and_jump_does_not_tunnel() {
@@ -1559,6 +1687,37 @@ mod tests {
         assert_eq!(
             runtime.scene().entity(&tid).unwrap().attributes["Vida"],
             Value::Number(80.0)
+        );
+    }
+    #[test]
+    fn recording_keeps_crossings_whose_objects_logic_removes() {
+        let mut project = Project::new("Gravação");
+        let mut coin = Entity::new("Moeda", None);
+        coin.collider = Some(Collider {
+            is_trigger: true,
+            ..Collider::default()
+        });
+        let event = Node::new("event.area_enter", [0.0; 2]);
+        let remove = Node::new("action.remove", [200.0, 0.0]);
+        connect(&mut coin.graph, &event, "exec", &remove, "exec");
+        coin.graph.nodes = vec![event, remove];
+        let mut target = Entity::new("Caixa", None);
+        target.collider = Some(Collider::default());
+        let (coin_id, target_id) = (coin.id.clone(), target.id.clone());
+        project.scenes[0].entities = vec![coin, target];
+        let mut plain = Runtime::new(&project, &project.start_scene).unwrap();
+        plain.advance(FIXED_DT, &InputFrame::default());
+        assert!(plain.recording.is_none(), "only hosts that ask record");
+        let mut runtime = Runtime::recorded(&project, &project.start_scene).unwrap();
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert!(runtime.scene().entity(&coin_id).is_none());
+        assert_eq!(
+            runtime.recording.as_ref().unwrap().crossings,
+            [AreaCrossing {
+                area: coin_id,
+                other: target_id,
+                entered: true,
+            }]
         );
     }
     #[test]

@@ -6,6 +6,110 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod movement;
 pub use movement::{movement_choices, movement_help};
 
+/// When an input event fires: value stored and label shown.
+pub const INPUT_MODES: [(&str, &str); 3] = [
+    ("pressed", "Pressionar"),
+    ("held", "Manter"),
+    ("released", "Soltar"),
+];
+/// Parts of an object that Ativar / desativar componente switches.
+pub const COMPONENTS: [(&str, &str); 5] = [
+    ("collider", "Colisão / área"),
+    ("controller", "Controlador de movimento"),
+    ("visible", "Visibilidade"),
+    ("behavior", "Comportamento visual"),
+    ("animation", "Reprodução da animação"),
+];
+pub const ARITHMETIC: [(&str, &str); 4] = [
+    ("+", "Somar · A + B"),
+    ("-", "Subtrair · A − B"),
+    ("*", "Multiplicar · A × B"),
+    ("/", "Dividir · A ÷ B"),
+];
+pub const COMPARISONS: [(&str, &str); 6] = [
+    ("==", "Igual · A = B"),
+    ("!=", "Diferente · A ≠ B"),
+    (">", "Maior · A > B"),
+    (">=", "Maior ou igual · A ≥ B"),
+    ("<", "Menor · A < B"),
+    ("<=", "Menor ou igual · A ≤ B"),
+];
+
+/// Text parameters that store one of a few fixed values, with their labels. Any other value
+/// is never matched by the runtime, so the node would silently do nothing.
+pub fn choices(
+    operation: &str,
+    parameter: &str,
+) -> Option<&'static [(&'static str, &'static str)]> {
+    movement_choices(operation, parameter).or(match (operation, parameter) {
+        ("event.input", "mode") => Some(&INPUT_MODES),
+        ("action.component", "component") => Some(&COMPONENTS),
+        ("math.binary", "operator") => Some(&ARITHMETIC),
+        ("condition.compare", "operator") => Some(&COMPARISONS),
+        _ => None,
+    })
+}
+
+/// Checks the fixed choices of `params` given to a node of `operation`.
+pub fn check_choices<'a>(
+    operation: &str,
+    params: impl IntoIterator<Item = (&'a String, &'a Value)>,
+) -> Result<(), String> {
+    for (key, value) in params {
+        let (Some(options), Value::Text(text)) = (choices(operation, key), value) else {
+            continue;
+        };
+        if !options.iter().any(|(id, _)| id == text) {
+            return Err(format!(
+                "O parâmetro {key} do nó {operation} aceita {}; recebeu \"{text}\"",
+                options
+                    .iter()
+                    .map(|(id, label)| format!("{id} ({label})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What a parameter names in the project, besides its own value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reference {
+    /// A scene ID.
+    Scene,
+    /// The ID of a WAV asset.
+    Audio,
+    /// The ID of an animation clip of an object in the scene.
+    Clip,
+    /// An object ID (empty: the node's own object).
+    Object,
+    /// The name of an attribute of the target object.
+    Attribute,
+    /// The ID of an input action (Ações de entrada).
+    InputAction,
+    /// The ID of a physics surface.
+    Surface,
+    /// The name of a marker in an animation clip.
+    Marker,
+}
+
+/// What the parameter `param` of `operation` refers to, if anything.
+pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
+    Some(match (operation, param.id, &param.default) {
+        (_, _, Value::Object(_)) => Reference::Object,
+        (_, _, Value::Surface(_)) => Reference::Surface,
+        ("action.scene", "scene", _) => Reference::Scene,
+        ("action.sound", "asset", _) => Reference::Audio,
+        ("action.animation", "clip", _) => Reference::Clip,
+        ("event.input" | "input.read", "action", _) => Reference::InputAction,
+        ("event.animation", "marker", _) => Reference::Marker,
+        (_, "attribute", Value::Text(_)) => Reference::Attribute,
+        _ => return None,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortType {
     Exec,

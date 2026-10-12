@@ -29,6 +29,9 @@ pub(super) struct Characters {
     lateral: HashSet<(Id, Id)>,
     warnings: Vec<(Id, String)>,
     reported: HashMap<Id, String>,
+    /// (character, platform) pairs already warned about a released support: once per scene
+    /// load, however often the support switches between platforms.
+    released: HashSet<(Id, Id)>,
     sensor_pairs: HashSet<(Id, Id)>,
     sensor_events: Vec<SensorCrossing>,
 }
@@ -104,13 +107,10 @@ impl Characters {
         #[cfg(feature = "profiling")]
         let prepare_started = std::time::Instant::now();
         let mut evaluation = SceneEvaluation::new(scene)?;
+        // A platform that turns, scales or jumps is reported by the characters it drops
+        // (motor), not on its own: with nobody on it, nothing goes wrong.
         self.platforms =
             platforms::advance(scene, &mut evaluation, &self.platforms, &self.looped, dt)?;
-        for (id, platform) in &self.platforms {
-            if platform.discontinuous {
-                self.warnings.push((id.clone(),"Plataforma com rotação, escala alterada ou salto de posição: apoio liberado sem herdar velocidade.".into()));
-            }
-        }
         self.ignored_tracks.retain(|(owner, clip, target)| {
             evaluation
                 .index
@@ -317,6 +317,21 @@ impl Characters {
                 Ok(result) => {
                     if let Some(warning) = result.warning {
                         self.warnings.push((id.clone(), warning));
+                    }
+                    if let Some(platform) = result.released
+                        && self.released.insert((id.clone(), platform.clone()))
+                    {
+                        let name = evaluation
+                            .index
+                            .position(&platform)
+                            .map_or(platform.as_str(), |i| scene.entities[i].name.as_str());
+                        self.warnings.push((
+                            id.clone(),
+                            format!(
+                                "Apoio em {name} liberado sem herdar velocidade, porque a \
+                                 plataforma girou, mudou de escala ou saltou de posição."
+                            ),
+                        ));
                     }
                     for (event, snapshot) in result.events {
                         self.events.push((id.clone(), event.clone()));
@@ -525,6 +540,9 @@ impl Runtime {
         characters
             .reported
             .retain(|id, _| self.entity(id).is_some());
+        characters.released.retain(|(character, platform)| {
+            self.entity(character).is_some() && self.entity(platform).is_some()
+        });
         self.characters = characters;
         self.physics_dirty = failed;
     }

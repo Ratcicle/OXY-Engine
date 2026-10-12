@@ -2065,6 +2065,57 @@ mod tests {
         }
     }
 
+    /// Modes, operators and components come from the core lists that agent commands enforce:
+    /// each value reads as its label, and the inspector stores the value of the label picked.
+    #[test]
+    fn fixed_choices_come_from_the_core_and_are_picked_by_their_labels() {
+        let project = Project::new("Escolhas");
+        let context = ParameterContext {
+            objects: &[],
+            project: &project,
+            scene: &project.scenes[0],
+            owner: None,
+            target_connected: false,
+            any_type: false,
+        };
+        let param = |operation: &str, key: &str| {
+            registry()
+                .iter()
+                .find(|op| op.id == operation)
+                .unwrap()
+                .params
+                .iter()
+                .find(|param| param.id == key)
+                .unwrap()
+        };
+        for (operation, key) in [
+            ("event.input", "mode"),
+            ("action.component", "component"),
+            ("math.binary", "operator"),
+            ("condition.compare", "operator"),
+            ("camera.mode", "mode"),
+        ] {
+            for (value, label) in oxy_core::graph::choices(operation, key).unwrap() {
+                let mut node = Node::new(operation, [0.0; 2]);
+                node.params.insert(key.into(), Value::Text((*value).into()));
+                assert_eq!(
+                    param_summary(&node, param(operation, key), &context).as_deref(),
+                    Some(*label)
+                );
+            }
+        }
+        let ctx = themed();
+        let mut node = Node::new("event.input", [0.0; 2]);
+        let mode = param("event.input", "mode");
+        let output = parameter_frame(&ctx, &mut node, mode, &context, vec![]);
+        let button = text_center(&output, "Pressionar");
+        click_parameter(&ctx, &mut node, mode, &context, button);
+        let output = parameter_frame(&ctx, &mut node, mode, &context, vec![]);
+        let held = text_center(&output, "Manter");
+        click_parameter(&ctx, &mut node, mode, &context, held);
+        assert_eq!(node.params["mode"], Value::Text("held".into()));
+    }
+
     #[test]
     fn node_and_connection_panels_show_descriptions_and_port_labels_instead_of_ids() {
         let ctx = themed();

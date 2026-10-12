@@ -2,6 +2,7 @@ mod agent;
 mod agent_channel;
 mod body_tools;
 mod camera_tools;
+mod console_feed;
 mod diagnostics;
 mod hierarchy;
 pub(crate) use hierarchy::entity_icon;
@@ -178,6 +179,27 @@ impl Default for TransformUi {
 }
 pub(crate) struct ConsoleLog {
     pub(crate) messages: Vec<String>,
+    /// Messages removed from the front (the oldest past the limit, or a cleared console).
+    pub(crate) dropped: u64,
+}
+impl ConsoleLog {
+    /// Messages ever written; the last `messages.len()` of them are kept.
+    pub(crate) fn written(&self) -> u64 {
+        self.dropped + self.messages.len() as u64
+    }
+    /// Adds a message; past 600 kept, the oldest 100 go.
+    pub(crate) fn push(&mut self, message: String) {
+        self.messages.push(message);
+        if self.messages.len() > 600 {
+            self.messages.drain(..100);
+            self.dropped += 100;
+        }
+    }
+    /// Empties the console; its messages still count as written.
+    pub(crate) fn clear(&mut self) {
+        self.dropped += self.messages.len() as u64;
+        self.messages.clear();
+    }
 }
 /// Frame timing shown by the performance overlay.
 pub(crate) struct FrameStats {
@@ -228,6 +250,8 @@ pub struct Editor {
     pub(crate) editor_size: [u32; 2],
     pub(crate) play: PlaySession,
     pub(crate) console: ConsoleLog,
+    /// The console as agents read it, kept beyond a play test.
+    pub(crate) console_feed: console_feed::ConsoleFeed,
     pub(crate) dock: Dock,
     pub(crate) frame: FrameStats,
     pub(crate) view: ViewOptions,
@@ -359,7 +383,9 @@ impl Editor {
             play: Default::default(),
             console: ConsoleLog {
                 messages: vec!["OXY Engine · editor nativo · documentos locais".into()],
+                dropped: 0,
             },
+            console_feed: Default::default(),
             dock: Dock {
                 open: [true, false, false],
                 tab: DockTab::Library,
@@ -415,10 +441,7 @@ impl Editor {
             .to_path_buf()
     }
     pub fn log(&mut self, message: impl Into<String>) {
-        self.console.messages.push(message.into());
-        if self.console.messages.len() > 600 {
-            self.console.messages.drain(..100);
-        }
+        self.console.push(message.into());
     }
     fn dirty(&self) -> bool {
         self.history.is_dirty()
@@ -432,6 +455,8 @@ impl Editor {
         self.transform_ui.gizmo_drag = None;
         self.hierarchy_ui.collapsed.clear();
         self.hierarchy_ui.reveal_scroll = None;
+        self.sync_console_feed();
+        self.console_feed.new_test();
         self.play.runtime = None;
         self.play.capture = false;
         self.selected = None;
@@ -809,6 +834,9 @@ impl Editor {
         match Runtime::new(&self.state.project, &self.scene_id) {
             Ok(runtime) => {
                 self.play.previous_tab = self.tab;
+                // The new test's logs count from zero.
+                self.sync_console_feed();
+                self.console_feed.new_test();
                 self.play.runtime = Some(runtime);
                 self.set_tab(Tab::Scene);
                 self.play.capture = true;
@@ -823,6 +851,8 @@ impl Editor {
         }
     }
     fn stop(&mut self) {
+        // The last frame's logs reach agents after the test too.
+        self.sync_console_feed();
         self.play.runtime = None;
         self.play.capture = false;
         self.set_tab(self.play.previous_tab);
@@ -1128,10 +1158,11 @@ impl Editor {
             .show(ctx, |ui| self.console_body(ui));
     }
     pub(crate) fn clear_console(&mut self) {
-        self.console.messages.clear();
+        self.console.clear();
         if let Some(rt) = &mut self.play.runtime {
             rt.logs.clear();
         }
+        self.console_feed.clear();
     }
     /// Editor messages, game logs and the last logic actions, each marked by its source.
     /// Messages that also became notices are shown as warnings.

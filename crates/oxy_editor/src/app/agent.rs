@@ -1,8 +1,12 @@
-//! Edits requested by AI agents. Each batch of project commands is one undo step labelled
-//! "Agente: …", logged in the console with the Agente origin, and refused while a person is
-//! in the middle of something the batch could collide with.
+//! Edits requested by AI agents. Each batch of project commands, and each imported PNG or WAV,
+//! is one undo step labelled "Agente: …", logged in the console with the Agente origin, and
+//! refused while a person is in the middle of something the edit could collide with.
 use super::*;
-use oxy_core::command::{self, Applied, Command};
+use oxy_core::{
+    asset_import::{self, ImportKind, ImportRequest},
+    command::{self, Command},
+};
+use serde_json::Value as Json;
 
 /// Console prefix of messages about agent edits; the console shows it as the line's origin.
 pub(crate) const AGENT_PREFIX: &str = "Agente · ";
@@ -30,13 +34,17 @@ impl Editor {
             || ctx.input(|i| i.pointer.any_down())
             || crate::graph_ui::text_input_active(ctx)
     }
-    /// Applies an agent's batch as one undo step. On failure nothing changes.
-    pub(crate) fn execute_agent(&mut self, commands: &[Command]) -> Result<Vec<Applied>, String> {
+    /// Applies an agent's batch as one undo step and answers with [`command::report`], as the
+    /// MCP server does on files. On failure nothing changes.
+    pub(crate) fn execute_agent(&mut self, commands: &[Command]) -> Result<Json, String> {
         if let Some(reason) = self.agent_busy() {
             return Err(reason.into());
         }
         if commands.is_empty() {
-            return Ok(Vec::new());
+            // No undo step for nothing; the answer leaves out the project's warnings, as on
+            // files.
+            let before = command::batch_warnings(&self.state.project);
+            return Ok(command::report(&self.state.project, &[], &before));
         }
         let label = match commands {
             [one] => format!("Agente: {}", one.label()),
@@ -44,8 +52,8 @@ impl Editor {
         };
         self.history
             .begin(label, &self.state.project, &self.state.images);
-        match command::apply(&mut self.state.project, &self.scene_id, commands) {
-            Ok(applied) => {
+        match command::apply_and_report(&mut self.state.project, &self.scene_id, commands) {
+            Ok(report) => {
                 if let Err(error) = self
                     .history
                     .commit(&self.state.project, &mut self.state.images)
@@ -56,7 +64,7 @@ impl Editor {
                     self.log(format!("{AGENT_PREFIX}{}", command.label()));
                 }
                 self.after_external_edit();
-                Ok(applied)
+                Ok(report)
             }
             Err(error) => {
                 self.history
@@ -64,6 +72,67 @@ impl Editor {
                 let message = error.to_string();
                 self.log(format!("{AGENT_PREFIX}{message}"));
                 Err(message)
+            }
+        }
+    }
+    /// Imports a PNG or WAV for an agent, as the editor's Importar does but without the dialog:
+    /// one undo step that carries the image, so the texture cache holds its pixels, the viewport
+    /// and the game interface show it at once, and undo takes them away again. `scene` is where
+    /// `apply_to` is looked for.
+    pub(crate) fn import_agent(
+        &mut self,
+        request: &ImportRequest,
+        scene: &str,
+    ) -> Result<Json, String> {
+        if let Some(reason) = self.agent_busy() {
+            return Err(reason.into());
+        }
+        if self.path.is_none() {
+            return Err(
+                "O projeto ainda não tem pasta: peça para a pessoa salvá-lo antes de importar \
+                 recursos."
+                    .into(),
+            );
+        }
+        let source = match request.read() {
+            Ok(source) => source,
+            Err(error) => {
+                self.log(format!("{AGENT_PREFIX}{error}"));
+                return Err(error);
+            }
+        };
+        let root = self.root();
+        self.history.begin(
+            "Agente: Importar recurso",
+            &self.state.project,
+            &self.state.images,
+        );
+        match asset_import::import(&mut self.state.project, &root, scene, request, &source) {
+            Ok(imported) => {
+                if let Some(image) = source.image {
+                    self.state.images.insert(imported.asset.clone(), image);
+                }
+                if let Err(error) = self
+                    .history
+                    .commit(&self.state.project, &mut self.state.images)
+                {
+                    self.log(error);
+                }
+                self.log(format!(
+                    "{AGENT_PREFIX}Recurso importado como cópia local: {}",
+                    imported.name
+                ));
+                self.after_external_edit();
+                if imported.kind == ImportKind::Texture {
+                    self.refresh_texture(&imported.asset);
+                }
+                serde_json::to_value(&imported).map_err(|e| e.to_string())
+            }
+            Err(error) => {
+                self.history
+                    .cancel(&mut self.state.project, &mut self.state.images);
+                self.log(format!("{AGENT_PREFIX}{error}"));
+                Err(error)
             }
         }
     }

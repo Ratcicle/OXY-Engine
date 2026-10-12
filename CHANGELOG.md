@@ -4,6 +4,25 @@ Resumo de cada versão. Os relatórios completos, com testes, capturas e mediç�
 
 ## Não lançado
 
+- **MCP pronto para o parkour (0.5.1):** um agente constrói e confere o próprio trabalho sem adivinhar.
+  - **Simulação:** as entradas programadas sobrevivem à troca e ao reinício de cena, e o relatório marca cada recarga. As ações vêm resumidas por padrão (objeto, ação, quantas vezes, quando), e os logs trazem o objeto e o nó, sem IDs. O relatório tem a velocidade, o chão, a postura e o olhar do personagem; a câmera do jogo; os eventos de pulo, aterrissagem, saída do chão, superfície e áreas; e a interface do jogo no fim. `setup` e `spawn` preparam o teste só na cópia, e `until` para o teste quando algo acontece.
+  - **Capturas:** colisores e sensores visíveis, câmera livre e vistas de cima e de lado. As vistas do jogo listam a interface do jogo, que a imagem não desenha.
+  - **Consultas compactas:** posições, rotações e escalas no mundo e caixas envolventes; projeção de campos; paginação da árvore da cena; catálogo filtrável; números arredondados. O `oxy_find` responde em páginas.
+  - **Comandos novos:** ações de entrada (criar, renomear, trocar tecla, excluir), superfícies físicas e nomes de grupos de colisão; salvar e colocar modelos; copiar objetos entre cenas; duplicar em série; criar e editar animações e quadros-chave; aplicar perfis de movimento. Os presets se descrevem no catálogo, e os de personagem escolhem o que fazer com a câmera.
+  - **Validação:** os parâmetros dos nós aceitam só as opções válidas, e o `oxy_apply` devolve avisos, por exemplo uma ação de entrada que o projeto não tem. Os marcadores aceitam `"$N.M"`, valem dentro de `patch` e usam `"$$"` como escape.
+  - **`oxy_import`:** importa PNG e WAV como o Importar da Biblioteca, conferindo o conteúdo e copiando só para a pasta `assets`. Ao vivo, a importação entra no histórico do editor.
+  - **Editor ao vivo:** `oxy_console` lê o Console com a origem de cada linha, e `oxy_status` informa se o jogo está em teste.
+  - Respostas que mudaram de formato estão listadas em [`docs/agentes-mcp.md`](docs/agentes-mcp.md).
+  - **Ajustes do teste prático:**
+    - `fit_collider` ajusta o colisor à forma, como "Ajustar ao objeto", e o `oxy_apply` avisa quando o tamanho muda e o colisor fica para trás.
+    - Nós de entrada aceitam a ação pelo nome.
+    - Duas ações na mesma tecla geram aviso.
+    - Valores simples (`3`, `"texto"`, `true`) valem quando o tipo do parâmetro é conhecido, e os erros dizem qual parâmetro e o formato esperado.
+    - Os erros numeram os comandos a partir de 0, como os marcadores.
+    - Modelos não repetem nome.
+- **Som antes de trocar de cena:** um som pedido no mesmo passo de uma troca ou reinício de cena (por exemplo "tocar som e reiniciar a fase") era descartado e agora toca.
+- **Aviso de plataforma:** o aviso de apoio liberado por uma plataforma que girou ou saltou sai uma vez por personagem e plataforma, com o nome da plataforma. Antes ele saía a cada início de cena, mesmo sem ninguém em cima.
+- **Mover objetos animados:** mover, girar ou escalar um objeto cujas próprias animações o movem, como uma plataforma móvel, agora leva junto os quadros-chave, fora da aba Animação. Assim a plataforma continua o percurso a partir do lugar novo, em vez de voltar ao antigo durante o jogo.
 - **Agentes de IA (MCP):** o novo `oxy-mcp.exe` é um servidor MCP para agentes como o Claude. Pelas ferramentas, o agente lê o projeto (resumo, árvore da cena, objeto, busca, catálogo de nós e componentes), edita por lotes atômicos de comandos, valida, roda o jogo sem janela com entradas programadas e captura a vista do editor ou da câmera do jogo. Com o projeto aberto e **Permitir agentes de IA** ligado nas Preferências (desligado por padrão), as mudanças aparecem ao vivo, entram no histórico como **Agente: …**, aparecem no Console com a origem Agente e podem ser desfeitas; o agente não salva. Sem editor aberto, ele edita os arquivos e guarda a versão anterior. Veja [`docs/agentes-mcp.md`](docs/agentes-mcp.md).
 - **Camada de comandos:** edições descritas como dados, aplicadas em lote atômico e validadas com as regras de salvar, no `oxy_core`. A regra de quais componentes cabem em cada objeto e as descrições dos nós passaram do editor para o `oxy_core`, compartilhadas pelo painel e pelos comandos.
 - **Simulação e captura sem janela:** `oxy_core::headless` roda o jogo por um tempo simulado e relata logs, ações, sons, trocas de cena e objetos observados; `oxy_render::offscreen` desenha sem janela e gera PNG.

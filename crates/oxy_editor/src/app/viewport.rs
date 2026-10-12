@@ -515,11 +515,13 @@ impl Editor {
         }
     }
 
+    /// A pose from the gizmo: a draft in the Animation, otherwise the object's transform, its
+    /// keyframes following when its own animations move it.
     pub(crate) fn apply_pose(&mut self, id: &str, transform: Transform) {
         if self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation {
             self.set_animation_draft_transform(id, transform);
-        } else if let Some(entity) = self.scene_mut().entity_mut(id) {
-            entity.transform = transform;
+        } else {
+            editing::set_local_transform(self.scene_mut(), id, transform);
         }
     }
 
