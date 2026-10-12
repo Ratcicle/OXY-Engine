@@ -16,11 +16,11 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
 
 ## Ordem
 
-1. **0.4.3: consolidação**
+1. **0.4.3: consolidação** (lançada junto com a 0.5.0)
    - Investigar os testes nativos instáveis: `native_navigation_v033` (repintura com o editor parado) e `native_layout_matrix_workflow` (a janela não redimensiona para 920×600).
    - Levar ao visual novo as telas que faltam: Diagnóstico de desempenho, Console (distinguir erro, aviso e log), Excluir recurso, Animação em uso, Prévia da câmera e Ajustar caixa.
    - Conferir se o guia do editor descreve as telas atuais.
-2. **0.5: camada de comandos, runtime headless e servidor MCP** (implementada; veja [Agentes de IA (MCP)](agentes-mcp.md))
+2. **0.5: camada de comandos, runtime headless e servidor MCP** (lançada na 0.5.0, em 12/10/2026; veja [Agentes de IA (MCP)](agentes-mcp.md))
    - **Camada de comandos:** operações sobre o projeto com validação e desfazer (criar objeto, mudar componente, ligar nós, criar cena…). Editor, MCP, testes e uma futura camada de script usam a mesma porta.
    - **Runtime headless:** rodar a simulação do jogo sem janela por um tempo e devolver logs, estado e erros. Serve ao MCP, aos testes, aos bots e a um servidor online.
    - **Servidor MCP:** para agentes de IA ajudarem no desenvolvimento de jogos. Ele trabalha sobre os arquivos do projeto e **também se conecta ao editor aberto e age ao vivo**: as mudanças aparecem na hora, entram no histórico e podem ser desfeitas. Para isso, o editor expõe um canal local. Primeira versão:
@@ -29,7 +29,7 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
      - validar;
      - rodar o jogo sem janela;
      - capturar telas.
-3. **0.5.1: MCP pronto para o parkour.** Uma análise com agentes (12 de outubro de 2026) montou um trecho de pista pelo MCP e conferiu 88 lacunas no código. Antes da 0.6 entram as que impedem um agente de construir e conferir o próprio trabalho:
+3. **0.5.1: MCP pronto para o parkour** (lançada em 12/10/2026). Uma análise com agentes (12 de outubro de 2026) montou um trecho de pista pelo MCP e conferiu 88 lacunas no código. Antes da 0.6 entram as que impedem um agente de construir e conferir o próprio trabalho:
    - **Simulação confiável e legível:**
      - entradas que sobrevivem à troca de cena;
      - resumo das ações e logs com nomes;
