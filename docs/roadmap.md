@@ -57,6 +57,28 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
    - exportar o jogo pelo editor.
 
    Do lado do MCP, durante a 0.6 entram as melhorias que o uso real pedir: iniciar e parar o teste no editor sem tomar o mouse da pessoa, entradas de "bot" que seguem um caminho, interface do jogo desenhada nas capturas, lógica compacta com layout legível, colisores a partir da forma da peça, salvar ao vivo opcional (preferência própria, desligada).
+
+   **Princípio:** o parkour só mostra o que falta. A engine ganha ferramentas genéricas, que qualquer jogo usa; nada de checkpoint, linha de chegada ou "melhor tempo" embutidos. O jogo é conteúdo feito com essas ferramentas, em `examples/parkour`.
+
+   **Decisões (12/10/2026):**
+   - **Formato do projeto 5**, uma vez só, com migração que preenche parâmetros novos dos nós com o padrão e backup no primeiro salvamento. A 0.5.x não abre projetos salvos pela 0.6.
+   - **Variáveis do jogo** declaradas no projeto (nome, tipo, valor inicial, "Salva entre partidas"), com chave opcional nos nós, por exemplo um valor por fase. Botão "Variáveis do jogo" na barra da Lógica.
+   - **Progresso salvo** em `%APPDATA%\OXY Engine\Jogos\<id do projeto>\progresso.json`. No teste do editor, o progresso fica em memória durante a sessão.
+   - **Catálogo:** categorias novas **Jogo** (variáveis, progresso, cena atual, pausa, sair) e **Som** ("Reproduzir WAV" vai para Som). Formatar tempo corta as casas e usa ponto (01:23.45).
+   - **Pausa:** numa cena com menu de pausa do jogo, o Esc abre esse menu também no teste do editor.
+   - **Áudio:** cpal para o dispositivo, com mixador próprio (loops, transições, canais de música e efeitos).
+   - **Plataformas que giram** passam a carregar o personagem (posição e giro), revertendo o contrato da 0.3.0; a câmera em primeira pessoa gira junto.
+   - **Exportação** pelo editor e pelo MCP (`oxy_export`, só num destino que a pessoa indicar).
+   - Protótipo aprovado da Lógica e das Variáveis do jogo: https://claude.ai/artifact/DpTXojrNpJKgH7a31ZUWsM
+
+   **Ordem de trabalho:**
+   1. Fundação: referências dos nós pelo catálogo, estado da partida no runtime e ordem determinística dos eventos (feito).
+   2. Formato 5, matemática e Formatar tempo, colisores e plataformas pela lógica.
+   3. Cena atual e entrada Cena em Mudar de cena, sorteio com semente, IDs estáveis e checagem de replay.
+   4. Variáveis do jogo (núcleo, MCP e editor), depois uma primeira fatia do parkour montada pelo MCP.
+   5. Progresso salvo, pausa do jogo, mixador e som em loop, transformações pela lógica e plataformas que giram.
+   6. MCP: interface do jogo nas capturas, layout automático da lógica, colisores pela forma, cópias no mesmo lote, bot que segue um caminho, teste e salvamento ao vivo.
+   7. Exportação, o parkour completo, guia, receitas e lançamento.
 5. **0.7: FPS.** Lacunas da engine já identificadas: origem do tiro pela câmera, criar inimigos a partir de modelos em posições calculadas, navegação/busca de caminho, eventos de mudança de atributo e de timer.
 6. **Depois:**
    - tabelas de dados e módulos de jogo em Rust (o terreno do Shadow Duel);
