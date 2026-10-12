@@ -9,6 +9,7 @@ pub mod input;
 pub mod labels;
 pub mod mesh;
 pub mod mesh_selection;
+pub mod offscreen;
 pub mod theme;
 pub use camera::CameraState;
 pub use game_ui::GameUi;
@@ -17,7 +18,8 @@ pub use game_ui::pick_ui;
 mod gpu_test;
 
 use cache::{DynamicBuffer, GeometryCache, GpuMesh, InstanceData, MeshVertex};
-use egui_wgpu::{RenderState, wgpu};
+pub use egui_wgpu::RenderState;
+use egui_wgpu::wgpu;
 use glam::{Mat4, Vec2, Vec3};
 #[cfg(test)]
 use oxy_core::document::Primitive;

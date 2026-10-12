@@ -56,6 +56,50 @@ pub struct OperationDef {
     pub params: Vec<ParamDef>,
 }
 
+/// What a node does, for catalogs, tooltips and agents.
+pub fn description(operation: &str) -> &'static str {
+    match operation {
+        "event.scene_start" => "Executa quando a cena começa.",
+        "event.input" => {
+            "Executa ao pressionar, manter ou soltar uma ação configurada em Ações de entrada."
+        }
+        "event.click" => "Executa ao clicar neste objeto ou em seu botão de interface.",
+        "event.area_enter" => {
+            "Executa quando um objeto entra na área e fornece esse objeto na saída."
+        }
+        "event.animation" => "Executa quando a reprodução atravessa o marcador escolhido.",
+        "value.number" => "Fornece um número definido no painel de parâmetros.",
+        "value.text" => "Fornece um texto definido no painel de parâmetros.",
+        "value.bool" => "Fornece um valor verdadeiro ou falso.",
+        "value.object" => "Fornece a referência de um objeto da cena.",
+        "attribute.get" => "Lê o atributo escolhido do objeto informado.",
+        "attribute.set" => "Altera o atributo escolhido do objeto informado.",
+        "math.binary" => "Soma, subtrai, multiplica ou divide os números A e B.",
+        "condition.compare" => "Compara A e B e fornece verdadeiro ou falso.",
+        "condition.branch" => "Segue a saída Verdadeiro ou Falso conforme a condição.",
+        "action.damage" => {
+            "Reduz o atributo numérico configurado no alvo. Pode limitar a um acerto por ativação."
+        }
+        "action.animation" => "Reproduz uma animação do objeto escolhido.",
+        "action.sound" => "Reproduz um áudio WAV do projeto no volume configurado.",
+        "action.spawn" => "Cria uma cópia da hierarquia do objeto durante o jogo.",
+        "action.remove" => "Remove o objeto e seus descendentes durante o jogo.",
+        "action.component" => "Ativa ou desativa o componente escolhido do objeto.",
+        "action.scene" => "Encerra a cena atual e abre a cena de destino no jogo.",
+        "control.sequence" => "Executa as saídas 1, 2 e 3 nessa ordem.",
+        "control.wait" => "Continua após o tempo indicado, sem interromper o jogo ou o editor.",
+        "debug.message" => "Exibe uma mensagem no diagnóstico durante a execução.",
+        // The guide documents every registered operation, movement nodes included.
+        _ => crate::guide::topics()
+            .iter()
+            .find(|topic| topic.operation.id == operation)
+            .map_or(
+                "Operação desconhecida. Verifique a compatibilidade do projeto.",
+                |topic| topic.purpose,
+            ),
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
     pub nodes: Vec<Node>,

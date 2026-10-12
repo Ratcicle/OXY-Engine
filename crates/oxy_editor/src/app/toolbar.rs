@@ -309,6 +309,7 @@ impl Editor {
                             concat!("OXY Engine ", env!("OXY_APP_VERSION")).into(),
                         ));
                         self.interface_button(ui);
+                        self.agent_indicator(ui);
                         let performance = ui
                             .add(egui::Button::selectable(
                                 self.frame.visible,

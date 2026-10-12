@@ -15,6 +15,7 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 - **Lógica visual** por nós, com ações de entrada e um guia offline com doze receitas prontas.
 - **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa e um laboratório de movimento editável.
 - **Player separado** (`oxy_player.exe`) para distribuir só o jogo, sem o editor.
+- **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam e capturam o projeto, ao vivo no editor e com tudo desfazível. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
 
 ## Baixar e abrir
 

@@ -1,30 +1,9 @@
 //! Opt-in tests really submit triangles and read GPU pixels back; no screenshots are faked.
 use super::*;
 mod components;
-use std::{
-    future::Future,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
-fn block_on<T>(future: impl Future<Output = T>) -> T {
-    struct ThreadWake(std::thread::Thread);
-    impl Wake for ThreadWake {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::park_timeout(Duration::from_secs(1)),
-        }
-    }
-}
+use crate::offscreen::block_on;
 
 #[test]
 #[ignore = "Measures CPU buffer creation and native submission for authored meshes; requires WGPU"]
@@ -124,61 +103,7 @@ fn native_mesh_upload_measurements() {
 }
 
 fn read_pixels(renderer: &Renderer, rs: &RenderState) -> Vec<u8> {
-    let [width, height] = renderer.target.size;
-    let stride = (width * 4).div_ceil(256) * 256;
-    let buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("OXY GPU evidence readback"),
-        size: u64::from(stride * height),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = rs.device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &renderer.target._color,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    rs.queue.submit([encoder.finish()]);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-    rs.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(20)),
-        })
-        .unwrap();
-    receiver
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap();
-    let mapped = buffer.slice(..).get_mapped_range();
-    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-    for row in mapped.chunks(stride as usize) {
-        pixels.extend_from_slice(&row[..(width * 4) as usize]);
-    }
-    drop(mapped);
-    buffer.unmap();
-    pixels
+    renderer.read_pixels(rs).unwrap().0
 }
 
 #[test]

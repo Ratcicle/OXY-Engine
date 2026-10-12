@@ -1,3 +1,5 @@
+mod agent;
+mod agent_channel;
 mod body_tools;
 mod camera_tools;
 mod diagnostics;
@@ -198,6 +200,8 @@ pub struct Editor {
     notices: notices::Notices,
     preferences: preferences::Preferences,
     pending_preferences: Option<preferences::Preferences>,
+    /// Local channel for AI agents, open while Permitir agentes de IA is on.
+    agents: Option<agent_channel::AgentChannel>,
     navigation: navigation::Navigation,
     body_tools: body_tools::BodyTools,
     new_project: Option<scenes::NewProject>,
@@ -327,6 +331,7 @@ impl Editor {
             notices: Default::default(),
             preferences,
             pending_preferences: None,
+            agents: None,
             navigation: Default::default(),
             body_tools: Default::default(),
             new_project: None,
@@ -1137,7 +1142,10 @@ impl Editor {
             .console
             .messages
             .iter()
-            .map(|line| ("Editor", line.clone(), warnings.contains(line.as_str())))
+            .map(|line| match line.strip_prefix(agent::AGENT_PREFIX) {
+                Some(text) => ("Agente", text.to_owned(), warnings.contains(line.as_str())),
+                None => ("Editor", line.clone(), warnings.contains(line.as_str())),
+            })
             .collect();
         if let Some(rt) = &self.play.runtime {
             lines.extend(rt.logs.iter().map(|line| ("Jogo", line.clone(), false)));
@@ -1176,6 +1184,7 @@ impl Editor {
                             (_, true) => ("Aviso", theme::WARNING),
                             ("Jogo", _) => ("Jogo", theme::SUCCESS),
                             ("Lógica", _) => ("Lógica", theme::ACCENT_BRIGHT),
+                            ("Agente", _) => ("Agente", Color32::from_rgb(190, 160, 240)),
                             _ => ("Editor", theme::TEXT_MUTED),
                         };
                         let (rect, _) = ui.allocate_exact_size(Vec2::new(52., 18.), Sense::hover());
@@ -1217,6 +1226,7 @@ impl eframe::App for Editor {
         if (ctx.zoom_factor() - self.scale).abs() > 0.0001 {
             ctx.set_zoom_factor(self.scale);
         }
+        self.agent_frame(ctx);
         if self.home.visible {
             self.stop_navigation(ctx);
             self.home_ui(ctx);

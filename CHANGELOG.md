@@ -4,6 +4,10 @@ Resumo de cada versão. Os relatórios completos, com testes, capturas e mediç�
 
 ## Não lançado
 
+- **Agentes de IA (MCP):** o novo `oxy-mcp.exe` é um servidor MCP para agentes como o Claude. Pelas ferramentas, o agente lê o projeto (resumo, árvore da cena, objeto, busca, catálogo de nós e componentes), edita por lotes atômicos de comandos, valida, roda o jogo sem janela com entradas programadas e captura a vista do editor ou da câmera do jogo. Com o projeto aberto e **Permitir agentes de IA** ligado nas Preferências (desligado por padrão), as mudanças aparecem ao vivo, entram no histórico como **Agente: …**, aparecem no Console com a origem Agente e podem ser desfeitas; o agente não salva. Sem editor aberto, ele edita os arquivos e guarda a versão anterior. Veja [`docs/agentes-mcp.md`](docs/agentes-mcp.md).
+- **Camada de comandos:** edições descritas como dados, aplicadas em lote atômico e validadas com as regras de salvar, no `oxy_core`. A regra de quais componentes cabem em cada objeto e as descrições dos nós passaram do editor para o `oxy_core`, compartilhadas pelo painel e pelos comandos.
+- **Simulação e captura sem janela:** `oxy_core::headless` roda o jogo por um tempo simulado e relata logs, ações, sons, trocas de cena e objetos observados; `oxy_render::offscreen` desenha sem janela e gera PNG.
+
 - **Janelas restantes no visual novo:** Excluir recurso e Animação em uso viraram diálogos no padrão dos demais, com a lista de usos pelo nome do objeto (sem IDs de nó). Desempenho mostra quadro, cena, memória e lógica em tabelas; Prévia da câmera e Ajustar caixa usam os mesmos controles e botões do editor.
 - **Console:** cada linha indica a origem (Editor, Jogo, Lógica) e os avisos ficam destacados. Os traços de Lógica citam objeto e ação, sem o ID do nó.
 - **QA nativa mais estável:** o redimensionamento espera o tamanho real da janela, e a medição de repouso ignora eventos reais do sistema (ponteiro, foco).
