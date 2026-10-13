@@ -58,6 +58,8 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
 
    Do lado do MCP, durante a 0.6 entram as melhorias que o uso real pedir: iniciar e parar o teste no editor sem tomar o mouse da pessoa, entradas de "bot" que seguem um caminho, interface do jogo desenhada nas capturas, lógica compacta com layout legível, colisores a partir da forma da peça, salvar ao vivo opcional (preferência própria, desligada).
 
+   **Online (decidido em 13/10/2026):** o parkour terá o modo online como foco, com corrida em tempo real e colisão entre jogadores. A 0.6 sai offline e já monta o parkour pensando no online: o estado de cada jogador fica no próprio personagem, e as variáveis do jogo guardam só o estado da partida e dos menus. O online vem na 0.7.
+
    **Princípio:** o parkour só mostra o que falta. A engine ganha ferramentas genéricas, que qualquer jogo usa; nada de checkpoint, linha de chegada ou "melhor tempo" embutidos. O jogo é conteúdo feito com essas ferramentas, em `examples/parkour`.
 
    **Decisões (12/10/2026):**
@@ -77,12 +79,17 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
    1. Fundação: referências dos nós pelo catálogo, estado da partida no runtime e ordem determinística dos eventos (feito).
    2. Formato 5, matemática e Formatar tempo, colisores e plataformas pela lógica (feito).
    3. Cena atual e entrada Cena em Mudar de cena, Referência de cena, sorteio com semente, IDs estáveis e checagem de replay (feito).
-   4. Variáveis do jogo (núcleo, MCP e editor), depois uma primeira fatia do parkour montada pelo MCP.
-   5. Progresso salvo, pausa do jogo, mixador e som em loop, transformações pela lógica e plataformas que giram.
-   6. MCP: interface do jogo nas capturas, layout automático da lógica, colisores pela forma, cópias no mesmo lote, bot que segue um caminho, teste e salvamento ao vivo.
-   7. Exportação, o parkour completo, guia, receitas e lançamento.
-5. **0.7: FPS.** Lacunas da engine já identificadas: origem do tiro pela câmera, criar inimigos a partir de modelos em posições calculadas, navegação/busca de caminho, eventos de mudança de atributo e de timer.
-6. **Depois:**
+   4. Variáveis do jogo (núcleo, MCP e editor) e progresso salvo (feito).
+   5. Pausa do jogo, mixador e som em loop, transformações pela lógica e plataformas que giram (feito), com a correção do personagem que afundava no meio de pisos grandes.
+   6. MCP: interface do jogo nas capturas, layout automático da lógica, colisores pela forma e cópias no mesmo lote (feito); bot que segue um caminho, teste e salvamento ao vivo.
+   7. Exportação, o parkour (offline, pronto para o online), guia, receitas e lançamento.
+5. **0.7: rede e parkour online.** Corrida em tempo real com colisão entre jogadores. Ferramentas genéricas, que o FPS e o Shadow Duel reaproveitam:
+   - servidor com autoridade sobre a física: um `oxy-server` sem janela, sobre a simulação headless, e o mesmo servidor rodando dentro do jogo de quem hospeda;
+   - entradas por jogador (cada personagem controlado por um jogador);
+   - snapshot e restauração do estado da partida, para previsão no cliente e correção (rollback);
+   - salas, conexão e replicação de objetos.
+6. **0.8: FPS.** Lacunas da engine já identificadas: origem do tiro pela câmera, criar inimigos a partir de modelos em posições calculadas, navegação/busca de caminho, eventos de mudança de atributo e de timer.
+7. **Depois:**
    - tabelas de dados e módulos de jogo em Rust (o terreno do Shadow Duel);
    - automação/tower defense;
    - port do Shadow Duel;
