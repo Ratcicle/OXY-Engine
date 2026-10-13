@@ -3,9 +3,11 @@
 use crate::document::{Value, new_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+mod audio;
 mod game;
 mod math;
 mod movement;
+pub use audio::{SOUND_CHANNELS, STOP_CHANNELS, VOLUME_CHANNELS, audio_choices, audio_help};
 pub use game::{game_choices, game_help};
 pub use math::{ARITHMETIC, math_choices, math_help};
 pub use movement::{movement_choices, movement_help};
@@ -45,6 +47,7 @@ pub fn choices(
     movement_choices(operation, parameter)
         .or_else(|| math_choices(operation, parameter))
         .or_else(|| game_choices(operation, parameter))
+        .or_else(|| audio_choices(operation, parameter))
         .or(match (operation, parameter) {
             ("event.input", "mode") => Some(&INPUT_MODES),
             ("event.pause", "when") => Some(&PAUSE_CHANGES),
@@ -107,7 +110,9 @@ pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
         (_, _, Value::Object(_)) => Reference::Object,
         (_, _, Value::Surface(_)) => Reference::Surface,
         ("action.scene" | "value.scene", "scene", _) => Reference::Scene,
-        ("action.sound", "asset", _) => Reference::Audio,
+        ("action.sound" | "action.sound_loop" | "action.sound_stop", "asset", _) => {
+            Reference::Audio
+        }
         ("action.animation", "clip", _) => Reference::Clip,
         ("event.input" | "input.read", "action", _) => Reference::InputAction,
         ("event.animation", "marker", _) => Reference::Marker,
@@ -115,6 +120,16 @@ pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
         (_, "attribute", Value::Text(_)) => Reference::Attribute,
         _ => return None,
     })
+}
+
+/// What an empty value of a parameter that names something of the project ([`reference`])
+/// stands for, when it is a choice of its own: Parar som's audio stops every loop of the
+/// channel. Other empty references are left unset.
+pub fn empty_choice(operation: &str, parameter: &str) -> Option<&'static str> {
+    match (operation, parameter) {
+        ("action.sound_stop", "asset") => Some("Todos os sons do canal"),
+        _ => None,
+    }
 }
 
 /// The parameters of `node` that name something of the project ([`reference`]), in registry
@@ -225,7 +240,9 @@ pub fn description(operation: &str) -> &'static str {
             "Reduz o atributo numérico configurado no alvo. Pode limitar a um acerto por ativação."
         }
         "action.animation" => "Reproduz uma animação do objeto escolhido.",
-        "action.sound" => "Reproduz um áudio WAV do projeto no volume configurado.",
+        "action.sound" => {
+            "Toca um áudio WAV do projeto uma vez, no canal de efeitos, no volume configurado."
+        }
         "action.spawn" => "Cria uma cópia da hierarquia do objeto durante o jogo.",
         "action.remove" => "Remove o objeto e seus descendentes durante o jogo.",
         "action.component" => {
@@ -521,17 +538,6 @@ fn build_registry() -> Vec<OperationDef> {
         ],
     });
     result.push(OperationDef {
-        id: "action.sound",
-        label: "Reproduzir WAV",
-        category: "Ações",
-        inputs: exec(),
-        outputs: exec(),
-        params: vec![
-            text("asset", "Áudio", ""),
-            number("volume", "Volume (0 a 1)", 1.0),
-        ],
-    });
-    result.push(OperationDef {
         id: "action.spawn",
         label: "Criar cópia de objeto",
         category: "Ações",
@@ -578,6 +584,7 @@ fn build_registry() -> Vec<OperationDef> {
     });
     result.extend(math::actions());
     result.extend(game::definitions());
+    result.extend(audio::definitions());
     result.push(OperationDef {
         id: "control.sequence",
         label: "Sequência",

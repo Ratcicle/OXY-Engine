@@ -1,6 +1,6 @@
 //! Runs repeat themselves. The replay check runs two copies of a game side by side in one
 //! process, where every HashMap orders its keys its own way, and compares their states after
-//! every step; the state hash compares whole runs.
+//! every step; the state hash compares whole runs, what plays included.
 use oxy_core::{
     animation::{AnimationEvent, Clip, Interpolation, Keyframe},
     character::{CameraRig, CharacterConfig},
@@ -578,4 +578,118 @@ fn digests_name_the_object_and_the_part_where_two_runs_part() {
     let mut taken = start();
     taken.remove_object(&coin);
     assert_eq!(difference(&taken), Some((coin, "exists".into())));
+}
+
+/// A radio that loops its music and the wind, turns the music down to half, stops the wind
+/// with a fade after 0.3 s and restarts the scene 0.3 s later.
+fn radio() -> Project {
+    let mut project = Project::new("Rádio");
+    let mut assets = Vec::new();
+    for name in ["Trilha", "Vento"] {
+        let asset = Asset {
+            id: new_id(),
+            name: name.into(),
+            path: format!("assets/{name}.wav"),
+            kind: AssetKind::Audio,
+            model: None,
+        };
+        assets.push(asset.id.clone());
+        project.assets.push(asset);
+    }
+    let mut radio = Entity::new("Rádio", None);
+    let start = node(&mut radio, "event.scene_start", &[]);
+    let music = node(
+        &mut radio,
+        "action.sound_loop",
+        &[("asset", text(&assets[0])), ("fade", Value::Number(1.))],
+    );
+    let wind = node(
+        &mut radio,
+        "action.sound_loop",
+        &[("asset", text(&assets[1])), ("channel", text("effects"))],
+    );
+    let quieter = node(
+        &mut radio,
+        "action.volume",
+        &[("channel", text("music")), ("volume", Value::Number(0.5))],
+    );
+    let wait = node(
+        &mut radio,
+        "control.wait",
+        &[("seconds", Value::Number(0.3))],
+    );
+    let calm = node(
+        &mut radio,
+        "action.sound_stop",
+        &[("channel", text("effects")), ("fade", Value::Number(0.2))],
+    );
+    let again = node(
+        &mut radio,
+        "control.wait",
+        &[("seconds", Value::Number(0.3))],
+    );
+    let here = node(&mut radio, "scene.current", &[]);
+    let restart = node(&mut radio, "action.scene", &[]);
+    for pair in [
+        start,
+        music,
+        wind,
+        quieter,
+        wait,
+        calm,
+        again,
+        restart.clone(),
+    ]
+    .windows(2)
+    {
+        link(&mut radio, &pair[0], &pair[1]);
+    }
+    wire(&mut radio, &here, "scene", &restart, "scene");
+    project.scenes[0].kind = SceneKind::TwoD;
+    project.scenes[0].entities.push(radio);
+    project
+}
+
+#[test]
+fn music_loops_and_volumes_replay_alike_and_are_part_of_the_state() {
+    let project = radio();
+    let report = replayed(&project, json!({"seconds": 2.0}));
+    let reloads = report.scene_changes.iter().filter(|c| c.reload).count();
+    assert!(reloads >= 2, "{:?}", report.scene_changes);
+    // The music started once; the wind starts with each scene and stops within it.
+    let kinds: Vec<_> = report
+        .sounds
+        .iter()
+        .map(|s| (s.text.as_str(), s.kind.map(|k| format!("{k:?}"))))
+        .collect();
+    assert_eq!(
+        kinds.iter().filter(|(text, _)| *text == "Trilha").count(),
+        1,
+        "{kinds:?}"
+    );
+    assert!(
+        kinds.iter().filter(|(text, _)| *text == "Vento").count() > 2,
+        "{kinds:?}"
+    );
+    // Runs apart only in a volume differ first in the audio, before any object.
+    let state = |project: &Project| {
+        let asked = request(json!({"seconds": 0.1}));
+        headless::run(project, &asked).unwrap().1.state_digest()
+    };
+    let mut quieter = project.clone();
+    let volume = quieter.scenes[0].entities[0]
+        .graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.operation == "action.volume")
+        .unwrap();
+    volume.params.insert("volume".into(), Value::Number(0.25));
+    let (half, quarter) = (state(&project), state(&quieter));
+    assert_eq!(
+        half.first_difference(&quarter),
+        Some(StateDifference {
+            object: None,
+            part: "audio".into()
+        })
+    );
 }

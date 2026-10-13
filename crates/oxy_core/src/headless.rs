@@ -1,9 +1,9 @@
 //! Runs a game without a window for a simulated time and reports what happened: scene
-//! changes, logs, logic actions, sounds, movement and area events, the game pause, the game
-//! camera, the game interface, the state of watched objects, the game variables, the progress
-//! saved and a hash of the whole state at the end. Used by the MCP server so an agent can test
-//! a change, and by tests. On request a second copy runs alongside on the same inputs, to
-//! check that the run repeats itself step by step.
+//! changes, logs, logic actions, sounds and changes of what plays, movement and area events,
+//! the game pause, the game camera, the game interface, the state of watched objects, the game
+//! variables, the progress saved, what plays and a hash of the whole state at the end. Used by
+//! the MCP server so an agent can test a change, and by tests. On request a second copy runs
+//! alongside on the same inputs, to check that the run repeats itself step by step.
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -11,6 +11,7 @@
 //! events and spawned objects come from the runtime's `Recording`, taken when they happen, so
 //! logic that removes the objects involved in the same step cannot hide them.
 use crate::{
+    audio::{AudioChange, AudioSettings, ChangeKind},
     character::{CameraMode, CharacterState, MovementEvent, Posture},
     command::{self, Applied, Command},
     document::*,
@@ -213,6 +214,9 @@ pub struct Until {
     /// `true`: the game pause starts; `false`: it ends (a scene change ending it included).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<bool>,
+    /// A sound, by the audio's ID or name, starts playing: once or in a loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
@@ -467,6 +471,45 @@ pub struct Event {
     pub time: f64,
     pub text: String,
 }
+/// A sound played once (no `kind`), or a change logic made to what plays.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SoundEvent {
+    pub time: f64,
+    /// The audio's name; for a stop of every loop, "Todos os sons do canal"; for a volume, the
+    /// channel's label.
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ChangeKind>,
+    /// A loop that starts (or starts over), not one already playing that only takes another
+    /// volume, as a restarted scene asking for its music at another volume.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub started: bool,
+    /// music or effects; all for a stop of both, master for the general volume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<&'static str>,
+    /// What a loop or a volume was set to; a one-shot's when below 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    /// Seconds a loop fades in, or loops stopped fade out, when not at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fade: Option<f64>,
+}
+/// A sound the game keeps playing at the end.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PlayingSound {
+    pub asset: Id,
+    pub name: String,
+    pub volume: f64,
+}
+/// What the game keeps playing at the end, and the run's volumes.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct AudioReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub music: Option<PlayingSound>,
+    /// The effect loops.
+    pub loops: Vec<PlayingSound>,
+    pub volumes: AudioSettings,
+}
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SceneChange {
     pub time: f64,
@@ -556,7 +599,7 @@ pub struct ReplayCheck {
 pub struct ReplayDifference {
     pub time: f64,
     /// The object that differed; none for the run's own state (scene, time, input, tasks,
-    /// areas, characters, random, variables.<name>, save, camera).
+    /// areas, characters, random, variables.<name>, save, audio, camera).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<Named>,
     /// What differed, a part of [`crate::runtime::StateDigest`]: transform, attributes.<name>,
@@ -622,7 +665,11 @@ pub struct SimulationReport {
     pub logs: Vec<Log>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actions: Option<Actions>,
-    pub sounds: Vec<Event>,
+    /// Sounds played once and changes of what plays, oldest first (the most recent
+    /// `MAX_ENTRIES`). The one-shots and effect loops of a scene that started and ended within
+    /// a step are left out, as the game never plays them, and so are the loops a step that
+    /// changed scene started and no longer plays at its end (see `Recording::audio`).
+    pub sounds: Vec<SoundEvent>,
     pub events: Vec<GameEvent>,
     /// The game camera at the end.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -643,6 +690,9 @@ pub struct SimulationReport {
     /// `MAX_ENTRIES` values); absent when there is none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub save: Option<BTreeMap<String, Value>>,
+    /// What plays at the end and the volumes; absent when nothing loops and every volume is 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioReport>,
     /// Entries dropped per list because it reached `MAX_ENTRIES`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub truncated: BTreeMap<&'static str, usize>,
@@ -904,6 +954,8 @@ struct Happened {
     events: Vec<GameEvent>,
     /// The game pause's changes, each its new state.
     pauses: Vec<bool>,
+    /// The audios that started playing, once or in a loop.
+    sounds: Vec<Id>,
 }
 
 /// "Object · Action", with the action's label.
@@ -996,7 +1048,7 @@ struct Recorder<'a> {
     scene: Id,
     scene_changes: Recent<SceneChange>,
     logs: Recent<Log>,
-    sounds: Recent<Event>,
+    sounds: Recent<SoundEvent>,
     events: Recent<GameEvent>,
     saves: Recent<SaveEvent>,
     pauses: Recent<PauseEvent>,
@@ -1029,6 +1081,7 @@ impl Recorder<'_> {
             movements,
             spawned,
             pauses,
+            audio,
         } = recording;
         for &paused in &pauses {
             self.pauses.push(PauseEvent {
@@ -1072,15 +1125,31 @@ impl Recorder<'_> {
         for trace in traces {
             self.action(runtime, trace);
         }
-        for sound in sounds {
-            let name = runtime
+        let name = |asset: &str| {
+            runtime
                 .project()
-                .asset(&sound.asset)
-                .map_or(sound.asset, |a| a.name.clone());
-            self.sounds.push(Event {
+                .asset(asset)
+                .map_or_else(|| asset.to_owned(), |a| a.name.clone())
+        };
+        for sound in sounds {
+            self.sounds.push(SoundEvent {
                 time: rounded(time),
-                text: name,
+                text: name(&sound.asset),
+                kind: None,
+                started: false,
+                channel: None,
+                volume: (sound.volume < 1.).then_some(f64::from(sound.volume)),
+                fade: None,
             });
+            happened.sounds.push(sound.asset);
+        }
+        for change in audio {
+            self.sounds.push(sound_change(rounded(time), &change, name));
+            if change.started
+                && let Some(asset) = change.asset
+            {
+                happened.sounds.push(asset);
+            }
         }
         for request in saves {
             let (kind, values) = match &request {
@@ -1224,6 +1293,52 @@ impl Recorder<'_> {
     }
 }
 
+/// A change of what plays as the report lists it.
+fn sound_change(time: f64, change: &AudioChange, name: impl Fn(&str) -> String) -> SoundEvent {
+    let text = match (change.kind, &change.asset) {
+        (_, Some(asset)) => name(asset),
+        (ChangeKind::Volume, None) => graph::VOLUME_CHANNELS
+            .iter()
+            .find(|(id, _)| *id == change.channel)
+            .map_or(change.channel, |(_, label)| label)
+            .to_owned(),
+        _ => graph::empty_choice("action.sound_stop", "asset")
+            .unwrap_or_default()
+            .to_owned(),
+    };
+    SoundEvent {
+        time,
+        text,
+        kind: Some(change.kind),
+        started: change.started,
+        channel: Some(change.channel),
+        volume: (change.kind != ChangeKind::Stop).then_some(change.volume),
+        fade: (change.fade > 0.).then_some(change.fade),
+    }
+}
+
+/// What plays at the end, by name; none when nothing loops and every volume is 1.
+fn audio_report(runtime: &Runtime) -> Option<AudioReport> {
+    let audio = runtime.audio();
+    let playing = |voice: &crate::audio::LoopVoice| PlayingSound {
+        asset: voice.asset.clone(),
+        name: runtime
+            .project()
+            .asset(&voice.asset)
+            .map_or_else(|| voice.asset.clone(), |a| a.name.clone()),
+        volume: voice.volume,
+    };
+    let report = AudioReport {
+        music: audio.music.as_ref().map(playing),
+        loops: audio.loops.values().map(playing).collect(),
+        volumes: audio.settings,
+    };
+    let quiet = report.music.is_none()
+        && report.loops.is_empty()
+        && report.volumes == AudioSettings::default();
+    (!quiet).then_some(report)
+}
+
 struct WatchPlan {
     id: Id,
     fields: BTreeSet<Field>,
@@ -1362,6 +1477,8 @@ struct Stop {
     absent: Option<(Id, String)>,
     event: Option<(EventKind, Option<Id>)>,
     paused: Option<bool>,
+    /// The audio's ID and name.
+    sound: Option<(Id, String)>,
 }
 impl Stop {
     fn new(
@@ -1503,6 +1620,33 @@ impl Stop {
                 Some((condition.kind, object))
             }
         };
+        let sound = match &until.sound {
+            None => None,
+            Some(text) => {
+                let text = resolve(text, applied)?;
+                let audios = || project.assets.iter().filter(|a| a.kind == AssetKind::Audio);
+                let named: Vec<&Asset> = match audios().find(|a| a.id == text) {
+                    Some(asset) => vec![asset],
+                    None => audios()
+                        .filter(|a| a.name.trim().to_lowercase() == text.trim().to_lowercase())
+                        .collect(),
+                };
+                match named.as_slice() {
+                    [asset] => Some((asset.id.clone(), asset.name.clone())),
+                    [] => return Err(format!("until: o som \"{text}\" não existe no projeto")),
+                    many => {
+                        return Err(format!(
+                            "until: há {} sons chamados \"{text}\"; use o ID: {}",
+                            many.len(),
+                            many.iter()
+                                .map(|a| a.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+            }
+        };
         if scene.is_none()
             && until.log_contains.is_none()
             && attribute.is_none()
@@ -1510,6 +1654,7 @@ impl Stop {
             && absent.is_none()
             && event.is_none()
             && until.paused.is_none()
+            && sound.is_none()
         {
             return Err("until: informe ao menos uma condição".into());
         }
@@ -1521,6 +1666,7 @@ impl Stop {
             absent,
             event,
             paused: until.paused,
+            sound,
         })
     }
 
@@ -1611,6 +1757,11 @@ impl Stop {
                 "O jogo saiu da pausa"
             };
             return Some(stopped("paused", detail.into()));
+        }
+        if let Some((id, name)) = &self.sound
+            && happened.sounds.contains(id)
+        {
+            return Some(stopped("sound", format!("O som {name} começou a tocar")));
         }
         None
     }
@@ -2002,6 +2153,7 @@ pub fn run(
         variables: BTreeMap::new(),
         saves: Vec::new(),
         save: None,
+        audio: None,
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
@@ -2091,6 +2243,7 @@ pub fn run(
             report.truncated.insert("save", left_out);
         }
     }
+    report.audio = audio_report(&runtime);
     report.final_scene = runtime.scene_id().to_owned();
     report.state_hash = format!("{:016x}", runtime.state_hash());
     report.replay = request.check_replay.then_some(twin.check);

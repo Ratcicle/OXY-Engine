@@ -122,7 +122,7 @@ pub fn game_help(id: &str) -> Option<(&'static str, &'static str, &'static str)>
             "Cena é o identificador estável, que não muda ao renomear a cena: é o que Mudar de cena espera. Nome é o texto mostrado, que pode mudar ou se repetir: use-o em textos e chaves, não como destino. Para abrir outra cena, escolhida pelo nome, use Referência de cena.",
         ),
         "game.pause" => (
-            "Pausa, retoma ou alterna a pausa do jogo. Na pausa, o mundo para: movimento, animações, áreas, A cada passo e Esperar. As ações de entrada, os cliques na interface e a lógica continuam, e o mouse fica livre.",
+            "Pausa, retoma ou alterna a pausa do jogo. Na pausa, o mundo para: movimento, animações, áreas, A cada passo e Esperar, e os efeitos sonoros congelam; a música continua. As ações de entrada, os cliques na interface e a lógica continuam, e o mouse fica livre.",
             "Num botão Continuar de um menu de pausa, ligue Ao clicar a Pausar / retomar jogo com a Ação Retomar. Numa ação de entrada, Alternar pausa e retoma com a mesma tecla.",
             "Cada mudança dispara Ao pausar ou retomar na cena, que pode mostrar e esconder o menu; pedir o estado em que o jogo já está não faz nada. Uma espera iniciada durante a pausa só termina depois de retomar. As ações de entrada continuam disparando na pausa: use Ler estado do jogo para ignorar as que movem o jogo. Mudar de cena termina a pausa. Esta é a pausa do jogo; a da engine (Pausar no editor, perda de foco) para também a lógica, e as duas podem acontecer juntas.",
         ),

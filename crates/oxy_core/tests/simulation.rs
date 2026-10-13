@@ -1,6 +1,6 @@
 //! The headless simulation used by agents: inputs across scene changes, the readable report,
-//! movement and camera detail, setup, spawn and stop conditions on the copy, the game
-//! interface and the game variables at the end.
+//! sounds, music and volumes, movement and camera detail, setup, spawn and stop conditions on
+//! the copy, the game interface and the game variables at the end.
 use oxy_core::{
     animation::Clip,
     character::{CameraRig, CharacterConfig},
@@ -286,6 +286,525 @@ fn every_sound_of_a_step_is_kept() {
         json!({"seconds": 0.5, "inputs": [{"type": "press", "at": 0.25, "action": "reiniciar"}]}),
     );
     assert_eq!(report.sounds.len(), 20, "{:?}", report.logs);
+}
+
+/// An audio asset named `name` with a fixed ID, so reports can be compared.
+fn audio(project: &mut Project, name: &str) -> Id {
+    let id = format!(
+        "00000000-0000-4000-8000-{:012x}",
+        project.assets.len() + 0xa0
+    );
+    project.assets.push(Asset {
+        id: id.clone(),
+        name: name.into(),
+        path: format!("assets/som-{}.wav", project.assets.len()),
+        kind: AssetKind::Audio,
+        model: None,
+    });
+    id
+}
+/// A Tocar em loop of `asset` on `channel`.
+fn looping(entity: &mut Entity, asset: &str, channel: &str, volume: f64, fade: f64) -> Id {
+    node(
+        entity,
+        "action.sound_loop",
+        &[
+            ("asset", text(asset)),
+            ("channel", text(channel)),
+            ("volume", Value::Number(volume)),
+            ("fade", Value::Number(fade)),
+        ],
+    )
+}
+/// Logic `entity` runs on input `action`: `nodes` in a row.
+fn on_input(entity: &mut Entity, action: &str, nodes: &[Id]) {
+    let event = node(entity, "event.input", &[("action", text(action))]);
+    let mut previous = event;
+    for next in nodes {
+        link(entity, &previous, next);
+        previous = next.clone();
+    }
+}
+/// The sound entries of a report as JSON, without their times.
+fn sound_entries(report: &SimulationReport) -> Vec<serde_json::Value> {
+    report
+        .sounds
+        .iter()
+        .map(|sound| {
+            let mut entry = serde_json::to_value(sound).unwrap();
+            entry.as_object_mut().unwrap().remove("time");
+            entry
+        })
+        .collect()
+}
+
+/// A level that plays Trilha as its music (0.8, fading in over 1 s) and Vento as an effect
+/// loop (0.5) as it starts, turns Trilha down to 0.4 on "baixar", restarts itself on
+/// "reiniciar" and opens the boss scene on "seguir", whose music Chefe takes over in 2 s.
+fn soundtrack() -> (Project, Id) {
+    let mut project = Project::new("Trilha sonora");
+    for (action, key) in [("reiniciar", "R"), ("seguir", "S"), ("baixar", "B")] {
+        project.input_bindings.insert(action.into(), key.into());
+    }
+    let track = audio(&mut project, "Trilha");
+    let boss = audio(&mut project, "Chefe");
+    let wind = audio(&mut project, "Vento");
+    let mut final_scene = Scene::new("Chefão", SceneKind::TwoD);
+    let final_id = final_scene.id.clone();
+    let mut arena = Entity::new("Arena", None);
+    let start = node(&mut arena, "event.scene_start", &[]);
+    let music = looping(&mut arena, &boss, "music", 1., 2.);
+    link(&mut arena, &start, &music);
+    final_scene.entities.push(arena);
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    let mut control = Entity::new("Controle", None);
+    let start = node(&mut control, "event.scene_start", &[]);
+    let music = looping(&mut control, &track, "music", 0.8, 1.);
+    let wind = looping(&mut control, &wind, "effects", 0.5, 0.);
+    link(&mut control, &start, &music);
+    link(&mut control, &music, &wind);
+    let restart = node(&mut control, "action.scene", &[]);
+    let current = node(&mut control, "scene.current", &[]);
+    wire(&mut control, &current, "scene", &restart, "scene");
+    on_input(&mut control, "reiniciar", &[restart]);
+    let next = node(&mut control, "action.scene", &[("scene", text(&final_id))]);
+    on_input(&mut control, "seguir", &[next]);
+    let quieter = looping(&mut control, &track, "music", 0.4, 0.);
+    on_input(&mut control, "baixar", &[quieter]);
+    scene.entities.push(control);
+    project.scenes.push(final_scene);
+    validate_project(&project).unwrap();
+    (project, final_id)
+}
+
+#[test]
+fn the_music_goes_on_through_restarts_and_another_track_crossfades() {
+    let (project, boss_scene) = soundtrack();
+    let [track, boss, wind] = [0, 1, 2].map(|i| project.assets[i].id.clone());
+    let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    let press = |runtime: &mut Runtime, action: &str| {
+        let frame = InputFrame {
+            pressed: [action.to_owned()].into(),
+            ..Default::default()
+        };
+        runtime.advance(FIXED_DT, &frame);
+    };
+    let music = runtime.audio().music.clone().unwrap();
+    assert_eq!(
+        (music.asset.as_str(), music.volume, music.fade),
+        (track.as_str(), 0.8, 1.)
+    );
+    let gust = runtime.audio().loops[&wind].clone();
+    // A restart asks for both again: the music goes on as it was, the effect loop starts over.
+    press(&mut runtime, "reiniciar");
+    assert_eq!(runtime.scene_starts.len(), 1);
+    assert_eq!(runtime.audio().music.as_ref(), Some(&music));
+    let again = &runtime.audio().loops[&wind];
+    assert_ne!(again.generation, gust.generation);
+    assert!(runtime.audio().ending.is_empty());
+    // Turned down, then restarted, it goes on too, back at the volume the scene asks.
+    press(&mut runtime, "baixar");
+    let quiet = runtime.audio().music.as_ref().unwrap();
+    assert_eq!((quiet.volume, quiet.generation), (0.4, music.generation));
+    press(&mut runtime, "reiniciar");
+    assert_eq!(runtime.audio().music.as_ref(), Some(&music));
+    // Another scene's music takes over, the old one fading out over the new one's 2 s; the
+    // effect loop ended with its scene.
+    press(&mut runtime, "seguir");
+    let audio = runtime.audio();
+    assert_eq!(audio.music.as_ref().unwrap().asset, boss);
+    assert!(audio.loops.is_empty());
+    assert_eq!(audio.ending.len(), 1);
+    assert_eq!(
+        (
+            &audio.ending[0].asset,
+            audio.ending[0].generation,
+            audio.ending[0].fade
+        ),
+        (&track, music.generation, 2.)
+    );
+    // Once faded out, it is forgotten.
+    for _ in 0..121 {
+        runtime.advance(FIXED_DT, &InputFrame::default());
+    }
+    assert!(runtime.audio().ending.is_empty());
+    assert_eq!(runtime.scene_id(), boss_scene);
+
+    // The report lists what changed: the music turned down and, at the restart, back up
+    // without starting over, and the wind started over.
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": [
+            {"type": "press", "at": 0.25, "action": "baixar"},
+            {"type": "press", "at": 0.5, "action": "reiniciar"},
+            {"type": "press", "at": 1.0, "action": "seguir"},
+        ]}),
+    );
+    assert_eq!(
+        sound_entries(&report),
+        [
+            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 0.8, "fade": 1.0}),
+            json!({"text": "Vento", "kind": "loop", "started": true, "channel": "effects", "volume": 0.5}),
+            json!({"text": "Trilha", "kind": "loop", "channel": "music", "volume": 0.4}),
+            json!({"text": "Trilha", "kind": "loop", "channel": "music", "volume": 0.8}),
+            json!({"text": "Vento", "kind": "loop", "started": true, "channel": "effects", "volume": 0.5}),
+            json!({"text": "Chefe", "kind": "loop", "started": true, "channel": "music", "volume": 1.0, "fade": 2.0}),
+        ]
+    );
+    let times: Vec<_> = report.sounds.iter().map(|s| s.time).collect();
+    assert!(
+        near(times[1], 0.)
+            && near(times[2], 0.25)
+            && near(times[3], 0.5)
+            && near(times[4], 0.5)
+            && near(times[5], 1.0),
+        "{times:?}"
+    );
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        json["audio"],
+        json!({
+            "music": {"asset": boss, "name": "Chefe", "volume": 1.0},
+            "loops": [],
+            "volumes": {"master": 1.0, "music": 1.0, "effects": 1.0},
+        })
+    );
+    // Before the change, the wind loops too.
+    let before = run(&project, json!({"seconds": 0.5}));
+    let loops: Vec<_> = before
+        .audio
+        .as_ref()
+        .unwrap()
+        .loops
+        .iter()
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(loops, ["Vento"]);
+
+    // Until a sound starts: at the start, or when the boss music takes over.
+    let inputs = json!([{"type": "press", "at": 1.0, "action": "seguir"}]);
+    let stop = run(
+        &project,
+        json!({"seconds": 2.0, "inputs": inputs, "until": {"sound": "vento"}}),
+    );
+    let stopped = stop.stopped_at.unwrap();
+    assert_eq!(
+        (stopped.reason, stopped.detail.as_str(), stopped.time),
+        ("sound", "O som Vento começou a tocar", 0.)
+    );
+    let stop = run(
+        &project,
+        json!({"seconds": 2.0, "inputs": inputs, "until": {"sound": boss}}),
+    );
+    let stopped = stop.stopped_at.unwrap();
+    assert!(
+        stopped.reason == "sound" && near(stopped.time, 1.0),
+        "{stopped:?}"
+    );
+    let error = headless::simulate(
+        &project,
+        &request(json!({"seconds": 1.0, "until": {"sound": "Sirene"}})),
+    )
+    .unwrap_err();
+    assert_eq!(error, "until: o som \"Sirene\" não existe no projeto");
+}
+
+#[test]
+fn stops_pick_the_channel_and_volumes_last_the_whole_run() {
+    let mut project = Project::new("Mixagem");
+    for (action, key) in [
+        ("chuva", "C"),
+        ("efeitos", "E"),
+        ("musica", "M"),
+        ("seguir", "S"),
+    ] {
+        project.input_bindings.insert(action.into(), key.into());
+    }
+    let track = audio(&mut project, "Trilha");
+    let wind = audio(&mut project, "Vento");
+    let rain = audio(&mut project, "Chuva");
+    let mut next = Scene::new("Opções", SceneKind::TwoD);
+    let next_id = next.id.clone();
+    // The next scene reads the volumes into attributes.
+    let mut panel = Entity::new("Painel", None);
+    let start = node(&mut panel, "event.scene_start", &[]);
+    let read = node(&mut panel, "audio.read", &[]);
+    let mut previous = start;
+    for (attribute, output) in [
+        ("Geral", "master"),
+        ("Música", "music"),
+        ("Efeitos", "effects"),
+    ] {
+        panel
+            .attributes
+            .insert(attribute.into(), Value::Number(-1.));
+        let set = node(
+            &mut panel,
+            "attribute.set",
+            &[("attribute", text(attribute))],
+        );
+        wire(&mut panel, &read, output, &set, "value");
+        link(&mut panel, &previous, &set);
+        previous = set;
+    }
+    let panel_id = panel.id.clone();
+    next.entities.push(panel);
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    let mut control = Entity::new("Controle", None);
+    let start = node(&mut control, "event.scene_start", &[]);
+    let music = looping(&mut control, &track, "music", 1., 0.);
+    let wind_loop = looping(&mut control, &wind, "effects", 1., 0.);
+    let rain_loop = looping(&mut control, &rain, "effects", 1., 0.);
+    let music_volume = node(
+        &mut control,
+        "action.volume",
+        &[("channel", text("music")), ("volume", Value::Number(0.25))],
+    );
+    let master = node(
+        &mut control,
+        "action.volume",
+        &[("volume", Value::Number(0.5))],
+    );
+    // A volume from the input, out of range, is kept within 0 and 1.
+    let effects = node(
+        &mut control,
+        "action.volume",
+        &[("channel", text("effects"))],
+    );
+    let loud = node(
+        &mut control,
+        "value.number",
+        &[("value", Value::Number(1.5))],
+    );
+    wire(&mut control, &loud, "value", &effects, "volume");
+    for (from, to) in [
+        (&start, &music),
+        (&music, &wind_loop),
+        (&wind_loop, &rain_loop),
+        (&rain_loop, &music_volume),
+        (&music_volume, &master),
+        (&master, &effects),
+    ] {
+        link(&mut control, from, to);
+    }
+    let stop_rain = node(
+        &mut control,
+        "action.sound_stop",
+        &[("asset", text(&rain)), ("fade", Value::Number(0.5))],
+    );
+    on_input(&mut control, "chuva", &[stop_rain]);
+    let stop_effects = node(
+        &mut control,
+        "action.sound_stop",
+        &[("channel", text("effects"))],
+    );
+    on_input(&mut control, "efeitos", &[stop_effects]);
+    let stop_music = node(
+        &mut control,
+        "action.sound_stop",
+        &[("channel", text("music"))],
+    );
+    on_input(&mut control, "musica", &[stop_music]);
+    let open = node(&mut control, "action.scene", &[("scene", text(&next_id))]);
+    on_input(&mut control, "seguir", &[open]);
+    scene.entities.push(control);
+    project.scenes.push(next);
+    validate_project(&project).unwrap();
+
+    let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    let press = |runtime: &mut Runtime, action: &str| {
+        let frame = InputFrame {
+            pressed: [action.to_owned()].into(),
+            ..Default::default()
+        };
+        runtime.advance(FIXED_DT, &frame);
+    };
+    let settings = runtime.audio().settings;
+    assert_eq!(
+        (settings.master, settings.music, settings.effects),
+        (0.5, 0.25, 1.)
+    );
+    assert_eq!(runtime.audio().loops.len(), 2);
+    // Chuva, on every channel; then every effect loop, the music playing on.
+    press(&mut runtime, "chuva");
+    assert_eq!(runtime.audio().loops.keys().collect::<Vec<_>>(), [&wind]);
+    assert_eq!(runtime.audio().ending.len(), 1);
+    press(&mut runtime, "efeitos");
+    assert!(runtime.audio().loops.is_empty());
+    assert!(runtime.audio().music.is_some());
+    press(&mut runtime, "musica");
+    assert!(runtime.audio().music.is_none());
+    // The volumes go on in the next scene, where Ler volumes reads them.
+    press(&mut runtime, "seguir");
+    press(&mut runtime, "nada");
+    assert_eq!(runtime.audio().settings, settings);
+    let panel = runtime.scene().entity(&panel_id).unwrap();
+    for (attribute, value) in [("Geral", 0.5), ("Música", 0.25), ("Efeitos", 1.)] {
+        assert_eq!(
+            panel.attributes[attribute],
+            Value::Number(value),
+            "{attribute}"
+        );
+    }
+    assert!(runtime.logs.is_empty(), "{:?}", runtime.logs);
+
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "inputs": [
+            {"type": "press", "at": 0.2, "action": "chuva"},
+            {"type": "press", "at": 0.4, "action": "efeitos"},
+            {"type": "press", "at": 0.5, "action": "efeitos"},
+            {"type": "press", "at": 0.6, "action": "seguir"},
+        ]}),
+    );
+    // Stopping what does not play is not listed, and neither is a volume already so.
+    assert_eq!(
+        sound_entries(&report)[3..],
+        [
+            json!({"text": "Música", "kind": "volume", "channel": "music", "volume": 0.25}),
+            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5}),
+            json!({"text": "Chuva", "kind": "stop", "channel": "all", "fade": 0.5}),
+            json!({"text": "Todos os sons do canal", "kind": "stop", "channel": "effects"}),
+        ]
+    );
+    let audio = report.audio.unwrap();
+    assert_eq!(audio.music.unwrap().name, "Trilha");
+    assert!(audio.loops.is_empty());
+    assert_eq!(audio.volumes, settings);
+}
+
+#[test]
+fn effect_loops_stop_at_32_with_an_error() {
+    let mut project = Project::new("Orquestra");
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::TwoD;
+    let assets: Vec<Id> = (0..33)
+        .map(|i| audio(&mut project, &format!("Som {i}")))
+        .collect();
+    let mut band = Entity::new("Banda", None);
+    let mut previous = node(&mut band, "event.scene_start", &[]);
+    for asset in &assets {
+        let next = looping(&mut band, asset, "effects", 1., 0.);
+        link(&mut band, &previous, &next);
+        previous = next;
+    }
+    project.scenes[0].entities.push(band);
+    let runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    assert_eq!(runtime.audio().loops.len(), 32);
+    assert!(!runtime.audio().loops.contains_key(&assets[32]));
+    assert!(
+        runtime
+            .logs
+            .iter()
+            .any(|l| l.contains("Já há 32 sons em loop nos efeitos")),
+        "{:?}",
+        runtime.logs
+    );
+}
+
+#[test]
+fn a_scene_left_within_the_step_leaves_its_effect_loops_out_of_the_report() {
+    // On "jogar" the menu loops a breeze and opens a passage, which loops the wind, starts the
+    // music, turns the volume down and opens the level, all within one step: the breeze and
+    // the wind ended unheard.
+    let mut project = Project::new("Passagem");
+    project.input_bindings.insert("jogar".into(), "J".into());
+    let track = audio(&mut project, "Trilha");
+    let wind = audio(&mut project, "Vento");
+    let breeze = audio(&mut project, "Brisa");
+    let boss = audio(&mut project, "Chefe");
+    let mut level = Scene::new("Fase", SceneKind::TwoD);
+    let level_id = level.id.clone();
+    level.entities.push(Entity::new("Chão", None));
+    let mut passage = Scene::new("Passagem", SceneKind::TwoD);
+    let passage_id = passage.id.clone();
+    let mut door = Entity::new("Porta", None);
+    let start = node(&mut door, "event.scene_start", &[]);
+    let gust = looping(&mut door, &wind, "effects", 1., 0.);
+    let music = looping(&mut door, &track, "music", 1., 0.);
+    let quiet = node(
+        &mut door,
+        "action.volume",
+        &[("volume", Value::Number(0.5))],
+    );
+    let open = node(&mut door, "action.scene", &[("scene", text(&level_id))]);
+    for (from, to) in [
+        (&start, &gust),
+        (&gust, &music),
+        (&music, &quiet),
+        (&quiet, &open),
+    ] {
+        link(&mut door, from, to);
+    }
+    passage.entities.push(door);
+    let mut menu = Entity::new("Menu", None);
+    let blow = looping(&mut menu, &breeze, "effects", 1., 0.);
+    let go = node(&mut menu, "action.scene", &[("scene", text(&passage_id))]);
+    on_input(&mut menu, "jogar", &[blow, go]);
+    project.scenes[0].kind = SceneKind::TwoD;
+    project.scenes[0].entities.push(menu);
+    project.scenes.extend([passage, level]);
+    validate_project(&project).unwrap();
+
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "inputs": [{"type": "press", "at": 0.5, "action": "jogar"}]}),
+    );
+    assert_eq!(report.scene_changes.len(), 2);
+    assert_eq!(
+        sound_entries(&report),
+        [
+            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 1.0}),
+            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5}),
+        ]
+    );
+    let audio = report.audio.unwrap();
+    assert_eq!(audio.music.unwrap().name, "Trilha");
+    assert!(audio.loops.is_empty());
+    assert_eq!(audio.volumes.master, 0.5);
+    let jump = json!([{"type": "press", "at": 0.5, "action": "jogar"}]);
+    for unheard in ["Brisa", "Vento"] {
+        let report = run(
+            &project,
+            json!({"seconds": 1.0, "inputs": jump, "until": {"sound": unheard}}),
+        );
+        assert_eq!(report.stopped_at, None, "{unheard}");
+    }
+    // A level with music of its own replaces the passage's within the step: only the level's
+    // is heard.
+    let level = project
+        .scenes
+        .iter_mut()
+        .find(|s| s.id == level_id)
+        .unwrap();
+    let mut speaker = Entity::new("Alto-falante", None);
+    let start = node(&mut speaker, "event.scene_start", &[]);
+    let theme = looping(&mut speaker, &boss, "music", 1., 0.);
+    link(&mut speaker, &start, &theme);
+    level.entities.push(speaker);
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "inputs": jump, "until": {"sound": "Trilha"}}),
+    );
+    assert_eq!(report.stopped_at, None);
+    assert_eq!(
+        sound_entries(&report),
+        [
+            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5}),
+            json!({"text": "Chefe", "kind": "loop", "started": true, "channel": "music", "volume": 1.0}),
+        ]
+    );
+    assert_eq!(report.audio.unwrap().music.unwrap().name, "Chefe");
+    // A one-shot keeps the shape it had.
+    let beeps = run(
+        &beep_then_restart(false),
+        json!({"seconds": 1.0, "inputs": [{"type": "press", "at": 0.5, "action": "reiniciar"}]}),
+    );
+    assert_eq!(sound_entries(&beeps), [json!({"text": "Bip"})]);
+    assert!(beeps.audio.is_none());
+    assert!(serde_json::to_value(&beeps).unwrap().get("audio").is_none());
 }
 
 /// `beep_then_restart(false)` with the restart wired: Cena atual gives Mudar de cena the scene

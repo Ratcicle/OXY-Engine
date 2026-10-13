@@ -8,7 +8,12 @@ mod mix;
 
 use cache::Cache;
 use mix::{Clip, Kind, Mix};
-use oxy_core::{audio::SoundRequest, document::Project, persistence, runtime::Runtime};
+use oxy_core::{
+    audio::{AudioState, Channel, SoundRequest},
+    document::Project,
+    persistence,
+    runtime::Runtime,
+};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -26,31 +31,11 @@ const REST_AFTER: Duration = Duration::from_secs(1);
 
 /// What freezes the sounds. The host's pause (the engine's in the player, the test's in the
 /// editor) freezes every voice where it is; the game's own pause freezes its effects, while
-/// sounds asked during it, as a menu's, play.
+/// the music goes on and sounds asked during it, as a menu's, play.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pause {
     pub host: bool,
     pub game: bool,
-}
-
-/// A sound the game's state keeps playing in a loop (see [`Mixer::sync`]).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Loop {
-    /// The audio asset.
-    pub asset: String,
-    /// Which request of it: another one starts it over.
-    pub generation: u64,
-    pub volume: f32,
-    /// Seconds it fades in as it starts.
-    pub fade: f32,
-}
-
-/// A loop the game's state stopped, going silent over `fade` seconds (see [`Mixer::sync`]).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Ending {
-    pub asset: String,
-    pub generation: u64,
-    pub fade: f32,
 }
 
 enum Output {
@@ -69,7 +54,8 @@ enum Output {
 type Open = fn(Arc<Mutex<Mix>>) -> Result<device::Output, String>;
 
 /// What a host plays: one-shots (at most 64), loops and the Library's preview, mixed at the
-/// device's rate in stereo. A sound is decoded once and kept, within about 512 MB.
+/// device's rate in stereo, each game sound at the master volume times its channel's times its
+/// own. A sound is decoded once and kept, within about 512 MB.
 pub struct Mixer {
     mix: Arc<Mutex<Mix>>,
     output: Output,
@@ -124,8 +110,9 @@ impl Mixer {
         }
     }
 
-    /// A frame of a running game: plays the sounds it asked for since the last frame and
-    /// follows its pauses (see [`Pause`]).
+    /// A frame of a running game: plays the sounds it asked for since the last frame, follows
+    /// what it keeps playing and its volumes (see [`Mixer::sync`]) and its pauses (see
+    /// [`Pause`]).
     pub fn update(&mut self, runtime: &mut Runtime, root: &Path) {
         // The time since the last frame passed under the pauses it had.
         self.advance_silent();
@@ -133,12 +120,14 @@ impl Mixer {
             host: runtime.paused,
             game: runtime.game_paused(),
         };
-        // Before the new sounds: a pause that starts now freezes what was playing, not them.
+        // Before the new sounds: a pause that starts now freezes what was playing, not them,
+        // and they start at the volumes the game has now.
         self.set_pause(pause);
+        self.set_volumes(runtime.audio());
         for request in std::mem::take(&mut runtime.sounds) {
             self.play_once(root, runtime.project(), &request);
         }
-        self.sync(root, runtime.project(), &[], &[], pause);
+        self.sync(root, runtime.project(), runtime.audio(), pause);
     }
 
     /// Plays `request` once, as Reproduzir WAV does; past 64 at once, the oldest stops.
@@ -150,25 +139,26 @@ impl Mixer {
         }
     }
 
-    /// Follows the loops the game's state keeps: one not playing yet starts, fading in over its
-    /// `fade`, and one playing takes the volume asked. One no longer asked fades out over the
-    /// `fade` of its entry in `ending`, or, in neither list, stops within the anti-click ramp,
-    /// as a scene change cuts them. Another `generation` of the same asset starts it over. Also
-    /// follows `pause`, and lets the device rest when nothing plays.
-    pub fn sync(
-        &mut self,
-        root: &Path,
-        project: &Project,
-        loops: &[Loop],
-        ending: &[Ending],
-        pause: Pause,
-    ) {
+    /// Follows what the game keeps playing (`audio`): a loop not playing yet starts, fading in
+    /// over its `fade`, and one playing takes the volume asked. One no longer asked fades out
+    /// over the `fade` of its entry in `ending`, or, in neither, stops within the anti-click
+    /// ramp, as a scene change cuts the effect loops. Another `generation` of the same audio
+    /// starts it over. Also follows the volumes and `pause`, and lets the device rest when
+    /// nothing plays.
+    pub fn sync(&mut self, root: &Path, project: &Project, audio: &AudioState, pause: Pause) {
         self.advance_silent();
         if self.awake && matches!(&self.output, Output::Device(device) if device.lost()) {
             // Unplugged: what plays goes on in the device that takes its place.
             self.wake();
         }
         self.set_pause(pause);
+        self.set_volumes(audio);
+        let loops: Vec<_> = audio
+            .music
+            .iter()
+            .map(|voice| (voice, Channel::Music))
+            .chain(audio.loops.values().map(|voice| (voice, Channel::Effects)))
+            .collect();
         let mut playing = vec![false; loops.len()];
         {
             let mut mix = lock(&self.mix);
@@ -179,20 +169,21 @@ impl Mixer {
                 }
                 let wanted = loops
                     .iter()
-                    .position(|wanted| voice.is_loop(&wanted.asset, wanted.generation));
+                    .position(|(wanted, _)| voice.is_loop(&wanted.asset, wanted.generation));
                 if let Some(index) = wanted {
-                    voice.volume = loops[index].volume.clamp(0., 1.);
+                    voice.volume = (loops[index].0.volume as f32).clamp(0., 1.);
                     playing[index] = true;
                 } else {
-                    let fade = ending
+                    let fade = audio
+                        .ending
                         .iter()
                         .find(|end| voice.is_loop(&end.asset, end.generation))
-                        .map_or(0., |end| end.fade.max(0.));
+                        .map_or(0., |end| (end.fade as f32).max(0.));
                     voice.release(fade, rate);
                 }
             }
         }
-        for (wanted, _) in loops.iter().zip(playing).filter(|(_, playing)| !playing) {
+        for ((wanted, channel), _) in loops.iter().zip(playing).filter(|(_, playing)| !playing) {
             let Some(clip) = self.asset_clip(root, project, &wanted.asset) else {
                 continue;
             };
@@ -205,9 +196,10 @@ impl Mixer {
                 let kind = Kind::Loop {
                     asset: wanted.asset.clone(),
                     generation: wanted.generation,
+                    channel: *channel,
                 };
-                let volume = wanted.volume.clamp(0., 1.);
-                mix.start(kind, clip, volume, wanted.fade, self.pause.host);
+                let volume = (wanted.volume as f32).clamp(0., 1.);
+                mix.start(kind, clip, volume, wanted.fade as f32, self.pause.host);
             }
         }
         self.rest_when_quiet();
@@ -286,8 +278,18 @@ impl Mixer {
         false
     }
 
-    /// Freezes or frees the voices when a pause starts or ends. The Library's preview is
-    /// nobody's; every other voice is an effect for now.
+    /// The game's volumes: each channel's times the master.
+    fn set_volumes(&mut self, audio: &AudioState) {
+        let settings = &audio.settings;
+        let (music, effects) = (
+            settings.gain(Channel::Music) as f32,
+            settings.gain(Channel::Effects) as f32,
+        );
+        lock(&self.mix).set_channels(music, effects);
+    }
+
+    /// Freezes or frees the voices when a pause starts or ends: the host's freezes the game's
+    /// voices, the game's only its effects. The Library's preview is nobody's.
     fn set_pause(&mut self, pause: Pause) {
         if pause == self.pause {
             return;
@@ -295,13 +297,13 @@ impl Mixer {
         let before = std::mem::replace(&mut self.pause, pause);
         let mut mix = lock(&self.mix);
         for voice in mix.voices.iter_mut() {
-            if voice.kind == Kind::Preview {
+            let Some(channel) = voice.channel() else {
                 continue;
-            }
+            };
             if pause.host != before.host {
                 voice.frozen_host = pause.host;
             }
-            if pause.game != before.game {
+            if pause.game != before.game && channel == Channel::Effects {
                 voice.frozen_game = pause.game;
             }
         }
@@ -434,6 +436,7 @@ pub(crate) mod tests {
     use oxy_core::{
         document::{Asset, AssetKind, Entity, Value, new_id},
         graph::{Edge, Node},
+        runtime::{FIXED_DT, InputFrame},
     };
 
     /// A temporary folder, removed with its files at the end of the test.
@@ -532,7 +535,12 @@ pub(crate) mod tests {
         mixer.preview(&short, 1.).unwrap();
         assert_eq!(mixer.voice_count(), 1);
         std::thread::sleep(Duration::from_millis(60));
-        mixer.sync(&folder.0, &project, &[], &[], Pause::default());
+        mixer.sync(
+            &folder.0,
+            &project,
+            &AudioState::default(),
+            Pause::default(),
+        );
         assert_eq!(mixer.voice_count(), 0);
     }
 
@@ -585,13 +593,18 @@ pub(crate) mod tests {
             host: true,
             game: false,
         };
-        mixer.sync(&folder.0, &project, &[], &[], paused);
+        mixer.sync(&folder.0, &project, &AudioState::default(), paused);
         assert!(mixer.rest_when_quiet());
         a_second_ago(&mut mixer);
         assert!(!mixer.rest_when_quiet());
         assert!(!mixer.awake);
         assert_eq!(mixer.voice_count(), 1);
-        mixer.sync(&folder.0, &project, &[], &[], Pause::default());
+        mixer.sync(
+            &folder.0,
+            &project,
+            &AudioState::default(),
+            Pause::default(),
+        );
         assert!(mixer.awake);
         // Stopped, the device rests a second after its last ramp.
         mixer.stop_all();
@@ -653,45 +666,152 @@ pub(crate) mod tests {
         let folder = Folder::new("loops");
         let (project, asset) = beep_project(&folder.0);
         let mut mixer = Mixer::silent();
-        let wanted = |generation, volume, fade| Loop {
-            asset: asset.clone(),
-            generation,
-            volume,
-            fade,
-        };
-        let ending = |generation, fade| Ending {
-            asset: asset.clone(),
-            generation,
-            fade,
-        };
-        let state = |mixer: &Mixer| -> Vec<(u64, f32, bool)> {
+        let mut audio = AudioState::default();
+        let state = |mixer: &Mixer| -> Vec<(u64, Channel, f32, bool)> {
             let mix = lock(&mixer.mix);
             mix.voices
                 .iter()
                 .map(|voice| match &voice.kind {
-                    Kind::Loop { generation, .. } => (*generation, voice.volume, voice.released),
+                    Kind::Loop {
+                        generation,
+                        channel,
+                        ..
+                    } => (*generation, *channel, voice.volume, voice.released),
                     _ => panic!("only loops"),
                 })
                 .collect()
         };
-        let pause = Pause::default();
-        mixer.sync(&folder.0, &project, &[wanted(1, 1., 0.)], &[], pause);
-        mixer.sync(&folder.0, &project, &[wanted(1, 0.5, 0.)], &[], pause);
+        let sync = |mixer: &mut Mixer, audio: &AudioState| {
+            mixer.sync(&folder.0, &project, audio, Pause::default());
+        };
+        let music = Channel::Music;
+        audio.play_loop(&asset, music, 1., 0., 0.).unwrap();
+        sync(&mut mixer, &audio);
+        audio.play_loop(&asset, music, 0.5, 0., 0.).unwrap();
+        sync(&mut mixer, &audio);
         // Asked again, it goes on at the new volume.
-        assert_eq!(state(&mixer), [(1, 0.5, false)]);
-        // Another request starts it over, while the first fades out over the seconds it ends
-        // with.
-        let crossfade = [ending(1, 2.)];
-        mixer.sync(&folder.0, &project, &[wanted(2, 1., 2.)], &crossfade, pause);
-        assert_eq!(state(&mixer), [(1, 0.5, true), (2, 1., false)]);
+        assert_eq!(state(&mixer), [(1, music, 0.5, false)]);
+        // Stopped with a fade and asked again, it starts over while the first fades out over
+        // the seconds it ends with.
+        audio.stop(None, &[music], 2., 0.);
+        audio.play_loop(&asset, music, 1., 2., 0.).unwrap();
+        sync(&mut mixer, &audio);
+        assert_eq!(
+            state(&mixer),
+            [(1, music, 0.5, true), (2, music, 1., false)]
+        );
         assert_eq!(mixer.voice_count(), 1);
-        // One in neither list stops within the anti-click ramp, as a scene change cuts it,
-        // whatever it faded in with.
-        mixer.sync(&folder.0, &project, &[], &crossfade, pause);
+        // The same audio looping on the effects is a voice of its own, which a scene change
+        // cuts within the anti-click ramp while the music goes on.
+        audio
+            .play_loop(&asset, Channel::Effects, 1., 0., 0.)
+            .unwrap();
+        sync(&mut mixer, &audio);
+        assert_eq!(mixer.voice_count(), 2);
+        audio.change_scene();
+        sync(&mut mixer, &audio);
+        assert_eq!(mixer.voice_count(), 1);
+        // Stopped without a fade, it stops within the ramp too, whatever it faded in with.
+        audio.stop(None, &[music], 0., 0.);
+        sync(&mut mixer, &audio);
         assert_eq!(mixer.voice_count(), 0);
         std::thread::sleep(Duration::from_millis(60));
-        mixer.sync(&folder.0, &project, &[], &crossfade, pause);
-        assert_eq!(state(&mixer), [(1, 0.5, true)]);
+        sync(&mut mixer, &audio);
+        assert_eq!(state(&mixer), [(1, music, 0.5, true)]);
+    }
+
+    /// A project whose scene plays Bip as its music and as an effect loop, with the music at
+    /// half the volume.
+    fn looping_project(folder: &Path) -> Project {
+        let (mut project, asset) = beep_project(folder);
+        let graph = &mut project.scenes[0].entities[0].graph;
+        let start = graph.nodes[0].id.clone();
+        graph.nodes.truncate(1);
+        graph.edges.clear();
+        let mut previous = start;
+        for (operation, params) in [
+            ("action.sound_loop", vec![("channel", "music")]),
+            ("action.sound_loop", vec![("channel", "effects")]),
+            ("action.volume", vec![("channel", "music")]),
+        ] {
+            let mut node = Node::new(operation, [0.; 2]);
+            for (key, value) in params {
+                node.params.insert(key.into(), Value::Text(value.into()));
+            }
+            if operation == "action.volume" {
+                node.params.insert("volume".into(), Value::Number(0.5));
+            } else {
+                node.params
+                    .insert("asset".into(), Value::Text(asset.clone()));
+            }
+            graph.edges.push(Edge {
+                from_node: previous,
+                from_port: "exec".into(),
+                to_node: node.id.clone(),
+                to_port: "exec".into(),
+            });
+            previous = node.id.clone();
+            graph.nodes.push(node);
+        }
+        project
+    }
+
+    #[test]
+    fn update_keeps_the_music_through_scene_changes_and_the_game_pause() {
+        let folder = Folder::new("musica");
+        let project = looping_project(&folder.0);
+        let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+        let mut mixer = Mixer::silent();
+        mixer.update(&mut runtime, &folder.0);
+        let voices = |mixer: &Mixer| -> Vec<(Channel, u64, bool, bool)> {
+            let mix = lock(&mixer.mix);
+            mix.voices
+                .iter()
+                .filter(|voice| !voice.released)
+                .map(|voice| match &voice.kind {
+                    Kind::Loop {
+                        channel,
+                        generation,
+                        ..
+                    } => (*channel, *generation, voice.frozen_host, voice.frozen_game),
+                    _ => panic!("only loops"),
+                })
+                .collect()
+        };
+        let playing = voices(&mixer);
+        assert_eq!(playing.len(), 2, "{playing:?}");
+        let music = playing[0];
+        assert_eq!(music.0, Channel::Music);
+        // The channels' volumes reach the mix.
+        {
+            let mix = lock(&mixer.mix);
+            assert_eq!((mix.music, mix.effects), (0.5, 1.));
+        }
+        // The game's pause freezes the effect loop and leaves the music playing; the host's
+        // freezes both.
+        runtime.toggle_game_pause();
+        mixer.update(&mut runtime, &folder.0);
+        let frozen: Vec<_> = voices(&mixer).iter().map(|v| (v.2, v.3)).collect();
+        assert_eq!(frozen, [(false, false), (false, true)]);
+        runtime.set_paused(true);
+        mixer.update(&mut runtime, &folder.0);
+        let frozen: Vec<_> = voices(&mixer).iter().map(|v| (v.2, v.3)).collect();
+        assert_eq!(frozen, [(true, false), (true, true)]);
+        runtime.set_paused(false);
+        // A restart asks for both again: the music goes on as it was, the effect loop starts
+        // over.
+        let scene = project.start_scene.clone();
+        runtime.change_scene(&scene).unwrap();
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        mixer.update(&mut runtime, &folder.0);
+        let after = voices(&mixer);
+        assert_eq!(after.len(), 2, "{after:?}");
+        assert_eq!(after[0], (Channel::Music, music.1, false, false));
+        assert_eq!(after[1].0, Channel::Effects);
+        assert_ne!(after[1].1, playing[1].1);
+        assert_eq!(mixer.voice_count(), 2);
+        mixer.stop_all();
+        assert_eq!(mixer.voice_count(), 0);
     }
 
     #[test]

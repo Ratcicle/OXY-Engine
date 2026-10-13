@@ -226,7 +226,11 @@ pub(super) fn param_summary(
             .iter()
             .find(|surface| &surface.id == id)
             .map_or_else(|| "superfície removida".into(), |s| s.name.clone()),
-        Value::Text(text) if text.is_empty() => "—".into(),
+        Value::Text(text) if text.is_empty() => {
+            oxy_core::graph::empty_choice(&node.operation, param.id)
+                .unwrap_or("—")
+                .into()
+        }
         Value::Text(text) => {
             if let Some(options) = oxy_core::graph::choices(&node.operation, param.id) {
                 return Some(
@@ -360,12 +364,19 @@ pub(super) fn parameter_editor(
                 specialized = true;
             }
             Some(Reference::Audio) => {
-                let choices: Vec<_> = context
-                    .project
-                    .assets
-                    .iter()
-                    .filter(|asset| asset.kind == AssetKind::Audio)
-                    .map(|asset| (asset.id.clone(), asset.name.clone()))
+                // Parar som's empty audio is a choice of its own: every loop of the channel.
+                let empty = oxy_core::graph::empty_choice(&node.operation, param.id)
+                    .map(|label| (String::new(), label.to_owned()));
+                let choices: Vec<_> = empty
+                    .into_iter()
+                    .chain(
+                        context
+                            .project
+                            .assets
+                            .iter()
+                            .filter(|asset| asset.kind == AssetKind::Audio)
+                            .map(|asset| (asset.id.clone(), asset.name.clone())),
+                    )
                     .collect();
                 named_choice(ui, selected, &choices, salt.clone());
                 ui.small("Importe um WAV pela biblioteca para adicioná-lo aqui.");

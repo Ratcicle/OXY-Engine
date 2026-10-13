@@ -59,8 +59,17 @@ impl Topic {
             "action.animation" => {
                 "Crie o clip no Estúdio do modelo e escolha o nome no nó. O alvo deve possuir esse clip."
             }
-            "action.sound" => {
+            "action.sound" | "action.sound_loop" => {
                 "Importe um WAV válido na Biblioteca e escolha esse recurso no nó. A reprodução requer um dispositivo de áudio disponível."
+            }
+            "action.sound_stop" => {
+                "Escolha o canal e, para parar um só áudio, o recurso; vazio para todos os sons do canal. Conecte uma saída de execução à entrada Executar."
+            }
+            "action.volume" => {
+                "Escolha o canal e forneça o Volume, de 0 a 1, pelo parâmetro ou pela entrada. Conecte uma saída de execução à entrada Executar."
+            }
+            "audio.read" => {
+                "Não precisa de configuração. Ligue Geral, Música ou Efeitos a uma entrada numérica; sozinho, o nó não inicia um comportamento."
             }
             "action.spawn" | "action.remove" | "action.component" => {
                 "Indique um objeto existente ou conecte uma referência de objeto. Confirme qual componente ou hierarquia será afetado."
@@ -124,7 +133,7 @@ pub fn topics() -> &'static [Topic] {
             "condition.branch"=>("Escolhe somente a saída Verdadeiro ou Falso.","Verdadeiro desconta energia e aplica dano; Falso mostra uma mensagem.","A porta de execução inicia a decisão; conectar somente o dado não executa ações."),
             "action.damage"=>("Subtrai dano de um atributo numérico configurável do alvo.","A área de um golpe aplica 25 ao atributo Vida do objeto que entrou.","Uma vez por ativação e alvo evita repetição do golpe, inclusive após uma espera. Ativações distintas podem causar novo dano."),
             "action.animation"=>("Reproduz um clip de animação do objeto escolhido.","A ação de entrada inicia Ataque; seu marcador Impacto inicia o acerto.","O clip deve existir nesse objeto. Não confunda a peça de uma trilha com o modelo que contém o clip."),
-            "action.sound"=>("Solicita reprodução de um WAV importado, com volume configurável.","O marcador Passo pode acionar um som do projeto.","Importe o WAV na Biblioteca. Arquivo ou dispositivo inválido é diagnosticado; não há áudio espacial ou mixer avançado."),
+            "action.sound"=>("Toca um WAV importado uma vez, no canal de efeitos, com volume configurável.","O marcador Passo pode acionar um som do projeto.","Importe o WAV na Biblioteca. Arquivo ou dispositivo inválido é diagnosticado. O som é ouvido no volume geral vezes o dos efeitos vezes o do nó (veja Volume do canal); a pausa do jogo o congela. Para um som contínuo, como música ou vento, use Tocar em loop. Não há áudio espacial."),
             "action.spawn"=>("Cria uma cópia da hierarquia indicada durante o jogo.","Crie uma cópia de um objeto de efeito e use a saída Objeto para configurar sua continuação.","É uma instância do runtime. Parar descarta as criações; referências internas da hierarquia são remapeadas."),
             "action.remove"=>("Remove um objeto e seus descendentes do jogo.","Após registrar Chave no visitante, remova o coletável.","As tarefas do objeto removido são canceladas. A alteração não apaga o documento de edição."),
             "action.component"=>("Ativa ou desativa o componente escolhido: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel.","Ative a colisão da área de ataque, espere sua duração e desative-a.","Visibilidade, comportamento, controlador, animação, colisão e plataforma são estados distintos: ocultar a peça não desativa seu colisor. Desativar uma área encerra a ocupação sem gerar saída; ao reativá-la, quem estiver dentro entra de novo. Desativar a plataforma móvel para o movimento por velocidade; numa plataforma animada, só deixa de carregar quem está em cima, e a animação continua: pause-a com Reprodução da animação."),
@@ -132,7 +141,7 @@ pub fn topics() -> &'static [Topic] {
             "control.sequence"=>("Dispara as saídas 1, 2 e 3 nessa ordem.","Inicie som e animação a partir do mesmo evento.","Não aguarda que um ramo termine. Para esperar antes da próxima ação, conecte-as em um mesmo ramo através de Esperar."),
             "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é o do jogo: a pausa da engine e a pausa do jogo suspendem a espera, e uma espera iniciada durante a pausa do jogo só termina depois de retomar. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
             "debug.message"=>("Registra uma mensagem no Console durante o teste.","Ligue à ação K para verificar seu primeiro fluxo.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução."),
-            _=>crate::graph::game_help(operation.id).or_else(||crate::graph::math_help(operation.id)).or_else(||crate::graph::movement_help(operation.id)).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
+            _=>crate::graph::game_help(operation.id).or_else(||crate::graph::audio_help(operation.id)).or_else(||crate::graph::math_help(operation.id)).or_else(||crate::graph::movement_help(operation.id)).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
         };Topic {operation,purpose,example,caution}
     }).collect())
 }

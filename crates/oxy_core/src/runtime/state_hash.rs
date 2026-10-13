@@ -12,10 +12,10 @@ use serde::Serialize;
 use std::fmt::{self, Write as _};
 
 /// The state in parts, each with its hash. The run's own come first (scene, time, input,
-/// tasks, areas, characters, random, variables.<name> for each game variable, save, camera), then
-/// each object's in scene order: transform, visible, attributes.<name>, document (its whole
-/// document form), character, platform, body (2D movement), animation and behavior (stopped by
-/// an error or by logic).
+/// tasks, areas, characters, random, variables.<name> for each game variable, save, audio,
+/// camera), then each object's in scene order: transform, visible, attributes.<name>, document
+/// (its whole document form), character, platform, body (2D movement), animation and behavior
+/// (stopped by an error or by logic).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateDigest {
     pub parts: Vec<StatePart>,
@@ -197,6 +197,8 @@ impl Runtime {
             recording: _,
             // Only within a step.
             sounds_before_change: _,
+            audio_before_change: _,
+            audio_step_start: _,
             query_work: _,
             paused,
             game_paused,
@@ -233,6 +235,7 @@ impl Runtime {
             variables,
             save,
             paused_for,
+            audio,
         } = run;
         let mut digest = StateDigest::default();
         digest.add(None, "scene", |s| {
@@ -308,6 +311,10 @@ impl Runtime {
         // What a new run would start from, and whether Ler progresso salvo finds any.
         digest.add(None, "save", |s| {
             s.debug(save);
+        });
+        // The music, the effect loops and the volumes the hosts follow.
+        digest.add(None, "audio", |s| {
+            s.debug(audio);
         });
         digest.add(None, "camera", |s| {
             let _ = cameras.write_digest(self.scene(), s);

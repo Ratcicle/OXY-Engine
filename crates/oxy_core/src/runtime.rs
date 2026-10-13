@@ -5,12 +5,13 @@
 //!   The clock (`time`), activation serials, the host pause, logs and traces with their
 //!   counters, the host queues (`sounds`, `save_requests`, `scene_starts`, `recording`), the
 //!   quit request and `run`, the `RunState` (draws, copy counts, game variables, saved
-//!   progress, time spent in the game pause) that new run-wide state goes into. `stop` resets
-//!   `run`.
+//!   progress, time spent in the game pause, music and volumes) that new run-wide state goes
+//!   into. `stop` resets `run`.
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
-//!   stopped behaviors, area pairs, activations, hit leases and the game pause.
+//!   stopped behaviors, area pairs, activations, hit leases, the game pause and the effect
+//!   loops (kept with the music in `run`, which `change_scene` ends).
 //! - Per object: the entries of per-scene structures keyed by an object, pruned in
 //!   `remove_object` when it goes (the cameras' lazily, at the next presentation), and the
 //!   run's counts of an object made during the run (see `forget_copies`).
@@ -40,6 +41,7 @@ type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
 mod cameras;
 pub use cameras::{CameraDebug, CameraPreview};
+mod audio_nodes;
 mod characters;
 mod game_nodes;
 mod math_nodes;
@@ -136,6 +138,13 @@ pub struct Recording {
     pub spawned: Vec<SpawnedObject>,
     /// Each change of the game pause, scene changes ending one included: the new state.
     pub pauses: Vec<bool>,
+    /// What logic changed in what plays (loops, stops, volumes). As with `Runtime::sounds`, a
+    /// scene that started and ended within a step leaves none of its effect loops: they ended
+    /// with it unheard. Its changes to the music and the volumes stay, since they go on. In a
+    /// step that changed scene, a loop started that no longer plays at its end, as an effect
+    /// loop started right before the change or a music the next scene replaced, was never
+    /// heard either: its start is left out.
+    pub audio: Vec<crate::audio::AudioChange>,
 }
 #[derive(Clone, Debug)]
 struct Context {
@@ -165,9 +174,9 @@ struct BodyState {
     grounded: bool,
 }
 /// Run-lifetime state: `change_scene` keeps it and `stop` resets it. The home of the seeded
-/// draws, the spawn counters, the game variables, the saved progress and the game-clock offset,
-/// and later of music and volumes. The counts of an object made during the run go with it (see
-/// `Runtime::forget_copies`).
+/// draws, the spawn counters, the game variables, the saved progress, the game-clock offset
+/// and what plays. The counts of an object made during the run go with it (see
+/// `Runtime::forget_copies`), and the effect loops with their scene.
 #[derive(Debug, Default)]
 pub(crate) struct RunState {
     /// What Sortear número draws from, with the draws so far of each (owner, node): a node's
@@ -187,6 +196,8 @@ pub(crate) struct RunState {
     /// Seconds of `time` spent in the game pause, in every scene of the run: the game clock is
     /// `time` minus them (see `Runtime::game_time`).
     paused_for: f64,
+    /// The music, the effect loops and the volumes, which the hosts play.
+    audio: crate::audio::AudioState,
 }
 impl RunState {
     /// A run's start: the draws from `seed`, every variable at its declared value.
@@ -234,6 +245,10 @@ pub struct Runtime {
     /// the same step drops the rest: they belong to scenes that started and ended within the
     /// step, as in a scene that restarts itself as it starts until the work budget runs out.
     sounds_before_change: Option<usize>,
+    /// The same for the recording's audio changes.
+    audio_before_change: Option<usize>,
+    /// How many of the recording's audio changes came before this step.
+    audio_step_start: usize,
     /// What Salvar progresso and Apagar progresso asked since the host last took them, oldest
     /// first. Unlike sounds, scene changes and `stop` never drop them: they are the game's state.
     pub save_requests: Vec<crate::save::SaveRequest>,
@@ -311,6 +326,8 @@ impl Runtime {
             traces_written: 0,
             sounds: Vec::new(),
             sounds_before_change: None,
+            audio_before_change: None,
+            audio_step_start: 0,
             save_requests: Vec::new(),
             scene_starts: Vec::new(),
             recording: options.record.then(Recording::default),
@@ -353,6 +370,7 @@ impl Runtime {
         runtime.emit(RuntimeEvent::SceneStart);
         let mut budget = MAX_NODE_WORK;
         runtime.process_tasks(&mut budget);
+        runtime.settle_audio_changes();
         Ok(runtime)
     }
     pub fn scene(&self) -> &Scene {
@@ -461,6 +479,7 @@ impl Runtime {
             ("damage_hits", self.damage_hits.is_empty()),
             ("area_hits", self.area_hits.is_empty()),
             ("game_paused", !self.game_paused),
+            ("effect_loops", self.run.audio.loops.is_empty()),
         ]
         .into_iter()
         .filter_map(|(name, empty)| (!empty).then_some(name))
@@ -578,6 +597,7 @@ impl Runtime {
                 || self.fixed_step(&frame, &mut budget),
                 |c, ns| c.fixed_step_ns += ns,
             );
+            self.settle_audio_changes();
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
         }
@@ -591,6 +611,8 @@ impl Runtime {
         self.step_input = input.clone();
         self.query_work = 0;
         self.sounds_before_change = None;
+        self.audio_before_change = None;
+        self.audio_step_start = self.recording.as_ref().map_or(0, |r| r.audio.len());
         let paused = self.game_paused;
         if !paused {
             crate::metrics::timed(|| self.begin_camera_input(input), |c, ns| c.input_ns += ns);
@@ -598,6 +620,7 @@ impl Runtime {
         self.collect_activations();
         crate::metrics::count(|c| c.steps += 1);
         self.time += f64::from(FIXED_DT);
+        self.run.audio.prune(self.time);
         if paused {
             self.run.paused_for += f64::from(FIXED_DT);
         } else if self.event_used("event.step") {
@@ -1190,19 +1213,6 @@ impl Runtime {
                         .insert(target, AnimationPlayer::new(clip_id));
                 }
             }
-            "action.sound" => {
-                let asset = self
-                    .project
-                    .asset(node.text("asset"))
-                    .ok_or("Asset de áudio não existe")?;
-                if asset.kind != crate::document::AssetKind::Audio {
-                    return Err("Asset selecionado não é áudio".into());
-                }
-                self.sounds.push(SoundRequest {
-                    asset: asset.id.clone(),
-                    volume: node.number("volume", 1.0).clamp(0.0, 1.0) as f32,
-                });
-            }
             "action.spawn" => {
                 let template = self.target(&graph, node, &context, budget, 0)?;
                 self.physics_dirty = true;
@@ -1315,10 +1325,23 @@ impl Runtime {
                 let scene = self.scene_destination(&graph, node, &context, budget)?;
                 self.change_scene(&scene)?;
                 // A sound played right before the first change of the step is heard; those
-                // of a scene that starts and ends within the step are not.
+                // of a scene that starts and ends within the step are not, nor its effect
+                // loops, which the change ended.
                 match self.sounds_before_change {
                     Some(kept) => self.sounds.truncate(kept),
                     None => self.sounds_before_change = Some(self.sounds.len()),
+                }
+                if let Some(recording) = &mut self.recording {
+                    match self.audio_before_change {
+                        Some(kept) => {
+                            let mut index = 0;
+                            recording.audio.retain(|change| {
+                                index += 1;
+                                index <= kept || change.lasts()
+                            });
+                        }
+                        None => self.audio_before_change = Some(recording.audio.len()),
+                    }
                 }
                 return Ok(());
             }
@@ -1428,7 +1451,9 @@ impl Runtime {
             recording.pauses.push(false);
         }
         // Sounds already requested still play ("play a sound, then restart"): the host takes
-        // them after the step. action.scene drops those of scenes left within the step.
+        // them after the step. action.scene drops those of scenes left within the step. The
+        // music and the volumes go on; the effect loops end with the scene.
+        self.run.audio.change_scene();
         self.physics_dirty = true;
         self.step_input = InputFrame::default();
         self.query_work = 0;

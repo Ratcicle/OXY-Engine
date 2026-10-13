@@ -645,6 +645,143 @@ fn an_input_action_name_never_stands_for_another_action() {
 }
 
 #[test]
+fn sound_nodes_take_their_channels_and_the_catalog_lists_them_under_som() {
+    let (mut project, scene) = project(SceneKind::TwoD);
+    let music = new_id();
+    project.assets.push(Asset {
+        id: music.clone(),
+        name: "Trilha".into(),
+        path: "assets/trilha.wav".into(),
+        kind: AssetKind::Audio,
+        model: None,
+    });
+    let before = project.clone();
+    for (operation, value) in [
+        ("action.sound_loop", "musica"),
+        ("action.sound_stop", "tudo"),
+        ("action.volume", "geral"),
+    ] {
+        let commands = batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": operation,
+             "params": {"channel": value}},
+        ]));
+        let error = command::apply(&mut project, &scene, &commands).unwrap_err();
+        assert!(
+            error.message.contains(&format!("recebeu \"{value}\"")),
+            "{error}"
+        );
+        assert_eq!(project, before);
+    }
+    // Plain values; Parar som's empty audio stops every loop of the channel.
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Rádio"},
+            {"op": "add_node", "entity": "$0", "operation": "action.sound_loop",
+             "params": {"asset": music, "channel": "effects", "volume": 0.5, "fade": 1}},
+            {"op": "add_node", "entity": "$0", "operation": "action.sound_stop"},
+            {"op": "add_node", "entity": "$0", "operation": "action.volume",
+             "params": {"channel": "music", "volume": 0.3}},
+            {"op": "add_node", "entity": "$0", "operation": "audio.read"},
+        ])),
+    )
+    .unwrap();
+    assert!(applied.iter().all(|a| a.warnings.is_empty()), "{applied:?}");
+    let radio = &applied[0].created[0];
+    let graph = &project.scene(&scene).unwrap().entity(radio).unwrap().graph;
+    let looped = &graph.nodes[0];
+    assert_eq!(looped.text("asset"), music);
+    assert_eq!(looped.text("channel"), "effects");
+    assert_eq!(looped.number("volume", 0.), 0.5);
+    assert_eq!(looped.number("fade", 0.), 1.);
+    let stop = &graph.nodes[1];
+    assert_eq!((stop.text("asset"), stop.text("channel")), ("", "all"));
+    assert_eq!(graph.nodes[2].text("channel"), "music");
+    validate_project(&project).unwrap();
+    assert!(command::warnings(&project).is_empty());
+    // The audio is used by the loop, not by the stop that names none.
+    let summary = query::project_summary(&project);
+    assert_eq!(
+        summary["assets"][0]["used_by"],
+        json!([{"entity": radio, "name": "Rádio", "role": "action.sound_loop"}])
+    );
+    assert_eq!(
+        graph::empty_choice("action.sound_stop", "asset"),
+        Some("Todos os sons do canal")
+    );
+    assert_eq!(graph::empty_choice("action.sound_loop", "asset"), None);
+
+    let catalog = query::catalog_query(&json!({"category": "Som"})).unwrap();
+    let nodes = catalog["nodes"].as_array().unwrap();
+    let listed: Vec<_> = nodes
+        .iter()
+        .map(|n| n["operation"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            "action.sound",
+            "action.sound_loop",
+            "action.sound_stop",
+            "action.volume",
+            "audio.read"
+        ]
+    );
+    let param = |operation: &str, id: &str| {
+        let node = nodes.iter().find(|n| n["operation"] == operation).unwrap();
+        node["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let values = |operation: &str| -> Vec<String> {
+        param(operation, "channel")["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["value"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(values("action.sound_loop"), ["music", "effects"]);
+    assert_eq!(values("action.sound_stop"), ["music", "effects", "all"]);
+    assert_eq!(values("action.volume"), ["master", "music", "effects"]);
+    assert_eq!(
+        param("action.volume", "channel")["choices"][0],
+        json!({"value": "master", "label": "Geral"})
+    );
+    for operation in ["action.sound", "action.sound_loop", "action.sound_stop"] {
+        assert_eq!(param(operation, "asset")["ref"], "audio", "{operation}");
+    }
+    // Volume takes an input; Ler volumes gives the three.
+    let ports = |operation: &str, side: &str| -> Vec<String> {
+        let node = nodes.iter().find(|n| n["operation"] == operation).unwrap();
+        node[side]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| port["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // Reproduzir WAV moved here as it was.
+    let sound = nodes
+        .iter()
+        .find(|n| n["operation"] == "action.sound")
+        .unwrap();
+    assert_eq!(sound["outputs"][0]["label"], "Executar");
+    assert_eq!(ports("action.sound_loop", "inputs"), ["exec", "volume"]);
+    assert_eq!(ports("action.volume", "inputs"), ["exec", "volume"]);
+    assert_eq!(
+        ports("audio.read", "outputs"),
+        ["master", "music", "effects"]
+    );
+}
+
+#[test]
 fn empty_choices_are_warned_but_an_unset_input_mode_reads_as_pressed() {
     let (mut project, scene) = project(SceneKind::ThreeD);
     let created = command::apply(
@@ -1851,8 +1988,8 @@ fn the_current_scene_wires_into_the_scene_change_and_the_catalog_lists_both() {
         .collect();
     let game = categories.iter().position(|c| *c == "Jogo").unwrap();
     assert_eq!(
-        categories[game - 1..=game + 1],
-        ["Ações", "Jogo", "Controle"],
+        categories[game - 1..=game + 2],
+        ["Ações", "Jogo", "Som", "Controle"],
         "{categories:?}"
     );
     let nodes = catalog(json!({"category": "Jogo"}))["nodes"].clone();

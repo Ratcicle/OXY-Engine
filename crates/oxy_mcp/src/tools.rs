@@ -398,7 +398,11 @@ pub fn definitions() -> Json {
                            "required": ["kind"]},
                        "paused": {"type": "boolean", "description":
                            "true: stops when the game pause starts; false: when it ends (a scene \
-                            change ends it too). The final ui then shows the pause menu."}},
+                            change ends it too). The final ui then shows the pause menu."},
+                       "sound": {"type": "string", "description":
+                           "An audio's ID or name: stops when it starts playing, once or in a \
+                            loop (a loop already playing that takes another volume does not \
+                            count)."}},
                        "description": "Stops at the first moment any condition holds; the report \
                         says which in stopped_at {time, reason, kind (the event's, for event), \
                         detail (what happened, in words)}. A game.quit node ends the run whatever \
@@ -641,7 +645,8 @@ project is saved in the current format and its original is kept once as \
 project.oxy.json.schema-N.….backup.json). Answers \
 {asset, name, kind, path (relative to the project folder), width and height (images), seconds \
 (sounds), applied_to?}. Use the asset ID in set_material texture, an interface element's \
-ui.texture (update_entity) or an action.sound node's asset parameter.";
+ui.texture (update_entity) or the asset parameter of an action.sound (once), action.sound_loop \
+or action.sound_stop node.";
 
 const CONSOLE_DESCRIPTION: &str = "Live only: the editor's console, read-only, for when the \
 person says something did not work: {lines: [{seq, origin, text, warning?, object? {id, name}, \
@@ -659,9 +664,16 @@ counts older lines left out by limit. oxy_status says whether a test is running.
 const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
 the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
 when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
-sounds, movement and area events {time, kind: jump|land|leave|side|surface|posture|area_enter|\
-area_exit, object, other?} as the game fires them (also when its logic then removes the objects \
-involved or changes scene), the game's own pause (pauses: [{time, paused}], each change, left \
+sounds [{time, text: the audio's name, kind?, started?, channel?, volume?, fade?}] (no kind: \
+played once by action.sound; loop, stop and volume: what logic changed in what plays, only when \
+it changed; a loop has started: true when it starts or starts over, and none when it was \
+already playing and only took another volume; channel music|effects, all for a stop, master \
+for a volume), audio at the end {music?: {asset, name, volume}, loops: [same], volumes: \
+{master, music, effects}} (left out when nothing loops and every volume is 1; the music goes on \
+through scene changes and restarts, effect loops end with their scene, the game pause freezes \
+effects only), movement and area events {time, kind: jump|land|leave|side|surface|posture|\
+area_enter|area_exit, object, other?} as the game fires them (also when its logic then removes \
+the objects involved or changes scene), the game's own pause (pauses: [{time, paused}], each change, left \
 out when none; paused: the state at the end; in the pause the world, waits included, stands \
 still while logic, input actions and interface clicks go on; a game.quit node ends the run, \
 stopped_at reason quit), the game camera at the end {active, mode, position, forward, fov}, \
@@ -1408,6 +1420,11 @@ mod tests {
         assert!(SIMULATE_DESCRIPTION.contains("stopped_at reason quit"));
         let until = &simulate["until"];
         assert_eq!(until["properties"]["paused"]["type"], "boolean");
+        // Sounds once, loops, stops and volumes, what plays at the end, and a stop on a sound.
+        assert!(SIMULATE_DESCRIPTION.contains("sounds [{time, text: the audio's name, kind?"));
+        assert!(SIMULATE_DESCRIPTION.contains("audio at the end {music?: {asset, name, volume}"));
+        assert!(SIMULATE_DESCRIPTION.contains("a loop has started: true when it starts"));
+        assert_eq!(until["properties"]["sound"]["type"], "string");
         assert!(
             until["description"]
                 .as_str()
@@ -2880,6 +2897,7 @@ mod tests {
             "agente.bak",
             "schema-N.….backup.json",
             "action.sound",
+            "action.sound_loop",
         ] {
             assert!(IMPORT_DESCRIPTION.contains(text), "{text}");
         }

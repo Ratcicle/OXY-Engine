@@ -44,11 +44,11 @@ impl Runtime {
                 }
                 scene => Ok(Value::Text(scene.into())),
             },
-            _ => self.math_data(graph, node, output, context, budget, depth),
+            _ => self.audio_data(graph, node, output, context, budget, depth),
         }
     }
 
-    /// Runs `node` when it is one of these actions, else hands it to the math ones; false when
+    /// Runs `node` when it is one of these actions, else hands it to the sound ones; false when
     /// no one runs it.
     pub(super) fn game_action(
         &mut self,
@@ -136,7 +136,7 @@ impl Runtime {
                 _ => return Err("Ação de pausa desconhecida; use pause/resume/toggle".into()),
             },
             "game.quit" => self.quit_requested = true,
-            _ => return self.math_action(graph, node, context, budget),
+            _ => return self.audio_action(graph, node, context, budget),
         }
         Ok(true)
     }

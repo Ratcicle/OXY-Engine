@@ -1,6 +1,7 @@
 //! The mixing itself, with no device: voices of decoded clips added into stereo blocks, each one
-//! with its volume, fade and anti-click ramp. Pure, so tests run it frame by frame.
-use oxy_core::audio::PcmAudio;
+//! with its volume, its channel's, its fade and its anti-click ramp. Pure, so tests run it frame
+//! by frame.
+use oxy_core::audio::{Channel, PcmAudio};
 use std::sync::Arc;
 
 /// Seconds of the anti-click ramp: a cut, a pause, a resume and a volume change take this long.
@@ -59,7 +60,11 @@ pub(crate) enum Kind {
     /// Once, for the game (Reproduzir WAV).
     Once,
     /// In a loop while the game's state keeps it: the request `generation` of `asset`.
-    Loop { asset: String, generation: u64 },
+    Loop {
+        asset: String,
+        generation: u64,
+        channel: Channel,
+    },
     /// The Library's Ouvir, which no pause freezes.
     Preview,
 }
@@ -85,7 +90,15 @@ pub(crate) struct Voice {
 
 impl Voice {
     pub(crate) fn is_loop(&self, asset: &str, generation: u64) -> bool {
-        matches!(&self.kind, Kind::Loop { asset: a, generation: g } if a == asset && *g == generation)
+        matches!(&self.kind, Kind::Loop { asset: a, generation: g, .. } if a == asset && *g == generation)
+    }
+    /// The game's channel it plays on; the Library's preview is nobody's.
+    pub(crate) fn channel(&self) -> Option<Channel> {
+        match &self.kind {
+            Kind::Once => Some(Channel::Effects),
+            Kind::Loop { channel, .. } => Some(*channel),
+            Kind::Preview => None,
+        }
     }
     /// Stops it: silent in `seconds`, or in the anti-click ramp when that is shorter. Stopping it
     /// again only makes it faster.
@@ -99,8 +112,9 @@ impl Voice {
         self.fade_target = 0.;
         self.released = true;
     }
-    /// Adds this voice to `out`, stereo frames; false once it is over.
-    fn render(&mut self, out: &mut [f32], step: f32) -> bool {
+    /// Adds this voice to `out`, stereo frames, its volume times `channel` (its channel's); false
+    /// once it is over.
+    fn render(&mut self, out: &mut [f32], step: f32, channel: f32) -> bool {
         let samples = &self.clip.samples;
         let frames = samples.len() / 2;
         let looping = matches!(self.kind, Kind::Loop { .. });
@@ -111,7 +125,7 @@ impl Voice {
                 // Silent: a frozen voice holds its place; a stopped one is over.
                 return !self.released;
             }
-            self.gain = approach(self.gain, self.volume, step);
+            self.gain = approach(self.gain, self.volume * channel, step);
             self.fade = approach(self.fade, self.fade_target, self.fade_step);
             let gain = self.gain * self.fade * self.ramp / 32768.;
             frame[0] += f32::from(samples[self.position * 2]) * gain;
@@ -137,6 +151,10 @@ pub(crate) struct Mix {
     rate: u32,
     /// How much the anti-click ramp moves a frame.
     step: f32,
+    /// What the music's and the effects' voices are multiplied by: the master volume times
+    /// the channel's.
+    pub(crate) music: f32,
+    pub(crate) effects: f32,
     pub(crate) voices: Vec<Voice>,
 }
 
@@ -145,6 +163,8 @@ impl Mix {
         let mut mix = Self {
             rate,
             step: 1.,
+            music: 1.,
+            effects: 1.,
             voices: Vec::new(),
         };
         mix.set_rate(rate);
@@ -157,6 +177,12 @@ impl Mix {
         self.rate = rate.max(1);
         self.step = 1. / (RAMP_SECONDS * self.rate as f32);
     }
+    /// The channels' volumes, master included, which voices follow within the anti-click ramp.
+    pub(crate) fn set_channels(&mut self, music: f32, effects: f32) {
+        self.music = music.clamp(0., 1.);
+        self.effects = effects.clamp(0., 1.);
+    }
+
     /// Starts `clip` at `volume`, fading in over `fade` seconds (at once with 0), frozen when
     /// the host is paused. Past [`MAX_ONCE`] one-shots, the oldest stops.
     pub(crate) fn start(
@@ -186,7 +212,7 @@ impl Mix {
             });
         }
         let fading = fade > 0.;
-        self.voices.push(Voice {
+        let mut voice = Voice {
             kind,
             clip,
             position: 0,
@@ -203,7 +229,9 @@ impl Mix {
             frozen_host,
             frozen_game: false,
             released: false,
-        });
+        };
+        voice.gain = volume * channel_gain(voice.channel(), self.music, self.effects);
+        self.voices.push(voice);
     }
     /// Stops the voices `which` picks, silent in `seconds` (see [`Voice::release`]).
     pub(crate) fn release(&mut self, seconds: f32, which: impl Fn(&Voice) -> bool) {
@@ -215,8 +243,11 @@ impl Mix {
     /// The next `out.len() / 2` stereo frames of every voice, added up. Voices that end leave.
     pub(crate) fn render(&mut self, out: &mut [f32]) {
         out.fill(0.);
-        let step = self.step;
-        self.voices.retain_mut(|voice| voice.render(out, step));
+        let (step, music, effects) = (self.step, self.music, self.effects);
+        self.voices.retain_mut(|voice| {
+            let channel = channel_gain(voice.channel(), music, effects);
+            voice.render(out, step, channel)
+        });
     }
     /// Voices playing or frozen; the ones going silent after a stop do not count.
     pub(crate) fn live(&self) -> usize {
@@ -227,6 +258,15 @@ impl Mix {
         self.voices
             .iter()
             .all(|voice| voice.frozen_host || voice.frozen_game)
+    }
+}
+
+/// What a voice of `channel` is multiplied by: `music` or `effects`, 1 for nobody's.
+fn channel_gain(channel: Option<Channel>, music: f32, effects: f32) -> f32 {
+    match channel {
+        Some(Channel::Music) => music,
+        Some(Channel::Effects) => effects,
+        None => 1.,
     }
 }
 
@@ -290,14 +330,35 @@ mod tests {
         near(&left(&mut mix, 6), &[0.8, 0.85, 0.9, 0.95, 1.0, 1.0]);
     }
 
+    fn looped(channel: Channel) -> Kind {
+        Kind::Loop {
+            asset: "a".into(),
+            generation: 1,
+            channel,
+        }
+    }
+
+    #[test]
+    fn channels_multiply_their_voices_and_the_preview_is_nobodys() {
+        let mut mix = Mix::new(RATE);
+        mix.set_channels(0.5, 0.25);
+        mix.start(looped(Channel::Music), half(100), 1., 0., false);
+        mix.start(Kind::Once, half(100), 1., 0., false);
+        mix.start(Kind::Preview, half(100), 1., 0., false);
+        // 0.5 × (0.5 + 0.25 + 1), at once for a new voice.
+        near(&left(&mut mix, 2), &[0.875; 2]);
+        // A volume moved during play arrives within the ramp.
+        mix.set_channels(1., 0.25);
+        let rising: Vec<f32> = (1..=5).map(|i| 0.875 + 0.05 * i as f32).collect();
+        near(&left(&mut mix, 5), &rising);
+        near(&left(&mut mix, 2), &[1.125; 2]);
+    }
+
     #[test]
     fn a_loop_wraps_with_no_gap_and_a_one_shot_ends() {
         let mut mix = Mix::new(RATE);
         let values = [1000, 2000, 3000];
-        let looped = Kind::Loop {
-            asset: "a".into(),
-            generation: 1,
-        };
+        let looped = looped(Channel::Effects);
         mix.start(looped, clip(&values), 1., 0., false);
         let out = left(&mut mix, 10);
         let expected: Vec<f32> = (0..10).map(|i| values[i % 3] as f32 / 32768.).collect();
@@ -313,10 +374,7 @@ mod tests {
     #[test]
     fn fades_in_and_out_over_their_seconds() {
         let mut mix = Mix::new(RATE);
-        let looped = Kind::Loop {
-            asset: "a".into(),
-            generation: 1,
-        };
+        let looped = looped(Channel::Music);
         // In over 10 ms: 10 frames.
         mix.start(looped, half(1000), 1., 0.01, false);
         let ramp_in: Vec<f32> = (1..=10).map(|i| 0.05 * i as f32).collect();

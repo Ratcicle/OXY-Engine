@@ -45,7 +45,15 @@ const STARTERS: [&str; 4] = [
     "event.area_enter",
 ];
 /// Catalog categories open by default; the movement families start collapsed.
-const OPEN_CATEGORIES: [&str; 6] = ["Eventos", "Dados", "Condições", "Ações", "Jogo", "Controle"];
+const OPEN_CATEGORIES: [&str; 7] = [
+    "Eventos",
+    "Dados",
+    "Condições",
+    "Ações",
+    "Jogo",
+    "Som",
+    "Controle",
+];
 
 fn port_color(kind: &PortType) -> Color32 {
     match kind {
@@ -88,6 +96,7 @@ pub fn category_icon(category: &str) -> Icon {
         "Condições" => Icon::Branch,
         "Ações" => Icon::Action,
         "Jogo" => Icon::Game,
+        "Som" => Icon::Sound,
         "Controle" => Icon::Flow,
         "Entrada e tempo" => Icon::Keyboard,
         "Personagem 3D" => Icon::Person,
@@ -2177,7 +2186,9 @@ mod tests {
                     .insert(param.id.into(), Value::Text(String::new()));
                 let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
                 assert_eq!(text_fields(&ctx), 0, "{name} shows a text field");
-                let button = text_center(&output, "Escolha…");
+                // An empty value that is a choice of its own (Parar som's audio) shows it.
+                let empty = oxy_core::graph::empty_choice(op.id, param.id);
+                let button = text_center(&output, empty.unwrap_or("Escolha…"));
                 click_parameter(&ctx, &mut node, param, &context, button);
                 let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
                 let choice = text_center(&output, label);
@@ -2204,6 +2215,13 @@ mod tests {
                     Some(missing),
                     "{name}"
                 );
+                node.params
+                    .insert(param.id.into(), Value::Text(String::new()));
+                assert_eq!(
+                    param_summary(&node, param, &context).as_deref(),
+                    Some(empty.unwrap_or("—")),
+                    "{name}"
+                );
                 covered.push(name);
             }
         }
@@ -2211,6 +2229,8 @@ mod tests {
             "action.scene.scene",
             "value.scene.scene",
             "action.sound.asset",
+            "action.sound_loop.asset",
+            "action.sound_stop.asset",
             "action.animation.clip",
             "event.input.action",
             "input.read.action",
@@ -2492,7 +2512,10 @@ mod tests {
         assert!(OPEN_CATEGORIES.iter().all(|name| names.contains(name)));
         let order: Vec<_> = categories().iter().map(|(name, _)| *name).collect();
         let game = order.iter().position(|name| *name == "Jogo").unwrap();
-        assert_eq!(order[game - 1..=game + 1], ["Ações", "Jogo", "Controle"]);
+        assert_eq!(
+            order[game - 1..=game + 2],
+            ["Ações", "Jogo", "Som", "Controle"]
+        );
         for op in registry() {
             assert!(
                 !operation_description(op.id).contains("desconhecida"),
