@@ -21,6 +21,7 @@ if (!$GraphicsOnly) {
         @('oxy_player','native_player_movement_v030'),
         @('oxy_editor','native_input_guide_workflow'),
         @('oxy_editor','native_game_variables_workflow'),
+        @('oxy_editor','native_game_pause_workflow'),
         @('oxy_editor','native_mesh_foundation_workflow'),
         @('oxy_editor','native_direct_modeling_v021_workflow'),
         @('oxy_editor','native_basic_modeling_workflow'),
@@ -34,6 +35,7 @@ if (!$GraphicsOnly) {
         @('oxy_editor','native_portable_home_workflow'),
         @('oxy_editor','native_agents_live_channel'),
         @('oxy_player','native_player_portable_workflow'),
+        @('oxy_player','native_player_game_pause_workflow'),
         @('oxy_player','native_player_final_authored_mesh')
     )
 }

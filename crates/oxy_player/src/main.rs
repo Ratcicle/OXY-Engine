@@ -158,10 +158,18 @@ impl eframe::App for Player {
         if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
             self.show_diagnostics = !self.show_diagnostics;
         }
-        if let Some(runtime) = &mut self.runtime
-            && (!focused || escape)
-        {
-            runtime.set_paused(true)
+        // Losing focus always pauses the engine, with its window over whatever the game shows.
+        // Esc is the game's own pause when the scene has a pause menu, else the engine's.
+        if let Some(runtime) = &mut self.runtime {
+            if !focused {
+                runtime.set_paused(true);
+            } else if escape && !runtime.paused {
+                if runtime.has_pause_menu() {
+                    runtime.toggle_game_pause();
+                } else {
+                    runtime.set_paused(true);
+                }
+            }
         }
         if let Some(error) = self.error.clone() {
             oxy_render::input::release_cursor(ctx);
@@ -194,11 +202,16 @@ impl eframe::App for Player {
                     .allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
                 let resized = (self.last_size - rect.size()).length() > 0.5;
                 self.last_size = rect.size();
-                let input = oxy_render::input::collect_game_input(
+                // A press on one of the game's buttons is the button's, not a mouse action.
+                let input = oxy_render::input::collect_game_input_where(
                     ctx,
                     &runtime.project().input_bindings,
                     !runtime.paused && focused,
                     runtime.wants_relative_mouse(),
+                    |p| {
+                        rect.contains(p)
+                            && oxy_render::game_ui::button_at(runtime.scene(), rect, p).is_none()
+                    },
                 );
                 runtime.set_viewport_aspect(rect.width() / rect.height());
                 runtime.advance(if resized { 0. } else { elapsed }, &input);
@@ -271,10 +284,15 @@ impl eframe::App for Player {
         }
         if let Some(runtime) = &mut self.runtime {
             let requests = std::mem::take(&mut runtime.save_requests);
+            let quit = runtime.quit_requested;
             if !requests.is_empty()
                 && let Err(error) = store_progress(&mut self.progress, runtime.project(), requests)
             {
                 self.push_diagnostic(error);
+            }
+            // Sair do jogo closes the window, after what the same frame saved.
+            if quit {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
         if self.runtime.as_ref().is_some_and(|runtime| runtime.paused) {
@@ -292,6 +310,7 @@ impl eframe::App for Player {
                     }
                     ui.separator();
                     ui.label("Controles configurados no projeto:");
+                    let mut menu = false;
                     if let Some(runtime) = &self.runtime {
                         for (action, key) in &runtime.project().input_bindings {
                             ui.label(format!(
@@ -300,8 +319,13 @@ impl eframe::App for Player {
                                 oxy_render::labels::key(key)
                             ));
                         }
+                        menu = runtime.has_pause_menu();
                     }
-                    ui.label("Esc: pausar · F3: diagnóstico");
+                    ui.label(if menu {
+                        "Esc: menu de pausa do jogo · F3: diagnóstico"
+                    } else {
+                        "Esc: pausar · F3: diagnóstico"
+                    });
                     if ui.button("Sair").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }

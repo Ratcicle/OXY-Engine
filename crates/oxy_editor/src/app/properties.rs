@@ -369,9 +369,39 @@ impl Editor {
                         ui,
                         "Durante o teste, mudanças não vão para o projeto. Pare o jogo para editar.",
                     );
+                    if self
+                        .play
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|rt| rt.game_paused() && !rt.paused)
+                    {
+                        ui.add_space(8.);
+                        self.game_pause_card(ui);
+                    }
                     ui.disable();
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| self.properties_body(ui));
+            });
+    }
+    /// What the game's own pause means during the test, apart from the test's Pausar.
+    fn game_pause_card(&self, ui: &mut egui::Ui) {
+        use crate::theme;
+        egui::Frame::new()
+            .fill(theme::CARD_FILL)
+            .stroke(egui::Stroke::new(1., theme::CARD_BORDER))
+            .corner_radius(theme::CARD_RADIUS)
+            .inner_margin(egui::Margin::symmetric(12, 10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new("O jogo pausou a si mesmo")
+                        .font(theme::medium(13.))
+                        .color(theme::TEXT),
+                );
+                crate::widgets::hint(
+                    ui,
+                    "O menu é do jogo: física, personagens e animações param, e a interface continua. O mouse fica livre. Pausar, na barra, pausa o teste inteiro.",
+                );
             });
     }
     fn properties_body(&mut self, ui: &mut egui::Ui) {
@@ -708,7 +738,12 @@ impl Editor {
                                 .map(|(_, n)| n.as_str())
                         })
                         .unwrap_or("Sem imagem");
-                    property_row(ui, "Imagem", "", |ui| {
+                    let hint = if element.kind == UiKind::Image {
+                        "Sem imagem, a Imagem é um retângulo na Cor, com a transparência dela, como fundo de um menu. Com imagem, a Cor tinge a imagem."
+                    } else {
+                        ""
+                    };
+                    property_row(ui, "Imagem", hint, |ui| {
                         egui::ComboBox::from_id_salt("ui_image")
                             .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(label)

@@ -124,8 +124,9 @@ WheelUp WheelDown";
 pub fn keys() -> impl Iterator<Item = &'static str> {
     KEY_NAMES.split(' ')
 }
-/// Keys the game reads but never hands to input actions: Escape releases the game and F3
-/// opens the player's diagnostics.
+/// Keys the game reads but never hands to input actions: Escape opens the game's pause menu
+/// (or pauses and releases the game, in a scene without one) and F3 opens the player's
+/// diagnostics.
 pub const RESERVED_KEYS: [&str; 2] = ["Escape", "F3"];
 /// Other spellings the game reads for the same keys, besides lowercase letters and
 /// Digit0/Numpad0 for digits.
@@ -187,7 +188,10 @@ fn key_name(key: &str) -> Option<&'static str> {
 /// The name an input action stores for `key`, or why it cannot use it.
 pub fn check_key(key: &str) -> Result<&'static str, String> {
     match key_name(key) {
-        Some("Escape") => Err("Escape é reservada: ela pausa o jogo e libera o mouse".into()),
+        Some("Escape") => Err(
+            "Escape é reservada: ela abre o menu de pausa do jogo, quando a cena tem um, ou pausa o jogo e libera o mouse"
+                .into(),
+        ),
         Some("F3") => Err("F3 é reservada ao diagnóstico do player".into()),
         Some(name) => Ok(name),
         None => Err(format!("Tecla desconhecida: \"{key}\"")),

@@ -1076,24 +1076,50 @@ impl Editor {
         if self.play.runtime.is_none() {
             return;
         }
-        if !ui.ctx().input(|i| i.focused) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+        let (focused, escape) = ui.input(|i| (i.focused, i.key_pressed(egui::Key::Escape)));
+        // Losing focus pauses the test. Esc opens and closes the game's pause menu when the scene
+        // has one, as in the exported game: capture stays on so the menu takes clicks, and the
+        // cursor goes free (wants_relative_mouse), so Pausar and Parar stay at hand.
+        if !focused {
             self.pause();
+        } else if escape {
+            let menu = self.play.capture
+                && self
+                    .play
+                    .runtime
+                    .as_ref()
+                    .is_some_and(|rt| !rt.paused && rt.has_pause_menu());
+            if !menu {
+                self.pause();
+            } else if let Some(rt) = &mut self.play.runtime {
+                rt.toggle_game_pause();
+            }
         }
         let relative = self
             .play
             .runtime
             .as_ref()
             .is_some_and(Runtime::wants_relative_mouse);
-        let input = oxy_render::input::collect_game_input(
-            ui.ctx(),
-            &self.state.project.input_bindings,
-            self.play.capture,
-            relative,
-        );
         let available = [
             ui.available_width().max(1.) as u32,
             ui.available_height().max(1.) as u32,
         ];
+        let (rect, response) =
+            ui.allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
+        // A press on one of the game's buttons, or on the editor around the game, is not a
+        // mouse action of the game.
+        let input = oxy_render::input::collect_game_input_where(
+            ui.ctx(),
+            &self.state.project.input_bindings,
+            self.play.capture,
+            relative,
+            |p| {
+                rect.contains(p)
+                    && self.play.runtime.as_ref().is_some_and(|rt| {
+                        oxy_render::game_ui::button_at(rt.scene(), rect, p).is_none()
+                    })
+            },
+        );
         let resized = self.play.game_size != Some(available);
         self.play.game_size = Some(available);
         if let Some(rt) = &mut self.play.runtime {
@@ -1102,8 +1128,6 @@ impl Editor {
         }
         let scene = self.play.runtime.as_ref().unwrap().scene().clone();
         let camera = CameraState::for_runtime(self.play.runtime.as_ref().unwrap());
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
         let physical = [
             (rect.width() * ui.ctx().pixels_per_point()).max(1.) as u32,
@@ -1169,6 +1193,16 @@ impl Editor {
             }
         }
         self.take_test_saves();
+        // Sair do jogo ends the test as Parar does; the exported game would close.
+        if self
+            .play
+            .runtime
+            .as_ref()
+            .is_some_and(|rt| rt.quit_requested)
+        {
+            self.stop();
+            self.log("O jogo pediu para sair; o teste foi encerrado.");
+        }
     }
     /// Console on the home screen, where the editor dock does not exist.
     pub(super) fn home_console(&mut self, ctx: &egui::Context) {

@@ -1042,5 +1042,5 @@ fn key_choice(ui: &mut egui::Ui, key: &mut String, salt: impl std::hash::Hash) {
                 ui.selectable_value(key,candidate.name().into(),crate::labels::key(candidate.name()));
             }
         }});
-    }).response.on_hover_text("Tecla que aciona este vínculo. Escape libera o jogo; F3 pertence ao diagnóstico do player.");
+    }).response.on_hover_text("Tecla que aciona este vínculo. Escape abre o menu de pausa do jogo, quando a cena tem um, ou pausa e libera o jogo; F3 pertence ao diagnóstico do player.");
 }

@@ -169,7 +169,12 @@ impl Editor {
             },
         );
         ui.add_space(4.);
-        let Some(paused) = self.play.runtime.as_ref().map(|r| r.paused) else {
+        let Some((paused, game_paused)) = self
+            .play
+            .runtime
+            .as_ref()
+            .map(|r| (r.paused, r.game_paused()))
+        else {
             // No tooltip: after Stop the pointer rests here, and an idle editor must not repaint.
             if widgets::icon_text_button(ui, Icon::Play, "Jogar", true, false).clicked() {
                 self.start();
@@ -200,26 +205,56 @@ impl Editor {
         }
         self.visualization_button(ui, true);
         if !compact {
-            // Painted at the buttons' exact height; a Frame would stretch to the bar.
-            let text = if paused { "Pausado" } else { "Jogando" };
+            // Painted at the buttons' exact height; a Frame would stretch to the bar. The test's
+            // pause wins over the game's: Retomar returns to the game's menu.
+            let (text, fill, border, color) = if paused {
+                (
+                    "Pausado",
+                    theme::BG_RAISED,
+                    Color32::from_rgb(70, 70, 76),
+                    Color32::from_rgb(196, 196, 202),
+                )
+            } else if game_paused {
+                (
+                    "Pausa do jogo",
+                    Color32::from_rgb(43, 58, 79),
+                    Color32::from_rgb(60, 83, 116),
+                    Color32::from_rgb(183, 210, 245),
+                )
+            } else {
+                (
+                    "Jogando",
+                    Color32::from_rgb(58, 46, 26),
+                    Color32::from_rgb(87, 70, 31),
+                    theme::WARNING,
+                )
+            };
             let font = egui::FontId::proportional(12.);
             let width = ui
                 .painter()
-                .layout_no_wrap(text.into(), font.clone(), theme::WARNING)
+                .layout_no_wrap(text.into(), font.clone(), color)
                 .size()
                 .x;
-            let (rect, _) = ui.allocate_exact_size(
+            let (rect, response) = ui.allocate_exact_size(
                 Vec2::new(width + 20., theme::CONTROL_HEIGHT + 4.),
                 Sense::hover(),
             );
-            ui.painter()
-                .rect_filled(rect, 6., Color32::from_rgb(58, 46, 26));
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text)
+            });
+            ui.painter().rect(
+                rect,
+                6.,
+                fill,
+                egui::Stroke::new(1., border),
+                egui::StrokeKind::Inside,
+            );
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 text,
                 font,
-                theme::WARNING,
+                color,
             );
         }
     }

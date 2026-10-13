@@ -2,6 +2,7 @@
 use crate::Player;
 mod mesh;
 mod movement;
+mod pause;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
 use oxy_core::{
     document::{Id, UiKind, new_id},
@@ -169,6 +170,10 @@ impl NativePlayerQa {
                 let runtime = self.player.runtime.as_ref().ok_or("Runtime ausente")?;
                 if !runtime.paused {
                     return Err("Escape não pausou o player".into());
+                }
+                // Without a pause menu, Esc stays the engine's pause, as before.
+                if runtime.has_pause_menu() || runtime.game_paused() {
+                    return Err("Escape pausou o jogo numa cena sem menu de pausa".into());
                 }
                 self.paused_time = runtime.time;
                 self.wait = 8;

@@ -273,10 +273,13 @@ impl Editor {
             {
                 self.gizmo_ui(ui, rect, size);
             }
-            let clicks =
-                self.play
-                    .game_ui
-                    .draw(ui, &self.state.project, &scene, &self.root(), rect);
+            let clicks = self.play.game_ui.draw_authoring(
+                ui,
+                &self.state.project,
+                &scene,
+                &self.root(),
+                rect,
+            );
             if let Some(id) = clicks.first() {
                 self.select_click(Some(id.clone()), ui.input(|i| i.modifiers), false);
             }

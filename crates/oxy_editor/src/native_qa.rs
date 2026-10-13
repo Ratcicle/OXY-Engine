@@ -16,6 +16,7 @@ mod modeling;
 mod movement;
 mod movement_lab;
 mod painting;
+mod pause;
 mod physics;
 mod portable;
 mod recipes;
@@ -173,6 +174,8 @@ struct NativeQa {
     paint_uploads: u64,
     held_until: Option<(Key, Instant)>,
     click_candidate: Option<(&'static str, Pos2, Instant)>,
+    /// Whether the game held the cursor in the last frame.
+    cursor_captured: bool,
 }
 
 impl NativeQa {
@@ -485,6 +488,7 @@ impl NativeQa {
             paint_uploads: 0,
             held_until: None,
             click_candidate: None,
+            cursor_captured: false,
         }
     }
 
@@ -670,6 +674,9 @@ impl NativeQa {
         }
         if label.starts_with("var_") {
             return self.check_variables(label);
+        }
+        if label.starts_with("pause_") {
+            return self.check_pause(label);
         }
         let ensure = |condition: bool, message: &str| {
             if condition {
@@ -1469,8 +1476,9 @@ impl NativeQa {
                         .play
                         .runtime
                         .as_ref()
-                        .is_some_and(|runtime| runtime.paused),
-                "Jogo deveria pausar e liberar entrada",
+                        .is_some_and(|runtime| runtime.paused && !runtime.game_paused())
+                    && self.test_chip() == Some("Pausado"),
+                "Jogo deveria pausar e liberar entrada; sem menu de pausa, Esc pausa o teste",
             ),
             "stop_isolated" => ensure(
                 self.editor.play.runtime.is_none()
@@ -2278,6 +2286,7 @@ impl eframe::App for NativeQa {
         self.editor.update(ctx, frame);
         self.camera_measurement_frame(camera_start.elapsed().as_secs_f64() * 1000.);
         self.surface = capture_surface(ctx);
+        self.cursor_captured = oxy_render::input::cursor_captured(ctx);
         if let Some((key, deadline)) = self.held_until {
             if Instant::now() < deadline {
                 ctx.request_repaint();

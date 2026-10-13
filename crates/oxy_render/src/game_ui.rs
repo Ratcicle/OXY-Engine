@@ -105,6 +105,31 @@ impl GameUi {
         root: &Path,
         viewport: Rect,
     ) -> Vec<Id> {
+        self.paint(ui, project, scene, root, viewport, false)
+    }
+
+    /// `draw` for the editor's scene view: an image element without an image also gets a dashed
+    /// outline, so a missing image shows even when its colour is see-through.
+    pub fn draw_authoring(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        scene: &Scene,
+        root: &Path,
+        viewport: Rect,
+    ) -> Vec<Id> {
+        self.paint(ui, project, scene, root, viewport, true)
+    }
+
+    fn paint(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        scene: &Scene,
+        root: &Path,
+        viewport: Rect,
+        authoring: bool,
+    ) -> Vec<Id> {
         if self.root != root {
             self.textures.clear();
             self.failed.clear();
@@ -183,14 +208,23 @@ impl GameUi {
                             color,
                         );
                     } else {
-                        painter.rect_filled(rect, 3., Color32::from_rgb(65, 45, 65));
-                        painter.text(
-                            rect.center(),
-                            Align2::CENTER_CENTER,
-                            "Imagem",
-                            FontId::proportional(14.),
-                            color,
-                        );
+                        // Without an image, a panel in its colour: the backdrop of a menu.
+                        painter.rect_filled(rect, 0., color);
+                        if authoring {
+                            let corners = [
+                                rect.left_top(),
+                                rect.right_top(),
+                                rect.right_bottom(),
+                                rect.left_bottom(),
+                                rect.left_top(),
+                            ];
+                            painter.extend(egui::Shape::dashed_line(
+                                &corners,
+                                Stroke::new(1., MISSING_IMAGE_OUTLINE),
+                                5.,
+                                4.,
+                            ));
+                        }
                     }
                 }
                 UiKind::Button => {
@@ -285,6 +319,31 @@ pub fn element_rect(element: &UiElement, viewport: Rect) -> Rect {
         },
     );
     Rect::from_min_max(rect.min.into(), rect.max.into())
+}
+
+/// The dashed outline of an image element without an image, in the editor's scene view.
+const MISSING_IMAGE_OUTLINE: Color32 = Color32::from_rgba_premultiplied(190, 190, 196, 220);
+
+/// The game button under `pointer`, the topmost as `draw` lays them out: a mouse press there
+/// belongs to the button, not to the actions bound to the mouse button.
+pub fn button_at(scene: &Scene, viewport: Rect, pointer: Pos2) -> Option<Id> {
+    if !viewport.contains(pointer) {
+        return None;
+    }
+    let view = oxy_core::scene_view::SceneView::new(scene);
+    scene
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity
+                .ui
+                .as_ref()
+                .is_some_and(|element| element.kind == UiKind::Button)
+                && view.visible(entity)
+        })
+        .filter(|entity| element_rect(entity.ui.as_ref().unwrap(), viewport).contains(pointer))
+        .max_by_key(|entity| entity.layer)
+        .map(|entity| entity.id.clone())
 }
 
 /// Editor selection for the overlay, using the very same anchors and layer ordering as drawing.
@@ -410,6 +469,150 @@ mod tests {
             assert_eq!(viewport.right() - rect.right(), 12.);
             assert_eq!(rect.top() - viewport.top(), 8.);
         }
+    }
+
+    /// The shapes `draw` (or `draw_authoring`) paints for `project`'s first scene in a 640×480
+    /// view, flattened.
+    fn painted(project: &Project, authoring: bool) -> Vec<egui::Shape> {
+        fn flatten(shape: egui::Shape, output: &mut Vec<egui::Shape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        flatten(shape, output);
+                    }
+                }
+                shape => output.push(shape),
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut overlay = GameUi::new();
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(640., 480.));
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(viewport),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let root = Path::new("sem-pasta");
+                    if authoring {
+                        overlay.draw_authoring(ui, project, &project.scenes[0], root, viewport);
+                    } else {
+                        overlay.draw(ui, project, &project.scenes[0], root, viewport);
+                    }
+                });
+            },
+        );
+        assert!(overlay.take_errors().is_empty());
+        let mut shapes = Vec::new();
+        for clipped in output.shapes {
+            flatten(clipped.shape, &mut shapes);
+        }
+        shapes
+    }
+
+    #[test]
+    fn an_image_without_an_image_is_a_panel_in_its_colour() {
+        use oxy_core::document::{Entity, UiAnchor};
+        let mut project = Project::new("Painel");
+        let mut backdrop = Entity::new("Fundo do menu", None);
+        let element = UiElement {
+            kind: UiKind::Image,
+            anchor: UiAnchor::Center,
+            position: [0., 0.],
+            size: [360., 300.],
+            color: [0.06, 0.08, 0.11, 0.86],
+            ..Default::default()
+        };
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(640., 480.));
+        let rect = element_rect(&element, viewport);
+        let fill = rgba(element.color);
+        backdrop.ui = Some(element);
+        project.scenes[0].entities.push(backdrop);
+        for authoring in [false, true] {
+            let shapes = painted(&project, authoring);
+            let panels: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Rect(panel) if panel.fill == fill => Some(panel.rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(panels, [rect], "the colour, transparency kept");
+            assert!(fill.a() < 255);
+            assert!(
+                !shapes
+                    .iter()
+                    .any(|shape| matches!(shape, egui::Shape::Text(_))),
+                "no Imagem placeholder"
+            );
+            // Only the editor's scene view outlines the missing image, dashed, on its border.
+            let dashes: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == MISSING_IMAGE_OUTLINE =>
+                    {
+                        Some(points)
+                    }
+                    _ => None,
+                })
+                .collect();
+            if authoring {
+                assert!(dashes.len() > 20, "{} dashes", dashes.len());
+            } else {
+                assert!(dashes.is_empty(), "{} dashes", dashes.len());
+            }
+            for [a, b] in dashes {
+                let on_border = |p: &Pos2| {
+                    (p.x - rect.left()).abs() < 0.01
+                        || (p.x - rect.right()).abs() < 0.01
+                        || (p.y - rect.top()).abs() < 0.01
+                        || (p.y - rect.bottom()).abs() < 0.01
+                };
+                assert!(on_border(a) && on_border(b));
+            }
+        }
+    }
+
+    #[test]
+    fn presses_belong_to_the_topmost_visible_button() {
+        use oxy_core::document::{Entity, SceneKind};
+        let mut scene = Scene::new("UI", SceneKind::TwoD);
+        let button = |name: &str, layer: i32| {
+            let mut entity = Entity::new(name, None);
+            entity.ui = Some(UiElement {
+                kind: UiKind::Button,
+                ..Default::default()
+            });
+            entity.layer = layer;
+            entity
+        };
+        let lower = button("Continuar", 0);
+        let upper = button("Sair", 3);
+        let mut image = Entity::new("Fundo", None);
+        image.ui = Some(UiElement {
+            kind: UiKind::Image,
+            size: [600., 400.],
+            ..Default::default()
+        });
+        image.layer = 9;
+        let (lower_id, upper_id) = (lower.id.clone(), upper.id.clone());
+        scene.entities.extend([lower, upper, image]);
+        let viewport = Rect::from_min_size(Pos2::new(10., 20.), Vec2::new(640., 480.));
+        let inside = Pos2::new(60., 60.);
+        // An image drawn over the buttons, or beside them, takes no press: it is no control.
+        assert_eq!(button_at(&scene, viewport, inside), Some(upper_id.clone()));
+        assert_eq!(button_at(&scene, viewport, Pos2::new(400., 300.)), None);
+        assert_eq!(button_at(&scene, viewport, Pos2::new(5., 5.)), None);
+        scene.entity_mut(&upper_id).unwrap().visible = false;
+        assert_eq!(button_at(&scene, viewport, inside), Some(lower_id.clone()));
+        let hidden = Entity::new("Menu de pausa", None);
+        let group = hidden.id.clone();
+        scene.entities.push(hidden);
+        scene.entity_mut(&group).unwrap().visible = false;
+        scene.entity_mut(&lower_id).unwrap().parent = Some(group);
+        assert_eq!(button_at(&scene, viewport, inside), None);
     }
 
     #[test]
