@@ -42,7 +42,7 @@ impl PhysicsWorld {
         let bounds = shape.compute_aabb(&start).merged(&shape.compute_aabb(&end));
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let pipeline = self.broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
+            &Windowed,
             &self.bodies,
             &self.colliders,
             QueryFilter::default().predicate(&predicate),
@@ -62,30 +62,29 @@ impl PhysicsWorld {
             let ends_inside =
                 query::intersection_test(&end, &**shape, collider.position(), collider.shape())
                     .map_err(|_| "Interseção de formas não suportada")?;
-            let forward = query::cast_shapes(
-                &start,
-                vector(delta),
-                &**shape,
-                collider.position(),
-                Vector::ZERO,
-                collider.shape(),
-                cast_options,
-            )
-            .map_err(|_| "Varredura de formas não suportada")?;
+            // The collider moves by -delta relative to the swept shape.
+            let forward = Windowed
+                .cast_shapes(
+                    &start.inv_mul(collider.position()),
+                    start.rotation.inverse() * vector(-delta),
+                    &**shape,
+                    collider.shape(),
+                    cast_options,
+                )
+                .map_err(|_| "Varredura de formas não suportada")?;
             if forward.is_none() && !starts_inside && !ends_inside {
                 continue;
             }
             let backward = if !ends_inside {
-                query::cast_shapes(
-                    &end,
-                    vector(-delta),
-                    &**shape,
-                    collider.position(),
-                    Vector::ZERO,
-                    collider.shape(),
-                    cast_options,
-                )
-                .map_err(|_| "Varredura de saída não suportada")?
+                Windowed
+                    .cast_shapes(
+                        &end.inv_mul(collider.position()),
+                        end.rotation.inverse() * vector(delta),
+                        &**shape,
+                        collider.shape(),
+                        cast_options,
+                    )
+                    .map_err(|_| "Varredura de saída não suportada")?
             } else {
                 None
             };

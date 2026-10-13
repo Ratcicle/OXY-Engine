@@ -1259,6 +1259,203 @@ fn a_railing_of_the_same_moving_group_does_not_block_the_passenger() {
     assert!(rt.logs.is_empty(), "{:?}", rt.logs);
 }
 
+const FLOOR: &str = "00000000-0000-4000-8000-000000000001";
+const ANGLES: [f32; 5] = [0., 13.5, 30., 45., 77.];
+/// The fixture's floor as a box, the hull of that box or a plane of two triangles, `size` wide
+/// with its top at y = 0 and turned `degrees` about the vertical through its middle, with the
+/// character's feet at `feet`.
+fn turned_floor(kind: &str, size: f32, degrees: f32, feet: Vec3) -> Project {
+    let mut project = fixture();
+    let scene = &mut project.scenes[0];
+    let floor = scene.entity_mut(FLOOR).unwrap();
+    floor.dimensions = [size, 1., size];
+    floor.transform.rotation[1] = degrees.to_radians();
+    floor.physics3d = Some(match kind {
+        "box" => Collider3d {
+            shape: CollisionShape::Box {
+                size: floor.dimensions,
+            },
+            ..Default::default()
+        },
+        "hull" => generate_collider(floor, true).unwrap(),
+        _ => {
+            floor.primitive = Some(Primitive::Plane);
+            floor.transform.position[1] = 0.;
+            generate_collider(floor, false).unwrap()
+        }
+    });
+    scene.entity_mut(BODY).unwrap().transform.position = feet.to_array();
+    project
+}
+/// The middle of a floor turned `degrees`, a millimetre from it, a point on one of its
+/// diagonals and one off them, at feet height `y`.
+fn spots(degrees: f32, y: f32) -> [Vec3; 4] {
+    let turn = Quat::from_rotation_y(degrees.to_radians());
+    [
+        Vec3::ZERO,
+        Vec3::new(0.001, 0., 0.),
+        turn * Vec3::new(0.5, 0., 0.5),
+        turn * Vec3::new(0.7, 0., -0.2),
+    ]
+    .map(|spot| spot.with_y(y))
+}
+/// Standing or walking on support, with the capsule its skin above `top` and nothing logged.
+fn assert_on_top(rt: &Runtime, top: f32, case: &str) {
+    let state = rt.character_state(BODY).unwrap();
+    let skin = CharacterConfig::default().margin;
+    assert!(state.grounded, "{case}: {state:?}");
+    assert!(state.position.y >= top + skin - 5e-4, "{case}: {state:?}");
+    assert!(rt.logs.is_empty(), "{case}: {:?}", rt.logs);
+}
+
+#[test]
+fn a_character_stands_over_the_middle_of_a_turned_floor() {
+    for kind in ["box", "hull", "plane"] {
+        for size in [6., 20., 100.] {
+            for degrees in ANGLES {
+                for feet in spots(degrees, 0.02) {
+                    let case = format!("{kind} {size} m, {degrees}°, at {feet}");
+                    let project = turned_floor(kind, size, degrees, feet);
+                    let mut rt = runtime(&project);
+                    rt.advance(FIXED_DT, &InputFrame::default());
+                    for step in 0..120 {
+                        rt.advance(FIXED_DT, &InputFrame::default());
+                        let case = format!("{case}, step {step}");
+                        assert_on_top(&rt, 0., &case);
+                        let state = rt.character_state(BODY).unwrap();
+                        assert_eq!(state.support.as_ref().unwrap().object, FLOOR, "{case}");
+                        assert!(
+                            state.position.with_y(0.).distance(feet.with_y(0.)) < 1e-3,
+                            "{case}: {state:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_floor_turned_under_a_standing_character_keeps_it_on_top() {
+    for size in [6., 20.] {
+        for feet in spots(0., 0.02) {
+            let case = format!("{size} m at {feet}");
+            let project = turned_floor("box", size, 0., feet);
+            let mut rt = runtime(&project);
+            settle(&mut rt);
+            // Turned by hand a degree and a half a step, a whole turn: nothing carries it round.
+            for step in 1..=240 {
+                let floor = rt.scene_mut().entity_mut(FLOOR).unwrap();
+                floor.transform.rotation[1] = (1.5 * step as f32).to_radians();
+                rt.advance(FIXED_DT, &InputFrame::default());
+                let case = format!("{case}, step {step}");
+                assert_on_top(&rt, 0., &case);
+                let state = rt.character_state(BODY).unwrap();
+                assert!(
+                    state.position.with_y(0.).distance(feet.with_y(0.)) < 1e-3,
+                    "{case}: {state:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_passenger_on_the_middle_of_a_turntable_turns_on_the_spot() {
+    for size in [6., 20.] {
+        let mut project = turntable();
+        let scene = &mut project.scenes[0];
+        let table = scene.entity_mut(TURNTABLE).unwrap();
+        table.dimensions = [size, 0.5, size];
+        table.physics3d = Some(Collider3d {
+            shape: CollisionShape::Box {
+                size: table.dimensions,
+            },
+            ..Default::default()
+        });
+        scene.entity_mut(BODY).unwrap().transform.position = [20., 1.02, 0.];
+        let mut rt = runtime(&project);
+        for _ in 0..10 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        let before = rt.character_state(BODY).unwrap().clone();
+        // Five seconds: a turn and a quarter of the turntable, which turns the body with it.
+        for step in 0..300 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+            let case = format!("{size} m, step {step}");
+            assert_on_top(&rt, 1., &case);
+            let state = rt.character_state(BODY).unwrap();
+            assert_eq!(state.support.as_ref().unwrap().object, TURNTABLE, "{case}");
+            assert!(
+                state.position.with_y(0.).distance(Vec3::new(20., 0., 0.)) < 1e-3,
+                "{case}: {state:?}"
+            );
+        }
+        let state = rt.character_state(BODY).unwrap();
+        assert!(
+            (heading_difference(state.yaw, before.yaw) - 90f32.to_radians()).abs() < 1e-2,
+            "{size} m: {} -> {}",
+            before.yaw,
+            state.yaw
+        );
+    }
+}
+
+#[test]
+fn walking_across_the_middle_of_a_turned_floor_stays_on_top_and_on_course() {
+    let input = InputFrame {
+        held: ["mover_frente".into()].into(),
+        ..Default::default()
+    };
+    for kind in ["box", "hull", "plane"] {
+        for degrees in ANGLES {
+            for x in [0., 0.001] {
+                let case = format!("{kind}, {degrees}°, x {x}");
+                let start = Vec3::new(x, 0.02, 3.);
+                let project = turned_floor(kind, 20., degrees, start);
+                let mut rt = runtime(&project);
+                rt.advance(FIXED_DT, &InputFrame::default());
+                // Forward is -Z: one second at 6 m/s crosses the middle halfway through.
+                for step in 0..60 {
+                    rt.advance(FIXED_DT, &input);
+                    let case = format!("{case}, step {step}");
+                    assert_on_top(&rt, 0., &case);
+                    let state = rt.character_state(BODY).unwrap();
+                    assert!((state.position.x - x).abs() < 1e-3, "{case}: {state:?}");
+                }
+                let state = rt.character_state(BODY).unwrap();
+                assert!((state.position.z + 3.).abs() < 0.01, "{case}: {state:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_character_placed_deep_in_a_floor_climbs_out_through_its_top() {
+    for size in [20., 100.] {
+        for degrees in [0., 13.5] {
+            for feet in [
+                Vec3::new(0., -0.8, 0.),
+                Vec3::new(0.7, -0.8, -0.2),
+                Vec3::new(3., -1., 2.),
+                Vec3::new(0., -1.2, 0.),
+            ] {
+                let case = format!("{size} m, {degrees}°, from {feet}");
+                let project = turned_floor("box", size, degrees, feet);
+                let mut rt = runtime(&project);
+                settle(&mut rt);
+                let state = rt.character_state(BODY).unwrap();
+                assert!(state.grounded, "{case}: {state:?}");
+                assert!(state.position.y > 0.009, "{case}: {state:?}");
+                assert!(
+                    state.position.with_y(0.).distance(feet.with_y(0.)) < 1e-3,
+                    "{case}: {state:?}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn elevator_cannot_push_character_through_a_ceiling() {
     use oxy_core::surface::*;

@@ -1,5 +1,8 @@
 use glam::{Quat, Vec3};
-use oxy_core::physics3d::*;
+use oxy_core::{
+    document::{Entity, Primitive},
+    physics3d::*,
+};
 use std::sync::Arc;
 
 fn box_at(world: &mut PhysicsWorld, id: &str, center: Vec3, size: [f32; 3]) {
@@ -403,4 +406,195 @@ fn invalid_and_mirrored_shapes_do_not_mutate_prior_body() {
             .distance,
         2.
     );
+}
+
+/// A floor as a box, the hull of that box or a plane of two triangles, `size` wide with its top
+/// at y = 0 and turned `degrees` about the vertical through its middle.
+fn turned_floor(kind: &str, size: f32, degrees: f32) -> PhysicsWorld {
+    let mut entity = Entity::new("Chão", Some(Primitive::Cube));
+    entity.dimensions = [size, 1., size];
+    let mut height = -0.5;
+    let config = match kind {
+        "box" => Collider3d {
+            shape: CollisionShape::Box {
+                size: entity.dimensions,
+            },
+            ..Default::default()
+        },
+        "hull" => generate_collider(&entity, true).unwrap(),
+        _ => {
+            entity.primitive = Some(Primitive::Plane);
+            height = 0.;
+            generate_collider(&entity, false).unwrap()
+        }
+    };
+    let mut world = PhysicsWorld::new();
+    world
+        .upsert(
+            "floor",
+            &config,
+            Vec3::Y * height,
+            Quat::from_rotation_y(degrees.to_radians()),
+            Vec3::ONE,
+        )
+        .unwrap();
+    world.flush();
+    world
+}
+
+#[test]
+fn casts_over_the_middle_of_a_large_turned_floor_keep_the_margin() {
+    let config = CapsuleMotion::default();
+    let capsule = CollisionShape::Capsule {
+        height: config.height,
+        radius: config.radius,
+    };
+    let gravity = Vec3::new(0., -22. / 3600., 0.);
+    for kind in ["box", "hull", "plane"] {
+        for size in [6., 20., 100.] {
+            for degrees in [0f32, 13.5, 30., 45., 77.] {
+                let world = turned_floor(kind, size, degrees);
+                let turn = Quat::from_rotation_y(degrees.to_radians());
+                // The middle, a millimetre from it, a point on a diagonal and one off them.
+                for spot in [
+                    Vec3::ZERO,
+                    Vec3::new(0.001, 0., 0.),
+                    turn * Vec3::new(0.5, 0., 0.5),
+                    turn * Vec3::new(0.7, 0., -0.2),
+                ] {
+                    // Starting inside the margin, on it or just above it, gravity moves the
+                    // capsule no closer than the margin or than it was; it does not slide.
+                    for gap in [0.003, 0.0099, 0.01, 0.0101, 0.02] {
+                        let case = format!("{kind} {size} m, {degrees}°, at {spot}, gap {gap}");
+                        let feet = spot.with_y(gap);
+                        let r = world
+                            .move_capsule(feet, gravity, 1. / 60., config, &QueryOptions::default())
+                            .unwrap();
+                        let end = feet + r.delta;
+                        assert!(
+                            end.y >= gap.min(config.margin) - 2e-4,
+                            "{case}: {end} {r:?}"
+                        );
+                        assert!(end.with_y(0.).distance(spot) < 1e-4, "{case}: {end} {r:?}");
+                        assert!(r.grounded, "{case}: {r:?}");
+                    }
+                    // A cast from 3.5 cm above stops where the capsule touches, on the face (the
+                    // edge between the plane's triangles may tilt the normal a little).
+                    let case = format!("{kind} {size} m, {degrees}°, at {spot}");
+                    let hit = world
+                        .cast(
+                            &capsule,
+                            spot.with_y(config.height * 0.5 + 0.035),
+                            Vec3::new(0., -0.1, 0.),
+                            &QueryOptions::default(),
+                        )
+                        .unwrap()
+                        .unwrap_or_else(|| panic!("{case}: missed"));
+                    assert!((hit.distance - 0.035).abs() < 1e-4, "{case}: {hit:?}");
+                    assert!(hit.normal.y > 0.99, "{case}: {hit:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_capsule_deep_in_a_turned_floor_gets_out_through_the_top() {
+    let config = CapsuleMotion::default();
+    let capsule = CollisionShape::Capsule {
+        height: config.height,
+        radius: config.radius,
+    };
+    for kind in ["box", "hull"] {
+        for size in [6., 20., 100.] {
+            for degrees in [0f32, 13.5, 45.] {
+                let world = turned_floor(kind, size, degrees);
+                let turn = Quat::from_rotation_y(degrees.to_radians());
+                for spot in [Vec3::ZERO, turn * Vec3::new(0.7, 0., -0.2)] {
+                    // The floor is a metre thick: the nearest way out is always up.
+                    for depth in [0.003, 0.03, 0.3, 0.8, 0.95] {
+                        let case = format!("{kind} {size} m, {degrees}°, at {spot}, {depth} deep");
+                        let feet = spot.with_y(-depth);
+                        let centre = feet + Vec3::Y * config.height * 0.5;
+                        let contacts = world
+                            .penetration_contacts(&capsule, centre, &QueryOptions::default())
+                            .unwrap();
+                        assert_eq!(contacts.len(), 1, "{case}: {contacts:?}");
+                        assert!(contacts[0].normal.y > 0.999, "{case}: {contacts:?}");
+                        assert!(
+                            (contacts[0].distance + depth).abs() < 1e-3,
+                            "{case}: {contacts:?}"
+                        );
+                        let hit = world
+                            .cast(
+                                &capsule,
+                                centre,
+                                Vec3::new(0., -0.1, 0.),
+                                &QueryOptions::default(),
+                            )
+                            .unwrap()
+                            .unwrap_or_else(|| panic!("{case}: missed"));
+                        assert!(hit.normal.y > 0.999, "{case}: {hit:?}");
+                        let r = world
+                            .move_capsule(
+                                feet,
+                                Vec3::ZERO,
+                                1. / 60.,
+                                config,
+                                &QueryOptions::default(),
+                            )
+                            .unwrap();
+                        assert!(r.delta.y > 0., "{case}: {r:?}");
+                        assert!(r.delta.with_y(0.).length() < 1e-4, "{case}: {r:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn standing_near_the_edges_and_corners_of_a_turned_floor_keeps_the_margin() {
+    let config = CapsuleMotion::default();
+    let gravity = Vec3::new(0., -22. / 3600., 0.);
+    for kind in ["box", "hull", "plane"] {
+        for size in [6f32, 20.] {
+            for degrees in [0f32, 13.5, 30., 45., 77.] {
+                let world = turned_floor(kind, size, degrees);
+                let turn = Quat::from_rotation_y(degrees.to_radians());
+                let half = size * 0.5;
+                // Toward three edges and into a corner, a tenth of a millimetre at a time,
+                // where the floor ends within the capsule's reach.
+                for (toward, corner) in [
+                    (Vec3::X, false),
+                    (Vec3::Z, false),
+                    (-Vec3::Z, false),
+                    (-Vec3::X - Vec3::Z, true),
+                ] {
+                    for step in 0..=4000 {
+                        let edge = 0.25 + step as f32 * 1e-4;
+                        let local = if corner {
+                            toward * (half - edge)
+                        } else {
+                            toward * (half - edge) + Vec3::new(toward.z, 0., toward.x) * 0.37
+                        };
+                        let spot = turn * local;
+                        let gap = [0.0099, 0.0101][step % 2];
+                        let case = format!("{kind} {size} m, {degrees}°, at {spot}, gap {gap}");
+                        let feet = spot.with_y(gap);
+                        let r = world
+                            .move_capsule(feet, gravity, 1. / 60., config, &QueryOptions::default())
+                            .unwrap();
+                        let end = feet + r.delta;
+                        assert!(
+                            end.y >= gap.min(config.margin) - 2e-4,
+                            "{case}: {end} {r:?}"
+                        );
+                        assert!(end.with_y(0.).distance(spot) < 1e-4, "{case}: {end} {r:?}");
+                        assert!(r.grounded, "{case}: {r:?}");
+                    }
+                }
+            }
+        }
+    }
 }
