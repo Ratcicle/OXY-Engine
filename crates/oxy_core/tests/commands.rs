@@ -286,6 +286,9 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
         ("event.character", "kind", "pulo"),
         ("event.pause", "when", "pausar"),
         ("game.pause", "mode", "parar"),
+        ("transform.write", "channel", "posição"),
+        ("transform.write", "mode", "multiplicar"),
+        ("transform.write", "space", "pai"),
     ] {
         let commands = batch(json!([
             {"op": "create_entity", "kind": {"type": "group"}},
@@ -358,6 +361,8 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
              "params": {"mode": "pause"}},
             {"op": "add_node", "entity": entity, "operation": "game.read"},
             {"op": "add_node", "entity": entity, "operation": "game.quit"},
+            {"op": "add_node", "entity": entity, "operation": "transform.write",
+             "params": {"channel": "rotation", "mode": "set", "space": "world"}},
         ])),
     )
     .unwrap();

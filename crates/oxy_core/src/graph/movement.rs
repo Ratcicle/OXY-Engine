@@ -215,6 +215,21 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             ],
         ),
         op(
+            "transform.write",
+            "Mover / girar / escalar objeto",
+            "Transformação 3D",
+            true,
+            vec![
+                target(),
+                text("channel", "O que muda", "position"),
+                text("mode", "Como", "add"),
+                text("space", "Espaço", "local"),
+                v3("value", "Valor", [0.; 3]),
+                flag("jump", "Salto: soltar passageiros", false),
+            ],
+            vec![],
+        ),
+        op(
             "character.yaw",
             "Definir giro horizontal do personagem",
             "Transformação 3D",
@@ -530,7 +545,12 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
         "transform.read" | "character.yaw" => (
             "Consulta transformações ou define giro horizontal compatível com a raiz física.",
             "Guarde giro mundial em graus junto ao checkpoint.",
-            "Posição usa metros. Rotação usa graus XYZ e espaço declarado. Mova o personagem por Teleportar com segurança.",
+            "Posição usa metros; no Mundo, é a do pivô, como nas Propriedades, e num personagem 3D, a origem, onde Teleportar com segurança o põe. Rotação usa graus XYZ e espaço declarado. Mova o personagem por Teleportar com segurança.",
+        ),
+        "transform.write" => (
+            "Define ou soma posição, rotação ou escala de um objeto, no mundo ou no espaço do pai.",
+            "Em A cada passo, multiplique (2, 0, 0) pela Duração do passo e some o resultado à Posição no Mundo de uma plataforma móvel que segue a animação: ela anda 2 m/s e leva quem está em cima.",
+            "No Mundo, a posição é a do pivô, como nas Propriedades e em Ler posição e orientação; no Local, os eixos são os do pai. Somar à rotação no Local soma aos ângulos XYZ; no Mundo, gira nos eixos do mundo. Somar à escala multiplica; a escala só muda no Local e não pode chegar a zero. Recusa a raiz de um personagem 3D (use Teleportar com segurança ou Definir giro horizontal do personagem) e objetos que uma animação em reprodução move (pause-a com Ativar / desativar componente). Uma plataforma movida mais que o Salto máximo num passo, ou com Salto: soltar passageiros ligado, solta quem está em cima sem lançá-lo. Uma animação terminada ou pausada não desfaz a mudança.",
         ),
         "camera.read" | "camera.activate" | "camera.mode" | "camera.target" | "camera.look_at"
         | "camera.setting" => (
@@ -614,7 +634,17 @@ pub fn movement_choices(
             ("slide_control", "Controle do deslize (m/s²)"),
             ("angular_speed", "Velocidade de giro (°/s)"),
         ],
-        ("transform.read", "space") => &[("world", "Mundo"), ("local", "Local")],
+        ("transform.read" | "transform.write", "space") => {
+            &[("world", "Mundo"), ("local", "Local")]
+        }
+        ("transform.write", "channel") => &[
+            ("position", "Posição (m)"),
+            ("rotation", "Rotação XYZ (°)"),
+            ("scale", "Escala"),
+        ],
+        ("transform.write", "mode") => {
+            &[("set", "Definir"), ("add", "Somar (escala: multiplicar)")]
+        }
         ("vector.direction", "space") => &[
             ("local_to_world", "Local → Mundo"),
             ("world_to_local", "Mundo → Local"),

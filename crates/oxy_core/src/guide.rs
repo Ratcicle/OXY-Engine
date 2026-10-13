@@ -26,6 +26,9 @@ impl Topic {
             id if id.starts_with("query.") => {
                 "Use numa cena 3D, com origem e direção em coordenadas mundiais. Conecte Executar e verifique Consulta válida antes de usar o contato. Limite de 256 consultas explícitas por passo."
             }
+            "transform.write" => {
+                "Escolha o que muda, como e em que espaço, e forneça o Valor (Vetor3) pelo parâmetro ou pela entrada. Alvo vazio usa o responsável; a raiz de um personagem 3D é recusada. Conecte uma saída de execução à entrada Executar."
+            }
             "surface.get" | "surface.apply" => {
                 "O alvo precisa de Colisor 3D. Crie a superfície física no inspetor e vincule seu ID; Aplicar exige entrada Executar."
             }

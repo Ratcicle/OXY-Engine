@@ -398,6 +398,61 @@ fn removing_a_platform_under_two_characters_replays_alike() {
     assert_eq!(attribute(&report, 0, "Último"), text("Segundo"));
 }
 
+/// A lift that its logic moves every step, with a runner riding it, and a fan that its logic
+/// turns in the world every step.
+fn logic_lift() -> Project {
+    let mut project = Project::new("Elevador da lógica");
+    let mut lift = block("Elevador", [6., 0.5, 6.], [0., 1.75, 0.]);
+    lift.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Animation,
+        ..Default::default()
+    });
+    let mut fan = block("Hélice", [2., 0.2, 0.2], [10., 3., 0.]);
+    for (entity, channel, value) in [
+        (&mut lift, "position", [0.02, 0., 0.01]),
+        (&mut fan, "rotation", [0., 3., 1.]),
+    ] {
+        let step = node(entity, "event.step", &[]);
+        let write = node(
+            entity,
+            "transform.write",
+            &[
+                ("channel", text(channel)),
+                ("mode", text("add")),
+                ("space", text("world")),
+                ("value", Value::Vector3(value)),
+            ],
+        );
+        link(entity, &step, &write);
+    }
+    let mut body = character("Corredor", [0., 2.02, 0.]);
+    body.id = BODY.into();
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::ThreeD;
+    scene.entities = vec![
+        block("Chão", [100., 1., 100.], [0., -0.5, 0.]),
+        lift,
+        body,
+        fan,
+    ];
+    project
+}
+
+#[test]
+fn a_lift_and_a_fan_that_logic_moves_replay_alike() {
+    let project = logic_lift();
+    let report = replayed(
+        &project,
+        json!({"seconds": 2.0, "watch": [{"id": BODY, "fields": ["position", "character"]}]}),
+    );
+    // 1.2 m/s along X from the first steps, with the runner on board.
+    let last = report.watched[0].samples.last().unwrap();
+    let character = last.character.as_ref().unwrap();
+    assert!(character.grounded, "{last:?}");
+    assert!(last.position.unwrap()[0] > 2.2, "{last:?}");
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+}
+
 /// A menu that opens the level after 0.3 s; the level draws a number, copies a Bloco and
 /// restarts itself through Cena atual every 0.25 s.
 fn restarting_level() -> Project {

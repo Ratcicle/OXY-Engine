@@ -574,7 +574,9 @@ the ID of a piece under entity, keyframes: [{time, position?, rotation? (degrees
 interpolation?: linear|hold}]}], events?: [{time, name}]}: creates an animation of entity \
 (answers its ID) or replaces its animation `clip` (ID or name), keeping the ID logic uses. \
 Keyframes are local transforms; channels left out are the target's current ones. Play it with an \
-action.animation node (param clip). delete_clip {entity, clip}, refused while a node plays it
+action.animation node (param clip). A clip poses its tracks while it plays and on the step it \
+ends; ended or paused, it leaves them where logic puts them (transform.write, which refuses \
+what a playing clip poses). delete_clip {entity, clip}, refused while a node plays it
 - apply_movement_profile {entity, profile: direct|parkour|chained}: writes the profile's values \
 (oxy_catalog movement_profiles) into a 3D character; they stay editable
 - set_attribute {entity, name, value?} (no value removes); attribute values are always tagged, \
@@ -1662,6 +1664,66 @@ mod tests {
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }
+    }
+
+    #[test]
+    fn the_catalog_lists_the_transform_write_with_its_choices() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let category = catalog(json!({"category": "Transformação 3D", "brief": true}));
+        let listed: Vec<&str> = category["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["operation"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "transform.read",
+                "transform.write",
+                "character.yaw",
+                "character.teleport"
+            ]
+        );
+        let write = catalog(json!({"operations": ["transform.write"]}))["nodes"][0].clone();
+        assert_eq!(write["label"], "Mover / girar / escalar objeto");
+        let inputs: Vec<(&str, &str)> = write["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| (port["id"].as_str().unwrap(), port["type"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            inputs,
+            [
+                ("exec", "exec"),
+                ("target", "object"),
+                ("value", "vector3"),
+                ("jump", "bool")
+            ]
+        );
+        let choices = |param: &str| -> Vec<String> {
+            write["params"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == param)
+                .unwrap()["choices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|choice| choice["value"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(choices("channel"), ["position", "rotation", "scale"]);
+        assert_eq!(choices("mode"), ["set", "add"]);
+        assert_eq!(choices("space"), ["world", "local"]);
+        assert!(
+            APPLY_DESCRIPTION.contains("transform.write, which refuses what a playing clip poses")
+        );
     }
 
     #[test]

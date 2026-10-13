@@ -47,6 +47,7 @@ mod game_nodes;
 mod math_nodes;
 mod movement_nodes;
 mod state_hash;
+mod transforms;
 pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
 pub use state_hash::{StateDifference, StateDigest, StatePart};
@@ -1598,15 +1599,23 @@ impl Runtime {
             self.bodies.insert(id, body_state);
         }
     }
+    /// Plays the clips one step. A clip poses its targets only while it plays and on the step
+    /// a clip that does not loop ends: one that ended or was paused leaves them where logic or
+    /// anything else puts them.
     fn advance_animations(&mut self) {
-        if !self.animations.is_empty() && self.scene().kind == SceneKind::ThreeD {
+        if self.animations.values().any(|player| player.playing)
+            && self.scene().kind == SceneKind::ThreeD
+        {
             self.physics_dirty = true;
         }
         let mut players = std::mem::take(&mut self.animations);
         // Scene order, as `emit` visits owners: the markers of one step and clips that share
         // a target never follow the map's order.
         let index = self.index();
-        let mut ordered: Vec<_> = players.iter_mut().collect();
+        let mut ordered: Vec<_> = players
+            .iter_mut()
+            .filter(|(_, player)| player.playing)
+            .collect();
         ordered.sort_by_key(|(owner, _)| index.and_then(|index| index.position(owner)));
         let mut events = Vec::new();
         for (owner, player) in ordered {
@@ -1640,16 +1649,10 @@ impl Runtime {
                         }
                     }
                 }
-                // A physical root is owned by its controller; only visual children
-                // may be animated. The authored clip is never rewritten here.
+                // The authored clip is never rewritten here.
                 let mut ignored = Vec::new();
                 clip.tracks.retain(|track| {
-                    let keep = self.entity(&track.target).is_none_or(|e| {
-                        e.character3d.is_none()
-                            && !e.platform.as_ref().is_some_and(|p| {
-                                p.enabled && p.mode == crate::surface::PlatformMode::Velocity
-                            })
-                    });
+                    let keep = self.entity(&track.target).is_none_or(animated);
                     if !keep {
                         ignored.push(track.target.clone());
                     }
@@ -1788,6 +1791,16 @@ impl Runtime {
             self.emit(event);
         }
     }
+}
+
+/// Whether a clip's track poses `target`. A physical root is owned by its controller (a 3D
+/// character, a platform that moves by velocity): only its visual children are animated.
+fn animated(target: &crate::document::Entity) -> bool {
+    target.character3d.is_none()
+        && !target
+            .platform
+            .as_ref()
+            .is_some_and(|p| p.enabled && p.mode == crate::surface::PlatformMode::Velocity)
 }
 
 pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {

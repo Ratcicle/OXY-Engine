@@ -2379,6 +2379,9 @@ mod tests {
             ("camera.mode", "mode"),
             ("event.pause", "when"),
             ("game.pause", "mode"),
+            ("transform.write", "channel"),
+            ("transform.write", "mode"),
+            ("transform.write", "space"),
         ] {
             for (value, label) in oxy_core::graph::choices(operation, key).unwrap() {
                 let mut node = Node::new(operation, [0.0; 2]);

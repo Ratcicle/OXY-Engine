@@ -101,6 +101,21 @@ impl Runtime {
                 let yaw = number(self, "yaw", budget)?.to_radians();
                 self.set_character_yaw(&id, yaw)?;
             }
+            "transform.write" => {
+                let id = target(self, budget)?;
+                let value = input(self, "value", budget)?
+                    .vector3()
+                    .ok_or("Valor exige Vetor3")?;
+                let jump = boolean(self, "jump", budget)?;
+                self.write_transform(
+                    &id,
+                    node.text("channel"),
+                    node.text("mode"),
+                    node.text("space"),
+                    value,
+                    jump,
+                )?;
+            }
             "character.teleport" => {
                 let result = (|| {
                     let id = target(self, budget)?;
