@@ -14,6 +14,16 @@ pub enum MovementReference {
     Body,
     Camera,
 }
+impl MovementReference {
+    /// The yaw the movement axis turns with (see [`wish_direction`]).
+    pub fn yaw(self, state: &CharacterState) -> f32 {
+        match self {
+            Self::World => 0.,
+            Self::Body => state.yaw,
+            Self::Camera => state.look_yaw,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InheritPlatform {
     None,
@@ -587,4 +597,9 @@ pub fn movement_axis(input: &crate::runtime::InputFrame, actions: &MovementActio
 }
 pub fn wish_direction(axis: Vec2, yaw: f32) -> Vec3 {
     Quat::from_rotation_y(yaw) * Vec3::new(axis.x, 0., -axis.y)
+}
+/// The axis [`wish_direction`] turns into the horizontal `direction`: its inverse.
+pub fn axis_toward(direction: Vec3, yaw: f32) -> Vec2 {
+    let local = Quat::from_rotation_y(-yaw) * direction;
+    Vec2::new(local.x, -local.z)
 }

@@ -3,7 +3,8 @@
 //! the game pause, the game camera, the game interface, the state of watched objects, the game
 //! variables, the progress saved, what plays and a hash of the whole state at the end. Used by
 //! the MCP server so an agent can test a change, and by tests. On request a second copy runs
-//! alongside on the same inputs, to check that the run repeats itself step by step.
+//! alongside on the same inputs, to check that the run repeats itself step by step, and a bot
+//! plays one character along a path of points (see [`crate::bot`]).
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -12,6 +13,7 @@
 //! logic that removes the objects involved in the same step cannot hide them.
 use crate::{
     audio::{AudioChange, AudioSettings, ChangeKind},
+    bot::{self, Bot, BotEvent, BotState},
     character::{CameraMode, CharacterState, MovementEvent, Posture},
     command::{self, Applied, Command},
     document::*,
@@ -217,6 +219,17 @@ pub struct Until {
     /// A sound, by the audio's ID or name, starts playing: once or in a loop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sound: Option<String>,
+    /// The request's bot is done with its path, stuck, or either.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<BotEnd>,
+}
+/// How a bot ends: at the end of its path or stuck; `Any` stands for either in `until`.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BotEnd {
+    Done,
+    Stuck,
+    Any,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
@@ -365,8 +378,8 @@ pub struct SimulationRequest {
     #[serde(default)]
     pub samples: u32,
     /// Commands applied to the copy before the run, as in a batch; commands without a scene
-    /// use the start scene. IDs they create are `"$N"` (or `"$N.M"`) in watch, inputs, spawn
-    /// and until. update_variable here gives a game variable another initial value.
+    /// use the start scene. IDs they create are `"$N"` (or `"$N.M"`) in watch, inputs, spawn,
+    /// bot and until. update_variable here gives a game variable another initial value.
     #[serde(default)]
     pub setup: Vec<Command>,
     #[serde(default)]
@@ -398,6 +411,10 @@ pub struct SimulationRequest {
     /// `save` has this shape, so a run can start where another left off.
     #[serde(default, deserialize_with = "plain_or_tagged_values")]
     pub save: Option<BTreeMap<String, Value>>,
+    /// Plays one 3D character of the start scene along a path of points, in place of the
+    /// movement inputs; its IDs may be `"$N"` from setup. The report's `bot` says how it went.
+    #[serde(default)]
+    pub bot: Option<Bot>,
 }
 impl SimulationRequest {
     /// Reads a `save` given apart from the rest of a request, as the MCP tools take it.
@@ -638,6 +655,36 @@ pub struct PauseEvent {
     pub paused: bool,
 }
 
+/// How the request's bot went.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotReport {
+    /// The character it played.
+    pub entity: Named,
+    /// The points it reached, in order.
+    pub reached: Vec<BotPoint>,
+    /// When it left the last point, its wait and jump there done.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_at: Option<f64>,
+    /// Where it gave up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<BotStuck>,
+}
+/// A point the bot reached: its index in the path, from 0, and where the character stood.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotPoint {
+    pub index: usize,
+    pub time: f64,
+    pub position: [f32; 3],
+}
+/// The point the bot came no nearer to, where the character stood and how far from it.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotStuck {
+    pub index: usize,
+    pub time: f64,
+    pub position: [f32; 3],
+    pub distance: f32,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SimulationReport {
     pub seconds: f64,
@@ -671,6 +718,9 @@ pub struct SimulationReport {
     /// changed scene started and no longer plays at its end (see `Recording::audio`).
     pub sounds: Vec<SoundEvent>,
     pub events: Vec<GameEvent>,
+    /// The bot, when the request has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot: Option<BotReport>,
     /// The game camera at the end.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraReport>,
@@ -957,6 +1007,8 @@ struct Happened {
     pauses: Vec<bool>,
     /// The audios that started playing, once or in a loop.
     sounds: Vec<Id>,
+    /// How the bot ended in the step (done or stuck), in words.
+    bot: Option<(BotEnd, String)>,
 }
 
 /// "Object · Action", with the action's label.
@@ -1480,6 +1532,7 @@ struct Stop {
     paused: Option<bool>,
     /// The audio's ID and name.
     sound: Option<(Id, String)>,
+    bot: Option<BotEnd>,
 }
 impl Stop {
     fn new(
@@ -1487,6 +1540,7 @@ impl Stop {
         project: &Project,
         start: &str,
         applied: &[Applied],
+        bot: Option<&Bot>,
     ) -> Result<Self, String> {
         let entity = |id: &str| {
             project
@@ -1648,6 +1702,9 @@ impl Stop {
                 }
             }
         };
+        if until.bot.is_some() && bot.is_none() {
+            return Err("until: bot só vale com um bot no pedido (informe bot)".into());
+        }
         if scene.is_none()
             && until.log_contains.is_none()
             && attribute.is_none()
@@ -1656,6 +1713,7 @@ impl Stop {
             && event.is_none()
             && until.paused.is_none()
             && sound.is_none()
+            && until.bot.is_none()
         {
             return Err("until: informe ao menos uma condição".into());
         }
@@ -1668,6 +1726,7 @@ impl Stop {
             event,
             paused: until.paused,
             sound,
+            bot: until.bot,
         })
     }
 
@@ -1763,6 +1822,61 @@ impl Stop {
             && happened.sounds.contains(id)
         {
             return Some(stopped("sound", format!("O som {name} começou a tocar")));
+        }
+        if let Some(wanted) = self.bot
+            && let Some((end, detail)) = &happened.bot
+            && (wanted == BotEnd::Any || wanted == *end)
+        {
+            return Some(stopped("bot", detail.clone()));
+        }
+        None
+    }
+}
+
+/// The request's bot as it plays, and what it did.
+struct BotRun {
+    bot: Bot,
+    state: BotState,
+    report: BotReport,
+}
+impl BotRun {
+    /// Plays the coming step and records what happened; how the bot ended, if it did now.
+    fn steer(&mut self, runtime: &Runtime, frame: &mut InputFrame) -> Option<(BotEnd, String)> {
+        let time = rounded(runtime.time);
+        let name = &self.report.entity.name;
+        match bot::steer(runtime, &self.bot, &mut self.state, frame) {
+            Some(BotEvent::Reached { index, position }) => self.report.reached.push(BotPoint {
+                index,
+                time,
+                position: position.to_array(),
+            }),
+            Some(BotEvent::Stuck {
+                index,
+                position,
+                distance,
+            }) => {
+                self.report.stuck = Some(BotStuck {
+                    index,
+                    time,
+                    position: position.to_array(),
+                    distance,
+                });
+                return Some((
+                    BotEnd::Stuck,
+                    format!(
+                        "{name} parou de avançar rumo ao ponto {index} do bot, a {distance:.2} m \
+                         dele"
+                    ),
+                ));
+            }
+            None => {}
+        }
+        if self.state.done() && self.report.done_at.is_none() {
+            self.report.done_at = Some(time);
+            return Some((
+                BotEnd::Done,
+                format!("{name} percorreu o caminho do bot até o fim"),
+            ));
         }
         None
     }
@@ -1985,6 +2099,21 @@ pub fn run(
         place(copy.to_mut(), &start, spawn, &entity)?;
     }
     let source: &Project = &copy;
+    let bot = request
+        .bot
+        .as_ref()
+        .map(|bot| {
+            let mut bot = bot.clone();
+            bot.entity = resolve(&bot.entity, &applied)?;
+            for point in &mut bot.path {
+                if let Some(object) = &mut point.object {
+                    *object = resolve(object, &applied)?;
+                }
+            }
+            bot.check(source.scene(&start).expect("checked above"))?;
+            Ok::<_, String>(bot)
+        })
+        .transpose()?;
     let mut events = request.inputs.clone();
     for event in &mut events {
         match event {
@@ -2065,7 +2194,7 @@ pub fn run(
     let stop = request
         .until
         .as_ref()
-        .map(|until| Stop::new(until, source, &start, &applied))
+        .map(|until| Stop::new(until, source, &start, &applied, bot.as_ref()))
         .transpose()?;
     let filter = &request.actions_filter;
     let objects = filter
@@ -2114,6 +2243,22 @@ pub fn run(
         save,
     };
     let mut runtime = Runtime::with_options(source, &start, options.clone())?;
+    let mut bot = bot.map(|bot| BotRun {
+        state: BotState::new(&runtime, &bot),
+        report: BotReport {
+            entity: Named {
+                name: source
+                    .scene(&start)
+                    .and_then(|s| s.entity(&bot.entity))
+                    .map_or_else(|| bot.entity.clone(), |e| e.name.clone()),
+                id: bot.entity.clone(),
+            },
+            reached: Vec::new(),
+            done_at: None,
+            stuck: None,
+        },
+        bot,
+    });
     let mut twin = Twin {
         runtime: request
             .check_replay
@@ -2141,6 +2286,7 @@ pub fn run(
         actions: None,
         sounds: Vec::new(),
         events: Vec::new(),
+        bot: None,
         camera: None,
         ui: Vec::new(),
         watched: watches
@@ -2189,9 +2335,11 @@ pub fn run(
             }
             let mut frame = InputFrame::default();
             timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
+            let ended = bot.as_mut().and_then(|bot| bot.steer(&runtime, &mut frame));
             runtime.advance(FIXED_DT, &frame);
             twin.advance(&frame);
-            let happened = recorder.collect(&mut runtime);
+            let mut happened = recorder.collect(&mut runtime);
+            happened.bot = ended;
             twin.compare(recorder.lookup(&runtime), step);
             stopped = check(&runtime, &happened);
             if stopped.is_some() {
@@ -2210,6 +2358,7 @@ pub fn run(
         }
     }
     report.stopped_at = stopped;
+    report.bot = bot.map(|bot| bot.report);
     report.paused = runtime.game_paused();
     for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
         watched

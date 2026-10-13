@@ -331,12 +331,7 @@ impl Characters {
                         .is_some_and(|r| r.target.as_deref() == Some(&id))
             });
             if config.enabled && !first_person {
-                let reference = match config.reference {
-                    MovementReference::World => 0.,
-                    MovementReference::Body => state.yaw,
-                    MovementReference::Camera => state.look_yaw,
-                };
-                let direction = wish_direction(axis, reference);
+                let direction = wish_direction(axis, config.reference.yaw(state));
                 let target = if config.facing == BodyFacing::Look {
                     Some(state.look_yaw)
                 } else if direction.length_squared() > 1e-8 {
@@ -654,6 +649,13 @@ impl Runtime {
     }
     pub fn character_state(&self, id: &str) -> Option<&CharacterState> {
         self.characters.states.get(id)
+    }
+    /// The yaw character `id`'s movement axis turns with, as its movement reference picks it in
+    /// the step (see [`wish_direction`]): 0 for World, the body's for Body, the camera's for
+    /// Camera. None when `id` is not a character of the running scene.
+    pub fn movement_yaw(&self, id: &str) -> Option<f32> {
+        let config = self.entity(id)?.character3d.as_ref()?;
+        Some(config.reference.yaw(self.characters.states.get(id)?))
     }
     pub fn physics_world(&self) -> Option<&PhysicsWorld> {
         self.characters.world.as_ref()

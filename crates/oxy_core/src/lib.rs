@@ -2,6 +2,7 @@ pub mod animation;
 pub mod asset_import;
 pub mod audio;
 pub mod authoring;
+pub mod bot;
 pub mod broadphase;
 pub mod camera_authoring;
 pub mod character;

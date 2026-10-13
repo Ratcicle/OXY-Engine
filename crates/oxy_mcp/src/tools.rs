@@ -105,6 +105,22 @@ part}}, part being what differed first (transform, visible, attributes.<name>, d
 character, animation, tasks, random, variables.<name> (a game variable), save…; exists: only one \
 copy has the object; order: both have it, in another scene order). identical: false \
 means the engine did not repeat itself: tell the person, it is not a fault of the logic.";
+const BOT: &str = "Plays one 3D character of the start scene along a path of points, as a \
+person at the controls: each step it gives the movement toward its point (in place of movement \
+inputs and the character's direction actions) and presses the character's own jump, sprint and \
+crouch actions, so logic hears them as in play. The game has one input in this version: the \
+movement reaches every character with automatic input, and characters reading the same jump, \
+sprint or crouch actions get those presses too. entity: ID or \"$N\"; refused in 2D scenes, without character3d and with \
+automatic_input false. A point is [x, y, z] in the world, y at the feet (a floor's top), or \
+{at?, object? (follows that object of the start scene as it moves, as a moving platform; at is \
+then an offset in world axes), jump? (pressed once on leaving the point: put it at the take-off \
+spot), sprint?, crouch? (held on the way there and while waiting), wait? (seconds standing \
+there), radius?}. Reached: within radius across the ground (default 0.6 m) and half the body's \
+height. start (default 0): the second it takes over. It walks straight at each point, never \
+turning the camera or finding a way around walls: when it comes no 0.1 m nearer for \
+stuck_after seconds (default 1.5) it gives up and reports where, instead of solving the level. \
+The report adds bot {entity, reached [{index, time, position}], done_at? (the last point left, \
+its wait and jump done), stuck? {index, time, position, distance}}.";
 const SAVE: &str = "The progress earlier runs saved, as a returning player has it (absent: a \
 fresh install): {variable: value}, a persistent game variable by ID or name (\"$N\" from setup \
 too), \"name · key\" for the value of a key, with a plain or tagged value of its type. Unknown \
@@ -156,6 +172,15 @@ pub fn definitions() -> Json {
     let check_replay = json!({"type": "boolean", "description": CHECK_REPLAY});
     let save = json!({"type": "object", "description": SAVE});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
+    let bot = json!({"type": "object", "properties": {
+        "entity": {"type": "string"},
+        "path": {"type": "array", "items": {"anyOf": [point, {"type": "object", "properties": {
+            "at": point, "object": {"type": "string"}, "jump": {"type": "boolean"},
+            "sprint": {"type": "boolean"}, "crouch": {"type": "boolean"},
+            "wait": {"type": "number"}, "radius": {"type": "number"}}}]}},
+        "radius": {"type": "number"}, "start": {"type": "number"},
+        "stuck_after": {"type": "number"}},
+        "required": ["entity", "path"], "description": BOT});
     let offset = json!({"type": "integer", "minimum": 0, "description":
         "Entries skipped (default 0): the answer's next_offset when more follow."});
     let tool = |name: &str, description: &str, properties: Json, required: Json| {
@@ -360,7 +385,7 @@ pub fn definitions() -> Json {
                        "oxy_apply commands applied to the in-memory copy before the run, never to \
                         the project; commands without a scene use the start scene. The IDs they \
                         create are \"$N\" (\"$N.M\" for the M-th) in watch, inputs, spawn, \
-                        until and actions_filter, and the report lists them under setup. \
+                        bot, until and actions_filter, and the report lists them under setup. \
                         update_variable here starts a game variable at another value."},
                    "spawn": {"type": "object", "properties": {
                        "entity": {"type": "string"},
@@ -402,7 +427,10 @@ pub fn definitions() -> Json {
                        "sound": {"type": "string", "description":
                            "An audio's ID or name: stops when it starts playing, once or in a \
                             loop (a loop already playing that takes another volume does not \
-                            count)."}},
+                            count)."},
+                       "bot": {"type": "string", "enum": ["done", "stuck", "any"],
+                           "description": "With a bot: stops once it is done with its path, \
+                            stuck, or either."}},
                        "description": "Stops at the first moment any condition holds; the report \
                         says which in stopped_at {time, reason, kind (the event's, for event), \
                         detail (what happened, in words)}. A game.quit node ends the run whatever \
@@ -424,7 +452,8 @@ pub fn definitions() -> Json {
                    "colliders": colliders,
                    "seed": seed,
                    "check_replay": check_replay,
-                   "save": save}),
+                   "save": save,
+                   "bot": bot}),
             json!(["seconds"])
         ),
         tool(
@@ -447,6 +476,7 @@ pub fn definitions() -> Json {
                    "seed": seed,
                    "check_replay": check_replay,
                    "save": save,
+                   "bot": bot,
                    "colliders": colliders,
                    "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
                        "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
@@ -705,8 +735,10 @@ variables)}] and save is the progress at the end in the shape the save input tak
 when there is none), so a run can start where another left off. Inputs use the project's \
 input actions, by ID or name (see oxy_project). To test \
 one section without editing the project, use setup (commands on the copy, update_variable to \
-start a variable elsewhere), spawn (place the player) and until (stop when something happens, a \
-variable reaching a value included). Draws repeat: random.number takes them from seed \
+start a variable elsewhere), spawn (place the player), bot (a character that walks a path of \
+points, jumping where told, and reports the points reached or where it got stuck) and until \
+(stop when something happens, a variable reaching a value or the bot ending included). Draws \
+repeat: random.number takes them from seed \
 (default 0, echoed in the report; vary it to see other draws), and copies made by action.spawn \
 get the same IDs on every run (not those of the logic setup creates: see seed). state_hash, 16 \
 hex digits, fingerprints the game state at the end: equal hashes, same state (the seed counts \
@@ -719,7 +751,7 @@ with the game interface drawn.";
 const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
 the editor viewport as the person sees it (during a test, the game with its interface), with the \
 collider view when colliders is set. Every other view first runs the game on an in-memory copy \
-for `seconds`, with inputs (and setup, spawn, until, seed and save as in oxy_simulate), then \
+for `seconds`, with inputs (and setup, spawn, until, bot, seed and save as in oxy_simulate), then \
 captures: game (the default on files) through the game camera, with the game interface drawn as \
 the player shows it, and lists it as ui like oxy_simulate, at the same rects (ui: false leaves \
 the list out); free through a perspective camera at eye looking at target (3D scenes); top and \
@@ -728,8 +760,8 @@ level along -Z, or along -X when the framed part is deeper (Z) than wide (X), so
 spans the image. In 2D scenes top and side both show the scene plane. An image painted in the \
 editor and not saved yet shows as saved: in view=editor on the interface only, in the other \
 views on objects too. The text gives the time, the scene and the camera used (position, \
-forward, and fov or the visible width and height in metres), and replay when check_replay is \
-set.";
+forward, and fov or the visible width and height in metres), replay when check_replay is set \
+and bot with a bot.";
 
 /// Values of oxy_console's origin.
 const CONSOLE_ORIGINS: [&str; 4] = ["editor", "agente", "jogo", "logica"];
@@ -1235,6 +1267,10 @@ impl Tools {
                 .map(headless::SimulationRequest::read_save)
                 .transpose()
                 .map_err(invalid("Progresso salvo (save) inválido"))?,
+            bot: arg("bot")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Bot inválido"))?,
         })
     }
 
@@ -1318,6 +1354,9 @@ impl Tools {
         }
         if let Some(replay) = &report.replay {
             text["replay"] = serde_json::to_value(replay).map_err(|e| e.to_string())?;
+        }
+        if let Some(bot) = &report.bot {
+            text["bot"] = serde_json::to_value(bot).map_err(|e| e.to_string())?;
         }
         let mut output = Output::json(text);
         output.image = Some(image);
@@ -1471,6 +1510,20 @@ mod tests {
                 .unwrap()
                 .contains("reason quit")
         );
+        // The bot plays a character along points in both tools, and until can wait for it.
+        assert_eq!(shot["bot"], simulate["bot"]);
+        assert_eq!(simulate["bot"]["required"], json!(["entity", "path"]));
+        let bot = simulate["bot"]["description"].as_str().unwrap();
+        assert!(bot.contains("in place of movement inputs") && bot.contains("stuck_after"));
+        assert!(bot.contains("instead of solving the level") && bot.contains("y at the feet"));
+        assert!(bot.contains("stuck? {index, time, position, distance}"));
+        assert_eq!(
+            until["properties"]["bot"]["enum"],
+            json!(["done", "stuck", "any"])
+        );
+        assert!(SIMULATE_DESCRIPTION.contains("bot (a character that walks a path of points"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("until, bot, seed and save as in oxy_simulate"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("bot with a bot"));
         let status = definitions()
             .as_array()
             .unwrap()
@@ -2984,6 +3037,45 @@ mod tests {
             let error = simulate(json!({"seed": bad})).unwrap_err();
             assert!(error.contains(refusal), "{bad}: {error}");
         }
+    }
+
+    #[test]
+    fn simulate_reads_a_bot_and_refuses_a_malformed_one() {
+        let args = json!({"bot": {"entity": "$0", "stuck_after": 2,
+            "path": [[0, 0, -2], {"object": "$0.1", "at": [0, 0.5, 0], "jump": true}]}});
+        let bot = Tools::simulation_request(&args, 1.).unwrap().bot.unwrap();
+        assert_eq!(
+            (
+                bot.entity.as_str(),
+                bot.path.len(),
+                bot.stuck_after,
+                bot.radius
+            ),
+            ("$0", 2, 2., 0.6)
+        );
+        assert_eq!(bot.path[0].at, Some([0., 0., -2.]));
+        assert!(bot.path[1].jump && bot.path[1].object.as_deref() == Some("$0.1"));
+        assert!(
+            Tools::simulation_request(&json!({"bot": null}), 1.)
+                .unwrap()
+                .bot
+                .is_none()
+        );
+        for bad in [
+            json!({"path": [[0, 0, 0]]}),
+            json!({"entity": "x", "path": [[0, 0]]}),
+            json!({"entity": "x", "path": [[0, 0, 0]], "velocidade": 1}),
+        ] {
+            let error = Tools::simulation_request(&json!({"bot": bad}), 1.).unwrap_err();
+            assert!(error.starts_with("Bot inválido"), "{error}");
+        }
+        // The scene it would play in is checked by the run: a 2D one is refused by name.
+        let project = editing::blank_project("Plano", SceneKind::TwoD).unwrap();
+        let args = json!({"bot": {"entity": "$0", "path": [[0, 0, 0]]},
+            "setup": [{"op": "create_entity", "kind": {"type": "group"}, "name": "Herói"}]});
+        let request = Tools::simulation_request(&args, 1.).unwrap();
+        let error = headless::simulate(&project, &request).unwrap_err();
+        assert!(error.contains("bot: a cena Cena 2D é 2D"), "{error}");
     }
 
     /// The whole capture on files, with a real GPU: the game view draws and lists the
