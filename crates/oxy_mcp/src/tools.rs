@@ -1,5 +1,6 @@
 //! MCP tools. Each call targets either an open editor (live: edits appear at once, are
-//! undoable, and the person saves) or, when no editor has the project open, the project files.
+//! undoable, and the person saves, or the agent when they allow it) or, when no editor has the
+//! project open, the project files.
 use crate::editors::{self, LiveEditor};
 use glam::Vec3;
 use oxy_core::{
@@ -195,15 +196,21 @@ pub fn definitions() -> Json {
             "oxy_status",
             "Lists open OXY editors that allow AI agents (project, active scene, unsaved changes, \
              whether the editor is busy and why) and explains how tools pick a target. play says \
-             whether the person is testing the game: {running, paused? (the test is paused), \
-             game_paused? (the game is in its own pause, from game.pause or Esc with a pause \
-             menu; either pause can hold alone, or both), scene? {id, name}, \
+             whether the game is being tested in the editor: {running, paused? (the test is \
+             paused), game_paused? (the game is in its own pause, from game.pause or Esc with a \
+             pause menu; either pause can hold alone, or both), driven_by? (person, or agent for \
+             a test you started with oxy_play, until the person clicks Assumir, or Retomar on a \
+             paused test), \
+             mouse_captured? (the game holds the person's mouse), advancing? (the game view is \
+             shown and the test is not paused: game time goes on only then), queued_until? (game \
+             time of the last input you sent that still waits), scene? {id, name}, \
              time? (simulated seconds), seed? (of the test's random.number draws, new on each \
              test and still there after it stops: oxy_simulate with this seed gives each \
              random.number node the same numbers in the same order), variables? (the game \
              variables now, {name: tagged value}, \"name · key\" for the value of a key, up to \
              300 as in oxy_simulate), variables_truncated? (how many were left out)}; while it \
-             runs, edits are refused. Call this first.",
+             runs, edits are refused. can_save says whether oxy_save may save now, and \
+             save_refusal why not. Call this first.",
             json!({}),
             json!([])
         ),
@@ -498,6 +505,26 @@ pub fn definitions() -> Json {
             json!([])
         ),
         tool(
+            "oxy_play",
+            PLAY_DESCRIPTION,
+            json!({"project": project,
+                   "action": {"type": "string", "enum": PLAY_ACTIONS, "description":
+                       "start: a new test; stop: ends a test you play; pause: any test; resume: \
+                        a paused test you play; input: sends inputs to the test you play."},
+                   "scene": {"type": "string", "description":
+                       "start: the scene the test starts in. Default: the scene open in the \
+                        editor, as Jogar (not the start scene oxy_simulate uses)."},
+                   "inputs": {"type": "array", "items": {"type": "object"}, "description":
+                       PLAY_INPUTS}}),
+            json!(["action"])
+        ),
+        tool(
+            "oxy_save",
+            SAVE_DESCRIPTION,
+            json!({"project": project}),
+            json!([])
+        ),
+        tool(
             "oxy_select",
             "Live only: selects objects in the editor (switching scene if needed) so the person \
              sees what you are talking about.",
@@ -547,7 +574,8 @@ pub fn definitions() -> Json {
 const APPLY_DESCRIPTION: &str = "Edits the project with a batch of commands, all-or-nothing: if \
 one fails, nothing changes and the error names it as \"Comando N (op, o Kº do lote)\", N being \
 its 0-based index, the one \"$N\" and created use (K = N + 1). Live, the batch is one undo step \
-labelled 'Agente: …' in the editor and the person saves; on files, the project file is saved \
+labelled 'Agente: …' in the editor and the person saves (or oxy_save, if they allow it); on \
+files, the project file is saved \
 (the previous version is kept as project.oxy.json.agente.bak; a project from an older OXY is \
 saved in the current format and its original is kept once as \
 project.oxy.json.schema-N.….backup.json). The answer is {created, \
@@ -687,7 +715,8 @@ editor's Importar does: the source is checked (extension, header, full content, 
 16 MB inline) and copied into the project's assets folder under a new name; nothing else is \
 written. Import only files the person asked for. Give exactly one of path and data_base64. \
 Live, it is one undo step 'Agente: Importar \
-recurso' and the person saves (the project needs a folder: refused before its first save); on \
+recurso' and the person saves (or oxy_save, if they allow it; the project needs a folder: \
+refused before its first save); on \
 files, the project file is saved (previous version in project.oxy.json.agente.bak; an older \
 project is saved in the current format and its original is kept once as \
 project.oxy.json.schema-N.….backup.json). Answers \
@@ -765,6 +794,33 @@ and bot with a bot.";
 
 /// Values of oxy_console's origin.
 const CONSOLE_ORIGINS: [&str; 4] = ["editor", "agente", "jogo", "logica"];
+
+const PLAY_DESCRIPTION: &str = "Live only: plays a test of the game in the editor for the \
+person to watch, without taking their mouse or keyboard: start shows the game as Jogar does and \
+it goes on while the editor window is in the background; the bar shows Agente jogando and an \
+Assumir button, which hands the test to the person (driven_by becomes person), as Retomar does \
+on a paused test. stop, resume and input work only on a test you play (driven_by agent), never \
+on the person's; pause works on any. While a test runs, edits are refused. The answer is the new play state, as in oxy_status (driven_by, \
+advancing, queued_until, time…). Game time goes on only while advancing is true (the person \
+opening Lógica, for one, pauses the test). Play in real time differs from run to run; check \
+results that must repeat with oxy_simulate.";
+
+const PLAY_INPUTS: &str = "action input: inputs in oxy_simulate's form (press, release, \
+movement, look, click, escape; actions by ID or name), `at` being seconds of game time from now, \
+or from the last input still waiting (queued_until), so batches queue up in order; a batch with \
+one bad input queues none. Refused while the test is paused. A pause, a scene change or a restart drops the inputs still waiting, and keys \
+and movement held stop.";
+
+const SAVE_DESCRIPTION: &str = "Live only: saves the project open in the editor, as its Salvar \
+does, only when the person allowed it (Preferências do editor > Permitir que agentes salvem, off \
+by default): oxy_status can_save says whether you may now, save_refusal why not. Everything \
+unsaved is written, the person's own changes too; the previous file is kept first as \
+project.oxy.json.agente.bak. Refused during a test, while the editor is busy, and for a project \
+that was never saved or is an example copy (saving it asks the person for a folder). Answers \
+{saved, previous_version}. Save only when the person asks or agrees.";
+
+/// Values of oxy_play's action.
+const PLAY_ACTIONS: [&str; 5] = ["start", "stop", "pause", "resume", "input"];
 
 /// Project-level commands: they take no `scene`, so the tool's default scene is not added
 /// (commands refuse unknown fields).
@@ -964,15 +1020,29 @@ impl Tools {
             "oxy_simulate" => self.simulate(args),
             "oxy_screenshot" => self.screenshot(args),
             "oxy_import" => self.import(args),
-            "oxy_select" | "oxy_frame" | "oxy_undo" | "oxy_redo" | "oxy_console" => {
+            "oxy_select" | "oxy_frame" | "oxy_undo" | "oxy_redo" | "oxy_console" | "oxy_play"
+            | "oxy_save" => {
+                // Bad options fail before the editor is looked for.
                 if name == "oxy_console" {
-                    // Bad options fail before the editor is looked for.
                     query::ConsoleQuery::parse(args)?;
                 }
+                if name == "oxy_play" {
+                    Self::check_play(args)?;
+                }
                 let Target::Live(port) = self.target(args)? else {
-                    return Err(
-                        "Esta ferramenta só funciona com o projeto aberto no editor.".into(),
-                    );
+                    return Err(match name {
+                        "oxy_play" => {
+                            "O teste ao vivo só existe com o projeto aberto no editor. Nos \
+                             arquivos, teste com o oxy_simulate."
+                        }
+                        "oxy_save" => {
+                            "Nos arquivos não há o que salvar: cada oxy_apply e cada oxy_import \
+                             já salva o projeto, com a versão anterior em \
+                             project.oxy.json.agente.bak."
+                        }
+                        _ => "Esta ferramenta só funciona com o projeto aberto no editor.",
+                    }
+                    .into());
                 };
                 let (method, params) = match name {
                     "oxy_select" => (
@@ -986,11 +1056,37 @@ impl Tools {
                         json!({"since": args["since"], "origin": args["origin"],
                                "limit": args["limit"]}),
                     ),
+                    "oxy_play" => (
+                        "play",
+                        json!({"action": args["action"], "scene": args["scene"],
+                               "inputs": args["inputs"]}),
+                    ),
+                    "oxy_save" => ("save", json!({})),
                     _ => ("redo", json!({})),
                 };
                 self.live(port, method, params).map(Output::json)
             }
             other => Err(format!("Ferramenta desconhecida: {other}")),
+        }
+    }
+
+    /// oxy_play's arguments, checked before any editor is looked for: a known action, and
+    /// inputs in oxy_simulate's form for input.
+    fn check_play(args: &Json) -> Result<(), String> {
+        let action = args["action"].as_str().unwrap_or_default();
+        if !PLAY_ACTIONS.contains(&action) {
+            return Err(format!(
+                "action inválido: `{action}`; use {}",
+                PLAY_ACTIONS.join(", ")
+            ));
+        }
+        match &args["inputs"] {
+            Json::Null if action == "input" => Err("Informe inputs para action input".into()),
+            Json::Null => Ok(()),
+            _ if action != "input" => Err("inputs só vale com action input".into()),
+            inputs => serde_json::from_value::<Vec<headless::InputEvent>>(inputs.clone())
+                .map(drop)
+                .map_err(|e| format!("Entradas inválidas: {e}")),
         }
     }
 
@@ -1007,8 +1103,9 @@ impl Tools {
             "editors": editors,
             "how_targets_work": "With one editor open (agents allowed in Preferências do editor), \
                 tools act on it live: edits show at once, are undoable with Ctrl+Z and the person \
-                saves. Pass `project` (a folder or project.oxy.json) to pick an editor by project, \
-                or to edit the files directly when no editor has that project open.",
+                saves (oxy_save saves for them only when they allow it: can_save). Pass `project` \
+                (a folder or project.oxy.json) to pick an editor by project, or to edit the files \
+                directly when no editor has that project open.",
         })))
     }
 
@@ -3278,6 +3375,110 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(project.contains("path (images and sounds") && project.contains("material, ui"));
+    }
+
+    #[test]
+    fn play_and_save_are_live_only_and_check_their_arguments_first() {
+        let play = schema("oxy_play");
+        assert_eq!(
+            play["action"]["enum"],
+            json!(["start", "stop", "pause", "resume", "input"])
+        );
+        let tool = |name: &str| {
+            definitions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == name)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(
+            tool("oxy_play")["inputSchema"]["required"],
+            json!(["action"])
+        );
+        let inputs = play["inputs"]["description"].as_str().unwrap();
+        assert!(inputs.contains("game time from now") && inputs.contains("queued_until"));
+        assert!(inputs.contains("drops the inputs still waiting"));
+        assert!(inputs.contains("one bad input queues none"));
+        assert!(
+            play["scene"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("as Jogar")
+        );
+        for text in [
+            "without taking their mouse",
+            "Assumir",
+            "as Retomar does on a paused test",
+            "stop, resume and input work only on a test you play",
+            "never on the person's",
+        ] {
+            assert!(PLAY_DESCRIPTION.contains(text), "{text}");
+        }
+        for text in [
+            "Permitir que agentes salvem",
+            "agente.bak",
+            "can_save",
+            "example copy",
+        ] {
+            assert!(SAVE_DESCRIPTION.contains(text), "{text}");
+        }
+        let status = tool("oxy_status")["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for text in [
+            "driven_by?",
+            "mouse_captured?",
+            "advancing?",
+            "queued_until?",
+            "can_save",
+            "Assumir, or Retomar on a paused test",
+        ] {
+            assert!(status.contains(text), "{text}");
+        }
+        assert!(APPLY_DESCRIPTION.contains("or oxy_save, if they allow it"));
+        // On files there is no editor test, and every batch is saved already.
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-play-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ao vivo", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let error = tools
+            .call(
+                "oxy_play",
+                &json!({"project": project_arg, "action": "start"}),
+            )
+            .unwrap_err();
+        assert!(error.contains("oxy_simulate"), "{error}");
+        let error = tools
+            .call("oxy_save", &json!({"project": project_arg}))
+            .unwrap_err();
+        assert!(
+            error.contains("já salva") && error.contains("agente.bak"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        // Bad arguments are refused before the project is looked for.
+        for (args, expected) in [
+            (json!({"action": "voar"}), "action inválido"),
+            (json!({"action": "input"}), "Informe inputs"),
+            (
+                json!({"action": "input", "inputs": [{"type": "pular", "at": 0}]}),
+                "Entradas inválidas",
+            ),
+            (
+                json!({"action": "start", "inputs": [{"type": "escape", "at": 0}]}),
+                "só vale com action input",
+            ),
+        ] {
+            let mut args = args;
+            args["project"] = json!("Z:/nao/existe");
+            let error = Tools::default().call("oxy_play", &args).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]

@@ -82,6 +82,8 @@ pub enum Icon {
     Examples,
     Track,
     Console,
+    // The test an agent plays.
+    Agent,
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
@@ -1002,6 +1004,20 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 Stroke::new(1.3, color),
             ));
             line(at(0.5, 0.66), at(0.74, 0.66));
+        }
+        Icon::Agent => {
+            // A robot head on a 14-unit grid: the face, an antenna and two eyes.
+            let unit = |x: f32, y: f32| at(x / 14., y / 14.);
+            p.rect_stroke(
+                Rect::from_min_max(unit(2.5, 4.), unit(11.5, 11.)),
+                2.,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Middle,
+            );
+            line(unit(7., 1.8), unit(7., 4.));
+            for x in [5., 9.] {
+                p.circle_filled(unit(x, 7.2), r.width() * 0.07, color);
+            }
         }
         Icon::Move => {
             for end in [at(0.5, 0.), at(1., 0.5), at(0.5, 1.), at(0., 0.5)] {

@@ -23,10 +23,12 @@ summarizes logic and geometry unless asked in full, and world positions and boxe
 fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
 (atomic batches, validated with the editor's own rules) and oxy_import (PNG and WAV files the \
 person points you to). When the project is open in the editor your edits appear live and the \
-person can undo them; you never save there, the person does. After changes, check them with \
-oxy_simulate and oxy_screenshot; when the person tested the game in the editor, oxy_console has \
-what that test logged. Messages from the engine are in Portuguese; answer the person in their \
-language.";
+person can undo them; the person saves there, and you never save unless they enabled it (Permitir \
+que agentes salvem: oxy_status can_save) and ask or agree, then with oxy_save. After changes, \
+check them with oxy_simulate and oxy_screenshot; oxy_play runs a test in the editor for the \
+person to watch, without taking their mouse. When the person tested the game in the editor, \
+oxy_console has what that test logged. Messages from the engine are in Portuguese; answer the \
+person in their language.";
 
 fn handle(tools: &mut tools::Tools, request: &Json) -> Option<Json> {
     let id = request.get("id").cloned()?;
@@ -139,9 +141,14 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(
-            names.contains(&"oxy_apply".to_owned()) && names.len() == 16,
+            names.contains(&"oxy_apply".to_owned()) && names.len() == 18,
             "{names:?}"
         );
+        assert!(names.contains(&"oxy_play".to_owned()) && names.contains(&"oxy_save".to_owned()));
+        // Saving live is the person's choice.
+        let instructions = init["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("never save unless they enabled it"));
+        assert!(instructions.contains("can_save") && instructions.contains("oxy_play"));
         let call = handle(
             &mut tools,
             &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -261,6 +268,29 @@ mod tests {
             import["params"],
             json!({"path": image, "apply_to": "e", "scene": "cena-1"})
         );
+        // The test and saving reach the editor, which plays and saves; input times stay
+        // relative, for the editor to count from its game clock.
+        let start = echo("oxy_play", json!({"action": "start", "scene": "cena-2"}));
+        assert_eq!(start["method"], "play");
+        assert_eq!(
+            start["params"],
+            json!({"action": "start", "scene": "cena-2", "inputs": null})
+        );
+        let inputs = json!([{"type": "press", "at": 0.0, "action": "Pular"},
+                            {"type": "release", "at": 0.25, "action": "Pular"}]);
+        let input = echo("oxy_play", json!({"action": "input", "inputs": inputs}));
+        assert_eq!(
+            input["params"],
+            json!({"action": "input", "scene": null, "inputs": inputs})
+        );
+        let save = echo(
+            "oxy_save",
+            json!({"project": "C:/ao-vivo/project.oxy.json"}),
+        );
+        assert_eq!(
+            (&save["method"], &save["params"]),
+            (&json!("save"), &json!({}))
+        );
         let error = tools
             .call("oxy_entity", &json!({"id": "a", "geometry": "toda"}))
             .unwrap_err();
@@ -277,6 +307,12 @@ mod tests {
         drop(tools);
         let methods = server.join().unwrap();
         assert!(methods.contains(&"status".to_owned()) && methods.contains(&"apply".to_owned()));
+        assert_eq!(
+            methods.iter().filter(|m| *m == "play").count(),
+            2,
+            "{methods:?}"
+        );
+        assert!(methods.contains(&"save".to_owned()), "{methods:?}");
         assert_eq!(
             methods.iter().filter(|m| *m == "entity").count(),
             1,

@@ -123,11 +123,23 @@ impl Default for ViewOptions {
         }
     }
 }
+/// Who plays the test: the person, with their mouse and keyboard, or an AI agent through its
+/// channel, which never takes the mouse or reads the keyboard and plays on while the window is
+/// in the background.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Driver {
+    #[default]
+    Person,
+    Agent,
+}
 /// The isolated play test. While it runs, the central area shows the game.
 pub(crate) struct PlaySession {
     pub(crate) runtime: Option<Runtime>,
     pub(crate) game_ui: oxy_render::game_ui::GameUi,
     pub(crate) capture: bool,
+    pub(crate) driver: Driver,
+    /// Clicks and Esc an agent sent, by game time, given to the game when that time comes.
+    pub(crate) agent_clicks: std::collections::VecDeque<(f64, oxy_core::headless::Direct)>,
     pub(crate) previous_tab: Tab,
     pub(crate) last_runtime_scene: Option<Id>,
     pub(crate) game_size: Option<[u32; 2]>,
@@ -146,6 +158,8 @@ impl Default for PlaySession {
             runtime: None,
             game_ui: Default::default(),
             capture: false,
+            driver: Driver::Person,
+            agent_clicks: Default::default(),
             previous_tab: Tab::Scene,
             last_runtime_scene: None,
             game_size: None,
@@ -167,6 +181,8 @@ impl PlaySession {
     pub(crate) fn end(&mut self) {
         self.runtime = None;
         self.capture = false;
+        self.driver = Driver::Person;
+        self.agent_clicks.clear();
         self.last_runtime_scene = None;
         self.mixer.stop_all();
     }
@@ -596,6 +612,10 @@ impl Editor {
         }
     }
     pub fn save(&mut self) -> bool {
+        self.save_from("")
+    }
+    /// Saves, writing the Console line "Salvo: …" with `origin` before it (an agent's prefix).
+    pub(crate) fn save_from(&mut self, origin: &str) -> bool {
         if self.mesh_operation_active() {
             self.warn("Termine o gesto de modelagem ou pressione Esc antes de salvar.");
             return false;
@@ -666,7 +686,7 @@ impl Editor {
                 self.remember_project();
                 self.renderer.release_saved_texture_pixels();
                 self.play.game_ui.release_saved_texture_pixels();
-                self.log(format!("Salvo: {}", path.display()));
+                self.log(format!("{origin}Salvo: {}", path.display()));
                 true
             }
             Err(e) => {
@@ -858,10 +878,18 @@ impl Editor {
             self.asset_ui.thumbnail = None;
         }
     }
+    /// Jogar: the person tests the open scene.
     fn start(&mut self) {
+        let scene = self.scene_id.clone();
+        if let Err(error) = self.start_with(&scene, Driver::Person) {
+            self.warn(error);
+        }
+    }
+    /// Starts a test in `scene`, shown in the Scene tab. The person's holds the mouse and reads
+    /// the keyboard; an agent's takes neither.
+    pub(crate) fn start_with(&mut self, scene: &Id, driver: Driver) -> Result<(), String> {
         if self.mesh_operation_active() {
-            self.warn("Termine o gesto de modelagem ou pressione Esc antes de jogar.");
-            return;
+            return Err("Termine o gesto de modelagem ou pressione Esc antes de jogar.".into());
         }
         self.cancel_mesh_operation();
         self.set_spatial_tool(Tool::Object);
@@ -872,25 +900,21 @@ impl Editor {
         // has its fixed bits above the 53 kept.
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
         let options = self.play.options(seed);
-        match Runtime::with_options(&self.state.project, &self.scene_id, options) {
-            Ok(runtime) => {
-                self.play.seed = Some(seed);
-                self.play.previous_tab = self.tab;
-                // The new test's logs count from zero.
-                self.sync_console_feed();
-                self.console_feed.new_test();
-                self.play.runtime = Some(runtime);
-                self.set_tab(Tab::Scene);
-                self.play.capture = true;
-                self.play.last_runtime_scene = Some(self.scene_id.clone());
-                self.frame.last_frame = Instant::now();
-                self.studio.playing = false;
-            }
-            Err(e) => {
-                self.log(e);
-                self.notice_last(false);
-            }
-        }
+        let runtime = Runtime::with_options(&self.state.project, scene, options)?;
+        self.play.seed = Some(seed);
+        self.play.previous_tab = self.tab;
+        // The new test's logs count from zero.
+        self.sync_console_feed();
+        self.console_feed.new_test();
+        self.play.runtime = Some(runtime);
+        self.set_tab(Tab::Scene);
+        self.play.driver = driver;
+        self.play.capture = driver == Driver::Person;
+        self.play.agent_clicks.clear();
+        self.play.last_runtime_scene = Some(scene.clone());
+        self.frame.last_frame = Instant::now();
+        self.studio.playing = false;
+        Ok(())
     }
     fn stop(&mut self) {
         // What the last frame saved, and its logs, reach the Console and agents after the test.
@@ -899,12 +923,30 @@ impl Editor {
         self.play.end();
         self.set_tab(self.play.previous_tab);
     }
+    /// Pauses the test. What an agent sent and the game has not reached yet is dropped, as the
+    /// runtime drops its timed inputs.
     fn pause(&mut self) {
         self.play.capture = false;
+        self.play.agent_clicks.clear();
         if let Some(rt) = &mut self.play.runtime {
             rt.set_paused(true);
         }
         self.update_test_audio();
+    }
+    /// Resumes a paused test, or goes on with a running one, for `driver`: Retomar and Assumir
+    /// give it to the person, with their mouse and keyboard; an agent's resume to the agent.
+    /// Inputs an agent sent and the game has not reached yet are dropped, and keys held let go.
+    pub(crate) fn resume_for(&mut self, driver: Driver) {
+        if self.tab == Tab::Logic {
+            self.set_tab(Tab::Scene);
+        }
+        self.play.driver = driver;
+        self.play.capture = driver == Driver::Person;
+        self.play.agent_clicks.clear();
+        if let Some(rt) = &mut self.play.runtime {
+            rt.set_paused(false);
+        }
+        self.frame.last_frame = Instant::now();
     }
     /// The test's sounds follow it (see `PlaySession::update_audio`); problems go to the Console.
     fn update_test_audio(&mut self) {
@@ -1103,11 +1145,14 @@ impl Editor {
             return;
         }
         let (focused, escape) = ui.input(|i| (i.focused, i.key_pressed(egui::Key::Escape)));
-        // Losing focus pauses the test. Esc opens and closes the game's pause menu when the scene
-        // has one, as in the exported game: capture stays on so the menu takes clicks, and the
-        // cursor goes free (wants_relative_mouse), so Pausar and Parar stay at hand.
+        // Losing focus pauses the person's test; an agent's plays on, as its inputs need no
+        // window. Esc opens and closes the game's pause menu when the scene has one, as in the
+        // exported game: capture stays on so the menu takes clicks, and the cursor goes free
+        // (wants_relative_mouse), so Pausar and Parar stay at hand.
         if !focused {
-            self.pause();
+            if self.play.driver == Driver::Person {
+                self.pause();
+            }
         } else if escape {
             let menu = self.play.capture
                 && self
@@ -1148,9 +1193,22 @@ impl Editor {
         );
         let resized = self.play.game_size != Some(available);
         self.play.game_size = Some(available);
-        if let Some(rt) = &mut self.play.runtime {
+        let play = &mut self.play;
+        if let Some(rt) = &mut play.runtime {
+            while play
+                .agent_clicks
+                .front()
+                .is_some_and(|(at, _)| *at <= rt.time)
+            {
+                let (_, direct) = play.agent_clicks.pop_front().unwrap();
+                direct.apply(rt);
+            }
             rt.set_viewport_aspect(available[0] as f32 / available[1] as f32);
             rt.advance(if resized { 0. } else { dt }, &input);
+            // A scene change or restart drops what the agent sent, as it drops timed inputs.
+            if !std::mem::take(&mut rt.scene_starts).is_empty() {
+                play.agent_clicks.clear();
+            }
         }
         let scene = self.play.runtime.as_ref().unwrap().scene().clone();
         let camera = CameraState::for_runtime(self.play.runtime.as_ref().unwrap());

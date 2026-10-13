@@ -1908,12 +1908,13 @@ fn event_detail(event: &GameEvent) -> String {
 }
 
 /// An input given to the game itself rather than through its input actions, as a window does.
-enum Direct {
+#[derive(Clone, Debug, PartialEq)]
+pub enum Direct {
     Click(Id),
     Escape,
 }
 impl Direct {
-    fn apply(&self, runtime: &mut Runtime) {
+    pub fn apply(&self, runtime: &mut Runtime) {
         match self {
             Self::Click(entity) => runtime.click(entity),
             Self::Escape if runtime.has_pause_menu() => runtime.toggle_game_pause(),
@@ -1924,6 +1925,68 @@ impl Direct {
             ),
         }
     }
+}
+
+/// Inputs planned for a running game: the timed ones, and the clicks and Esc by game time.
+pub type PlannedInputs = (Vec<TimedInput>, Vec<(f64, Direct)>);
+
+/// `inputs` for a game whose clock reads `start`, each `at` counted from it: presses, releases,
+/// movement and look as timed inputs in time order, for an [`InputTimeline`] or
+/// [`Runtime::queue_timed_inputs`], and clicks and Esc, which the host gives the game once its
+/// time comes ([`Direct::apply`]). Actions are found by ID or name, and `"$N"` in `applied`.
+pub fn plan_inputs(
+    project: &Project,
+    inputs: &[InputEvent],
+    applied: &[Applied],
+    start: f64,
+) -> Result<PlannedInputs, String> {
+    let mut events = inputs.to_vec();
+    for event in &mut events {
+        match event {
+            InputEvent::Click { entity, .. } => *entity = resolve(entity, applied)?,
+            // A name the project does not have would be pressed in vain.
+            InputEvent::Press { action, .. } | InputEvent::Release { action, .. } => {
+                *action = input_actions::find(project, &resolve(action, applied)?)?;
+            }
+            _ => {}
+        }
+    }
+    events.sort_by(|a, b| a.at().total_cmp(&b.at()));
+    if events.iter().any(|e| !e.at().is_finite() || e.at() < 0.) {
+        return Err("Os tempos das entradas precisam ser números a partir de 0".into());
+    }
+    // A number too large for the game, such as 1e39, reads as infinite.
+    if events.iter().any(|e| match e {
+        InputEvent::Movement { value, .. } | InputEvent::Look { value, .. } => {
+            value.iter().any(|v| !v.is_finite())
+        }
+        _ => false,
+    }) {
+        return Err("Os valores de movement e look precisam ser números finitos".into());
+    }
+    let mut timed = Vec::new();
+    let mut directs = Vec::new();
+    for event in events {
+        let (at, change) = match event {
+            InputEvent::Press { at, action } => (at, InputChange::Press(action)),
+            InputEvent::Release { at, action } => (at, InputChange::Release(action)),
+            InputEvent::Movement { at, value } => (at, InputChange::Movement(value)),
+            InputEvent::Look { at, value } => (at, InputChange::Look(value)),
+            InputEvent::Click { at, entity } => {
+                directs.push((start + at, Direct::Click(entity)));
+                continue;
+            }
+            InputEvent::Escape { at } => {
+                directs.push((start + at, Direct::Escape));
+                continue;
+            }
+        };
+        timed.push(TimedInput {
+            at: start + at,
+            change,
+        });
+    }
+    Ok((timed, directs))
 }
 
 /// The replay check: a second copy of the game, fed the same clicks and inputs in lockstep and
@@ -2114,40 +2177,9 @@ pub fn run(
             Ok::<_, String>(bot)
         })
         .transpose()?;
-    let mut events = request.inputs.clone();
-    for event in &mut events {
-        match event {
-            InputEvent::Click { entity, .. } => *entity = resolve(entity, &applied)?,
-            // A name the project does not have would be pressed in vain.
-            InputEvent::Press { action, .. } | InputEvent::Release { action, .. } => {
-                *action = input_actions::find(source, &resolve(action, &applied)?)?;
-            }
-            _ => {}
-        }
-    }
-    events.sort_by(|a, b| a.at().total_cmp(&b.at()));
-    if events.iter().any(|e| !e.at().is_finite() || e.at() < 0.) {
-        return Err("Os tempos das entradas precisam ser números a partir de 0".into());
-    }
+    let (timed, directs) = plan_inputs(source, &request.inputs, &applied, 0.)?;
     let mut timeline = InputTimeline::default();
-    let mut directs = Vec::new();
-    for event in events {
-        let (at, change) = match event {
-            InputEvent::Press { at, action } => (at, InputChange::Press(action)),
-            InputEvent::Release { at, action } => (at, InputChange::Release(action)),
-            InputEvent::Movement { at, value } => (at, InputChange::Movement(value)),
-            InputEvent::Look { at, value } => (at, InputChange::Look(value)),
-            InputEvent::Click { at, entity } => {
-                directs.push((at, Direct::Click(entity)));
-                continue;
-            }
-            InputEvent::Escape { at } => {
-                directs.push((at, Direct::Escape));
-                continue;
-            }
-        };
-        timeline.push(TimedInput { at, change }, 0.)?;
-    }
+    timeline.push_all(timed, 0.)?;
     let watches: Vec<(WatchPlan, String)> = request
         .watch
         .iter()
@@ -2455,6 +2487,53 @@ mod tests {
             (plain.text.as_str(), plain.object),
             ("Limite de tarefas", None)
         );
+    }
+
+    #[test]
+    fn inputs_for_a_running_game_count_from_its_clock() {
+        let (mut project, door, _) = project();
+        let open = input_actions::create(&mut project, "Abrir porta", "O").unwrap();
+        let inputs: Vec<InputEvent> = serde_json::from_value(serde_json::json!([
+            {"type": "release", "at": 0.5, "action": "abrir porta"},
+            {"type": "click", "at": 0.25, "entity": door},
+            {"type": "press", "at": 0.0, "action": open},
+            {"type": "escape", "at": 0.0},
+            {"type": "movement", "at": 0.5, "value": [0.0, 1.0]},
+        ]))
+        .unwrap();
+        let (timed, directs) = plan_inputs(&project, &inputs, &[], 10.).unwrap();
+        let timed: Vec<_> = timed
+            .iter()
+            .map(|input| (input.at, format!("{:?}", input.change)))
+            .collect();
+        assert_eq!(
+            timed,
+            [
+                (10., format!("Press({open:?})")),
+                (10.5, format!("Release({open:?})")),
+                (10.5, "Movement([0.0, 1.0])".to_owned()),
+            ],
+            "by name or ID, in time order, equal times as given"
+        );
+        assert_eq!(
+            directs,
+            [(10., Direct::Escape), (10.25, Direct::Click(door))]
+        );
+        let unknown: Vec<InputEvent> = serde_json::from_value(
+            serde_json::json!([{"type": "press", "at": 0.0, "action": "voar"}]),
+        )
+        .unwrap();
+        let error = plan_inputs(&project, &unknown, &[], 0.).unwrap_err();
+        assert!(error.contains("\"voar\" não existe"), "{error}");
+        let early: Vec<InputEvent> =
+            serde_json::from_value(serde_json::json!([{"type": "escape", "at": -1.0}])).unwrap();
+        assert!(plan_inputs(&project, &early, &[], 5.).is_err());
+        let huge: Vec<InputEvent> = serde_json::from_value(
+            serde_json::json!([{"type": "look", "at": 0.0, "value": [1e39, 0.0]}]),
+        )
+        .unwrap();
+        let error = plan_inputs(&project, &huge, &[], 0.).unwrap_err();
+        assert!(error.contains("números finitos"), "{error}");
     }
 
     #[test]

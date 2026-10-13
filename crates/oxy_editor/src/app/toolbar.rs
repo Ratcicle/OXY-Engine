@@ -191,28 +191,37 @@ impl Editor {
         };
         if widgets::icon_text_button(ui, icon, label, false, compact).clicked() {
             if paused {
-                if self.tab == Tab::Logic {
-                    self.set_tab(Tab::Scene);
-                }
-                self.play.capture = true;
-                if let Some(rt) = &mut self.play.runtime {
-                    rt.set_paused(false);
-                }
-                self.frame.last_frame = Instant::now();
+                self.resume_for(Driver::Person);
             } else {
                 self.pause();
             }
         }
+        let agent = self.play.driver == Driver::Agent;
+        if agent
+            && widgets::primary_button(ui, "Assumir", true)
+                .on_hover_text("Assumir o teste: o mouse e o teclado passam a controlar o jogo")
+                .clicked()
+        {
+            self.resume_for(Driver::Person);
+        }
         self.visualization_button(ui, true);
         if !compact {
             // Painted at the buttons' exact height; a Frame would stretch to the bar. The test's
-            // pause wins over the game's: Retomar returns to the game's menu.
+            // pause wins over the game's: Retomar returns to the game's menu. A test an agent
+            // plays says so while it runs.
             let (text, fill, border, color) = if paused {
                 (
                     "Pausado",
                     theme::BG_RAISED,
                     Color32::from_rgb(70, 70, 76),
                     Color32::from_rgb(196, 196, 202),
+                )
+            } else if agent {
+                (
+                    "Agente jogando",
+                    Color32::from_rgb(46, 42, 68),
+                    Color32::from_rgb(70, 63, 107),
+                    Color32::from_rgb(201, 189, 242),
                 )
             } else if game_paused {
                 (
@@ -235,8 +244,10 @@ impl Editor {
                 .layout_no_wrap(text.into(), font.clone(), color)
                 .size()
                 .x;
+            // The agent's chip leads with its mark.
+            let icon = if agent && !paused { 19. } else { 0. };
             let (rect, response) = ui.allocate_exact_size(
-                Vec2::new(width + 20., theme::CONTROL_HEIGHT + 4.),
+                Vec2::new(width + icon + 20., theme::CONTROL_HEIGHT + 4.),
                 Sense::hover(),
             );
             response.widget_info(|| {
@@ -249,8 +260,19 @@ impl Editor {
                 egui::Stroke::new(1., border),
                 egui::StrokeKind::Inside,
             );
+            if icon > 0. {
+                icons::paint(
+                    ui,
+                    Rect::from_center_size(
+                        egui::pos2(rect.left() + 16.5, rect.center().y),
+                        Vec2::splat(13.),
+                    ),
+                    Icon::Agent,
+                    color,
+                );
+            }
             ui.painter().text(
-                rect.center(),
+                egui::pos2(rect.center().x + icon / 2., rect.center().y),
                 egui::Align2::CENTER_CENTER,
                 text,
                 font,

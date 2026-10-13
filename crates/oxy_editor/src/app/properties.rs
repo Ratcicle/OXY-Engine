@@ -369,6 +369,16 @@ impl Editor {
                         ui,
                         "Durante o teste, mudanças não vão para o projeto. Pare o jogo para editar.",
                     );
+                    if self.play.driver == Driver::Agent {
+                        ui.add_space(8.);
+                        Self::test_card(
+                            ui,
+                            "Um agente está jogando",
+                            "O agente iniciou este teste pelo MCP e envia as entradas. O mouse \
+                             continua livre. Clique em Assumir para jogar você mesmo.",
+                            true,
+                        );
+                    }
                     if self
                         .play
                         .runtime
@@ -376,32 +386,54 @@ impl Editor {
                         .is_some_and(|rt| rt.game_paused() && !rt.paused)
                     {
                         ui.add_space(8.);
-                        self.game_pause_card(ui);
+                        // What the game's own pause means, apart from the test's Pausar.
+                        Self::test_card(
+                            ui,
+                            "O jogo pausou a si mesmo",
+                            "O menu é do jogo: física, personagens, animações e efeitos param, e a interface continua. O mouse fica livre. Pausar, na barra, pausa o teste inteiro.",
+                            false,
+                        );
                     }
                     ui.disable();
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| self.properties_body(ui));
             });
     }
-    /// What the game's own pause means during the test, apart from the test's Pausar.
-    fn game_pause_card(&self, ui: &mut egui::Ui) {
+    /// A note about the running test; `agent` draws it in the colours of the agent's chip.
+    fn test_card(ui: &mut egui::Ui, title: &str, text: &str, agent: bool) {
         use crate::theme;
+        let (fill, border) = if agent {
+            (
+                Color32::from_rgb(43, 58, 79),
+                Color32::from_rgb(60, 83, 116),
+            )
+        } else {
+            (theme::CARD_FILL, theme::CARD_BORDER)
+        };
         egui::Frame::new()
-            .fill(theme::CARD_FILL)
-            .stroke(egui::Stroke::new(1., theme::CARD_BORDER))
+            .fill(fill)
+            .stroke(egui::Stroke::new(1., border))
             .corner_radius(theme::CARD_RADIUS)
             .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(
-                    egui::RichText::new("O jogo pausou a si mesmo")
+                    egui::RichText::new(title)
                         .font(theme::medium(13.))
-                        .color(theme::TEXT),
+                        .color(if agent { Color32::WHITE } else { theme::TEXT }),
                 );
-                crate::widgets::hint(
-                    ui,
-                    "O menu é do jogo: física, personagens, animações e efeitos param, e a interface continua. O mouse fica livre. Pausar, na barra, pausa o teste inteiro.",
-                );
+                if agent {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(text)
+                                .size(12.)
+                                .color(Color32::from_rgb(183, 210, 245)),
+                        )
+                        .wrap(),
+                    );
+                } else {
+                    crate::widgets::hint(ui, text);
+                }
             });
     }
     fn properties_body(&mut self, ui: &mut egui::Ui) {

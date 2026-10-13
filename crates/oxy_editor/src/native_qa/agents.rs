@@ -5,8 +5,14 @@
 //! while the game runs), imports a PNG (applied to a sprite, its pixels in the texture cache)
 //! and a WAV, reads the console (its own edits, then the game's logs and logic of the person's
 //! test, still there after the test stops) and the play state, is refused edits and imports
-//! while the game is running, and undoes its own steps.
+//! while the game is running, and undoes its own steps. It also plays a test of its own with
+//! the window in the background (the game goes on, the mouse stays free, its inputs and Esc
+//! reach the game), is refused saving until the person allows it in Preferências do editor
+//! and then saves with a backup (never an example copy, which would ask for a folder), hands a
+//! first-person test to the person through Assumir, and then may pause the person's test but
+//! not stop it, resume it or send it inputs. Turning agents off turns their saving off.
 use super::*;
+use crate::app::Driver;
 use oxy_core::{document::Value, encoding, painting::PaintImage, query, random};
 use serde_json::{Value as Json, json};
 use std::{
@@ -162,6 +168,18 @@ fn wav(samples: usize, rate: u32) -> Vec<u8> {
 /// The message the agent's batch logs when the game starts.
 const GREETING: &str = "Olá do agente";
 
+/// The input action the agent's batch creates, and its logic listens to.
+const DOOR_ACTION: &str = "Abrir porta";
+
+/// Fails with `message` and what the editor's test looks like when `condition` does not hold.
+fn ensure(condition: bool, message: &str, state: &str) -> Result<(), String> {
+    if condition {
+        Ok(())
+    } else {
+        Err(format!("{message} ({state})"))
+    }
+}
+
 impl NativeQa {
     fn agent_dir(&self) -> PathBuf {
         self.output.join("agents")
@@ -178,7 +196,490 @@ impl NativeQa {
             .iter()
             .find(|e| e.primitive == Some(oxy_core::document::Primitive::Sprite) && e.ui.is_none())
     }
+    /// The editor's test as the checks see it, for their messages.
+    fn agent_test_state(&self) -> String {
+        let play = &self.editor.play;
+        format!(
+            "teste {:?}, condutor {:?}, captura {}, mouse preso {}, chip {:?}, foco {}",
+            play.runtime.as_ref().map(|rt| (rt.time, rt.paused)),
+            play.driver,
+            play.capture,
+            self.cursor_captured,
+            self.test_chip(),
+            !self.unfocused
+        )
+    }
+    fn visible(&self, text: &str) -> bool {
+        self.surface.texts.iter().any(|t| t.text == text)
+    }
+    /// Clicks the switch named `label`; its row label may repeat the name.
+    fn click_switch(&mut self, label: &str) -> Result<(), String> {
+        let rect = self
+            .editor
+            .qa_icon_rect(label)
+            .ok_or_else(|| format!("Chave ausente: {label}"))?;
+        self.click(rect.center());
+        Ok(())
+    }
+    /// Checks of the agent's own test, its saving and the hand-over to the person.
+    fn check_agent_play(&mut self, label: &str) -> Result<(), String> {
+        let dir = self.agent_dir();
+        let state = self.agent_test_state();
+        let time = self.editor.play.runtime.as_ref().map(|rt| rt.time);
+        match label {
+            "agent_play" => {
+                // The person works in another window: the agent's test must not pause for it.
+                self.unfocused = true;
+                std::thread::spawn(move || client(dir, vec![("play", json!({"action": "start"}))]));
+            }
+            "agent_playing" => {
+                let answers = take_results()?;
+                let start = answer(&answers, "play", 0)??;
+                if start["running"] != true
+                    || start["driven_by"] != "agent"
+                    || start["mouse_captured"] != false
+                    || start["advancing"] != true
+                    || start["paused"] != false
+                    || start["scene"]["id"] != json!(self.editor.scene_id)
+                {
+                    return Err(format!("Início do teste pelo agente inesperado: {start}"));
+                }
+                ensure(
+                    self.editor.play.driver == Driver::Agent && !self.editor.play.capture,
+                    "O teste do agente deveria deixar o mouse e o teclado com a pessoa",
+                    &state,
+                )?;
+                ensure(
+                    self.editor
+                        .play
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|rt| !rt.paused && rt.time > 0.),
+                    "O teste do agente deveria correr com a janela sem foco",
+                    &state,
+                )?;
+                ensure(
+                    !self.cursor_captured
+                        && self.test_chip() == Some("Agente jogando")
+                        && self.visible("Assumir")
+                        && self.visible("Um agente está jogando"),
+                    "A barra deveria mostrar Agente jogando e Assumir, com o mouse livre",
+                    &state,
+                )?;
+                ensure(
+                    self.editor
+                        .console
+                        .messages
+                        .iter()
+                        .any(|m| m.starts_with("Agente · Teste iniciado em ")),
+                    "O Console não diz que o agente iniciou o teste",
+                    &state,
+                )?;
+                // Esc waits in the editor for its game time, as clicks do.
+                let press = json!([
+                    {"type": "press", "at": 0.0, "action": DOOR_ACTION},
+                    {"type": "escape", "at": 0.05},
+                    {"type": "release", "at": 0.1, "action": DOOR_ACTION},
+                ]);
+                let requests = vec![
+                    ("status", json!({})),
+                    ("play", json!({"action": "input", "inputs": press})),
+                    (
+                        "play",
+                        json!({"action": "input", "inputs":
+                            [{"type": "press", "at": 0.0, "action": "voar"}]}),
+                    ),
+                    ("play", json!({"action": "start"})),
+                    ("save", json!({})),
+                    ("status", json!({})),
+                ];
+                std::thread::spawn(move || client(dir, requests));
+            }
+            "agent_play_input" => {
+                let answers = take_results()?;
+                let get = |method: &str, index: usize| answer(&answers, method, index);
+                let status = get("status", 0)??;
+                let before = status["play"]["time"].as_f64().ok_or("Status sem tempo")?;
+                if status["play"]["driven_by"] != "agent" || status["busy"].is_null() {
+                    return Err(format!("Status do teste do agente inesperado: {status}"));
+                }
+                let input = get("play", 0)??;
+                let queued = input["queued_until"].as_f64().ok_or("Entradas sem fila")?;
+                let at = input["time"].as_f64().ok_or("Resposta sem tempo")?;
+                if (queued - at - 0.1).abs() > 1e-6 {
+                    return Err(format!("Entradas fora do relógio do jogo: {input}"));
+                }
+                let error = get("play", 1)?.err().ok_or("Ação inexistente aceita")?;
+                if !error.contains("\"voar\" não existe") {
+                    return Err(format!("Recusa da ação sem motivo claro: {error}"));
+                }
+                let error = get("play", 2)?.err().ok_or("Segundo teste aceito")?;
+                if !error.contains("Já há um teste") {
+                    return Err(format!("Recusa do segundo teste sem motivo claro: {error}"));
+                }
+                let error = get("save", 0)?
+                    .err()
+                    .ok_or("Salvou sem a permissão da pessoa")?;
+                if !error.contains("Permitir que agentes salvem") {
+                    return Err(format!("Recusa ao salvar sem motivo claro: {error}"));
+                }
+                let status = get("status", 1)??;
+                if status["can_save"] != false
+                    || !status["save_refusal"]
+                        .as_str()
+                        .is_some_and(|r| r.contains("Permitir que agentes salvem"))
+                {
+                    return Err(format!("Status sem a recusa de salvar: {status}"));
+                }
+                ensure(
+                    time.is_some_and(|now| now > before + 0.05)
+                        && self
+                            .editor
+                            .play
+                            .runtime
+                            .as_ref()
+                            .is_some_and(|rt| !rt.paused),
+                    "O jogo deveria seguir com a janela sem foco",
+                    &state,
+                )?;
+                ensure(
+                    self.editor.play.agent_clicks.is_empty(),
+                    "O Esc do agente deveria ter chegado ao jogo na hora dele",
+                    &state,
+                )?;
+                let requests = vec![
+                    (
+                        "console",
+                        json!({"origin": ["jogo", "logica"], "limit": 300}),
+                    ),
+                    ("play", json!({"action": "pause"})),
+                    (
+                        "play",
+                        json!({"action": "input", "inputs": [{"type": "escape", "at": 0.0}]}),
+                    ),
+                    ("play", json!({"action": "resume"})),
+                    ("play", json!({"action": "stop"})),
+                    ("status", json!({})),
+                ];
+                std::thread::spawn(move || client(dir, requests));
+            }
+            "agent_play_stopped" => {
+                let answers = take_results()?;
+                let get = |method: &str, index: usize| answer(&answers, method, index);
+                let console = get("console", 0)??;
+                if !lines(&console).iter().any(|l| {
+                    l["operation"] == "event.input" && l["object"]["name"] == "Grupo do agente"
+                }) {
+                    return Err(format!(
+                        "A entrada do agente não chegou à lógica: {console}"
+                    ));
+                }
+                if !lines(&console).iter().any(|l| {
+                    l["origin"] == "jogo"
+                        && l["text"]
+                            .as_str()
+                            .is_some_and(|t| t.starts_with("Esc: a cena não tem menu de pausa"))
+                }) {
+                    return Err(format!("O Esc do agente não chegou ao jogo: {console}"));
+                }
+                let paused = get("play", 0)??;
+                if paused["paused"] != true || paused["advancing"] != false {
+                    return Err(format!("Pausa do agente inesperada: {paused}"));
+                }
+                let error = get("play", 1)?
+                    .err()
+                    .ok_or("Entrada aceita no teste pausado")?;
+                if !error.contains("pausado") {
+                    return Err(format!("Recusa da entrada sem motivo claro: {error}"));
+                }
+                let resumed = get("play", 2)??;
+                if resumed["paused"] != false || resumed["driven_by"] != "agent" {
+                    return Err(format!("O agente não retomou o teste: {resumed}"));
+                }
+                let stopped = get("play", 3)??;
+                let seed = self.editor.play.seed.ok_or("Teste sem semente")?;
+                if stopped != json!({"running": false, "seed": seed}) {
+                    return Err(format!("O agente não parou o teste: {stopped}"));
+                }
+                ensure(
+                    self.editor.play.runtime.is_none()
+                        && self.editor.play.driver == Driver::Person
+                        && self.editor.tab == crate::app::Tab::Scene,
+                    "Parar pelo agente deveria encerrar o teste e voltar à Cena",
+                    &state,
+                )?;
+                for line in ["Agente · Teste pausado", "Agente · Teste retomado"] {
+                    ensure(
+                        self.editor.console.messages.iter().any(|m| m == line),
+                        &format!("O Console não diz {line}"),
+                        &state,
+                    )?;
+                }
+                if get("status", 0)??["play"] != json!({"running": false, "seed": seed}) {
+                    return Err("O status ainda mostra o teste do agente".into());
+                }
+                self.unfocused = false;
+            }
+            "agent_preferences" => {
+                // Saving starts off, under agents that are on.
+                ensure(
+                    self.surface.modal.is_some()
+                        && self.visible("Permitir que agentes salvem")
+                        && self.visible("desligado")
+                        && self.surface.texts.iter().any(|t| {
+                            t.text
+                                .starts_with("Quando ligado, o agente pode salvar o projeto")
+                        })
+                        && !self.visible("ligue Permitir agentes primeiro")
+                        && self.editor.qa_agent_preferences() == (true, false),
+                    "Preferências sem a opção de salvar pelos agentes, desligada",
+                    &state,
+                )?;
+            }
+            "agent_agents_switch" => self.click_switch("Permitir agentes de IA")?,
+            "agent_preferences_locked" => {
+                // With agents off, saving cannot be turned on.
+                ensure(
+                    self.visible("ligue Permitir agentes primeiro"),
+                    "Com os agentes desligados, a opção de salvar deveria pedir para ligá-los",
+                    &state,
+                )?;
+            }
+            "agent_save_switch" => {
+                ensure(
+                    !self.visible("ligue Permitir agentes primeiro"),
+                    "Religar os agentes deveria liberar a opção de salvar",
+                    &state,
+                )?;
+                self.click_switch("Permitir que agentes salvem")?;
+            }
+            "agent_save" => {
+                // The person allowed it: everything unsaved is written, the agent's edits and
+                // imports too.
+                ensure(
+                    self.surface.modal.is_none()
+                        && self.editor.qa_agent_preferences() == (true, true),
+                    "Aplicar deveria permitir que agentes salvem",
+                    &state,
+                )?;
+                std::thread::spawn(move || {
+                    client(
+                        dir,
+                        vec![
+                            ("status", json!({})),
+                            ("save", json!({})),
+                            ("status", json!({})),
+                        ],
+                    )
+                });
+            }
+            "agent_saved" => {
+                let answers = take_results()?;
+                let get = |method: &str, index: usize| answer(&answers, method, index);
+                let before = get("status", 0)??;
+                if before["can_save"] != true
+                    || before.get("save_refusal").is_some()
+                    || before["project"]["unsaved_changes"] != true
+                {
+                    return Err(format!("Status antes de salvar inesperado: {before}"));
+                }
+                let saved = get("save", 0)??;
+                let path = self.editor.path.clone().ok_or("Projeto sem arquivo")?;
+                let backup = path.with_extension("json.agente.bak");
+                if saved["saved"] != json!(path.display().to_string())
+                    || saved["previous_version"] != json!(backup.display().to_string())
+                {
+                    return Err(format!("Resposta de salvar inesperada: {saved}"));
+                }
+                let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+                let original = std::fs::read(workspace.join("examples/validacao/project.oxy.json"))
+                    .map_err(|e| e.to_string())?;
+                if std::fs::read(&backup).map_err(|e| e.to_string())? != original {
+                    return Err("A versão anterior não foi guardada em .agente.bak".into());
+                }
+                let written = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                if !written.contains("Grupo do agente") || !written.contains("Placa do agente") {
+                    return Err("O arquivo salvo não tem as edições ainda não salvas".into());
+                }
+                let after = get("status", 1)??;
+                if after["project"]["unsaved_changes"] != false {
+                    return Err(format!("O projeto continua com alterações: {after}"));
+                }
+                if !self
+                    .editor
+                    .console
+                    .messages
+                    .iter()
+                    .any(|m| *m == format!("Agente · Salvo: {}", path.display()))
+                {
+                    return Err("O Console não diz que o agente salvou".into());
+                }
+            }
+            "agent_example_copy" => {
+                // Salvar would ask the person for a folder, in a dialog the agent cannot answer.
+                self.editor.qa_example_copy(true);
+                std::thread::spawn(move || {
+                    client(dir, vec![("status", json!({})), ("save", json!({}))])
+                });
+            }
+            "agent_example_refused" => {
+                let answers = take_results()?;
+                let status = answer(&answers, "status", 0)??;
+                if status["can_save"] != false
+                    || !status["save_refusal"]
+                        .as_str()
+                        .is_some_and(|r| r.contains("cópia de exemplo"))
+                {
+                    return Err(format!("Status sem a recusa da cópia de exemplo: {status}"));
+                }
+                let error = answer(&answers, "save", 0)?
+                    .err()
+                    .ok_or("Salvou a cópia de exemplo")?;
+                if !error.contains("cópia de exemplo") {
+                    return Err(format!(
+                        "Recusa da cópia de exemplo sem motivo claro: {error}"
+                    ));
+                }
+                self.editor.qa_example_copy(false);
+            }
+            "agent_takeover" => {
+                // A first-person game, whose camera would hold the person's mouse.
+                let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+                let project = self.output.join("laboratorio");
+                let _ = std::fs::remove_dir_all(&project);
+                copy_folder(&workspace.join("examples/laboratorio-3d"), &project)
+                    .map_err(|e| e.to_string())?;
+                self.editor.open(project.join("project.oxy.json"));
+                self.unfocused = true;
+                std::thread::spawn(move || client(dir, vec![("play", json!({"action": "start"}))]));
+            }
+            "agent_driving" => {
+                let answers = take_results()?;
+                let start = answer(&answers, "play", 0)??;
+                if start["driven_by"] != "agent" || start["mouse_captured"] != false {
+                    return Err(format!(
+                        "Teste em primeira pessoa do agente inesperado: {start}"
+                    ));
+                }
+                ensure(
+                    self.editor
+                        .play
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|rt| rt.wants_relative_mouse() && !rt.paused)
+                        && !self.editor.play.capture
+                        && !self.cursor_captured
+                        && self.test_chip() == Some("Agente jogando")
+                        && self.visible("Assumir"),
+                    "A câmera em primeira pessoa do agente não deveria prender o mouse",
+                    &state,
+                )?;
+                // The person comes back to the editor to take over.
+                self.unfocused = false;
+            }
+            "agent_taken_over" => {
+                ensure(
+                    self.editor.play.driver == Driver::Person
+                        && self.editor.play.capture
+                        && self.cursor_captured
+                        && self
+                            .editor
+                            .play
+                            .runtime
+                            .as_ref()
+                            .is_some_and(|rt| !rt.paused)
+                        && self.test_chip() == Some("Jogando")
+                        && !self.visible("Assumir")
+                        && !self.visible("Um agente está jogando"),
+                    "Assumir deveria passar o teste, o mouse e o teclado para a pessoa",
+                    &state,
+                )?;
+            }
+            "agent_person_test" => {
+                // The agent pauses the person's test, and asks for what is not its own.
+                let escape = json!([{"type": "escape", "at": 0.0}]);
+                std::thread::spawn(move || {
+                    client(
+                        dir,
+                        vec![
+                            ("status", json!({})),
+                            ("play", json!({"action": "stop"})),
+                            ("play", json!({"action": "input", "inputs": escape})),
+                            ("play", json!({"action": "pause"})),
+                            ("play", json!({"action": "resume"})),
+                        ],
+                    )
+                });
+            }
+            "agent_person_test_kept" => {
+                let answers = take_results()?;
+                let status = answer(&answers, "status", 0)??;
+                if status["play"]["driven_by"] != "person"
+                    || status["play"]["mouse_captured"] != true
+                {
+                    return Err(format!("Status depois de Assumir inesperado: {status}"));
+                }
+                let error = answer(&answers, "play", 0)?
+                    .err()
+                    .ok_or("O agente parou o teste da pessoa")?;
+                if !error.contains("da pessoa") {
+                    return Err(format!("Recusa de parar sem motivo claro: {error}"));
+                }
+                let error = answer(&answers, "play", 1)?
+                    .err()
+                    .ok_or("O agente mandou entradas ao teste da pessoa")?;
+                if !error.contains("da pessoa") {
+                    return Err(format!("Recusa das entradas sem motivo claro: {error}"));
+                }
+                let paused = answer(&answers, "play", 2)??;
+                if paused["paused"] != true || paused["driven_by"] != "person" {
+                    return Err(format!("Pausa do teste da pessoa inesperada: {paused}"));
+                }
+                let error = answer(&answers, "play", 3)?
+                    .err()
+                    .ok_or("O agente retomou o teste da pessoa")?;
+                if !error.contains("Retomar") {
+                    return Err(format!("Recusa de retomar sem motivo claro: {error}"));
+                }
+                ensure(
+                    self.editor
+                        .play
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|rt| rt.paused)
+                        && self.editor.play.driver == Driver::Person,
+                    "O teste da pessoa deveria continuar dela, pausado pelo agente",
+                    &state,
+                )?;
+            }
+            _ => return Err(format!("Verificação de agentes desconhecida: {label}")),
+        }
+        Ok(())
+    }
     pub(super) fn check_agents(&mut self, label: &str) -> Result<(), String> {
+        if [
+            "agent_play",
+            "agent_playing",
+            "agent_play_input",
+            "agent_play_stopped",
+            "agent_preferences",
+            "agent_agents_switch",
+            "agent_preferences_locked",
+            "agent_save_switch",
+            "agent_save",
+            "agent_saved",
+            "agent_example_copy",
+            "agent_example_refused",
+            "agent_takeover",
+            "agent_driving",
+            "agent_taken_over",
+            "agent_person_test",
+            "agent_person_test_kept",
+        ]
+        .contains(&label)
+        {
+            return self.check_agent_play(label);
+        }
         match label {
             "agent_enable" => {
                 let dir = self.agent_dir();
@@ -455,6 +956,8 @@ impl NativeQa {
                             ("import", json!({"path": image.display().to_string()})),
                             ("status", json!({})),
                             ("console", json!({"origin": ["jogo", "logica"]})),
+                            // The person's test is theirs to stop.
+                            ("play", json!({"action": "stop"})),
                         ],
                     )
                 });
@@ -481,10 +984,18 @@ impl NativeQa {
                 {
                     return Err("Captura do jogo com colisores falhou".into());
                 }
+                let error = get("play", 0)?
+                    .err()
+                    .ok_or("O agente parou o teste da pessoa")?;
+                if !error.contains("da pessoa") {
+                    return Err(format!("Recusa de parar sem motivo claro: {error}"));
+                }
                 let status = get("status", 0)??;
                 let play = &status["play"];
                 if play["running"] != true
                     || play["game_paused"] != false
+                    || play["driven_by"] != "person"
+                    || play["advancing"] != true
                     || play["scene"]["id"] != json!(self.editor.scene_id)
                     || !play["time"].is_number()
                     || play["seed"]
@@ -567,9 +1078,18 @@ impl NativeQa {
                 }
             }
             "agent_disable" => {
-                self.editor.qa_allow_agents(false);
+                // Through Preferências, as the person would, with saving still on.
+                if self.editor.qa_agent_preferences() != (true, true) {
+                    return Err(
+                        "Os agentes deveriam estar ligados e com permissão de salvar".into(),
+                    );
+                }
+                self.click_switch("Permitir agentes de IA")?;
             }
             "agent_disabled" => {
+                if self.editor.qa_agent_preferences() != (false, false) {
+                    return Err("Desligar os agentes deveria desligar também o salvamento".into());
+                }
                 if std::fs::read_dir(self.agent_dir())
                     .map(|entries| entries.count())
                     .unwrap_or(0)
@@ -643,6 +1163,36 @@ fn native_agents_live_channel() {
                 Action::Wait(60),
                 Action::Check("agent_imported"),
                 Action::Screenshot("agent-imported.png"),
+                // The agent's own test, with the editor window in the background.
+                Action::Check("agent_play"),
+                Action::Wait(60),
+                Action::Check("agent_playing"),
+                Action::Screenshot("agent-playing.png"),
+                Action::Wait(60),
+                Action::Check("agent_play_input"),
+                Action::Wait(90),
+                Action::Check("agent_play_stopped"),
+                // The person lets agents save, in Preferências do editor.
+                Action::Click("Interface: 100%"),
+                Action::Check("agent_preferences"),
+                Action::Screenshot("agent-preferences.png"),
+                Action::Check("agent_agents_switch"),
+                Action::Wait(10),
+                Action::Check("agent_preferences_locked"),
+                Action::Screenshot("agent-preferences-locked.png"),
+                Action::Check("agent_agents_switch"),
+                Action::Wait(10),
+                Action::Check("agent_save_switch"),
+                Action::Wait(10),
+                Action::Screenshot("agent-preferences-on.png"),
+                Action::Click("Aplicar"),
+                Action::Wait(5),
+                Action::Check("agent_save"),
+                Action::Wait(60),
+                Action::Check("agent_saved"),
+                Action::Check("agent_example_copy"),
+                Action::Wait(60),
+                Action::Check("agent_example_refused"),
                 Action::Click("Jogar"),
                 Action::Check("agent_while_playing"),
                 Action::Wait(90),
@@ -651,7 +1201,24 @@ fn native_agents_live_channel() {
                 Action::Check("agent_undo"),
                 Action::Wait(60),
                 Action::Check("agent_undone"),
+                // A first-person test the agent plays, which the person takes over.
+                Action::Check("agent_takeover"),
+                Action::Wait(90),
+                Action::Check("agent_driving"),
+                Action::Screenshot("agent-driving.png"),
+                Action::Click("Assumir"),
+                Action::Check("agent_taken_over"),
+                Action::Screenshot("agent-taken-over.png"),
+                Action::Check("agent_person_test"),
+                Action::Wait(60),
+                Action::Check("agent_person_test_kept"),
+                Action::Click("Parar"),
+                // Turning agents off in Preferências turns their saving off too.
+                Action::Click("Interface: 100%"),
                 Action::Check("agent_disable"),
+                Action::Wait(10),
+                Action::Check("agent_preferences_locked"),
+                Action::Click("Aplicar"),
                 Action::Wait(10),
                 Action::Check("agent_disabled"),
             ]);

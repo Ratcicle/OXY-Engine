@@ -6,11 +6,13 @@ A OXY Engine traz um servidor MCP, o `oxy-mcp.exe`, que deixa agentes de IA como
 - importa imagens PNG e sons WAV;
 - valida o projeto;
 - roda o jogo sem janela para testar;
-- captura imagens.
+- testa o jogo no editor, para você ver, sem tomar o seu mouse;
+- captura imagens;
+- salva o projeto aberto, só se você permitir.
 
 ## Configurar
 
-1. **No editor:** abra **Preferências do editor** (o botão **Interface: 100%** na barra de status) e ligue **Permitir agentes de IA**. A opção começa desligada. Com ela ligada, a barra de status mostra **Agentes ligados**, ou **Agente conectado** quando um agente está conectado.
+1. **No editor:** abra **Preferências do editor** (o botão **Interface: 100%** na barra de status) e ligue **Permitir agentes de IA**. A opção começa desligada. Com ela ligada, a barra de status mostra **Agentes ligados**, ou **Agente conectado** quando um agente está conectado. Logo abaixo, **Permitir que agentes salvem**, também desligada por padrão, deixa o agente salvar o projeto (veja [Salvar ao vivo](#salvar-ao-vivo)); ela só pode ser ligada com os agentes permitidos.
 2. **No Claude Code:** registre o servidor, apontando para a pasta onde está o `oxy-mcp.exe`:
 
    ```
@@ -34,8 +36,8 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 **Ao vivo (projeto aberto no editor).** O servidor encontra o editor aberto pelo canal local e age sobre ele:
 - Cada lote de comandos aparece na hora e vira um passo no histórico, com o rótulo **Agente: …**.
 - O Console mostra as ações com a origem **Agente**, e você pode desfazer tudo com Ctrl+Z.
-- O agente nunca salva; quem salva é você. A importação copia o arquivo para a pasta `assets` do projeto na hora, como o **Importar** da Biblioteca, mas o arquivo do projeto só muda quando você salva.
-- O agente lê o Console e sabe se você está testando o jogo, para entender o que deu errado no seu teste.
+- Quem salva é você. O agente só salva se você ligar **Permitir que agentes salvem** (veja [Salvar ao vivo](#salvar-ao-vivo)). A importação copia o arquivo para a pasta `assets` do projeto na hora, como o **Importar** da Biblioteca, mas o arquivo do projeto só muda quando o projeto é salvo.
+- O agente lê o Console e sabe se você está testando o jogo, para entender o que deu errado no seu teste. Ele também pode testar o jogo no editor enquanto você assiste (veja [Teste ao vivo pelo agente](#teste-ao-vivo-pelo-agente)).
 - Se você estiver arrastando ou digitando, o pedido espera o gesto terminar.
 - Durante um teste do jogo, uma operação de modelagem em prévia ou uma pose provisória da animação, o editor recusa a edição e explica o motivo.
 
@@ -50,7 +52,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 
 | Ferramenta | O que faz |
 | --- | --- |
-| `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer e se há um teste do jogo rodando |
+| `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer, se há um teste do jogo rodando e quem joga, e se o agente pode salvar |
 | `oxy_project` | Cenas, recursos (com o arquivo e quem usa cada um), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas, variáveis do jogo (com o valor inicial e quem usa cada uma) e nomes dos grupos de colisão |
 | `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
@@ -64,6 +66,8 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_select`, `oxy_frame` | Ao vivo: seleciona e enquadra objetos para você ver do que o agente fala |
 | `oxy_undo`, `oxy_redo` | Ao vivo: desfaz ou refaz o último passo |
 | `oxy_console` | Ao vivo: as linhas do Console (editor, agente, jogo e lógica), só as novas quando o agente pede |
+| `oxy_play` | Ao vivo: inicia, pausa, retoma e para um teste do jogo no editor e manda entradas a ele, sem tomar o seu mouse nem o teclado |
+| `oxy_save` | Ao vivo: salva o projeto, só quando você permite em **Preferências do editor** |
 
 As descrições das ferramentas estão em inglês, para os agentes. As mensagens e erros do editor continuam em português.
 
@@ -357,7 +361,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 
 ## Console e teste ao vivo
 
-- **`oxy_status`** traz `play`: `{running: true, paused, game_paused, scene: {id, name}, time, seed, variables, variables_truncated}` enquanto você testa o jogo no editor (`paused` é a pausa do teste, e `game_paused`, a pausa do próprio jogo, a do menu de pausa; as duas podem valer juntas), ou `{running: false, seed}` depois do teste (só `{running: false}` antes do primeiro teste do projeto). Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo. `seed` é a semente dos sorteios do teste atual ou do último, nova a cada vez que você joga: no `oxy_simulate`, a mesma semente dá a cada nó `random.number` os mesmos números, na mesma ordem. `variables` traz as variáveis do jogo naquele momento do teste, como no relatório do `oxy_simulate`, até 300 valores (só quando o projeto tem variáveis); `variables_truncated` conta os que ficaram de fora.
+- **`oxy_status`** traz `play`: `{running: true, paused, game_paused, driven_by, mouse_captured, advancing, queued_until, scene: {id, name}, time, seed, variables, variables_truncated}` enquanto o jogo está em teste no editor (`paused` é a pausa do teste, e `game_paused`, a pausa do próprio jogo, a do menu de pausa; as duas podem valer juntas), ou `{running: false, seed}` depois do teste (só `{running: false}` antes do primeiro teste do projeto). `driven_by` diz quem joga: `person` (você) ou `agent` (o agente, pelo `oxy_play`); `mouse_captured`, se o jogo prende o seu mouse; `advancing`, se o tempo do jogo está correndo (a vista do jogo na tela e o teste sem pausa); `queued_until`, até que tempo do jogo ainda esperam entradas que o agente mandou. Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo. `can_save` diz se o `oxy_save` pode salvar agora e, quando não pode, `save_refusal` diz por quê. `seed` é a semente dos sorteios do teste atual ou do último, nova a cada vez que você joga: no `oxy_simulate`, a mesma semente dá a cada nó `random.number` os mesmos números, na mesma ordem. `variables` traz as variáveis do jogo naquele momento do teste, como no relatório do `oxy_simulate`, até 300 valores (só quando o projeto tem variáveis); `variables_truncated` conta os que ficaram de fora.
 - **`oxy_console`** lê o Console do editor aberto. Cada linha vem com `seq`, `origin` e `text`:
   - `editor`: mensagens do editor; `warning: true` marca as que também viraram aviso;
   - `agente`: as edições do agente e os erros delas;
@@ -367,6 +371,29 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 - Ao reabrir o editor, a numeração recomeça, com outra `session` na resposta. Quando a `session` muda, o agente lê de novo sem `since`. Um `since` maior que o `last_seq` (guardado de antes de o editor fechar) não esconde as linhas novas: a leitura começa da linha mais antiga guardada, e a resposta traz `reset: true`.
 - As linhas do jogo e da lógica continuam lá depois que o teste para: quando você diz "apertei J e nada aconteceu", o agente lê o que o seu teste registrou. O agente guarda as 1000 linhas mais recentes, e a lógica guarda as suas 300 à parte, para a lógica que roda a cada passo não empurrar o resto para fora. Limpar o Console limpa também o que o agente lê.
 - Nos arquivos, sem editor aberto, não há Console: a ferramenta explica que só funciona ao vivo. Para testar sem editor, use o `oxy_simulate`.
+
+## Teste ao vivo pelo agente
+
+O `oxy_play` deixa o agente testar o jogo no editor enquanto você assiste, por exemplo para mostrar um defeito ou uma fase funcionando. O teste é o mesmo do **Jogar**, com uma diferença: o agente nunca prende o seu mouse nem lê o seu teclado, e o jogo continua quando a janela do editor fica em segundo plano (o seu teste pausa quando o editor perde o foco).
+- `action` diz o que fazer:
+  - `start` inicia um teste na cena de `scene` ou, sem ela, na cena aberta no editor, como o **Jogar**. O editor mostra a Cena com o jogo.
+  - `pause` pausa o teste, seja o do agente ou o seu.
+  - `resume` retoma um teste do agente que está pausado.
+  - `stop` para um teste que o agente joga.
+  - `input` manda entradas ao teste que o agente joga, no formato das `inputs` do `oxy_simulate` (`press`, `release`, `movement`, `look`, `click`, `escape`, com as ações pelo ID ou pelo nome). O `at` conta segundos do tempo do jogo a partir de agora ou, se ainda há entradas esperando, a partir da última delas (`queued_until`): os lotes entram em fila, na ordem. Se uma entrada do lote é inválida, nenhuma entra. É recusado com o teste pausado.
+- O seu teste é seu, desde o **Jogar** ou depois de **Assumir** ou **Retomar**: o agente pode pausá-lo, mas não retomá-lo, pará-lo nem mandar entradas a ele.
+- Cada resposta traz o `play` novo, como no `oxy_status`.
+- Enquanto o agente joga, a barra do editor mostra **Agente jogando**, as Propriedades explicam que um agente está jogando e a barra de status mostra **Agente jogando**. O botão **Assumir** passa o teste para você: o mouse e o teclado voltam a controlar o jogo, e as entradas que o agente ainda tinha mandado são descartadas. **Retomar** também passa um teste pausado para você.
+- Uma pausa, uma troca de cena ou um reinício descartam as entradas que ainda esperavam, e as teclas e o movimento que estavam pressionados param.
+- O Console mostra, com a origem **Agente**, quando o agente inicia, pausa, retoma ou para o teste.
+
+## Salvar ao vivo
+
+Por padrão, o agente não salva: quem salva é você. Ligando **Permitir que agentes salvem**, em **Preferências do editor**, o agente pode salvar com o `oxy_save`:
+- O agente salva tudo o que não foi salvo, inclusive as suas alterações, como o **Salvar** do editor.
+- Antes de salvar, a versão anterior do arquivo é guardada em `project.oxy.json.agente.bak`, como nos arquivos. O Console mostra `Agente · Salvo: …`.
+- O editor recusa e explica o motivo quando a opção está desligada, durante um teste, enquanto está ocupado (modelagem em prévia, pose provisória, uma decisão sobre alterações não salvas) e quando salvar abriria a escolha de pasta: um projeto que nunca foi salvo ou uma cópia de exemplo. O `oxy_status` mostra antes se o agente pode salvar (`can_save` e `save_refusal`).
+- Nos arquivos, cada `oxy_apply` e cada `oxy_import` já salva o projeto: o `oxy_save` só explica isso.
 
 ## Imagens com `oxy_screenshot`
 
@@ -382,9 +409,9 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 - **Pintura não salva nas capturas:** com o projeto aberto no editor, uma imagem pintada e ainda não salva aparece nas capturas do agente como está no arquivo salvo. Na vista do editor durante um teste, isso vale só para as imagens da interface do jogo; nas outras vistas do `oxy_screenshot` e no `screenshot` do `oxy_simulate`, vale também para as texturas dos objetos.
 - **Simulação:** o mesmo pedido repete os sorteios, que a semente (`seed`) decide, e os IDs das cópias do `action.spawn`. Os objetos e nós que o `setup` cria, ao contrário, recebem IDs novos a cada pedido (o relatório os lista em `setup`); por isso os sorteios dos nós `random.number` criados ou copiados no `setup`, as cópias feitas pelos nós e objetos que ele cria e o `state_hash` mudam de um pedido para outro. O teste que você faz no editor não é gravado: com a semente que o `oxy_status` mostra, cada nó `random.number` dá os mesmos números, na mesma ordem, mas as suas entradas e o tempo delas o agente precisa refazer em `inputs`.
 - **Importação:** só PNG e WAV, como no editor. Ao desfazer uma importação, a cópia continua na pasta `assets`, como acontece com o **Importar** da Biblioteca.
-- **Teste ao vivo:** o agente vê se você está testando e lê o Console, mas não inicia nem para o seu teste.
+- **Teste ao vivo pelo agente:** o jogo corre em tempo real, no ritmo dos quadros do editor, então dois testes iguais não dão sempre o mesmo resultado: para conferir algo que precisa se repetir, use o `oxy_simulate`. O tempo do jogo só corre com a vista do jogo na tela (abrir a Lógica pausa o teste) e pode parar com a janela do editor minimizada; o agente vê isso em `advancing`. O agente pode pausar o seu teste, mas não retomá-lo, pará-lo nem mandar entradas a ele.
 - **Bot:** só no `oxy_simulate` e no `oxy_screenshot`, não no teste do editor, e um personagem por pedido. Ele segue os pontos em linha reta e não acha caminho sozinho: os pontos (onde pular, onde esperar) vêm do agente.
 - **Progresso salvo:** o agente não lê nem apaga o progresso do jogo exportado nem o do teste do editor, que também não aparece no `oxy_status`; no `oxy_simulate`, o progresso entra pelo `save` e sai no relatório.
 - **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.
 - **Cópias de modelos:** no `place_model`, o `"$N@<ID>"` usa os IDs das peças, nós e animações como o modelo os guarda, e as leituras não mostram os nós de dentro de um modelo (o `oxy_entity` não chega lá). Esses IDs só se alcançam no lote que salva o modelo, encadeando os marcadores (`"$P@$S@<ID>"`, veja **Cópias no mesmo lote**). Para mudar a lógica de um modelo salvo num lote anterior, coloque-o e leia a peça colocada com o `oxy_entity`, ou, no mesmo lote, use o `duplicate_entities` ou o `copy_entities` a partir de um objeto da cena, que aceitam os IDs que você leu.
-- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto.
+- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto. Ao vivo, o agente só salva com **Permitir que agentes salvem** ligada, e só o projeto aberto, como o **Salvar** do editor, guardando antes o `.agente.bak`.

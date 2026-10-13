@@ -71,7 +71,7 @@ Há duas pausas, que podem valer juntas. A **pausa do teste** (no jogo exportado
 
 - Uma cena que usa **Ao pausar ou retomar** tem menu de pausa: Esc abre e fecha esse menu, no teste e no jogo exportado. O mouse fica livre enquanto o jogo está pausado e, quando a câmera usa o mouse, volta a ser capturado ao retomar. No teste, a barra mostra **Pausa do jogo**, Propriedades explica essa pausa, e **Pausar** e **Parar** continuam ao alcance do mouse.
 - Numa cena sem menu de pausa, Esc pausa o teste e, no jogo exportado, abre a janela **Jogo pausado**, como antes.
-- A perda de foco sempre pausa o teste e, no jogo exportado, abre a janela **Jogo pausado**, mesmo por cima do menu do jogo. **Retomar** volta ao estado em que o jogo estava, inclusive pausado por ele mesmo.
+- A perda de foco sempre pausa o teste e, no jogo exportado, abre a janela **Jogo pausado**, mesmo por cima do menu do jogo. **Retomar** volta ao estado em que o jogo estava, inclusive pausado por ele mesmo. A exceção é o teste que um agente de IA joga (veja **Agentes de IA**), que continua com o editor em segundo plano.
 - **Sair do jogo** fecha a janela do jogo exportado; no teste, encerra o teste como **Parar** e escreve uma linha no Console.
 - Com o mouse livre, um clique num botão da interface do jogo é só do botão: não aciona também uma ação de entrada ligada ao botão do mouse, nem quando retoma o jogo. No teste, cliques fora da área do jogo também não chegam ao jogo.
 
@@ -94,7 +94,10 @@ Selecionar uma peça **ou grupo vazio** com colisor mostra a caixa real da físi
 
 ## Agentes de IA
 
-Em **Preferências do editor**, **Permitir agentes de IA** (desligado por padrão) abre um canal local para o servidor MCP da OXY (`oxy-mcp.exe`). Com o projeto aberto, as mudanças do agente aparecem na hora, entram no histórico como **Agente: …**, aparecem no Console com a origem **Agente** e podem ser desfeitas com Ctrl+Z; o agente não salva. A barra de status mostra **Agentes ligados** ou **Agente conectado**. Configuração e ferramentas: [Agentes de IA (MCP)](agentes-mcp.md).
+Em **Preferências do editor**, **Permitir agentes de IA** (desligado por padrão) abre um canal local para o servidor MCP da OXY (`oxy-mcp.exe`). Com o projeto aberto, as mudanças do agente aparecem na hora, entram no histórico como **Agente: …**, aparecem no Console com a origem **Agente** e podem ser desfeitas com Ctrl+Z. A barra de status mostra **Agentes ligados** ou **Agente conectado**. Configuração e ferramentas: [Agentes de IA (MCP)](agentes-mcp.md).
+
+- **Permitir que agentes salvem** (desligado por padrão, e só disponível com os agentes permitidos) deixa o agente salvar o projeto. Ele salva tudo, inclusive as suas alterações ainda não salvas, e antes guarda o arquivo anterior em `project.oxy.json.agente.bak`; o Console mostra `Agente · Salvo: …`. Sem essa opção, o agente não salva: quem salva é você.
+- Um agente pode testar o jogo no editor para você ver. Enquanto ele joga, a barra mostra **Agente jogando**, as Propriedades explicam que um agente está jogando e o mouse e o teclado continuam seus: o jogo não prende o mouse nem lê o teclado, e o teste continua com o editor em segundo plano. **Assumir**, na barra, passa o teste para você, com o mouse e o teclado; **Retomar** faz o mesmo com um teste pausado. O agente pode pausar o seu teste, mas não retomá-lo, pará-lo nem mandar entradas a ele.
 
 ## Compatibilidade e domínio suportado
 

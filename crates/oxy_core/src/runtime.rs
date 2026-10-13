@@ -684,6 +684,18 @@ impl Runtime {
     ) -> Result<(), String> {
         self.input_timeline.push(event, self.time)
     }
+    /// Queues timed inputs in time order: all of them or, when one is refused, none.
+    pub fn queue_timed_inputs(
+        &mut self,
+        events: Vec<crate::input_timeline::TimedInput>,
+    ) -> Result<(), String> {
+        self.input_timeline.push_all(events, self.time)
+    }
+    /// The game time of the last queued timed input still waiting. A pause, a scene change or
+    /// a restart drops them.
+    pub fn timed_input_end(&self) -> Option<f64> {
+        self.input_timeline.last_at()
+    }
     /// Log lines written since the runtime started; the last `logs.len()` of them are in
     /// `logs`.
     pub fn logs_written(&self) -> u64 {

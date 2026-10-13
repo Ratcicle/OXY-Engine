@@ -6,8 +6,9 @@
 //! requests `{"id": 1, "method": "...", "params": {...}}`, one per line, and receives
 //! `{"id": 1, "result": ...}` or `{"id": 1, "error": "..."}`. Requests run on the UI thread
 //! in the next frame, and edits wait while a person is dragging or typing. Besides edits and
-//! reads, an agent can import a PNG or WAV (`import`) and read the console (`console`), and
-//! `status` says whether the person is testing the game.
+//! reads, an agent can import a PNG or WAV (`import`), read the console (`console`), play a
+//! test of the game (`play`) and save when the person allowed it (`save`), and `status` says
+//! whether the game is being tested, and by whom.
 use super::*;
 use oxy_core::{command, query};
 use serde_json::{Value as Json, json};
@@ -215,11 +216,12 @@ fn serve(
     ctx.request_repaint();
 }
 
-/// Requests that change the project, and therefore wait for a person's gesture to end.
+/// Requests that change the project or the editor's state, and therefore wait for a person's
+/// gesture to end.
 fn edits(method: &str) -> bool {
     matches!(
         method,
-        "apply" | "import" | "undo" | "redo" | "select" | "frame"
+        "apply" | "import" | "undo" | "redo" | "select" | "frame" | "play" | "save"
     )
 }
 
@@ -283,6 +285,46 @@ impl Editor {
             .map(str::to_owned)
             .unwrap_or_else(|| self.scene_id.clone()))
     }
+    /// The test of the game as agents read it, in `status` and in answers to `play`.
+    pub(crate) fn play_status(&self) -> Json {
+        let Some(runtime) = &self.play.runtime else {
+            // The last test's seed stays for the person's report after it stops.
+            return match self.play.seed {
+                Some(seed) => json!({"running": false, "seed": seed}),
+                None => json!({"running": false}),
+            };
+        };
+        let mut play = json!({
+            "running": true,
+            "paused": runtime.paused,
+            // The game's own pause (its menu), apart from the test's.
+            "game_paused": runtime.game_paused(),
+            "driven_by": match self.play.driver {
+                Driver::Person => "person",
+                Driver::Agent => "agent",
+            },
+            "mouse_captured": self.play.capture
+                && self.showing_game()
+                && runtime.wants_relative_mouse(),
+            // Game time goes on only while the game view is drawn.
+            "advancing": self.showing_game() && !runtime.paused,
+            "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
+            "time": runtime.time,
+            "seed": self.play.seed,
+        });
+        if let Some(until) = self.play.queued_until() {
+            play["queued_until"] = json!(until);
+        }
+        // Capped like a simulation report's variables.
+        let (variables, left_out) = runtime.variable_values(oxy_core::headless::MAX_ENTRIES);
+        if !variables.is_empty() {
+            play["variables"] = json!(variables);
+        }
+        if left_out > 0 {
+            play["variables_truncated"] = json!(left_out);
+        }
+        play
+    }
     fn agent_request(
         &mut self,
         ctx: &egui::Context,
@@ -290,53 +332,36 @@ impl Editor {
         params: &Json,
     ) -> Result<Json, String> {
         match method {
-            "status" => Ok(json!({
-                "editor": env!("OXY_APP_VERSION"),
-                "project": (!self.home.visible).then(|| json!({
-                    "name": self.state.project.name,
-                    "path": self.path.as_ref().map(|p| p.display().to_string()),
-                    "unsaved_changes": self.dirty(),
-                })),
-                "active_scene": (!self.home.visible).then(|| self.scene_id.clone()),
-                "mode": match self.tab {
-                    Tab::Scene => "scene",
-                    Tab::Studio => "studio",
-                    Tab::Logic => "logic",
-                },
-                "selection": self.selection.ids,
-                "busy": self.agent_busy(),
-                "undo": self.history.undo_label(),
-                "redo": self.history.redo_label(),
-                // A test the person is running: edits are refused until it stops.
-                "play": match &self.play.runtime {
-                    Some(runtime) => {
-                        let mut play = json!({
-                            "running": true,
-                            "paused": runtime.paused,
-                            // The game's own pause (its menu), apart from the test's.
-                            "game_paused": runtime.game_paused(),
-                            "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
-                            "time": runtime.time,
-                            "seed": self.play.seed,
-                        });
-                        // Capped like a simulation report's variables.
-                        let (variables, left_out) =
-                            runtime.variable_values(oxy_core::headless::MAX_ENTRIES);
-                        if !variables.is_empty() {
-                            play["variables"] = json!(variables);
-                        }
-                        if left_out > 0 {
-                            play["variables_truncated"] = json!(left_out);
-                        }
-                        play
-                    }
-                    // The last test's seed stays for the person's report after it stops.
-                    None => match self.play.seed {
-                        Some(seed) => json!({"running": false, "seed": seed}),
-                        None => json!({"running": false}),
+            "status" => {
+                let save_refusal = self.save_refusal();
+                let mut status = json!({
+                    "editor": env!("OXY_APP_VERSION"),
+                    "project": (!self.home.visible).then(|| json!({
+                        "name": self.state.project.name,
+                        "path": self.path.as_ref().map(|p| p.display().to_string()),
+                        "unsaved_changes": self.dirty(),
+                    })),
+                    "active_scene": (!self.home.visible).then(|| self.scene_id.clone()),
+                    "mode": match self.tab {
+                        Tab::Scene => "scene",
+                        Tab::Studio => "studio",
+                        Tab::Logic => "logic",
                     },
-                },
-            })),
+                    "selection": self.selection.ids,
+                    "busy": self.agent_busy(),
+                    "undo": self.history.undo_label(),
+                    "redo": self.history.redo_label(),
+                    // While a test runs, edits are refused until it stops.
+                    "play": self.play_status(),
+                    "can_save": save_refusal.is_none(),
+                });
+                if let Some(reason) = save_refusal {
+                    status["save_refusal"] = json!(reason);
+                }
+                Ok(status)
+            }
+            "play" => self.agent_play(params),
+            "save" => self.agent_save(),
             "console" => self.console_answer(params),
             "document" => {
                 self.agent_scene(params)?;

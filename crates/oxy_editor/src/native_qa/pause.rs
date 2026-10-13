@@ -7,14 +7,15 @@ mod pause_menu;
 const QUIT_LINE: &str = "O jogo pediu para sair; o teste foi encerrado.";
 
 impl NativeQa {
-    /// The status chip of the test in the top bar: Jogando, Pausado or Pausa do jogo.
+    /// The status chip of the test in the top bar: Jogando, Pausado, Pausa do jogo or Agente
+    /// jogando.
     pub(super) fn test_chip(&self) -> Option<&str> {
         self.surface
             .texts
             .iter()
             .filter(|t| t.rect.max.y <= crate::theme::TOPBAR_HEIGHT)
             .map(|t| t.text.as_str())
-            .find(|text| ["Jogando", "Pausado", "Pausa do jogo"].contains(text))
+            .find(|text| ["Jogando", "Pausado", "Pausa do jogo", "Agente jogando"].contains(text))
     }
     pub(super) fn check_pause(&mut self, label: &str) -> Result<(), String> {
         let visible = |text: &str| self.surface.texts.iter().any(|t| t.text == text);

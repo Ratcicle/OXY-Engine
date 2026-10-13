@@ -176,6 +176,8 @@ struct NativeQa {
     click_candidate: Option<(&'static str, Pos2, Instant)>,
     /// Whether the game held the cursor in the last frame.
     cursor_captured: bool,
+    /// The editor sees its window without focus, as when the person works in another window.
+    unfocused: bool,
 }
 
 impl NativeQa {
@@ -489,6 +491,7 @@ impl NativeQa {
             held_until: None,
             click_candidate: None,
             cursor_captured: false,
+            unfocused: false,
         }
     }
 
@@ -2181,11 +2184,11 @@ impl eframe::App for NativeQa {
             })
             .unwrap_or_default();
         input.events.extend(scripted);
-        input.focused = true;
+        input.focused = !self.unfocused;
         input.hovered_files.clear();
         input.dropped_files.clear();
         if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
-            viewport.focused = Some(true);
+            viewport.focused = Some(!self.unfocused);
         }
         self.editor.raw_input_hook(_ctx, input);
     }
