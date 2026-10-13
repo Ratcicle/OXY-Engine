@@ -4,7 +4,7 @@ mod movement;
 mod replay;
 #[test]
 fn parkour_camera_teleport_and_platform_replay_preserve_fixed_states_and_events() {
-    for mode in ["sparse", "platforms"] {
+    for mode in ["sparse", "platforms", "turntable"] {
         let reference = replay::run(60, mode);
         assert!(reference.events.len() > 20);
         assert_eq!(
@@ -15,6 +15,17 @@ fn parkour_camera_teleport_and_platform_replay_preserve_fixed_states_and_events(
                 .count(),
             1
         );
+        if mode != "sparse" {
+            // The character rides the platform, which turns it in "turntable".
+            assert!(
+                reference
+                    .samples
+                    .iter()
+                    .any(|s| s.support.as_deref() == Some(movement::id(2000).as_str())),
+                "{mode}: {:?}",
+                reference.samples
+            );
+        }
         for hz in [30, 144, 240] {
             replay::compare(&reference, &replay::run(hz, mode));
         }
@@ -238,7 +249,7 @@ fn a_game_pause_delays_the_replay_without_changing_it() {
     let dt = f64::from(FIXED_DT);
     // The pause starts after step 75, mid-jump, and lasts 90 steps.
     let (start, length) = (75, 90);
-    for mode in ["sparse", "platforms"] {
+    for mode in ["sparse", "platforms", "turntable"] {
         let p = replay::project(mode);
         let id = movement::id(0);
         let inputs = [

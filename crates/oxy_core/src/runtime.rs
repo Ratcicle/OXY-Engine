@@ -495,6 +495,7 @@ impl Runtime {
         self.pending_look = [0.; 2];
         self.pending_wheel = 0.;
         self.characters.release_input();
+        self.cameras.settle();
         self.step_input = InputFrame::default();
         self.update_presentation(0.);
     }

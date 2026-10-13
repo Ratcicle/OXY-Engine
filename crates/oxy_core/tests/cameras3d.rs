@@ -429,6 +429,102 @@ fn animated_obstacle_queries_use_the_same_interpolation_as_rendering() {
     );
 }
 #[test]
+fn a_turning_platform_turns_the_first_person_view_and_not_the_third_person_one() {
+    use oxy_core::surface::*;
+    let step = 1.5_f32.to_radians();
+    for mode in [CameraMode::FirstPerson, CameraMode::ThirdPerson] {
+        // The character stands 2 m from the centre of a turntable that turns 90° a second.
+        let mut p = fixture(mode);
+        let mut table = cube("Carrossel", [2., 0.2, 0.], [6., 0.4, 6.]);
+        table.platform = Some(TranslationPlatform::default());
+        let id = table.id.clone();
+        p.scenes[0].entities.push(table);
+        p.scenes[0].entity_mut(BODY).unwrap().transform.position[1] = 0.42;
+        let mut r = runtime(&p);
+        let view = r.camera_orientation().unwrap();
+        let body = r.character_state(BODY).unwrap().yaw;
+        let turn = |r: &mut Runtime, elapsed: f32| {
+            r.scene_mut().entity_mut(&id).unwrap().transform.rotation[1] += step;
+            r.advance(elapsed, &InputFrame::default());
+        };
+        for _ in 0..60 {
+            turn(&mut r, FIXED_DT);
+        }
+        let quarter = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let state = r.character_state(BODY).unwrap();
+        assert!(state.grounded, "{mode:?}: {state:?}");
+        assert_eq!(state.support.as_ref().unwrap().object, id);
+        assert!(
+            Quat::from_rotation_y(state.yaw).angle_between(quarter * Quat::from_rotation_y(body))
+                < 1e-3,
+            "{mode:?}: {state:?}"
+        );
+        let first = mode == CameraMode::FirstPerson;
+        let expected = if first { quarter * view } else { view };
+        assert!(
+            r.camera_orientation().unwrap().angle_between(expected) < 1e-3,
+            "{mode:?}"
+        );
+        // Half a step on, the turntable and the view are shown half the step's turn round.
+        turn(&mut r, FIXED_DT * 1.5);
+        let half = Quat::from_rotation_y(step * 60.5);
+        let shown = r.presentation_worlds().unwrap()[&id];
+        let (_, rotation, _) = world_pose(shown).unwrap();
+        assert!(rotation.angle_between(half) < 1e-4, "{mode:?}");
+        let expected = if first {
+            half * Quat::from_rotation_y(body)
+        } else {
+            view
+        };
+        assert!(pose(&r).rotation.angle_between(expected) < 1e-3, "{mode:?}");
+        assert!(r.logs.is_empty(), "{mode:?}: {:?}", r.logs);
+    }
+}
+#[test]
+fn a_view_cleared_set_or_paused_on_a_turning_platform_keeps_the_platform_turn() {
+    use oxy_core::surface::*;
+    let step = 1.5_f32.to_radians();
+    let mut p = fixture(CameraMode::FirstPerson);
+    let mut table = cube("Carrossel", [2., 0.2, 0.], [6., 0.4, 6.]);
+    table.platform = Some(TranslationPlatform::default());
+    let id = table.id.clone();
+    p.scenes[0].entities.push(table);
+    p.scenes[0].entity_mut(BODY).unwrap().transform.position[1] = 0.42;
+    let mut r = runtime(&p);
+    let turn = |r: &mut Runtime| {
+        r.scene_mut().entity_mut(&id).unwrap().transform.rotation[1] += step;
+        r.advance(FIXED_DT, &InputFrame::default());
+    };
+    for _ in 0..10 {
+        turn(&mut r);
+    }
+    // Logic that clears the look-at keeps the view, with the turn of the step.
+    let view = r.camera_orientation().unwrap();
+    r.set_camera_look_at(CAMERA, None).unwrap();
+    assert!(r.camera_orientation().unwrap().angle_between(view) < 1e-3);
+    assert!(pose(&r).rotation.angle_between(view) < 1e-3);
+    // A view set by logic is shown as set, not a turn behind.
+    turn(&mut r);
+    r.set_camera_orientation(CAMERA, 1., 0.).unwrap();
+    assert!(pose(&r).rotation.angle_between(Quat::from_rotation_y(1.)) < 1e-3);
+    // Paused, the turntable, the body and the view are shown where the step left them.
+    turn(&mut r);
+    r.set_paused(true);
+    let shown = r.presentation_worlds().unwrap();
+    let (_, rotation, _) = world_pose(shown[&id]).unwrap();
+    assert!(rotation.angle_between(Quat::from_rotation_y(step * 12.)) < 1e-3);
+    let state = r.character_state(BODY).unwrap();
+    let (_, rotation, _) = world_pose(shown[BODY]).unwrap();
+    assert!(rotation.angle_between(Quat::from_rotation_y(state.yaw)) < 1e-3);
+    assert!(
+        pose(&r)
+            .rotation
+            .angle_between(r.camera_orientation().unwrap())
+            < 1e-3
+    );
+    assert!(r.logs.is_empty(), "{:?}", r.logs);
+}
+#[test]
 fn transition_runs_in_seconds_and_competing_active_cameras_warn_once() {
     let mut p = fixture(CameraMode::FirstPerson);
     let mut fixed = Entity::new("Outra ativa", None);

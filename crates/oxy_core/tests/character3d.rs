@@ -711,12 +711,14 @@ fn platform_discontinuity_detaches_without_launch_and_diagnostics_are_bounded() 
         rt.logs,
         [format!(
             "Personagem {BODY}: Apoio em Chão liberado sem herdar velocidade, porque a \
-             plataforma girou, mudou de escala ou saltou de posição."
+             plataforma girou rápido demais, mudou de escala ou saltou de posição."
         )]
     );
+    // Turning faster than a platform carries (20° a step) keeps dropping it, unreported.
     for _ in 0..10 {
-        rt.scene_mut().entities[0].transform.rotation[1] += 0.2;
+        rt.scene_mut().entities[0].transform.rotation[1] += 0.5;
         rt.advance(FIXED_DT, &InputFrame::default());
+        assert!(!rt.character_state(BODY).unwrap().grounded);
     }
     assert_eq!(rt.logs.len(), 1);
     assert!(rt.character_state(BODY).unwrap().velocity.length() < 10.);
@@ -757,9 +759,10 @@ fn a_platform_that_turns_with_nobody_on_it_reports_nothing() {
     let mut rt = runtime(&project);
     for round in 0..2 {
         settle(&mut rt);
+        // Too fast to carry anyone, a jump each step.
         for _ in 0..10 {
             let wheel = rt.scene_mut().entity_mut("wheel").unwrap();
-            wheel.transform.rotation[1] += 0.2;
+            wheel.transform.rotation[1] += 0.5;
             rt.advance(FIXED_DT, &InputFrame::default());
         }
         assert!(rt.logs.is_empty(), "round {round}: {:?}", rt.logs);
@@ -778,12 +781,12 @@ fn a_character_on_the_seam_of_turning_planks_is_warned_once_per_platform() {
     let warning = |platform: &str| {
         format!(
             "Personagem {BODY}: Apoio em {platform} liberado sem herdar velocidade, porque a \
-             plataforma girou, mudou de escala ou saltou de posição."
+             plataforma girou rápido demais, mudou de escala ou saltou de posição."
         )
     };
-    // Two 2 m planks side by side, either the children of one turning platform ("Ponte") or
-    // each a turning platform of its own. On the seam, the support probe hits one plank or the
-    // other from step to step.
+    // Two 2 m planks side by side, either the children of one platform ("Ponte") or each a
+    // platform of its own, turning too fast to carry anyone (over 20° a step). On the seam,
+    // the support probe hits one plank or the other from step to step.
     for grouped in [true, false] {
         for (x, walking) in [(0., false), (0.05, false), (-0.6, true)] {
             let mut project = fixture();
@@ -827,7 +830,7 @@ fn a_character_on_the_seam_of_turning_planks_is_warned_once_per_platform() {
             };
             for _ in 0..120 {
                 for id in turning {
-                    rt.scene_mut().entity_mut(id).unwrap().transform.rotation[1] += 0.01;
+                    rt.scene_mut().entity_mut(id).unwrap().transform.rotation[1] += 0.4;
                 }
                 let mut input = InputFrame::default();
                 if walking {
@@ -865,6 +868,395 @@ fn a_character_on_the_seam_of_turning_planks_is_warned_once_per_platform() {
             }
         }
     }
+}
+
+const TURNTABLE: &str = "turntable";
+/// A 6 × 0.5 × 6 m turntable at (20, 0.75, 0) that turns a quarter turn a second about its
+/// centre, as a clip played from the scene start moves it, with the character on it 2 m
+/// from the centre along X.
+fn turntable() -> Project {
+    use oxy_core::{
+        animation::{Clip, Interpolation, Keyframe},
+        graph::{Edge, Node},
+        surface::{PlatformMode, TranslationPlatform},
+    };
+    let mut project = fixture();
+    let mut table = Entity::new("Carrossel", Some(Primitive::Cube));
+    table.id = TURNTABLE.into();
+    table.dimensions = [6., 0.5, 6.];
+    table.transform.position = [20., 0.75, 0.];
+    table.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: table.dimensions,
+        },
+        ..Default::default()
+    });
+    table.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Animation,
+        ..Default::default()
+    });
+    // A key every quarter turn: in between, the turn takes the shorter way.
+    let mut clip = Clip {
+        duration: 4.,
+        looping: true,
+        ..Clip::new("Giro")
+    };
+    for quarter in 0..=4 {
+        let mut transform = table.transform.clone();
+        transform.rotation[1] = (90. * quarter as f32).to_radians();
+        clip.insert_key(
+            TURNTABLE,
+            Keyframe {
+                time: quarter as f32,
+                transform,
+                interpolation: Interpolation::Linear,
+            },
+        );
+    }
+    let start = Node::new("event.scene_start", [0.; 2]);
+    let mut play = Node::new("action.animation", [0.; 2]);
+    play.params
+        .insert("clip".into(), Value::Text(clip.id.clone()));
+    table.graph.edges.push(Edge {
+        from_node: start.id.clone(),
+        from_port: "exec".into(),
+        to_node: play.id.clone(),
+        to_port: "exec".into(),
+    });
+    table.graph.nodes = vec![start, play];
+    table.clips.push(clip);
+    let scene = &mut project.scenes[0];
+    scene.entity_mut(BODY).unwrap().transform.position = [22., 1.02, 0.];
+    scene.entities.push(table);
+    project
+}
+/// `point` turned `degrees` about the turntable's vertical axis.
+fn around_turntable(point: Vec3, degrees: f32) -> Vec3 {
+    let centre = Vec3::new(20., point.y, 0.);
+    centre + Quat::from_rotation_y(degrees.to_radians()) * (point - centre)
+}
+/// The angle between two headings, in radians, whatever whole turns separate them.
+fn heading_difference(a: f32, b: f32) -> f32 {
+    Quat::from_rotation_y(a).angle_between(Quat::from_rotation_y(b))
+}
+
+#[test]
+fn a_turning_platform_carries_position_and_yaw() {
+    let project = turntable();
+    let mut rt = runtime(&project);
+    // Landing keeps the world speed; braking then matches the turntable's.
+    for _ in 0..60 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    let before = rt.character_state(BODY).unwrap().clone();
+    assert!(
+        before.grounded && before.velocity.length() < 1e-3,
+        "{before:?}"
+    );
+    assert!(
+        before.position.with_y(0.).distance(Vec3::new(20., 0., 0.)) > 1.5,
+        "{before:?}"
+    );
+    // One second: a quarter turn of the turntable, the first person view and the body.
+    let view = rt.camera_orientation().unwrap();
+    for step in 0..60 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let state = rt.character_state(BODY).unwrap();
+        assert!(state.grounded, "step {step}: {state:?}");
+        assert_eq!(state.support.as_ref().unwrap().object, TURNTABLE);
+    }
+    let state = rt.character_state(BODY).unwrap();
+    let expected = around_turntable(before.position, 90.);
+    assert!(
+        state.position.distance(expected) < 0.02,
+        "{:?} != {expected:?}",
+        state.position
+    );
+    assert!(
+        (heading_difference(state.yaw, before.yaw) - 90f32.to_radians()).abs() < 1e-3,
+        "{} -> {}",
+        before.yaw,
+        state.yaw
+    );
+    assert!(
+        rt.camera_orientation()
+            .unwrap()
+            .angle_between(Quat::from_rotation_y(90f32.to_radians()) * view)
+            < 1e-3
+    );
+    // Standing still on it: what moves is the turntable.
+    assert!(state.velocity.length() < 1e-3, "{state:?}");
+    assert!(
+        (state.total_velocity().length() - 2. * std::f32::consts::FRAC_PI_2).abs() < 0.05,
+        "{state:?}"
+    );
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    // On past the end of the clip, which loops at 4 s from where it started: a whole turn.
+    for step in 0..180 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let state = rt.character_state(BODY).unwrap();
+        assert!(state.grounded, "step {step}: {state:?}");
+        assert_eq!(state.support.as_ref().unwrap().object, TURNTABLE);
+    }
+    let state = rt.character_state(BODY).unwrap();
+    assert!(
+        state.position.distance(before.position) < 0.05,
+        "{:?} != {:?}",
+        state.position,
+        before.position
+    );
+    assert!(
+        heading_difference(state.yaw, before.yaw) < 1e-3,
+        "{} -> {}",
+        before.yaw,
+        state.yaw
+    );
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
+fn a_tilting_platform_carries_its_rider_round_its_pivot_without_turning_it() {
+    let mut project = turntable();
+    let scene = &mut project.scenes[0];
+    // Tilted by hand about X, 1° a step, with the character on it 2 m from the centre along
+    // Z, the side that rises.
+    let table = scene.entity_mut(TURNTABLE).unwrap();
+    table.graph = Default::default();
+    table.clips.clear();
+    scene.entity_mut(BODY).unwrap().transform.position = [20., 1.02, 2.];
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let before = rt.character_state(BODY).unwrap().clone();
+    assert!(before.grounded, "{before:?}");
+    let view = rt.camera_orientation().unwrap();
+    let pivot = Vec3::new(20., 0.75, 0.);
+    let mut tilted = 0_f32;
+    for step in 0..10 {
+        tilted += 1.;
+        let table = rt.scene_mut().entity_mut(TURNTABLE).unwrap();
+        table.transform.rotation[0] = -tilted.to_radians();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let state = rt.character_state(BODY).unwrap();
+        assert!(state.grounded, "step {step}: {state:?}");
+        assert_eq!(state.support.as_ref().unwrap().object, TURNTABLE);
+        let expected =
+            pivot + Quat::from_rotation_x(-tilted.to_radians()) * (before.position - pivot);
+        assert!(
+            state.position.distance(expected) < 0.02,
+            "step {step}: {:?} != {expected:?}",
+            state.position
+        );
+        assert_eq!(state.yaw, before.yaw, "step {step}");
+    }
+    assert!(rt.character_state(BODY).unwrap().position.y > before.position.y + 0.3);
+    assert!(rt.camera_orientation().unwrap().angle_between(view) < 1e-6);
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
+fn jumping_off_a_spinning_platform_inherits_contact_point_velocity() {
+    for policy in [
+        InheritPlatform::None,
+        InheritPlatform::Horizontal,
+        InheritPlatform::All,
+    ] {
+        let mut project = turntable();
+        project.scenes[0]
+            .entity_mut(BODY)
+            .unwrap()
+            .character3d
+            .as_mut()
+            .unwrap()
+            .inherit_platform = policy;
+        let mut rt = runtime(&project);
+        for _ in 0..60 {
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        let before = rt.character_state(BODY).unwrap().position;
+        rt.request_jump(BODY).unwrap();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let state = rt.character_state(BODY).unwrap();
+        assert!(!state.grounded && state.support.is_none(), "{state:?}");
+        // The step carries the feet 1.5° round before they leave; the point under them
+        // goes on as the turntable does.
+        let feet = around_turntable(before, 1.5);
+        let point = (around_turntable(feet, 1.5) - feet) / FIXED_DT;
+        assert!(
+            (point.length() - std::f32::consts::PI).abs() < 0.01,
+            "{point}"
+        );
+        let horizontal = state.velocity.with_y(0.);
+        let inherited = if policy == InheritPlatform::None {
+            Vec3::ZERO
+        } else {
+            point
+        };
+        assert!(
+            horizontal.distance(inherited) < 0.01,
+            "{policy:?}: {horizontal} != {inherited}"
+        );
+        assert!(
+            (state.velocity.y - (8. - 22. * FIXED_DT)).abs() < 0.003,
+            "{state:?}"
+        );
+        assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+    }
+}
+
+#[test]
+fn a_box_body_keeps_position_carry_when_turning_would_penetrate() {
+    let mut project = turntable();
+    let scene = &mut project.scenes[0];
+    // Turned by hand, 3° a step.
+    let table = scene.entity_mut(TURNTABLE).unwrap();
+    table.graph = Default::default();
+    table.clips.clear();
+    let config = scene
+        .entity_mut(BODY)
+        .unwrap()
+        .character3d
+        .as_mut()
+        .unwrap();
+    config.body.standing = CollisionShape::Box {
+        size: [1., 1.8, 1.],
+    };
+    // A wall hung over the turntable, 12 mm from the body's outer face on the side its
+    // corner would turn into: carrying the body moves it away, turning it would not fit.
+    let mut wall = Entity::new("Parede", None);
+    wall.id = "wall".into();
+    wall.transform.position = [22.5 + 0.012 + 0.1, 2., 0.5];
+    wall.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [0.2, 1.8, 1.],
+        },
+        ..Default::default()
+    });
+    scene.entities.push(wall);
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let before = rt.character_state(BODY).unwrap().clone();
+    assert!(before.grounded, "{before:?}");
+    assert!(
+        before
+            .position
+            .with_y(0.)
+            .abs_diff_eq(Vec3::new(22., 0., 0.), 1e-3),
+        "{before:?}"
+    );
+    let mut turned = 0.;
+    for step in 0..2 {
+        turned += 3_f32;
+        let table = rt.scene_mut().entity_mut(TURNTABLE).unwrap();
+        table.transform.rotation[1] = turned.to_radians();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let state = rt.character_state(BODY).unwrap();
+        assert!(state.grounded, "step {step}: {state:?}");
+        assert!(
+            state
+                .position
+                .abs_diff_eq(around_turntable(before.position, turned), 1e-3),
+            "step {step}: {state:?}"
+        );
+        assert_eq!(state.yaw, before.yaw, "step {step}");
+    }
+    // Clear of the wall, it turns with the turntable again.
+    for _ in 0..10 {
+        turned += 3_f32;
+        let table = rt.scene_mut().entity_mut(TURNTABLE).unwrap();
+        table.transform.rotation[1] = turned.to_radians();
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    let state = rt.character_state(BODY).unwrap();
+    assert!(state.grounded, "{state:?}");
+    assert!(
+        heading_difference(state.yaw, before.yaw) > 20_f32.to_radians(),
+        "{state:?}"
+    );
+    let world = rt.physics_world().unwrap();
+    let body = rt
+        .scene()
+        .entity(BODY)
+        .unwrap()
+        .character3d
+        .as_ref()
+        .unwrap();
+    let motion = body
+        .body
+        .prepare(false, body.crouch_height, 1., state.yaw)
+        .unwrap();
+    assert!(
+        world
+            .penetrating_prepared(
+                &motion.geometry,
+                motion.rotation,
+                motion.at(state.position),
+                &QueryOptions::excluding(BODY)
+            )
+            .unwrap()
+            .is_empty()
+    );
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
+fn a_railing_of_the_same_moving_group_does_not_block_the_passenger() {
+    use oxy_core::surface::{PlatformMode, TranslationPlatform};
+    let mut project = fixture();
+    // A turntable group: the floor and a railing are its pieces, the passenger a box body
+    // that stands 15 mm from the railing. Carried, it would cross the railing, which has
+    // already turned; turned with it, it keeps its place.
+    let mut group = Entity::new("Carrossel", None);
+    group.id = TURNTABLE.into();
+    group.transform.position = [20., 0.75, 0.];
+    group.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Animation,
+        ..Default::default()
+    });
+    let piece = |id: &str, size: [f32; 3], position: [f32; 3]| {
+        let mut piece = Entity::new(id, Some(Primitive::Cube));
+        piece.id = id.into();
+        piece.parent = Some(TURNTABLE.into());
+        piece.dimensions = size;
+        piece.transform.position = position;
+        piece.physics3d = Some(Collider3d {
+            shape: CollisionShape::Box { size },
+            ..Default::default()
+        });
+        piece
+    };
+    let floor = piece("Piso", [6., 0.5, 6.], [0., 0., 0.]);
+    let railing = piece("Grade", [0.2, 1., 3.], [2.5 + 0.015 + 0.1, 0.75, 0.]);
+    let scene = &mut project.scenes[0];
+    let body = scene.entity_mut(BODY).unwrap();
+    body.transform.position = [22., 1.02, 0.];
+    body.character3d.as_mut().unwrap().body.standing = CollisionShape::Box {
+        size: [1., 1.8, 1.],
+    };
+    scene.entities.extend([group, floor, railing]);
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let before = rt.character_state(BODY).unwrap().clone();
+    assert!(before.grounded, "{before:?}");
+    let mut turned = 0_f32;
+    for step in 0..40 {
+        turned += 3.;
+        let group = rt.scene_mut().entity_mut(TURNTABLE).unwrap();
+        group.transform.rotation[1] = turned.to_radians();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        let state = rt.character_state(BODY).unwrap();
+        assert!(state.grounded, "step {step}: {state:?}");
+        assert!(
+            state
+                .position
+                .abs_diff_eq(around_turntable(before.position, turned), 1e-3),
+            "step {step}: {state:?}"
+        );
+        assert!(
+            (heading_difference(state.yaw, before.yaw) - turned.to_radians()).abs() < 1e-3,
+            "step {step}: {state:?}"
+        );
+    }
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
 }
 
 #[test]

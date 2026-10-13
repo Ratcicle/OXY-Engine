@@ -26,6 +26,9 @@ struct RigState {
     pivot: Option<Vec3>,
     shown_distance: Option<f32>,
     rotation: Option<Quat>,
+    /// How far the platform under the target turned the first person view in the last step,
+    /// shown along the step as the body's own turn is.
+    carried: f32,
 }
 #[derive(Debug)]
 struct Transition {
@@ -200,6 +203,7 @@ impl Cameras {
             pivot: None,
             shown_distance: None,
             rotation: None,
+            carried: 0.,
         });
         if state.authored_distance != rig.distance {
             state.distance = rig.distance;
@@ -263,6 +267,32 @@ impl Cameras {
             pitch: state.pitch,
             mode,
         }))
+    }
+    /// Turns the active first person view by the turn the platform under its target gave the
+    /// body in this step (`turns`, by character), since the body's yaw is the view's; the turn
+    /// is shown along the step. A third person view keeps its own.
+    pub(super) fn carry(&mut self, scene: &Scene, turns: &[(Id, f32)]) {
+        self.settle();
+        let Some(entity) = self.active(scene) else {
+            return;
+        };
+        let target = entity.camera_rig.as_ref().and_then(|r| r.target.as_ref());
+        let Some((_, turn)) = turns.iter().find(|(id, _)| Some(id) == target) else {
+            return;
+        };
+        if self.mode(entity) != CameraMode::FirstPerson {
+            return;
+        }
+        if let Some(state) = self.states.get_mut(&entity.id) {
+            state.yaw = (state.yaw + turn).rem_euclid(std::f32::consts::TAU);
+            state.carried = *turn;
+        }
+    }
+    /// Shows the views where the last step left them, as the characters' `settle` does.
+    pub(super) fn settle(&mut self) {
+        for state in self.states.values_mut() {
+            state.carried = 0.;
+        }
     }
     fn present(
         &mut self,
@@ -353,6 +383,7 @@ impl Cameras {
                 } else {
                     (state.yaw, state.pitch)
                 };
+            let yaw = yaw - state.carried * (1. - alpha);
             let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
             let eye = character
                 .filter(|s| s.eye_height > 0.)
@@ -669,6 +700,7 @@ impl Runtime {
                 state.pivot = None;
                 state.rotation = None;
                 state.shown_distance = None;
+                state.carried = 0.;
                 if let Some([yaw, pitch]) = look {
                     state.yaw = yaw.rem_euclid(std::f32::consts::TAU);
                     state.pitch = pitch;
@@ -860,6 +892,11 @@ impl Runtime {
                 return Err("Alvo do olhar inválido.".into());
             }
         }
+        // Clearing keeps the shown view: shown at the step's end, it keeps the turn a platform
+        // gave it.
+        if let Some(state) = self.cameras.states.get_mut(id) {
+            state.carried = 0.;
+        }
         self.update_presentation(0.);
         let state = self
             .cameras
@@ -893,6 +930,7 @@ impl Runtime {
         state.yaw = yaw.rem_euclid(std::f32::consts::TAU);
         state.pitch = pitch.clamp(-limit, limit);
         state.rotation = None;
+        state.carried = 0.;
         self.update_presentation(0.);
         Ok(())
     }

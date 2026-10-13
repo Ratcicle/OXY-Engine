@@ -1198,6 +1198,53 @@ fn a_platform_logic_moves_every_step_carries_its_rider() {
 }
 
 #[test]
+fn a_platform_logic_turns_every_step_carries_and_turns_its_rider() {
+    let (mut p, lift, body) = rider();
+    p.input_bindings.insert("girar".into(), "G".into());
+    // 2 m from the centre of a platform that turns 90° a second while G is held.
+    p.scenes[0].entity_mut(&body).unwrap().transform.position = [2., 2.02, 0.];
+    let held = node(
+        "event.input",
+        &[("action", text("girar")), ("mode", text("held"))],
+    );
+    let turn = write(None, "rotation", "add", "local", [0., 1.5, 0.]);
+    let e = p.scenes[0].entity_mut(&lift).unwrap();
+    wire(&mut e.graph, &held, "exec", &turn, "exec");
+    e.graph.nodes = vec![held, turn];
+    validate_project(&p).unwrap();
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    ticks(&mut r, 30);
+    let before = r.character_state(&body).unwrap().clone();
+    let turning = InputFrame {
+        held: ["girar".into()].into(),
+        ..Default::default()
+    };
+    for _ in 0..60 {
+        r.advance(FIXED_DT, &turning);
+        let state = r.character_state(&body).unwrap();
+        assert!(state.grounded, "{state:?}");
+        assert_eq!(state.support.as_ref().unwrap().object, lift);
+    }
+    let quarter = glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    let state = r.character_state(&body).unwrap();
+    let expected = quarter * before.position.with_y(0.);
+    assert!(
+        state.position.with_y(0.).distance(expected) < 0.02,
+        "{:?} != {expected:?}",
+        state.position
+    );
+    assert!(
+        glam::Quat::from_rotation_y(state.yaw)
+            .angle_between(quarter * glam::Quat::from_rotation_y(before.yaw))
+            < 1e-3,
+        "{} -> {}",
+        before.yaw,
+        state.yaw
+    );
+    clean(&r);
+}
+
+#[test]
 fn a_write_marked_as_a_jump_drops_the_riders_without_launching_them() {
     let (mut p, lift, body) = rider();
     for (action, key, jump) in [("empurrar", "E", false), ("saltar", "S", true)] {

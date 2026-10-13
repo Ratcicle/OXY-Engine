@@ -453,6 +453,86 @@ fn a_lift_and_a_fan_that_logic_moves_replay_alike() {
     assert!(report.logs.is_empty(), "{:?}", report.logs);
 }
 
+/// A first person runner 2 m from the centre of a turntable that a clip turns a quarter turn
+/// a second, and a railing on the turntable beside it.
+fn turntable() -> Project {
+    let mut project = Project::new("Carrossel");
+    let mut table = block("Carrossel", [10., 0.5, 10.], [0., 0.25, 0.]);
+    table.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Animation,
+        ..Default::default()
+    });
+    let mut clip = Clip::new("Giro");
+    clip.looping = true;
+    clip.duration = 4.;
+    for quarter in 0..=4 {
+        let mut transform = table.transform.clone();
+        transform.rotation[1] = (90. * quarter as f32).to_radians();
+        clip.insert_key(
+            &table.id,
+            Keyframe {
+                time: quarter as f32,
+                transform,
+                interpolation: Interpolation::Linear,
+            },
+        );
+    }
+    let start = node(&mut table, "event.scene_start", &[]);
+    let play = node(&mut table, "action.animation", &[("clip", text(&clip.id))]);
+    link(&mut table, &start, &play);
+    table.clips.push(clip);
+    let mut railing = block("Grade", [0.2, 1., 3.], [2.5, 0.75, 0.]);
+    railing.parent = Some(table.id.clone());
+    let mut body = character("Passageiro", [2., 0.52, 0.]);
+    body.id = BODY.into();
+    let mut camera = Entity::new("Olhos", None);
+    camera.camera = Some(Camera::default());
+    camera.camera_rig = Some(CameraRig {
+        target: Some(BODY.into()),
+        ..Default::default()
+    });
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::ThreeD;
+    scene.entities = vec![
+        block("Chão", [100., 1., 100.], [0., -0.5, 0.]),
+        table,
+        railing,
+        body,
+        camera,
+    ];
+    project
+}
+
+#[test]
+fn a_turntable_passenger_replays_alike() {
+    let project = turntable();
+    let report = replayed(
+        &project,
+        json!({"seconds": 2.0, "samples": 4,
+               "watch": [{"id": BODY, "fields": ["character"]}],
+               "inputs": [{"type": "press", "at": 1.0, "action": "pular"},
+                          {"type": "release", "at": 1.1, "action": "pular"}]}),
+    );
+    let kinds: Vec<_> = report.events.iter().map(|e| e.kind).collect();
+    for kind in [EventKind::Jump, EventKind::Land] {
+        assert!(kinds.contains(&kind), "{kind:?}: {:?}", report.events);
+    }
+    // Turned with the turntable before the jump, and back on it at the end: on its floor or
+    // on its railing.
+    let samples = &report.watched[0].samples;
+    let character = |i: usize| samples[i].character.as_ref().unwrap();
+    assert!(
+        character(0).grounded && character(0).yaw > 30.,
+        "{samples:?}"
+    );
+    let support = character(3).support.as_ref().map(|s| s.name.as_str());
+    assert!(
+        matches!(support, Some("Carrossel" | "Grade")),
+        "{samples:?}"
+    );
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+}
+
 /// A menu that opens the level after 0.3 s; the level draws a number, copies a Bloco and
 /// restarts itself through Cena atual every 0.25 s.
 fn restarting_level() -> Project {

@@ -1,12 +1,56 @@
 use super::*;
 use crate::surface::{PlatformMode, VelocitySpace};
+use std::f32::consts::{PI, TAU};
+
+/// The most a platform may turn in one step and still carry whoever stands on it (1200° a
+/// second): a faster turn drops them, like a jump.
+const MAX_TURN_PER_STEP: f32 = 20. * PI / 180.;
 
 #[derive(Clone, Debug)]
 pub(super) struct PlatformFrame {
     pub matrix: Mat4,
-    pub delta: Vec3,
-    pub velocity: Vec3,
+    /// `matrix` taken apart: position, rotation and scale.
+    pose: (Vec3, Quat, Vec3),
+    /// Where the platform was a step before, position and rotation, which presentation moves
+    /// it from: where it is on a jump and once a pause settles the shown poses.
+    previous: (Vec3, Quat),
+    /// The rigid move from the last step's place to `matrix`, which carries whoever stands
+    /// on it; none on a jump.
+    pub motion: Mat4,
+    /// How far that move turned about the world's vertical, in radians (counterclockwise
+    /// seen from above): the turn a passenger turns with.
+    pub turn: f32,
     pub discontinuous: bool,
+}
+impl PlatformFrame {
+    /// The velocity of the platform's point at `point`, over the last step of `dt` seconds.
+    pub fn point_velocity(&self, point: Vec3, dt: f32) -> Vec3 {
+        (self.motion.transform_point3(point) - point) / dt
+    }
+    /// Where the platform is shown `alpha` of the way through the last step, moved and turned
+    /// along it; none on a jump, which shows it where it is.
+    pub fn shown(&self, alpha: f32) -> Option<Mat4> {
+        if self.discontinuous {
+            return None;
+        }
+        let (old_position, old_rotation) = self.previous;
+        let (position, rotation, scale) = self.pose;
+        let mut shown = if old_rotation == rotation {
+            self.matrix
+        } else {
+            Mat4::from_scale_rotation_translation(
+                scale,
+                old_rotation.slerp(rotation, alpha),
+                Vec3::ZERO,
+            )
+        };
+        shown.w_axis = (position - (position - old_position) * (1. - alpha)).extend(1.);
+        Some(shown)
+    }
+    /// Shows the platform where it is, with no move left to interpolate.
+    pub fn settle(&mut self) {
+        self.previous = (self.pose.0, self.pose.1);
+    }
 }
 pub(super) fn advance(
     scene: &mut Scene,
@@ -73,8 +117,8 @@ pub(super) fn advance(
             continue;
         };
         let entity = &scene.entities[i];
-        // Keep intermediate joints too: a rotated parent invalidates transport
-        // even when a child collider happens to retain its own orientation.
+        // Keep intermediate joints too: a parent that jumped drops what stands on its
+        // children even when a child collider happens to keep its own place.
         let matrix = evaluation.worlds[i].ok_or("Plataforma sem transformação")?;
         let prior = previous
             .get(&entity.id)
@@ -93,18 +137,41 @@ pub(super) fn advance(
             || parent_jump
             || delta.length() > limit
             || !old_scale.abs_diff_eq(scale, 1e-4)
-            || old_rotation.dot(rotation).abs() < 0.999999;
+            || old_rotation.angle_between(rotation) > MAX_TURN_PER_STEP;
+        let change = (rotation * old_rotation.inverse()).normalize();
+        // The twist about the vertical: a platform that tilts does not turn its passengers.
+        let twist = 2. * change.y.atan2(change.w);
+        let turn = if twist > PI {
+            twist - TAU
+        } else if twist <= -PI {
+            twist + TAU
+        } else {
+            twist
+        };
         result.insert(
             entity.id.clone(),
-            PlatformFrame {
-                matrix,
-                delta: if discontinuous { Vec3::ZERO } else { delta },
-                velocity: if discontinuous {
-                    Vec3::ZERO
-                } else {
-                    delta / dt
-                },
-                discontinuous,
+            if discontinuous {
+                PlatformFrame {
+                    matrix,
+                    pose: (position, rotation, scale),
+                    previous: (position, rotation),
+                    motion: Mat4::IDENTITY,
+                    turn: 0.,
+                    discontinuous,
+                }
+            } else {
+                PlatformFrame {
+                    matrix,
+                    pose: (position, rotation, scale),
+                    previous: (old_position, old_rotation),
+                    // Turned about its place a step before, then moved: rigid, whatever the
+                    // platform's scale.
+                    motion: Mat4::from_translation(position)
+                        * Mat4::from_quat(change)
+                        * Mat4::from_translation(-old_position),
+                    turn,
+                    discontinuous,
+                }
             },
         );
     }

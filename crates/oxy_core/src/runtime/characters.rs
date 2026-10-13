@@ -32,6 +32,9 @@ pub(super) struct Characters {
     /// (character, platform) pairs already warned about a released support: once per scene
     /// load, however often the support switches between platforms.
     released: HashSet<(Id, Id)>,
+    /// How far the platforms under them turned the characters this step, in scene order: the
+    /// first person view turns with them.
+    turns: Vec<(Id, f32)>,
     sensor_pairs: HashSet<(Id, Id)>,
     sensor_events: Vec<SensorCrossing>,
 }
@@ -72,6 +75,8 @@ impl Characters {
             // Synced from the scene every step.
             world: _,
             overrides: _,
+            // Handed to the cameras in the step that turned them.
+            turns: _,
             // Read per object by write_character and write_platform.
             states: _,
             intents: _,
@@ -108,10 +113,7 @@ impl Characters {
     pub(super) fn presentation_worlds(&self, alpha: f32) -> HashMap<Id, Mat4> {
         let mut worlds = HashMap::with_capacity(self.states.len() + self.platforms.len());
         for (id, platform) in &self.platforms {
-            if !platform.discontinuous {
-                let mut matrix = platform.matrix;
-                let position = matrix.w_axis.truncate() - platform.delta * (1. - alpha);
-                matrix.w_axis = position.extend(1.);
+            if let Some(matrix) = platform.shown(alpha) {
                 worlds.insert(id.clone(), matrix);
             }
         }
@@ -142,18 +144,16 @@ impl Characters {
         self.sprints.clear();
         self.crouches.clear();
         self.slides.clear();
-        self.paths.clear();
         for state in self.states.values_mut() {
             state.jump_until = None;
             state.want_crouch = false;
             state.sprinting = false;
-            state.previous_position = state.position;
-            state.previous_eye_height = state.eye_height;
-            state.previous_yaw = state.yaw;
         }
+        self.settle();
     }
-    /// Shows everyone where the last step left them, with no movement still to interpolate,
-    /// as the game pause starts or ends. What logic asked of them stays, a toggled crouch too.
+    /// Shows everyone, and the platforms, where the last step left them, with no movement still
+    /// to interpolate, as a pause starts or ends. What logic asked of them stays, a toggled
+    /// crouch too.
     pub(super) fn settle(&mut self) {
         self.paths.clear();
         for state in self.states.values_mut() {
@@ -162,7 +162,7 @@ impl Characters {
             state.previous_yaw = state.yaw;
         }
         for frame in self.platforms.values_mut() {
-            frame.delta = Vec3::ZERO;
+            frame.settle();
         }
     }
     /// Drops the one-step requests logic made (movement, jumps, slides), which the game pause
@@ -196,8 +196,8 @@ impl Characters {
         #[cfg(feature = "profiling")]
         let prepare_started = std::time::Instant::now();
         let mut evaluation = SceneEvaluation::new(scene)?;
-        // A platform that turns, scales or jumps is reported by the characters it drops
-        // (motor), not on its own: with nobody on it, nothing goes wrong.
+        // A platform that turns too fast, scales or jumps is reported by the characters it
+        // drops (motor), not on its own: with nobody on it, nothing goes wrong.
         self.platforms =
             platforms::advance(scene, &mut evaluation, &self.platforms, &self.looped, dt)?;
         self.ignored_tracks.retain(|(owner, clip, target)| {
@@ -216,6 +216,7 @@ impl Characters {
                 .map(|r| (r.object.clone(), r.event.clone())),
         );
         self.paths.clear();
+        self.turns.clear();
         self.states.retain(|id, _| {
             evaluation
                 .index
@@ -375,6 +376,7 @@ impl Characters {
             };
             let events_before = self.events.len();
             let records_before = self.records.len();
+            let turn;
             let result = if config.enabled {
                 crate::metrics::timed(
                     || {
@@ -404,6 +406,7 @@ impl Characters {
                     continue;
                 }
                 Ok(result) => {
+                    turn = result.turn;
                     if let Some(warning) = result.warning {
                         self.warnings.push((id.clone(), warning));
                     }
@@ -418,7 +421,8 @@ impl Characters {
                             id.clone(),
                             format!(
                                 "Apoio em {name} liberado sem herdar velocidade, porque a \
-                                 plataforma girou, mudou de escala ou saltou de posição."
+                                 plataforma girou rápido demais, mudou de escala ou saltou de \
+                                 posição."
                             ),
                         ));
                     }
@@ -504,6 +508,9 @@ impl Characters {
                 continue;
             }
             scene.entities[i].transform = transform;
+            if turn != 0. {
+                self.turns.push((id.clone(), turn));
+            }
             self.overrides.insert(
                 id.clone(),
                 ColliderOverride {
@@ -622,6 +629,14 @@ impl Runtime {
         if let Err(error) = result {
             self.log(format!("Movimento 3D: {error}"));
         }
+        let scene = self
+            .project
+            .scenes
+            .iter()
+            .find(|s| s.id == self.scene_id)
+            .unwrap();
+        self.cameras
+            .carry(scene, &std::mem::take(&mut characters.turns));
         for (id, error) in std::mem::take(&mut characters.warnings) {
             if characters.reported.get(&id) != Some(&error) {
                 self.log(format!("Personagem {id}: {error}"));

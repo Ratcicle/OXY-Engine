@@ -220,6 +220,7 @@ impl Runtime {
         }
         self.game_paused = paused;
         self.characters.settle();
+        self.cameras.settle();
         if !paused {
             self.characters.forget_requests();
         }
