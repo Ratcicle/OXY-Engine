@@ -419,7 +419,8 @@ pub fn definitions() -> Json {
                    "height": {"type": "integer", "description":
                        "Game view height in pixels, 16-4096 (default 540)."},
                    "screenshot": {"type": "boolean", "description":
-                       "Also returns the game camera view at the end, as oxy_screenshot view=game."},
+                       "Also returns the game camera view at the end, with the game interface \
+                        drawn, as oxy_screenshot view=game."},
                    "colliders": colliders,
                    "seed": seed,
                    "check_replay": check_replay,
@@ -460,7 +461,8 @@ pub fn definitions() -> Json {
                         object with a shape, hidden ones too)."},
                    "ui": {"type": "boolean", "description":
                        "view=game: lists the game interface in the text as ui, like oxy_simulate \
-                        (default true); false leaves it out, e.g. for repeated captures."},
+                        (default true); false leaves the list out, e.g. for repeated captures. The \
+                        image draws the interface either way."},
                    "width": {"type": "integer", "description": "16-4096 pixels (default 960)."},
                    "height": {"type": "integer", "description": "16-4096 pixels (default 540)."}}),
             json!([])
@@ -697,19 +699,23 @@ hex digits, fingerprints the game state at the end: equal hashes, same state (th
 even with no draws, and so do IDs: objects setup creates change it on each call); check_replay \
 checks that a run repeats itself. \
 Lists keep the most recent 300 entries and `truncated` counts what was dropped. Times are \
-seconds rounded to 0.1 ms. Set screenshot=true to also get the game camera view at the end.";
+seconds rounded to 0.1 ms. Set screenshot=true to also get the game camera view at the end, \
+with the game interface drawn.";
 
 const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
-the editor viewport as the person sees it, with the collider view when colliders is set. Every \
-other view first runs the game on an in-memory copy for `seconds`, with inputs (and setup, spawn, \
-until, seed and save as in oxy_simulate), then captures: game (the default on files) through the game \
-camera, and lists the game interface as ui like oxy_simulate, since the image leaves out texts, \
-buttons and bars (ui: false leaves the list out); free through a perspective camera at eye \
-looking at target (3D scenes); top and side through orthographic views framing ids: top \
-straight down with -Z up and +X right, side level along -Z, or along -X when the framed part is \
-deeper (Z) than wide (X), so the long side spans the image. In 2D scenes top and side both show the scene plane. The text gives the \
-time, the scene and the camera used (position, forward, and fov or the visible width and \
-height in metres), and replay when check_replay is set.";
+the editor viewport as the person sees it (during a test, the game with its interface), with the \
+collider view when colliders is set. Every other view first runs the game on an in-memory copy \
+for `seconds`, with inputs (and setup, spawn, until, seed and save as in oxy_simulate), then \
+captures: game (the default on files) through the game camera, with the game interface drawn as \
+the player shows it, and lists it as ui like oxy_simulate, at the same rects (ui: false leaves \
+the list out); free through a perspective camera at eye looking at target (3D scenes); top and \
+side through orthographic views framing ids: top straight down with -Z up and +X right, side \
+level along -Z, or along -X when the framed part is deeper (Z) than wide (X), so the long side \
+spans the image. In 2D scenes top and side both show the scene plane. An image painted in the \
+editor and not saved yet shows as saved: in view=editor on the interface only, in the other \
+views on objects too. The text gives the time, the scene and the camera used (position, \
+forward, and fov or the visible width and height in metres), and replay when check_replay is \
+set.";
 
 /// Values of oxy_console's origin.
 const CONSOLE_ORIGINS: [&str; 4] = ["editor", "agente", "jogo", "logica"];
@@ -1318,6 +1324,8 @@ impl Tools {
             self.gpu = Some((rs, renderer));
         }
         let (rs, renderer) = self.gpu.as_mut().unwrap();
+        // Each capture reads the images again: the person may have saved new pixels since.
+        renderer.clear_textures();
         let root = root.map_or_else(std::env::temp_dir, Path::to_owned);
         let (png, camera) = oxy_render::offscreen::view_png(
             rs,
@@ -1326,6 +1334,7 @@ impl Tools {
             &root,
             view_size(args),
             view,
+            *view == ShotView::Game,
             args["colliders"].as_bool() == Some(true),
         )?;
         Ok((encoding::base64(&png), camera))
@@ -1386,10 +1395,25 @@ mod tests {
             assert!(shot[option]["description"].is_string(), "{option}");
         }
         assert!(SCREENSHOT_DESCRIPTION.contains("ui: false"));
+        // The game images draw the interface; ui only adds the list.
+        assert!(SCREENSHOT_DESCRIPTION.contains("with the game interface drawn as the player"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("during a test, the game with its interface"));
+        // Captures read images from the files, the MCP's own ones even with the editor open.
+        assert!(SCREENSHOT_DESCRIPTION.contains("not saved yet shows as saved"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("in the other views on objects too"));
+        assert!(!SCREENSHOT_DESCRIPTION.contains("leaves out texts"));
+        let listed = shot["ui"]["description"].as_str().unwrap();
+        assert!(
+            listed.contains("draws the interface either way"),
+            "{listed}"
+        );
         let simulate = schema("oxy_simulate");
         for option in ["ui", "width", "height", "screenshot", "colliders", "seed"] {
             assert!(simulate[option]["description"].is_string(), "{option}");
         }
+        let image = simulate["screenshot"]["description"].as_str().unwrap();
+        assert!(image.contains("with the game interface drawn"), "{image}");
+        assert!(SIMULATE_DESCRIPTION.contains("view at the end, with the game interface drawn"));
         // The seed is a JSON integer both tools take alike, up to the largest one kept exactly.
         assert_eq!(shot["seed"], simulate["seed"]);
         assert_eq!(simulate["seed"]["type"], "integer");
@@ -2847,8 +2871,9 @@ mod tests {
         }
     }
 
-    /// The whole capture on files, with a real GPU: the game view lists the interface, the
-    /// free and top views report their camera, and the collider view changes the image.
+    /// The whole capture on files, with a real GPU: the game view draws and lists the
+    /// interface, the free and top views report their camera and draw no interface, and the
+    /// collider view changes the image.
     #[test]
     #[ignore = "Requires a native WGPU adapter; run explicitly for graphics validation"]
     fn native_screenshot_views_on_files() {
@@ -2879,6 +2904,7 @@ mod tests {
             text: "Pontos".into(),
             ..Default::default()
         });
+        let label_id = label.id.clone();
         project.scenes[0]
             .entities
             .extend([floor, checkpoint, label]);
@@ -2894,23 +2920,66 @@ mod tests {
             let text: Json = serde_json::from_str(&output.text).unwrap();
             (text, output.image.unwrap())
         };
-        let (game, _) = shot(json!({}));
+        let hide_label =
+            json!([{"op": "update_entity", "entity": label_id, "patch": {"visible": false}}]);
+        let (game, drawn) = shot(json!({}));
         assert_eq!(game["view"], "game");
         assert_eq!(game["ui"][0]["text"], "Pontos");
         assert_eq!(game["colliders"], false);
-        let (quiet, _) = shot(json!({"ui": false}));
+        let (quiet, listless) = shot(json!({"ui": false}));
         assert!(quiet.get("ui").is_none(), "ui: false leaves the list out");
+        assert_eq!(listless, drawn, "ui: false still draws the interface");
+        let (_, hidden) = shot(json!({"setup": hide_label}));
+        // The label changes the pixels inside the rect the list gives it, and only those.
+        let decode = |image: &str| {
+            let png = encoding::decode_base64(image).unwrap();
+            oxy_core::painting::PaintImage::from_png(&png).unwrap()
+        };
+        let (with_label, without_label) = (decode(&drawn), decode(&hidden));
+        assert_eq!([with_label.width, with_label.height], [320, 240]);
+        let rect: [f64; 4] = serde_json::from_value(game["ui"][0]["rect"].clone()).unwrap();
+        let (mut inside, mut outside) = (0, 0);
+        let pairs = with_label
+            .pixels
+            .chunks(4)
+            .zip(without_label.pixels.chunks(4));
+        for (index, _) in pairs.enumerate().filter(|(_, (a, b))| a != b) {
+            let (x, y) = ((index % 320) as f64 + 0.5, (index / 320) as f64 + 0.5);
+            if x > rect[0] && x < rect[0] + rect[2] && y > rect[1] && y < rect[1] + rect[3] {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+        assert!(inside > 40, "{inside} pixels drawn inside {rect:?}");
+        assert_eq!(outside, 0, "nothing drawn outside {rect:?}");
         let (top, plain) = shot(json!({"view": "top"}));
         assert_eq!(top["camera"]["projection"], "orthographic");
         assert!(
             top.get("ui").is_none(),
             "only the game view lists the interface"
         );
+        for view in ["top", "side"] {
+            let (_, shown) = shot(json!({"view": view}));
+            let (_, unlabelled) = shot(json!({"view": view, "setup": hide_label}));
+            assert_eq!(shown, unlabelled, "{view}: no interface drawn");
+        }
         let (_, with) = shot(json!({"view": "top", "colliders": true}));
         assert_ne!(
             plain, with,
             "the collider view draws the invisible checkpoint"
         );
+        let output = oxy_core::qa::output_dir("v0.6/captures");
+        std::fs::create_dir_all(&output).unwrap();
+        for (name, image) in [
+            ("files-game.png", &drawn),
+            ("files-game-hidden-label.png", &hidden),
+            ("files-top-colliders.png", &with),
+        ] {
+            let png = encoding::decode_base64(image).unwrap();
+            std::fs::write(output.join(name), png).unwrap();
+        }
+        println!("Capture evidence: {}", output.display());
         let (free, _) = shot(json!({"view": "free", "eye": [10, 8, 10],
                                     "target": [0, 0, 0], "fov": 45}));
         assert_eq!(free["camera"]["projection"], "perspective");

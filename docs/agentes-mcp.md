@@ -60,7 +60,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_import` | Importa uma imagem PNG ou um som WAV como recurso do projeto e, se pedido, já aplica a imagem num objeto |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria ou o que nele pararia com erro |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a pausa do jogo, a câmera, a interface do jogo, os objetos observados, as variáveis do jogo, o que toca e o resumo do estado no fim; se pedido, confere que o teste se repete |
-| `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
+| `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo com a interface do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
 | `oxy_select`, `oxy_frame` | Ao vivo: seleciona e enquadra objetos para você ver do que o agente fala |
 | `oxy_undo`, `oxy_redo` | Ao vivo: desfaz ou refaz o último passo |
 | `oxy_console` | Ao vivo: as linhas do Console (editor, agente, jogo e lógica), só as novas quando o agente pede |
@@ -340,8 +340,8 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 
 ## Imagens com `oxy_screenshot`
 
-- **Vista do editor** (`view: "editor"`, ao vivo): o que aparece na vista do editor. Com `colliders: true`, o editor desenha a mesma vista de novo com os colisores por cima, como na vista de colisores, sem mexer no que aparece na tela. Durante um teste do jogo, mostra a câmera do jogo.
-- **Câmera do jogo** (`view: "game"`, o padrão nos arquivos): roda o jogo numa cópia por `seconds` (0 é o primeiro quadro), com as mesmas `inputs`, `setup`, `spawn`, `until`, `seed` e `save` do `oxy_simulate`, e captura pela câmera do jogo. O texto traz a interface do jogo em `ui`, como no `oxy_simulate`; `ui: false` a deixa de fora, o que encurta a resposta em capturas repetidas.
+- **Vista do editor** (`view: "editor"`, ao vivo): o que aparece na vista do editor. Com `colliders: true`, o editor desenha a mesma vista de novo com os colisores por cima, como na vista de colisores, sem mexer no que aparece na tela. Durante um teste do jogo, mostra o jogo como você o vê: a câmera do jogo com a interface do jogo (textos, imagens, botões e barras) por cima.
+- **Câmera do jogo** (`view: "game"`, o padrão nos arquivos): roda o jogo numa cópia por `seconds` (0 é o primeiro quadro), com as mesmas `inputs`, `setup`, `spawn`, `until`, `seed` e `save` do `oxy_simulate`, e captura pela câmera do jogo, com a interface do jogo desenhada por cima, como no jogo. O texto traz a interface em `ui`, como no `oxy_simulate`, com os mesmos retângulos da imagem; `ui: false` deixa a lista de fora, o que encurta a resposta em capturas repetidas, mas a imagem continua com a interface. As outras vistas não desenham a interface.
 - **Câmera livre** (`view: "free"`): uma câmera em `eye` olhando para `target`, que é um ponto ou o ID de um objeto (o centro da forma dele ou, sem forma, a posição), com `fov` em graus (60 por padrão). Só em cenas 3D.
 - **De cima e de lado** (`view: "top"` e `view: "side"`): vistas ortográficas, sem perspectiva, que enquadram os objetos de `ids` e seus filhos, ou tudo o que tem forma. De cima, o -Z fica para cima na imagem. De lado, a câmera olha ao longo do -Z ou, quando a parte enquadrada é mais funda (Z) do que larga (X), ao longo do -X, para o lado comprido ocupar a imagem. Em cenas 2D, as duas mostram o plano da cena.
 - **Colisores** (`colliders: true`): desenha os colisores sólidos em verde e as áreas em amarelo, inclusive de objetos invisíveis, como pontos de controle.
@@ -349,7 +349,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 
 ## Limites desta versão
 
-- **Imagem do jogo:** não desenha a interface do jogo (textos, botões e barras). Ela vem descrita em `ui`.
+- **Pintura não salva nas capturas:** com o projeto aberto no editor, uma imagem pintada e ainda não salva aparece nas capturas do agente como está no arquivo salvo. Na vista do editor durante um teste, isso vale só para as imagens da interface do jogo; nas outras vistas do `oxy_screenshot` e no `screenshot` do `oxy_simulate`, vale também para as texturas dos objetos.
 - **Simulação:** o mesmo pedido repete os sorteios, que a semente (`seed`) decide, e os IDs das cópias do `action.spawn`. Os objetos e nós que o `setup` cria, ao contrário, recebem IDs novos a cada pedido (o relatório os lista em `setup`); por isso os sorteios dos nós `random.number` criados ou copiados no `setup`, as cópias feitas pelos nós e objetos que ele cria e o `state_hash` mudam de um pedido para outro. O teste que você faz no editor não é gravado: com a semente que o `oxy_status` mostra, cada nó `random.number` dá os mesmos números, na mesma ordem, mas as suas entradas e o tempo delas o agente precisa refazer em `inputs`.
 - **Importação:** só PNG e WAV, como no editor. Ao desfazer uma importação, a cópia continua na pasta `assets`, como acontece com o **Importar** da Biblioteca.
 - **Teste ao vivo:** o agente vê se você está testando e lê o Console, mas não inicia nem para o seu teste.

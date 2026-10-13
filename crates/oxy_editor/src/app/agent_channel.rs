@@ -388,8 +388,8 @@ impl Editor {
             "screenshot" => {
                 self.agent_scene(params)?;
                 let colliders = params["colliders"].as_bool() == Some(true);
-                let (pixels, size) = if colliders {
-                    self.agent_capture_colliders(ctx.pixels_per_point())?
+                let (pixels, size) = if colliders || self.showing_game() {
+                    self.agent_capture(ctx.pixels_per_point(), colliders)?
                 } else {
                     self.renderer.read_pixels(&self.render_state)?
                 };
@@ -410,14 +410,17 @@ impl Editor {
             other => Err(format!("Pedido desconhecido: {other}")),
         }
     }
-    /// The view on screen drawn again with the collider view on top, as with the debug view
-    /// on: the game camera while the game runs, the editor camera otherwise (without the
-    /// Studio's modeling marks). The frame shown to the person is not touched.
-    fn agent_capture_colliders(
+    /// The view on screen drawn again, with the collider view on top when `colliders` is set,
+    /// as with the debug view on: while the game shows, the game camera with the game
+    /// interface, as the person sees them; otherwise the editor camera (without the Studio's
+    /// modeling marks). Interface images come from the project files, so an image painted
+    /// and not yet saved shows as saved. The frame shown to the person is not touched.
+    fn agent_capture(
         &mut self,
         pixels_per_point: f32,
+        colliders: bool,
     ) -> Result<(Vec<u8>, [u32; 2]), String> {
-        use oxy_render::offscreen::ColliderOverlay;
+        use oxy_render::offscreen::{ColliderOverlay, Overlays};
         let size = self.renderer.target_size();
         let root = self.root();
         let show_disabled = self.view.show_disabled_colliders;
@@ -433,12 +436,15 @@ impl Editor {
                 &CameraState::for_runtime(runtime),
                 size,
                 None,
-                Some(ColliderOverlay {
-                    selected: &[],
-                    show_disabled,
-                    runtime_world: runtime.physics_world(),
+                Overlays {
+                    interface: true,
+                    colliders: colliders.then(|| ColliderOverlay {
+                        selected: &[],
+                        show_disabled,
+                        runtime_world: runtime.physics_world(),
+                    }),
                     pixels_per_point,
-                }),
+                },
             );
         }
         let scene = self.view_scene();
@@ -451,12 +457,15 @@ impl Editor {
             &self.camera,
             size,
             self.selected.clone(),
-            Some(ColliderOverlay {
-                selected: &self.selection.ids,
-                show_disabled,
-                runtime_world: None,
+            Overlays {
+                interface: false,
+                colliders: colliders.then(|| ColliderOverlay {
+                    selected: &self.selection.ids,
+                    show_disabled,
+                    runtime_world: None,
+                }),
                 pixels_per_point,
-            }),
+            },
         )
     }
 }

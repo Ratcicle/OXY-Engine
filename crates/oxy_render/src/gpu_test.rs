@@ -601,7 +601,10 @@ fn native_gpu_editable_mesh_equivalence() {
 #[ignore = "Requires a native WGPU adapter; run explicitly for graphics validation"]
 fn native_gpu_capture_collider_view_and_free_cameras() {
     use crate::offscreen::{ShotView, framed_bounds, headless_state, view_png};
-    use oxy_core::physics3d::{Collider3d, CollisionShape};
+    use oxy_core::{
+        document::{UiAnchor, UiElement, UiKind, Value},
+        physics3d::{Collider3d, CollisionShape},
+    };
     let rs = headless_state().expect("Native WGPU adapter");
     let mut renderer = Renderer::new(&rs);
     let mut project = Project::new("Captura");
@@ -625,7 +628,26 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
         sensor: true,
         ..Default::default()
     });
-    scene.entities = vec![floor, checkpoint];
+    // The game interface: a white text and a bar three quarters full of white.
+    let mut score = Entity::new("Placar", None);
+    score.ui = Some(UiElement {
+        text: "Pontos".into(),
+        position: [16., 16.],
+        ..Default::default()
+    });
+    let mut health = Entity::new("Vida", None);
+    health.attributes.insert("vida".into(), Value::Number(75.));
+    health.ui = Some(UiElement {
+        kind: UiKind::Bar,
+        anchor: UiAnchor::BottomRight,
+        position: [16., 16.],
+        size: [200., 28.],
+        text: String::new(),
+        color: [0.95, 0.95, 0.95, 1.],
+        binding_attribute: "vida".into(),
+        ..Default::default()
+    });
+    scene.entities = vec![floor, checkpoint, score, health];
     let mut runtime = oxy_core::runtime::Runtime::new(&project, &project.start_scene).unwrap();
     // What the editor shows must survive a capture.
     renderer.render(
@@ -640,8 +662,9 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
     );
     let shown = read_pixels(&renderer, &rs);
     let bounds = framed_bounds(runtime.scene(), &[]).unwrap();
+    let interface = oxy_core::game_ui::ui_state(runtime.project(), runtime.scene(), [320., 240.]);
     let decode = |png: &[u8]| image::load_from_memory(png).unwrap().to_rgba8();
-    let mut shot = |view: &ShotView, colliders: bool| {
+    let mut shot = |view: &ShotView, interface: bool, colliders: bool| {
         let (png, camera) = view_png(
             &rs,
             &mut renderer,
@@ -649,14 +672,15 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
             Path::new(""),
             [320, 240],
             view,
+            interface,
             colliders,
         )
         .unwrap();
         (decode(&png), camera)
     };
-    let (plain, camera) = shot(&ShotView::Top(bounds), false);
+    let (plain, camera) = shot(&ShotView::Top(bounds), false, false);
     assert_eq!(camera.kind, SceneKind::TwoD, "orthographic top view");
-    let (with, _) = shot(&ShotView::Top(bounds), true);
+    let (with, _) = shot(&ShotView::Top(bounds), false, true);
     assert_eq!(plain.dimensions(), (320, 240));
     let count = |image: &image::RgbaImage, test: fn(&[u8]) -> bool| {
         image.pixels().filter(|p| test(&p.0)).count()
@@ -679,10 +703,64 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
             fov: 60.,
         },
         false,
+        false,
     );
     assert_eq!(camera.kind, SceneKind::ThreeD);
     assert!(blue(&free.get_pixel(160, 120).0), "looking at the floor");
     assert!(!blue(&free.get_pixel(160, 2).0), "background above it");
+
+    // The game camera with the interface: drawn as the player draws it, inside the rects the
+    // simulation reports for the same size, and only when asked.
+    let (drawn, _) = shot(&ShotView::Game, true, false);
+    let (bare, _) = shot(&ShotView::Game, false, false);
+    let bright: fn(&[u8]) -> bool = |p| p[0] > 200 && p[1] > 200 && p[2] > 200;
+    let inside = |rect: [f64; 4], x: u32, y: u32| {
+        let (x, y) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+        x > rect[0] && x < rect[0] + rect[2] && y > rect[1] && y < rect[1] + rect[3]
+    };
+    let lit = |image: &image::RgbaImage, rect: [f64; 4]| {
+        image
+            .enumerate_pixels()
+            .filter(|(x, y, p)| inside(rect, *x, *y) && bright(&p.0))
+            .count()
+    };
+    assert_eq!(interface.len(), 2);
+    for element in &interface {
+        assert!(
+            lit(&drawn, element.rect) > 40,
+            "{} drawn at {:?}",
+            element.name,
+            element.rect
+        );
+        assert_eq!(lit(&bare, element.rect), 0, "{} left out", element.name);
+    }
+    assert_eq!(count(&bare, bright), 0);
+    let stray = drawn
+        .enumerate_pixels()
+        .filter(|(x, y, p)| bright(&p.0) && !interface.iter().any(|e| inside(e.rect, *x, *y)))
+        .count();
+    assert_eq!(stray, 0, "nothing bright outside the interface rects");
+    // Past three quarters, the bar shows its dark track.
+    let [x, y, width, height] = interface[1].rect;
+    assert_eq!(interface[1].fraction, Some(0.75));
+    assert_eq!(
+        lit(
+            &drawn,
+            [x + width * 0.8, y + 3., width * 0.2 - 3., height - 6.]
+        ),
+        0
+    );
+    assert!(lit(&drawn, [x + 3., y + 3., width * 0.2, height - 6.]) > 40);
+    let output = oxy_core::qa::output_dir("v0.6/captures");
+    std::fs::create_dir_all(&output).unwrap();
+    for (name, image) in [
+        ("game-interface.png", &drawn),
+        ("game-without-interface.png", &bare),
+        ("top-colliders.png", &with),
+    ] {
+        image.save(output.join(name)).unwrap();
+    }
+    println!("Capture evidence: {}", output.display());
     assert_eq!(renderer.target_size(), [64, 48]);
     assert_eq!(read_pixels(&renderer, &rs), shown);
     assert!(renderer.take_errors().is_empty());

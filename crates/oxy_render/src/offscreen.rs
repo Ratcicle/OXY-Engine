@@ -1,6 +1,7 @@
 //! Rendering without a window: a GPU device of its own and pixel readback, for scene
 //! screenshots requested by tools (the MCP server, the editor's agent channel) and for GPU
-//! tests. Captures can carry the editor's collider view and look through a free camera.
+//! tests. Captures can carry the game interface and the editor's collider view, and look
+//! through a free camera.
 use super::*;
 use oxy_core::{character::GameCameraPose, collision::Aabb, runtime::Runtime};
 use std::{
@@ -56,15 +57,35 @@ pub struct ColliderOverlay<'a> {
     pub show_disabled: bool,
     /// The running game's physics; without it, the scene's own colliders.
     pub runtime_world: Option<&'a oxy_core::physics3d::PhysicsWorld>,
-    /// Pixels per egui point, which sets the stroke widths (1 off the editor).
+}
+
+/// What `capture` paints over the scene, in the order the editor's game view does.
+pub struct Overlays<'a> {
+    /// The game interface (texts, images, buttons and bars), as the player draws it.
+    pub interface: bool,
+    pub colliders: Option<ColliderOverlay<'a>>,
+    /// Pixels per egui point, which sets the interface sizes and the stroke widths. At 1, as
+    /// off the editor, the interface rects are the `ui` rects of a simulation of that size.
     pub pixels_per_point: f32,
 }
 
-/// What `capture` draws the collider view with: an egui context and painter of its own, so
-/// the editor's fonts and textures are never touched.
+/// What `capture` paints the interface and the collider view with: an egui context with the
+/// player's fonts and a painter of its own, so the editor's fonts and textures are never
+/// touched. Interface images come from the project files: unsaved painting is not seen.
 pub(crate) struct CapturePainter {
     context: egui::Context,
     painter: egui_wgpu::Renderer,
+    game_ui: GameUi,
+}
+
+impl CapturePainter {
+    /// Forgets the interface image `id`, or every one, so the next capture reads the file.
+    pub(crate) fn forget_image(&mut self, id: Option<&str>) {
+        match id {
+            Some(id) => self.game_ui.invalidate_texture(id),
+            None => self.game_ui = GameUi::new(),
+        }
+    }
 }
 
 impl Renderer {
@@ -133,7 +154,7 @@ impl Renderer {
     }
 
     /// Renders `scene` into a target of its own, so the one the editor shows stays as it is,
-    /// draws the collider view on top when given and reads the pixels back.
+    /// paints `overlays` on top and reads the pixels back.
     #[allow(clippy::too_many_arguments)]
     pub fn capture(
         &mut self,
@@ -144,7 +165,7 @@ impl Renderer {
         camera: &CameraState,
         size: [u32; 2],
         selected: Option<Id>,
-        colliders: Option<ColliderOverlay>,
+        overlays: Overlays,
     ) -> Result<(Vec<u8>, [u32; 2]), String> {
         let mut target = make_target(rs, [size[0].max(1), size[1].max(1)], None);
         std::mem::swap(&mut self.target, &mut target);
@@ -157,10 +178,10 @@ impl Renderer {
             camera,
             size,
             selected,
-            colliders.is_some(),
+            overlays.colliders.is_some(),
         );
-        if let Some(overlay) = &colliders {
-            self.draw_overlay(rs, scene, camera, overlay);
+        if overlays.interface || overlays.colliders.is_some() {
+            self.draw_overlays(rs, project, scene, root, camera, &overlays);
         }
         let pixels = self.read_pixels(rs);
         self.debug_colliders = debug;
@@ -169,23 +190,27 @@ impl Renderer {
         pixels
     }
 
-    /// Paints the collider view over the target with the editor's own drawing code.
-    fn draw_overlay(
+    /// Paints the game interface, then the collider view, over the target with the drawing
+    /// code of the player and the editor.
+    fn draw_overlays(
         &mut self,
         rs: &RenderState,
+        project: &Project,
         scene: &Scene,
+        root: &Path,
         camera: &CameraState,
-        overlay: &ColliderOverlay,
+        overlays: &Overlays,
     ) {
         let size = self.target.size;
         let CapturePainter {
             context,
             mut painter,
-        } = self
-            .capture_painter
-            .take()
-            .unwrap_or_else(|| CapturePainter {
-                context: egui::Context::default(),
+            mut game_ui,
+        } = self.capture_painter.take().unwrap_or_else(|| {
+            let context = egui::Context::default();
+            crate::theme::apply(&context);
+            CapturePainter {
+                context,
                 painter: egui_wgpu::Renderer::new(
                     &rs.device,
                     wgpu::TextureFormat::Rgba8Unorm,
@@ -194,9 +219,11 @@ impl Renderer {
                         ..Default::default()
                     },
                 ),
-            });
-        let pixels_per_point = if overlay.pixels_per_point.is_finite() {
-            overlay.pixels_per_point.clamp(0.25, 8.)
+                game_ui: GameUi::new(),
+            }
+        });
+        let pixels_per_point = if overlays.pixels_per_point.is_finite() {
+            overlays.pixels_per_point.clamp(0.25, 8.)
         } else {
             1.
         };
@@ -205,6 +232,7 @@ impl Renderer {
                 egui::Pos2::ZERO,
                 egui::vec2(size[0] as f32, size[1] as f32) / pixels_per_point,
             )),
+            max_texture_side: Some(rs.device.limits().max_texture_dimension_2d as usize),
             ..Default::default()
         };
         input
@@ -217,17 +245,24 @@ impl Renderer {
                 .frame(egui::Frame::NONE)
                 .show(ctx, |ui| {
                     let rect = ui.max_rect();
-                    self.draw_runtime_colliders(
-                        ui,
-                        scene,
-                        camera,
-                        rect,
-                        overlay.selected,
-                        overlay.show_disabled,
-                        overlay.runtime_world,
-                    );
+                    if overlays.interface {
+                        game_ui.draw(ui, project, scene, root, rect);
+                    }
+                    if let Some(colliders) = &overlays.colliders {
+                        self.draw_runtime_colliders(
+                            ui,
+                            scene,
+                            camera,
+                            rect,
+                            colliders.selected,
+                            colliders.show_disabled,
+                            colliders.runtime_world,
+                        );
+                    }
                 });
         });
+        // An image that does not load is reported where the person sees the game, not here.
+        game_ui.take_errors();
         let primitives = context.tessellate(output.shapes, output.pixels_per_point);
         for (id, delta) in &output.textures_delta.set {
             painter.update_texture(&rs.device, &rs.queue, *id, delta);
@@ -268,7 +303,11 @@ impl Renderer {
         for id in &output.textures_delta.free {
             painter.free_texture(id);
         }
-        self.capture_painter = Some(CapturePainter { context, painter });
+        self.capture_painter = Some(CapturePainter {
+            context,
+            painter,
+            game_ui,
+        });
     }
 }
 
@@ -399,9 +438,11 @@ pub fn framed_bounds(scene: &Scene, ids: &[Id]) -> Result<Aabb, String> {
     oxy_core::spatial::visual_bounds(scene, &targets)
 }
 
-/// `runtime` at its current time seen through `view`, as PNG, with the collider view on top
-/// when `colliders` is set, and the camera used. The game interface (text, buttons) is not
-/// drawn: egui draws it.
+/// `runtime` at its current time seen through `view`, as PNG, and the camera used. With
+/// `interface` (for the game camera), the game interface is drawn as the player draws it, one
+/// pixel per point, so its elements sit at the rects of `game_ui::ui_state` for `size`; with
+/// `colliders`, the collider view goes on top.
+#[allow(clippy::too_many_arguments)]
 pub fn view_png(
     rs: &RenderState,
     renderer: &mut Renderer,
@@ -409,6 +450,7 @@ pub fn view_png(
     root: &Path,
     size: [u32; 2],
     view: &ShotView,
+    interface: bool,
     colliders: bool,
 ) -> Result<(Vec<u8>, CameraState), String> {
     if size.iter().any(|v| !(16..=4096).contains(v)) {
@@ -417,12 +459,15 @@ pub fn view_png(
     runtime.set_viewport_aspect(size[0] as f32 / size[1] as f32);
     let camera = view.camera(runtime, size)?;
     renderer.show_grid = false;
-    let overlay = colliders.then(|| ColliderOverlay {
-        selected: &[],
-        show_disabled: false,
-        runtime_world: runtime.physics_world(),
+    let overlays = Overlays {
+        interface,
+        colliders: colliders.then(|| ColliderOverlay {
+            selected: &[],
+            show_disabled: false,
+            runtime_world: runtime.physics_world(),
+        }),
         pixels_per_point: 1.,
-    });
+    };
     let (pixels, size) = renderer.capture(
         rs,
         runtime.project(),
@@ -431,7 +476,7 @@ pub fn view_png(
         &camera,
         size,
         None,
-        overlay,
+        overlays,
     )?;
     Ok((encode_png(pixels, size)?, camera))
 }

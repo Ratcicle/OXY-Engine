@@ -136,7 +136,8 @@ pub struct Renderer {
     pub show_grid: bool,
     debug_colliders: bool,
     physics_debug: std::cell::RefCell<Option<oxy_core::physics3d::PhysicsWorld>>,
-    /// Draws the collider view on captures; created by the first one that asks for it.
+    /// Draws the game interface and the collider view on captures; created by the first one
+    /// that asks for them.
     capture_painter: Option<offscreen::CapturePainter>,
 }
 
@@ -257,6 +258,9 @@ impl Renderer {
 
     pub fn invalidate_texture(&mut self, id: &str) {
         self.textures.retain(|(key, _), _| key != id);
+        if let Some(capture) = &mut self.capture_painter {
+            capture.forget_image(Some(id));
+        }
     }
 
     pub fn clear_texture_override(&mut self, id: &str) {
@@ -268,6 +272,12 @@ impl Renderer {
     /// intact; a later cache miss reads the now-current PNG from the project.
     pub fn release_saved_texture_pixels(&mut self) -> usize {
         let released = self.texture_override_bytes();
+        // Captures read interface images from the files, which now hold the painting.
+        if let Some(capture) = &mut self.capture_painter {
+            for id in self.overrides.keys() {
+                capture.forget_image(Some(id));
+            }
+        }
         self.overrides.clear();
         released
     }
@@ -283,6 +293,9 @@ impl Renderer {
     pub fn clear_textures(&mut self) {
         self.textures.clear();
         self.overrides.clear();
+        if let Some(capture) = &mut self.capture_painter {
+            capture.forget_image(None);
+        }
     }
 
     /// In-memory painting never writes the source PNG. A document save commits pixels separately.

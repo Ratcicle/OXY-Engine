@@ -166,8 +166,16 @@ impl GameUi {
                         .asset(id)
                         .ok_or_else(|| format!("Imagem de interface ausente: {id}"))
                         .and_then(|asset| {
-                            image::open(root.join(&asset.path))
-                                .map_err(|error| format!("Imagem {}: {error}", asset.name))
+                            let image = image::open(root.join(&asset.path))
+                                .map_err(|error| format!("Imagem {}: {error}", asset.name))?;
+                            let limit = ui.ctx().input(|input| input.max_texture_side);
+                            if image.width().max(image.height()) as usize > limit {
+                                return Err(format!(
+                                    "Imagem {} excede o limite de {limit} pixels da GPU",
+                                    asset.name
+                                ));
+                            }
+                            Ok(image)
                         });
                     match loaded {
                         Ok(image) => {
@@ -573,6 +581,58 @@ mod tests {
                 assert!(on_border(a) && on_border(b));
             }
         }
+    }
+
+    #[test]
+    fn an_image_past_the_gpu_limit_is_a_panel_and_an_error() {
+        use oxy_core::document::{Asset, AssetKind, Entity};
+        let root =
+            std::env::temp_dir().join(format!("oxy-ui-limit-{}", oxy_core::document::new_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        image::RgbaImage::from_pixel(1100, 2, image::Rgba([255; 4]))
+            .save(root.join("fundo.png"))
+            .unwrap();
+        let mut project = Project::new("Limite");
+        project.assets.push(Asset {
+            id: "fundo".into(),
+            name: "Fundo largo".into(),
+            path: "fundo.png".into(),
+            kind: AssetKind::Texture,
+            model: None,
+        });
+        let mut backdrop = Entity::new("Fundo do menu", None);
+        backdrop.ui = Some(UiElement {
+            kind: UiKind::Image,
+            texture: Some("fundo".into()),
+            ..Default::default()
+        });
+        project.scenes[0].entities.push(backdrop);
+        let ctx = egui::Context::default();
+        let mut overlay = GameUi::new();
+        for limit in [1024, 2048] {
+            let input = egui::RawInput {
+                max_texture_side: Some(limit),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    overlay.draw(ui, &project, &project.scenes[0], &root, ui.max_rect());
+                });
+            });
+            if limit < 1100 {
+                // Drawn as a panel in its colour instead of reaching the GPU.
+                assert!(overlay.textures.is_empty());
+                assert_eq!(
+                    overlay.take_errors(),
+                    ["Imagem Fundo largo excede o limite de 1024 pixels da GPU"]
+                );
+                overlay.invalidate_texture("fundo");
+            } else {
+                assert!(overlay.textures.contains_key("fundo"));
+                assert!(overlay.take_errors().is_empty());
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
