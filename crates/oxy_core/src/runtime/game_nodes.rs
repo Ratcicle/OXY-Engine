@@ -1,5 +1,6 @@
 //! Operations about the game as a whole, exposed by the typed graph adapter: the game
-//! variables, the saved progress, the scene running and the scenes logic names.
+//! variables, the saved progress, the scene running and the scenes logic names, the game pause
+//! and quitting.
 use super::*;
 use crate::{
     save::{self, SaveRequest, SaveSlot},
@@ -27,6 +28,7 @@ impl Runtime {
                     .clone())
             }
             "save.state" => Ok(Value::Bool(self.run.save.exists)),
+            "game.read" => Ok(Value::Bool(self.game_paused)),
             // Logic runs only in the running scene, so it is the owner's scene.
             "scene.current" => match output {
                 "scene" => Ok(Value::Text(self.scene_id.clone())),
@@ -123,6 +125,17 @@ impl Runtime {
                 self.run.save.apply(SaveRequest::Clear);
                 self.request_save(SaveRequest::Clear);
             }
+            "game.pause" => match node.text("mode") {
+                "pause" => {
+                    self.set_game_paused(true);
+                }
+                "resume" => {
+                    self.set_game_paused(false);
+                }
+                "toggle" => self.toggle_game_pause(),
+                _ => return Err("Ação de pausa desconhecida; use pause/resume/toggle".into()),
+            },
+            "game.quit" => self.quit_requested = true,
             _ => return self.math_action(graph, node, context, budget),
         }
         Ok(true)
@@ -182,6 +195,60 @@ impl Runtime {
     /// and Apagar progresso made of it.
     pub fn save_slot(&self) -> &SaveSlot {
         &self.run.save
+    }
+
+    /// Whether the game paused itself (Pausar / retomar jogo, or Esc in a scene with a pause
+    /// menu): the world stands still while input events, interface clicks and logic go on. The
+    /// host's own pause is `paused`; the two are kept apart, and either may come first.
+    pub fn game_paused(&self) -> bool {
+        self.game_paused
+    }
+
+    /// The game clock: `time` less the seconds spent in the game pause. Waits, Ler tempo, Ao
+    /// passo and the characters' timing windows run on it, so it stands still in the pause.
+    pub fn game_time(&self) -> f64 {
+        self.time - self.run.paused_for
+    }
+
+    /// Starts or ends the game pause; false when it already was so, or the run stopped. A
+    /// change fires Ao pausar ou retomar in the running scene, whatever caused it. The shown
+    /// poses settle on the last step, and what logic asked of the characters during the pause
+    /// (movement, jumps, slides) is dropped as it ends.
+    pub fn set_game_paused(&mut self, paused: bool) -> bool {
+        if self.stopped || self.game_paused == paused {
+            return false;
+        }
+        self.game_paused = paused;
+        self.characters.settle();
+        if !paused {
+            self.characters.forget_requests();
+        }
+        if let Some(recording) = &mut self.recording {
+            recording.pauses.push(paused);
+        }
+        if self.event_used("event.pause") {
+            self.emit(RuntimeEvent::Pause(paused));
+        }
+        true
+    }
+
+    pub fn toggle_game_pause(&mut self) {
+        self.set_game_paused(!self.game_paused);
+    }
+
+    /// Whether the running scene has a pause menu, logic that listens to Ao pausar ou retomar:
+    /// Esc then pauses the game rather than the host.
+    pub fn has_pause_menu(&self) -> bool {
+        self.event_used("event.pause")
+    }
+
+    /// Where between the last two steps the world is shown: in the game pause, at the last.
+    pub(super) fn presentation_alpha(&self) -> f32 {
+        if self.game_paused {
+            1.
+        } else {
+            (self.accumulator / FIXED_DT).clamp(0., 1.)
+        }
     }
 
     /// Starts the persistent variables at the values `slot` holds, before the scene start

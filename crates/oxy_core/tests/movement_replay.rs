@@ -227,3 +227,72 @@ fn event_owner_index_survives_same_length_reordering_removal_and_insertion() {
     r.advance(FIXED_DT, &input);
     assert!(r.logs.is_empty(), "{:?}", r.logs);
 }
+/// A pause the game takes holds the world still; after it, the run goes on as the run without
+/// it did, later by the length of the pause.
+#[test]
+fn a_game_pause_delays_the_replay_without_changing_it() {
+    use oxy_core::{
+        input_timeline::{InputChange, TimedInput},
+        runtime::{FIXED_DT, InputFrame, Runtime},
+    };
+    let dt = f64::from(FIXED_DT);
+    // The pause starts after step 75, mid-jump, and lasts 90 steps.
+    let (start, length) = (75, 90);
+    for mode in ["sparse", "platforms"] {
+        let p = replay::project(mode);
+        let id = movement::id(0);
+        let inputs = [
+            (0.21, InputChange::Movement([0., 1.])),
+            (0.5, InputChange::Press("correr".into())),
+            (1.113, InputChange::Press("pular".into())),
+            (2.29, InputChange::Release("pular".into())),
+            (2.7, InputChange::Press("agachar".into())),
+            (3.3, InputChange::Release("agachar".into())),
+            (3.9, InputChange::Movement([0.4, -1.])),
+        ];
+        let run = |paused: bool| {
+            let mut rt = Runtime::new(&p, &p.start_scene).unwrap();
+            for (at, change) in &inputs {
+                let at = if paused && *at > start as f64 * dt {
+                    at + length as f64 * dt
+                } else {
+                    *at
+                };
+                rt.queue_timed_input(TimedInput {
+                    at,
+                    change: change.clone(),
+                })
+                .unwrap();
+            }
+            let mut states = Vec::new();
+            for step in 1..=300 + length {
+                if paused && step == start + 1 {
+                    assert!(rt.set_game_paused(true));
+                }
+                if paused && step == start + length + 1 {
+                    assert!(rt.set_game_paused(false));
+                }
+                rt.advance(FIXED_DT, &InputFrame::default());
+                let s = rt.character_state(&id).unwrap();
+                states.push((
+                    s.position.to_array(),
+                    s.total_velocity().to_array(),
+                    s.grounded,
+                    format!("{:?}", s.posture),
+                    s.support.as_ref().map(|s| s.object.clone()),
+                ));
+            }
+            assert!(rt.logs.is_empty(), "{mode}: {:?}", rt.logs);
+            states
+        };
+        let (plain, paused) = (run(false), run(true));
+        assert!(plain.iter().any(|s| !s.2), "{mode}: the run jumps");
+        assert_eq!(paused[..start], plain[..start], "{mode}");
+        for (i, state) in paused[start..start + length].iter().enumerate() {
+            assert_eq!(*state, plain[start - 1], "{mode}: paused step {i}");
+        }
+        for i in start..plain.len() - length {
+            assert_eq!(paused[i + length], plain[i], "{mode}: step {}", i + 1);
+        }
+    }
+}

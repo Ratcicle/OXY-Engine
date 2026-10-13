@@ -45,7 +45,7 @@ impl Runtime {
             "time.read" => Value::Number(if output == "dt" {
                 f64::from(FIXED_DT)
             } else {
-                self.time
+                self.game_time()
             }),
             "character.state" => {
                 let id = self.target(graph, node, context, budget, depth + 1)?;

@@ -1099,3 +1099,239 @@ fn step_height_and_headroom_are_both_required() {
         assert!(rt.logs.is_empty(), "{:?}", rt.logs);
     }
 }
+
+#[test]
+fn coyote_time_and_the_jump_buffer_run_on_game_time_across_a_pause() {
+    let pause = |rt: &mut Runtime| {
+        let before = rt.character_state(BODY).unwrap().clone();
+        assert!(rt.set_game_paused(true));
+        // A second of run time, with a jump pressed that the pause keeps from the body.
+        for step in 0..60 {
+            let input = InputFrame {
+                pressed: if step == 10 {
+                    ["pular".into()].into()
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            };
+            rt.advance(FIXED_DT, &input);
+        }
+        let state = rt.character_state(BODY).unwrap();
+        assert_eq!(
+            (state.position, state.velocity),
+            (before.position, before.velocity)
+        );
+        assert!(rt.set_game_paused(false));
+    };
+    // Off the edge, a long pause, then a jump still inside the 100 ms of coyote time.
+    let mut project = fixture();
+    project.scenes[0]
+        .entity_mut(BODY)
+        .unwrap()
+        .character3d
+        .as_mut()
+        .unwrap()
+        .coyote_ms = 100.;
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let floor = rt.scene().entities[0].id.clone();
+    rt.scene_mut().remove_subtree(&floor);
+    for _ in 0..3 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    pause(&mut rt);
+    rt.request_jump(BODY).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(rt.character_state(BODY).unwrap().velocity.y > 0.);
+    // Logic removing the support after a pause opens the same 100 ms on the game clock: a jump
+    // asked 3 steps later comes, one asked 10 steps later does not.
+    let jumps_after = |steps: usize| {
+        let mut rt = runtime(&project);
+        settle(&mut rt);
+        pause(&mut rt);
+        rt.remove_object(&floor);
+        for _ in 0..steps {
+            rt.advance(FIXED_DT, &InputFrame::default());
+        }
+        rt.request_jump(BODY).unwrap();
+        rt.advance(FIXED_DT, &InputFrame::default());
+        assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+        rt.character_state(BODY).unwrap().velocity.y > 0.
+    };
+    assert!(jumps_after(3));
+    assert!(!jumps_after(10));
+
+    // A jump asked in the air, a long pause, then the landing inside the 120 ms buffer.
+    let mut project = fixture();
+    let body = project.scenes[0].entity_mut(BODY).unwrap();
+    body.transform.position[1] = 0.15;
+    body.character3d.as_mut().unwrap().jump_buffer_ms = 120.;
+    let mut rt = runtime(&project);
+    rt.set_character_velocity(BODY, -Vec3::Y * 3.).unwrap();
+    rt.request_jump(BODY).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(!rt.character_state(BODY).unwrap().grounded);
+    pause(&mut rt);
+    let mut jumped = 0;
+    for _ in 0..8 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+        jumped += rt
+            .movement_events()
+            .iter()
+            .filter(|(_, e)| matches!(e, MovementEvent::Jumped))
+            .count();
+    }
+    assert_eq!(jumped, 1);
+    // A jump logic asks during the pause is dropped as it ends.
+    let mut rt = runtime(&fixture());
+    settle(&mut rt);
+    rt.set_game_paused(true);
+    rt.request_jump(BODY).unwrap();
+    rt.advance(FIXED_DT, &InputFrame::default());
+    rt.set_game_paused(false);
+    rt.advance(FIXED_DT, &InputFrame::default());
+    assert!(rt.character_state(BODY).unwrap().grounded);
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
+fn the_game_pause_holds_the_camera_frees_the_cursor_and_keeps_a_toggled_crouch() {
+    use oxy_core::input_timeline::{InputChange, TimedInput};
+    let project = fixture();
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    assert!(rt.wants_relative_mouse());
+    rt.request_crouch(BODY, true).unwrap();
+    for _ in 0..10 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+    }
+    assert_eq!(rt.character_state(BODY).unwrap().posture, Posture::Crouched);
+    let orientation = rt.camera_orientation().unwrap();
+    let position = rt.character_state(BODY).unwrap().position;
+    rt.set_game_paused(true);
+    assert!(!rt.wants_relative_mouse(), "a menu needs the cursor");
+    rt.advance(FIXED_DT * 0.5, &InputFrame::default());
+    let pose = rt.game_camera_pose().unwrap();
+    rt.queue_timed_input(TimedInput {
+        at: rt.time + 0.1,
+        change: InputChange::Look([300., 40.]),
+    })
+    .unwrap();
+    let looking = InputFrame {
+        look: [500., 120.],
+        held: ["mover_frente".into()].into(),
+        ..Default::default()
+    };
+    for _ in 0..40 {
+        rt.advance(FIXED_DT * 0.7, &looking);
+        let shown = rt.game_camera_pose().unwrap();
+        assert_eq!(shown.position, pose.position);
+        assert!(shown.rotation.abs_diff_eq(pose.rotation, 1e-6));
+    }
+    assert_eq!(rt.character_state(BODY).unwrap().position, position);
+    rt.set_game_paused(false);
+    assert!(rt.wants_relative_mouse());
+    rt.advance(FIXED_DT, &InputFrame::default());
+    // Look given in the pause is not applied afterwards; the crouch asked before it stays.
+    assert!(
+        rt.camera_orientation()
+            .unwrap()
+            .abs_diff_eq(orientation, 1e-6)
+    );
+    assert_eq!(rt.character_state(BODY).unwrap().posture, Posture::Crouched);
+    rt.advance(
+        FIXED_DT,
+        &InputFrame {
+            look: [750., 0.],
+            ..Default::default()
+        },
+    );
+    assert!(
+        !rt.camera_orientation()
+            .unwrap()
+            .abs_diff_eq(orientation, 1e-3)
+    );
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
+fn an_animated_platform_and_its_passenger_freeze_in_the_game_pause() {
+    use oxy_core::{
+        animation::{Clip, Interpolation, Keyframe},
+        graph::{Edge, Node},
+        surface::{PlatformMode, TranslationPlatform},
+    };
+    let mut project = fixture();
+    let mut lift = Entity::new("Elevador", Some(Primitive::Cube));
+    lift.dimensions = [4., 0.5, 4.];
+    lift.transform.position = [20., 0.75, 0.];
+    lift.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: lift.dimensions,
+        },
+        ..Default::default()
+    });
+    lift.platform = Some(TranslationPlatform {
+        mode: PlatformMode::Animation,
+        ..Default::default()
+    });
+    let mut clip = Clip {
+        duration: 2.,
+        looping: true,
+        ..Clip::new("Vaivém")
+    };
+    for (time, x) in [(0., 20.), (1., 24.), (2., 20.)] {
+        let mut transform = lift.transform.clone();
+        transform.position[0] = x;
+        clip.insert_key(
+            &lift.id,
+            Keyframe {
+                time,
+                transform,
+                interpolation: Interpolation::Linear,
+            },
+        );
+    }
+    let start = Node::new("event.scene_start", [0.; 2]);
+    let mut play = Node::new("action.animation", [0.; 2]);
+    play.params
+        .insert("clip".into(), Value::Text(clip.id.clone()));
+    lift.graph.edges.push(Edge {
+        from_node: start.id.clone(),
+        from_port: "exec".into(),
+        to_node: play.id.clone(),
+        to_port: "exec".into(),
+    });
+    lift.graph.nodes = vec![start, play];
+    lift.clips.push(clip);
+    let lift_id = lift.id.clone();
+    let scene = &mut project.scenes[0];
+    scene.entity_mut(BODY).unwrap().transform.position = [20., 1.02, 0.];
+    scene.entities.push(lift);
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    let x = |rt: &Runtime| {
+        (
+            rt.scene().entity(&lift_id).unwrap().transform.position[0],
+            rt.character_state(BODY).unwrap().position.x,
+        )
+    };
+    let before = x(&rt);
+    assert!(before.0 > 21., "{before:?}");
+    let state = rt.character_state(BODY).unwrap();
+    assert_eq!(state.support.as_ref().unwrap().object, lift_id);
+    rt.set_game_paused(true);
+    for _ in 0..30 {
+        rt.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(x(&rt), before);
+    }
+    rt.set_game_paused(false);
+    rt.advance(FIXED_DT, &InputFrame::default());
+    let after = x(&rt);
+    // One step of the clip, 4 m a second, with the passenger carried alike.
+    let moved = (after.0 - before.0, after.1 - before.1);
+    assert!((moved.0 - 4. * FIXED_DT).abs() < 1e-4, "{moved:?}");
+    assert!((moved.1 - moved.0).abs() < 1e-4, "{moved:?}");
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}

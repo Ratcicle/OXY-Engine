@@ -394,6 +394,9 @@ fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
         for _ in 0..3 {
             rt.advance(FIXED_DT, &held);
         }
+        // One step in the game pause, which input logic still runs in.
+        assert!(rt.set_game_paused(true));
+        rt.advance(FIXED_DT, &held);
         rt.queue_timed_input(TimedInput {
             at: rt.time + 10.,
             change: InputChange::Press("pular".into()),
@@ -423,6 +426,7 @@ fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
                 "area_activations",
                 "damage_hits",
                 "area_hits",
+                "game_paused",
             ]
         );
         rt
@@ -430,9 +434,12 @@ fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
     let fresh = Runtime::new(&p, &p.start_scene).unwrap().run_state_debug();
     let mut rt = busy();
     let run = rt.run_state_debug();
-    // The seed, and three draws and three copies counted for the Dado's nodes.
+    // The seed, four draws and four copies counted for the Dado's nodes (one in the pause),
+    // and the step spent in the pause.
     assert!(
-        run.contains("seed: 7") && run.matches("): 3").count() == 2,
+        run.contains("seed: 7")
+            && run.matches("): 4").count() == 2
+            && run.contains(&format!("paused_for: {}", f64::from(FIXED_DT))),
         "{run}"
     );
     assert_ne!(run, fresh);

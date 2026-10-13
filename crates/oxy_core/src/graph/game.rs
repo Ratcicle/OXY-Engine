@@ -1,5 +1,5 @@
 //! Operations about the game as a whole rather than one object: its variables, the progress
-//! saved between runs and the scene running.
+//! saved between runs, the scene running, the game's own pause and quitting.
 use super::*;
 pub(super) fn definitions() -> Vec<OperationDef> {
     use PortType::*;
@@ -62,6 +62,31 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             vec![],
             vec![port("scene", "Cena", Text), port("name", "Nome", Text)],
         ),
+        op(
+            "game.pause",
+            "Pausar / retomar jogo",
+            "Jogo",
+            true,
+            vec![text("mode", "Ação", "toggle")],
+            vec![],
+        ),
+        op(
+            "game.read",
+            "Ler estado do jogo",
+            "Jogo",
+            false,
+            vec![],
+            vec![port("paused", "Pausado", Bool)],
+        ),
+        // Like Mudar de cena, nothing follows it.
+        OperationDef {
+            id: "game.quit",
+            label: "Sair do jogo",
+            category: "Jogo",
+            inputs: vec![port("exec", "Executar", Exec)],
+            outputs: vec![],
+            params: vec![],
+        },
     ]
 }
 pub fn game_help(id: &str) -> Option<(&'static str, &'static str, &'static str)> {
@@ -96,13 +121,35 @@ pub fn game_help(id: &str) -> Option<(&'static str, &'static str, &'static str)>
             "Ligue a saída Cena à entrada Cena de Mudar de cena para reiniciar a cena. A mesma lógica, copiada para outra cena ou colocada a partir de um modelo, reinicia a cena em que estiver.",
             "Cena é o identificador estável, que não muda ao renomear a cena: é o que Mudar de cena espera. Nome é o texto mostrado, que pode mudar ou se repetir: use-o em textos e chaves, não como destino. Para abrir outra cena, escolhida pelo nome, use Referência de cena.",
         ),
+        "game.pause" => (
+            "Pausa, retoma ou alterna a pausa do jogo. Na pausa, o mundo para: movimento, animações, áreas, A cada passo e Esperar. As ações de entrada, os cliques na interface e a lógica continuam, e o mouse fica livre.",
+            "Num botão Continuar de um menu de pausa, ligue Ao clicar a Pausar / retomar jogo com a Ação Retomar. Numa ação de entrada, Alternar pausa e retoma com a mesma tecla.",
+            "Cada mudança dispara Ao pausar ou retomar na cena, que pode mostrar e esconder o menu; pedir o estado em que o jogo já está não faz nada. Uma espera iniciada durante a pausa só termina depois de retomar. As ações de entrada continuam disparando na pausa: use Ler estado do jogo para ignorar as que movem o jogo. Mudar de cena termina a pausa. Esta é a pausa do jogo; a da engine (Pausar no editor, perda de foco) para também a lógica, e as duas podem acontecer juntas.",
+        ),
+        "game.read" => (
+            "Fornece Pausado: verdadeiro durante a pausa do jogo.",
+            "Numa ação de entrada que dispara um efeito, ligue Pausado à Condição de Se / Senão e siga pelo Falso: com o jogo pausado, o efeito não acontece.",
+            "Lê só a pausa do jogo, a de Pausar / retomar jogo: na pausa da engine a lógica não executa. Para agir quando a pausa muda, use o evento Ao pausar ou retomar.",
+        ),
+        "game.quit" => (
+            "Encerra o jogo: o jogo exportado fecha a janela.",
+            "Num botão Sair de um menu, ligue Ao clicar a Sair do jogo.",
+            "No teste do editor, para o teste, como Parar, e escreve uma linha no Console; numa simulação dos agentes, encerra a simulação. O que ainda falta da lógica no mesmo passo executa. Para o progresso continuar na próxima partida, ligue antes Salvar progresso.",
+        ),
         _ => return None,
     })
 }
-/// Fixed values of the parameters of these operations; none has one yet.
+/// Fixed values of the parameters of these operations.
 pub fn game_choices(
-    _operation: &str,
-    _parameter: &str,
+    operation: &str,
+    parameter: &str,
 ) -> Option<&'static [(&'static str, &'static str)]> {
-    None
+    Some(match (operation, parameter) {
+        ("game.pause", "mode") => &[
+            ("pause", "Pausar"),
+            ("resume", "Retomar"),
+            ("toggle", "Alternar"),
+        ],
+        _ => return None,
+    })
 }

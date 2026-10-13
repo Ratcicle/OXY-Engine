@@ -41,6 +41,18 @@ impl Topic {
             "event.click" => {
                 "Escolha um objeto visual clicável ou adicione um botão de interface ao responsável pelo grafo."
             }
+            "event.pause" => {
+                "Escolha Ao pausar ou Ao retomar e ligue Executar às ações que mostram ou escondem o menu. O evento dispara a cada mudança da pausa do jogo."
+            }
+            "game.pause" => {
+                "Escolha a Ação (Pausar, Retomar ou Alternar) e conecte uma saída de execução à entrada Executar."
+            }
+            "game.read" => {
+                "Não precisa de configuração. Ligue Pausado a uma entrada booleana, como a Condição de Se / Senão; sozinho, o nó não inicia um comportamento."
+            }
+            "game.quit" => {
+                "Conecte uma saída de execução à entrada Executar, como o Ao clicar de um botão Sair."
+            }
             "attribute.get" | "attribute.set" | "action.damage" => {
                 "Crie o atributo no painel do objeto correto e escreva o mesmo nome no nó. Dano exige um atributo numérico. Forneça o alvo pela porta ou por referência explícita; vazio usa o responsável."
             }
@@ -95,11 +107,12 @@ pub fn topics() -> &'static [Topic] {
     TOPICS.get_or_init(||crate::graph::registry().iter().map(|operation| {
         let (purpose,example,caution)=match operation.id {
             "event.scene_start"=>("Inicia um fluxo quando esta cena começa.","Conecte a uma mensagem para verificar que o objeto está na cena.","O evento acontece novamente ao iniciar outra instância da cena; não a cada atualização."),
-            "event.input"=>("Inicia um fluxo ao pressionar, manter ou soltar uma ação configurada na Lógica.","Escolha Mostrar mensagem, tecla K, modo Pressionar; conecte a Mensagem de diagnóstico.","Pressionar e Soltar são transições únicas. Manter executa uma vez por passo fixo; é adequado para ações contínuas. Pausa e campos de texto não recebem controles do jogo."),
+            "event.input"=>("Inicia um fluxo ao pressionar, manter ou soltar uma ação configurada na Lógica.","Escolha Mostrar mensagem, tecla K, modo Pressionar; conecte a Mensagem de diagnóstico.","Pressionar e Soltar são transições únicas. Manter executa uma vez por passo fixo; é adequado para ações contínuas. A pausa da engine e campos de texto não recebem controles do jogo; na pausa do jogo, as ações continuam disparando (use Ler estado do jogo para ignorá-las)."),
             "event.click"=>("Inicia o comportamento ao clicar no objeto ou em seu botão de interface.","Um botão de carta inicia uma condição de energia antes de aplicar o efeito.","O grafo precisa pertencer ao objeto clicado; uma referência visual não cria uma ligação de clique."),
             "event.area_enter"=>("Detecta entrada em uma área e fornece o objeto que entrou.","Ligue Objeto à leitura do atributo Chave do visitante.","Adicione um colisor ativo marcado como área ao responsável. Não procure o visitante por um nome fixo."),
             "event.area_exit"=>("Executa quando o visitante sai de uma área e fornece esse objeto.","Use a referência do visitante para desativar um efeito temporário ao sair.","Um corpo de movimento 3D rápido pode entrar e sair no mesmo passo, nessa ordem. Desativar ou remover uma área cancela a ocupação; não simula uma travessia. Objetos legados usam a sobreposição entre passos."),
             "event.animation"=>("Inicia um fluxo quando a reprodução atravessa um marcador de animação.","Use Impacto para ativar a área do golpe.","O marcador precisa existir no clip reproduzido pelo responsável. Ficar parado perto do instante não repete o evento."),
+            "event.pause"=>("Inicia um fluxo quando o jogo pausa ou retoma, qualquer que seja a causa: o nó Pausar / retomar jogo ou a tecla Esc.","Num grupo de interface Menu de pausa, oculto ao começar, Ao pausar mostra o grupo com Ativar / desativar componente (Visibilidade) e Ao retomar o esconde.","Uma cena com este evento tem menu de pausa: Esc pausa e retoma o jogo em vez de pausar a engine. Ao mudar de cena, a pausa termina sem o evento: a cena nova começa sem pausa. Na pausa do jogo, o mundo para, mas a lógica, as ações de entrada e os cliques na interface continuam; botões ocultos não recebem cliques."),
             "value.number"=>("Fornece um número constante.","Use 2 como custo de uma carta.","Conecte a uma entrada numérica; textos não viram números automaticamente."),
             "value.text"=>("Fornece um texto constante.","Defina uma mensagem ou conteúdo textual para um atributo.","O texto não procura objetos pelo nome; use referências de objeto."),
             "value.bool"=>("Fornece verdadeiro ou falso.","Use verdadeiro ao registrar que uma chave foi coletada.","Uma condição espera um booleano, não o texto verdadeiro."),
@@ -117,7 +130,7 @@ pub fn topics() -> &'static [Topic] {
             "action.component"=>("Ativa ou desativa o componente escolhido: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel.","Ative a colisão da área de ataque, espere sua duração e desative-a.","Visibilidade, comportamento, controlador, animação, colisão e plataforma são estados distintos: ocultar a peça não desativa seu colisor. Desativar uma área encerra a ocupação sem gerar saída; ao reativá-la, quem estiver dentro entra de novo. Desativar a plataforma móvel para o movimento por velocidade; numa plataforma animada, só deixa de carregar quem está em cima, e a animação continua: pause-a com Reprodução da animação."),
             "action.scene"=>("Encerra a cena atual e abre a cena de destino: a escolhida no parâmetro ou a que a entrada Cena receber.","Uma passagem usa a área para iniciar a segunda cena. Com Cena atual ligada à entrada Cena, o mesmo nó reinicia a cena em que está, em qualquer cena para onde a lógica for copiada.","Conectada, a entrada Cena substitui a cena escolhida, que fica ignorada. Ela espera o identificador de uma cena, não o nome: um texto vazio, um nome ou um identificador que o projeto não tem interrompe o comportamento com erro. Para seguir para outra cena, escolha-a no parâmetro em cada cópia da lógica ou ligue à entrada Cena uma Referência de cena. Um atributo de texto lido por Ler atributo também serve, com o identificador da cena: grave-o com Alterar atributo a partir de uma Referência de cena. Tarefas e ativações da cena anterior são canceladas."),
             "control.sequence"=>("Dispara as saídas 1, 2 e 3 nessa ordem.","Inicie som e animação a partir do mesmo evento.","Não aguarda que um ramo termine. Para esperar antes da próxima ação, conecte-as em um mesmo ramo através de Esperar."),
-            "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é da simulação: pausar o jogo suspende a espera. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
+            "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é o do jogo: a pausa da engine e a pausa do jogo suspendem a espera, e uma espera iniciada durante a pausa do jogo só termina depois de retomar. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
             "debug.message"=>("Registra uma mensagem no Console durante o teste.","Ligue à ação K para verificar seu primeiro fluxo.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução."),
             _=>crate::graph::game_help(operation.id).or_else(||crate::graph::math_help(operation.id)).or_else(||crate::graph::movement_help(operation.id)).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
         };Topic {operation,purpose,example,caution}

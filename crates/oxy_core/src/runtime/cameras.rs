@@ -743,7 +743,7 @@ impl Runtime {
                 world.sync_scene(self.scene(), false)?;
                 self.characters.world = Some(world);
             }
-            let pending = if self.paused {
+            let pending = if self.paused || self.game_paused {
                 Vec2::ZERO
             } else {
                 Vec2::from(self.pending_look)
@@ -751,12 +751,14 @@ impl Runtime {
                         .input_timeline
                         .unconsumed_look(self.time + f64::from(self.accumulator))
             };
+            // The game pause freezes smoothing and transitions where they are.
+            let dt = if self.game_paused { 0. } else { dt.min(0.25) };
             cameras.present(
                 self.scene(),
                 &self.characters,
-                (self.accumulator / FIXED_DT).clamp(0., 1.),
+                self.presentation_alpha(),
                 pending,
-                dt.min(0.25),
+                dt,
             )
         })();
         let warning = result.err().or_else(|| {

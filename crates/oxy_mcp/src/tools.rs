@@ -87,7 +87,11 @@ others are refused; {type: movement, at, value: [right, \
 forward]}, each -1 to 1, held until the next movement; {type: look, at, value: [x, y]}, a mouse \
 displacement applied once: each unit turns the camera by its sensitivity (camera control, 0.12 \
 degrees by default), +x turns right and +y looks down unless the camera inverts an axis; {type: \
-click, at, entity}. They survive scene changes and reloads; a key held across one stays held.";
+click, at, entity}: an object or its interface button; a hidden element (itself or a group above \
+it) takes no click, which a log line notes, and in the game pause only interface elements take \
+clicks; {type: escape, at}: what Esc does in the game, pausing or resuming it when the scene has \
+a pause menu (an event.pause node), else a log line says it has none. They survive scene \
+changes and reloads; a key held across one stays held.";
 const COLLIDERS: &str = "Draws colliders (green) and sensor areas (yellow) over the image, \
 invisible objects' too, as the editor's collider view does.";
 const SEED: &str = "Seed of the random.number draws, an integer from 0 to 9007199254740991 \
@@ -166,7 +170,9 @@ pub fn definitions() -> Json {
             "oxy_status",
             "Lists open OXY editors that allow AI agents (project, active scene, unsaved changes, \
              whether the editor is busy and why) and explains how tools pick a target. play says \
-             whether the person is testing the game: {running, paused?, scene? {id, name}, \
+             whether the person is testing the game: {running, paused? (the test is paused), \
+             game_paused? (the game is in its own pause, from game.pause or Esc with a pause \
+             menu; either pause can hold alone, or both), scene? {id, name}, \
              time? (simulated seconds), seed? (of the test's random.number draws, new on each \
              test and still there after it stops: oxy_simulate with this seed gives each \
              random.number node the same numbers in the same order), variables? (the game \
@@ -389,10 +395,14 @@ pub fn definitions() -> Json {
                            "kind": {"type": "string", "enum": ["jump", "land", "leave", "side",
                                "surface", "posture", "area_enter", "area_exit"]},
                            "object": {"type": "string", "description": "Either side of the event."}},
-                           "required": ["kind"]}},
+                           "required": ["kind"]},
+                       "paused": {"type": "boolean", "description":
+                           "true: stops when the game pause starts; false: when it ends (a scene \
+                            change ends it too). The final ui then shows the pause menu."}},
                        "description": "Stops at the first moment any condition holds; the report \
                         says which in stopped_at {time, reason, kind (the event's, for event), \
-                        detail (what happened, in words)}."},
+                        detail (what happened, in words)}. A game.quit node ends the run whatever \
+                        until asks, with reason quit."},
                    "ui": {"type": "boolean", "description":
                        "Reports the game interface at the end (default true): ui, in drawing order \
                         (the topmost last), [{id, name, kind: Text|Image|Button|Bar, visible, rect: \
@@ -651,7 +661,10 @@ the project (nothing is saved or changed) and reports what happened: scene chang
 when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
 sounds, movement and area events {time, kind: jump|land|leave|side|surface|posture|area_enter|\
 area_exit, object, other?} as the game fires them (also when its logic then removes the objects \
-involved or changes scene), the game camera at the end {active, mode, position, forward, fov}, \
+involved or changes scene), the game's own pause (pauses: [{time, paused}], each change, left \
+out when none; paused: the state at the end; in the pause the world, waits included, stands \
+still while logic, input actions and interface clicks go on; a game.quit node ends the run, \
+stopped_at reason quit), the game camera at the end {active, mode, position, forward, fov}, \
 the game interface at the end (ui: texts with their values, bars, buttons), the watched \
 objects and the game variables at the end (variables: {name: tagged value, as {\"Number\": 3}}, \
 \"name · key\" for the value of a key; up to 300, the variables' own values before the keys', \
@@ -1387,6 +1400,30 @@ mod tests {
         assert!(inputs.contains("+y looks down"));
         assert_eq!(shot["inputs"], simulate["inputs"]);
         assert!(SIMULATE_DESCRIPTION.contains("game interface"));
+        // Esc, the game pause and quitting; clicks as a person makes them.
+        assert!(inputs.contains("{type: escape, at}") && inputs.contains("event.pause"));
+        assert!(inputs.contains("a hidden element") && inputs.contains("takes no click"));
+        assert!(SIMULATE_DESCRIPTION.contains("pauses: [{time, paused}]"));
+        assert!(SIMULATE_DESCRIPTION.contains("paused: the state at the end"));
+        assert!(SIMULATE_DESCRIPTION.contains("stopped_at reason quit"));
+        let until = &simulate["until"];
+        assert_eq!(until["properties"]["paused"]["type"], "boolean");
+        assert!(
+            until["description"]
+                .as_str()
+                .unwrap()
+                .contains("reason quit")
+        );
+        let status = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_status")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(status.contains("game_paused?") && status.contains("paused? (the test"));
     }
 
     #[test]
@@ -2173,6 +2210,93 @@ mod tests {
         assert!(
             error.contains("Contador → nó Ler variável do jogo"),
             "{error}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_simulate_a_pause_menu_that_escape_opens_and_continuar_closes() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-pause-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Pausa", SceneKind::TwoD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // A hidden group that Ao pausar shows, with a Continuar button that resumes.
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Menu de pausa"},
+                {"op": "update_entity", "entity": "$0", "patch": {"visible": false}},
+                {"op": "create_entity", "kind": {"type": "ui", "element": "Button"},
+                 "name": "Continuar", "parent": "$0"},
+                {"op": "add_node", "entity": "$0", "operation": "event.pause",
+                 "params": {"when": "pause"}},
+                {"op": "add_node", "entity": "$0", "operation": "action.component",
+                 "params": {"component": "visible"}},
+                {"op": "connect", "entity": "$0", "from_node": "$3", "from_port": "exec",
+                 "to_node": "$4", "to_port": "exec"},
+                {"op": "add_node", "entity": "$2", "operation": "event.click"},
+                {"op": "add_node", "entity": "$2", "operation": "game.pause",
+                 "params": {"mode": "resume"}},
+                {"op": "connect", "entity": "$2", "from_node": "$6", "from_port": "exec",
+                 "to_node": "$7", "to_port": "exec"},
+            ]}),
+        )
+        .unwrap();
+        assert!(applied.get("warnings").is_none(), "{applied}");
+        let button = applied["created"]["2"][0]["id"].clone();
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 1.0, "inputs": [{"type": "escape", "at": 0.2}],
+                   "until": {"paused": true}}),
+        )
+        .unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "paused", "{report}");
+        assert_eq!(report["paused"], true);
+        assert_eq!(report["pauses"], json!([{"time": 0.2167, "paused": true}]));
+        let shown = report["ui"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == "Continuar")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (&shown["visible"], &shown["clickable"]),
+            (&json!(true), &json!(true))
+        );
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 1.0, "ui": false, "inputs": [
+                {"type": "click", "at": 0.1, "entity": button},
+                {"type": "escape", "at": 0.2},
+                {"type": "click", "at": 0.5, "entity": button},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(report["paused"], false);
+        assert_eq!(
+            report["pauses"][1],
+            json!({"time": 0.5167, "paused": false})
+        );
+        // The first click came while the menu was hidden.
+        assert!(
+            report["logs"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Clique ignorado: Continuar está oculto"),
+            "{report}"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

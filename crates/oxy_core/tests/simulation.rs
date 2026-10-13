@@ -2287,3 +2287,205 @@ fn runs_with_variables_repeat_and_setup_starts_them_elsewhere() {
         })
     );
 }
+
+/// `menu_and_level()` with a pause menu in the level: a hidden group that Ao pausar shows and
+/// Ao retomar hides, holding Continuar (resumes) and Sair (quits), and a clock that logs once
+/// half a second of game time has gone by in the level.
+fn paused_level() -> (Project, Id, Id, Id) {
+    let (mut project, level) = menu_and_level();
+    let mut menu = Entity::new("Menu de pausa", None);
+    menu.visible = false;
+    for (when, shown) in [("pause", true), ("resume", false)] {
+        let event = node(&mut menu, "event.pause", &[("when", text(when))]);
+        let show = node(
+            &mut menu,
+            "action.component",
+            &[
+                ("component", text("visible")),
+                ("enabled", Value::Bool(shown)),
+            ],
+        );
+        link(&mut menu, &event, &show);
+    }
+    let button = |name: &str, operation: &str, params: &[(&str, Value)]| {
+        let mut e = Entity::new(name, None);
+        e.parent = Some(menu.id.clone());
+        e.ui = Some(UiElement {
+            kind: UiKind::Button,
+            text: name.into(),
+            ..Default::default()
+        });
+        let click = node(&mut e, "event.click", &[]);
+        let act = node(&mut e, operation, params);
+        link(&mut e, &click, &act);
+        e
+    };
+    let resume = button("Continuar", "game.pause", &[("mode", text("resume"))]);
+    let quit = button("Sair", "game.quit", &[]);
+    let mut clock = Entity::new("Relógio", None);
+    let start = node(&mut clock, "event.scene_start", &[]);
+    let wait = node(
+        &mut clock,
+        "control.wait",
+        &[("seconds", Value::Number(0.5))],
+    );
+    let said = node(
+        &mut clock,
+        "debug.message",
+        &[("message", text("meio segundo"))],
+    );
+    link(&mut clock, &start, &wait);
+    link(&mut clock, &wait, &said);
+    let (resume_id, quit_id) = (resume.id.clone(), quit.id.clone());
+    project
+        .scene_mut(&level)
+        .unwrap()
+        .entities
+        .extend([menu, resume, quit, clock]);
+    validate_project(&project).unwrap();
+    (project, level, resume_id, quit_id)
+}
+
+#[test]
+fn escape_opens_the_pause_menu_whose_buttons_resume_and_quit() {
+    let (project, level, resume, quit) = paused_level();
+    let log_time = |report: &SimulationReport, text: &str| {
+        report
+            .logs
+            .iter()
+            .find(|l| l.text == text)
+            .map(|l| l.time)
+            .unwrap_or_else(|| panic!("{text}: {:?}", report.logs))
+    };
+    let shown = |report: &SimulationReport, name: &str| {
+        let element = report.ui.iter().find(|e| e.name == name).unwrap();
+        (element.visible, element.clickable)
+    };
+    // The level opens at 1 s. Esc pauses it at 1.2, Continuar resumes it at 2, Esc again at 2.5.
+    let inputs = json!([
+        {"type": "escape", "at": 1.2},
+        {"type": "press", "at": 1.5, "action": "pular"},
+        {"type": "release", "at": 1.6, "action": "pular"},
+        {"type": "click", "at": 2.0, "entity": resume},
+        {"type": "escape", "at": 2.5},
+    ]);
+    let report = run(
+        &project,
+        json!({"seconds": 3.0, "inputs": inputs, "check_replay": true}),
+    );
+    assert!(
+        report.replay.as_ref().unwrap().identical,
+        "{:?}",
+        report.replay
+    );
+    let pauses: Vec<_> = report.pauses.iter().map(|p| (p.time, p.paused)).collect();
+    assert_eq!(pauses.len(), 3, "{pauses:?}");
+    for ((time, paused), (expected, state)) in
+        pauses
+            .iter()
+            .zip([(1.2167, true), (2.0167, false), (2.5167, true)])
+    {
+        assert!(near(*time, expected) && *paused == state, "{pauses:?}");
+    }
+    assert!(report.paused);
+    // Input logic runs in the pause, at run time; the wait counts game time only: half a
+    // second after 1.0, plus the 0.8 s the game spent paused.
+    assert!(near(log_time(&report, "pulou"), 1.5), "{:?}", report.logs);
+    assert!(
+        near(log_time(&report, "meio segundo"), 2.3167),
+        "{:?}",
+        report.logs
+    );
+    assert_eq!(shown(&report, "Continuar"), (true, true));
+    assert_eq!(shown(&report, "Sair"), (true, true));
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["pauses"][0], json!({"time": 1.2167, "paused": true}));
+    assert_eq!(json["paused"], true);
+
+    // Until the pause starts, and until it ends.
+    let stop = run(
+        &project,
+        json!({"seconds": 3.0, "inputs": inputs, "until": {"paused": true}}),
+    );
+    let stopped = stop.stopped_at.as_ref().unwrap();
+    assert_eq!(
+        (stopped.reason, stopped.detail.as_str()),
+        ("paused", "O jogo pausou")
+    );
+    assert!(near(stopped.time, 1.2167) && stop.paused, "{stopped:?}");
+    assert_eq!(shown(&stop, "Continuar"), (true, true), "the menu shows");
+    let stop = run(
+        &project,
+        json!({"seconds": 3.0, "inputs": inputs, "until": {"paused": false}}),
+    );
+    let stopped = stop.stopped_at.as_ref().unwrap();
+    assert_eq!(stopped.detail, "O jogo saiu da pausa");
+    assert!(near(stopped.time, 2.0167) && !stop.paused, "{stopped:?}");
+    assert_eq!(shown(&stop, "Continuar"), (false, false));
+
+    // Sair ends the run, with no `until`.
+    let quitting = run(
+        &project,
+        json!({"seconds": 3.0, "inputs": [
+            {"type": "escape", "at": 1.2},
+            {"type": "click", "at": 1.5, "entity": quit},
+        ]}),
+    );
+    let stopped = quitting.stopped_at.as_ref().unwrap();
+    assert_eq!(stopped.reason, "quit");
+    assert_eq!(stopped.detail, "O jogo pediu para sair (Sair do jogo)");
+    assert!(near(stopped.time, 1.5167), "{stopped:?}");
+    assert_eq!(quitting.final_scene, level);
+
+    // A hidden button takes no click, as for a person, and says so.
+    let hidden = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": [{"type": "click", "at": 1.1, "entity": resume}]}),
+    );
+    assert!(hidden.pauses.is_empty() && !hidden.paused);
+    let json = serde_json::to_value(&hidden).unwrap();
+    assert!(json.get("pauses").is_none() && json["paused"] == false);
+    let ignored = hidden
+        .logs
+        .iter()
+        .find(|l| l.text.starts_with("Clique ignorado"))
+        .unwrap();
+    assert_eq!(
+        ignored.text,
+        "Clique ignorado: Continuar está oculto (ele mesmo ou um grupo acima dele)."
+    );
+    assert!(ignored.object.is_none());
+
+    // The menu scene has no pause menu: Esc only logs.
+    let early = run(
+        &project,
+        json!({"seconds": 0.5, "inputs": [{"type": "escape", "at": 0.2}]}),
+    );
+    assert!(early.pauses.is_empty() && !early.paused);
+    assert!(
+        early.logs[0]
+            .text
+            .starts_with("Esc: a cena não tem menu de pausa"),
+        "{:?}",
+        early.logs
+    );
+
+    // A scene change ends the pause: the level reloads itself on "reiniciar", which input
+    // logic runs in the pause.
+    let reload = run(
+        &project,
+        json!({"seconds": 2.0, "inputs": [
+            {"type": "escape", "at": 1.2},
+            {"type": "press", "at": 1.5, "action": "reiniciar"},
+            {"type": "release", "at": 1.6, "action": "reiniciar"},
+        ]}),
+    );
+    let pauses: Vec<_> = reload.pauses.iter().map(|p| (p.time, p.paused)).collect();
+    assert!(
+        pauses.len() == 2 && near(pauses[1].0, 1.5) && !pauses[1].1,
+        "{pauses:?}"
+    );
+    assert!(!reload.paused);
+    assert!(reload.scene_changes.last().unwrap().reload);
+    assert_eq!(shown(&reload, "Continuar"), (false, false));
+}

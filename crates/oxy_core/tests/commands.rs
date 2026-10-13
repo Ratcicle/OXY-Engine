@@ -284,6 +284,8 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
         ("random.number", "mode", "inteiro"),
         ("condition.compare", "operator", "=>"),
         ("event.character", "kind", "pulo"),
+        ("event.pause", "when", "pausar"),
+        ("game.pause", "mode", "parar"),
     ] {
         let commands = batch(json!([
             {"op": "create_entity", "kind": {"type": "group"}},
@@ -345,6 +347,20 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
         ),
     )
     .unwrap();
+    // The game pause's nodes take their values, plain ones too.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": entity, "operation": "event.pause",
+             "params": {"when": "resume"}},
+            {"op": "add_node", "entity": entity, "operation": "game.pause",
+             "params": {"mode": "pause"}},
+            {"op": "add_node", "entity": entity, "operation": "game.read"},
+            {"op": "add_node", "entity": entity, "operation": "game.quit"},
+        ])),
+    )
+    .unwrap();
 
     // The editor reads the same lists from the core.
     assert_eq!(
@@ -389,6 +405,21 @@ fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
     assert_eq!(
         param("action.component", "component")["choices"][5],
         json!({"value": "platform", "label": "Plataforma móvel"})
+    );
+    assert_eq!(
+        param("event.pause", "when")["choices"],
+        json!([
+            {"value": "pause", "label": "Ao pausar"},
+            {"value": "resume", "label": "Ao retomar"},
+        ])
+    );
+    assert_eq!(
+        param("game.pause", "mode")["choices"],
+        json!([
+            {"value": "pause", "label": "Pausar"},
+            {"value": "resume", "label": "Retomar"},
+            {"value": "toggle", "label": "Alternar"},
+        ])
     );
     assert_eq!(param("event.input", "action")["ref"], "input_action");
     assert!(param("event.input", "action").get("choices").is_none());

@@ -1,9 +1,9 @@
 //! Runs a game without a window for a simulated time and reports what happened: scene
-//! changes, logs, logic actions, sounds, movement and area events, the game camera, the game
-//! interface, the state of watched objects, the game variables, the progress saved and a hash
-//! of the whole state at the end. Used by the MCP server so an agent can test a change, and by
-//! tests. On request a second copy runs alongside on the same inputs, to check that the run
-//! repeats itself step by step.
+//! changes, logs, logic actions, sounds, movement and area events, the game pause, the game
+//! camera, the game interface, the state of watched objects, the game variables, the progress
+//! saved and a hash of the whole state at the end. Used by the MCP server so an agent can test
+//! a change, and by tests. On request a second copy runs alongside on the same inputs, to
+//! check that the run repeats itself step by step.
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -61,10 +61,16 @@ pub enum InputEvent {
         at: f64,
         value: [f32; 2],
     },
-    /// Clicks an object or its interface button.
+    /// Clicks an object or its interface button. A hidden element takes no click, nor does a
+    /// world object in the game pause, as in the game.
     Click {
         at: f64,
         entity: Id,
+    },
+    /// What Esc does in the game: pauses or resumes it when the scene has a pause menu (logic
+    /// listening to Ao pausar ou retomar); otherwise a log line says there is none.
+    Escape {
+        at: f64,
     },
 }
 impl InputEvent {
@@ -74,7 +80,8 @@ impl InputEvent {
             | Self::Release { at, .. }
             | Self::Movement { at, .. }
             | Self::Look { at, .. }
-            | Self::Click { at, .. } => *at,
+            | Self::Click { at, .. }
+            | Self::Escape { at } => *at,
         }
     }
 }
@@ -203,6 +210,9 @@ pub struct Until {
     pub entity_absent: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<EventCondition>,
+    /// `true`: the game pause starts; `false`: it ends (a scene change ending it included).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
@@ -578,6 +588,13 @@ fn is_zero(count: &usize) -> bool {
     *count == 0
 }
 
+/// A change of the game pause: `paused` is the new state.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PauseEvent {
+    pub time: f64,
+    pub paused: bool,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SimulationReport {
     pub seconds: f64,
@@ -593,6 +610,11 @@ pub struct SimulationReport {
     pub replay: Option<ReplayCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<StoppedAt>,
+    /// Whether the game was in its own pause at the end.
+    pub paused: bool,
+    /// Each change of the game pause, oldest first (the most recent `MAX_ENTRIES`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pauses: Vec<PauseEvent>,
     /// What each setup command did, with the IDs it created.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub setup: Vec<Applied>,
@@ -880,6 +902,8 @@ struct Happened {
     scenes: Vec<Id>,
     logs: Vec<String>,
     events: Vec<GameEvent>,
+    /// The game pause's changes, each its new state.
+    pauses: Vec<bool>,
 }
 
 /// "Object · Action", with the action's label.
@@ -975,6 +999,7 @@ struct Recorder<'a> {
     sounds: Recent<Event>,
     events: Recent<GameEvent>,
     saves: Recent<SaveEvent>,
+    pauses: Recent<PauseEvent>,
 }
 impl Recorder<'_> {
     fn lookup<'b>(&'b self, runtime: &'b Runtime) -> Lookup<'b> {
@@ -1003,7 +1028,15 @@ impl Recorder<'_> {
             crossings,
             movements,
             spawned,
+            pauses,
         } = recording;
+        for &paused in &pauses {
+            self.pauses.push(PauseEvent {
+                time: rounded(time),
+                paused,
+            });
+        }
+        happened.pauses = pauses;
         for object in spawned {
             // A copy's nodes have IDs of their own, so its exclusions come from its own graph.
             if self.mode != ActionsMode::None
@@ -1176,6 +1209,7 @@ impl Recorder<'_> {
         report.sounds = self.sounds.finish("sounds", truncated);
         report.events = self.events.finish("events", truncated);
         report.saves = self.saves.finish("saves", truncated);
+        report.pauses = self.pauses.finish("pauses", truncated);
         report.actions = match self.mode {
             ActionsMode::None => None,
             ActionsMode::All => Some(Actions::All(self.actions.finish("actions", truncated))),
@@ -1327,6 +1361,7 @@ struct Stop {
     variable: Option<(VariableCondition, String)>,
     absent: Option<(Id, String)>,
     event: Option<(EventKind, Option<Id>)>,
+    paused: Option<bool>,
 }
 impl Stop {
     fn new(
@@ -1474,6 +1509,7 @@ impl Stop {
             && variable.is_none()
             && absent.is_none()
             && event.is_none()
+            && until.paused.is_none()
         {
             return Err("until: informe ao menos uma condição".into());
         }
@@ -1484,6 +1520,7 @@ impl Stop {
             variable,
             absent,
             event,
+            paused: until.paused,
         })
     }
 
@@ -1565,6 +1602,16 @@ impl Stop {
                 ..stopped("event", event_detail(event))
             });
         }
+        if let Some(paused) = self.paused
+            && happened.pauses.contains(&paused)
+        {
+            let detail = if paused {
+                "O jogo pausou"
+            } else {
+                "O jogo saiu da pausa"
+            };
+            return Some(stopped("paused", detail.into()));
+        }
         None
     }
 }
@@ -1594,6 +1641,25 @@ fn event_detail(event: &GameEvent) -> String {
     }
 }
 
+/// An input given to the game itself rather than through its input actions, as a window does.
+enum Direct {
+    Click(Id),
+    Escape,
+}
+impl Direct {
+    fn apply(&self, runtime: &mut Runtime) {
+        match self {
+            Self::Click(entity) => runtime.click(entity),
+            Self::Escape if runtime.has_pause_menu() => runtime.toggle_game_pause(),
+            Self::Escape => runtime.log(
+                "Esc: a cena não tem menu de pausa (nenhum objeto usa Ao pausar ou retomar); no \
+                 jogo, Esc abriria a pausa da engine."
+                    .into(),
+            ),
+        }
+    }
+}
+
 /// The replay check: a second copy of the game, fed the same clicks and inputs in lockstep and
 /// compared after every step until the two differ.
 struct Twin {
@@ -1601,9 +1667,9 @@ struct Twin {
     check: ReplayCheck,
 }
 impl Twin {
-    fn click(&mut self, entity: &str) {
+    fn direct(&mut self, direct: &Direct) {
         if let Some(twin) = &mut self.runtime {
-            twin.click(entity);
+            direct.apply(twin);
         }
     }
     fn advance(&mut self, frame: &InputFrame) {
@@ -1783,7 +1849,7 @@ pub fn run(
         return Err("Os tempos das entradas precisam ser números a partir de 0".into());
     }
     let mut timeline = InputTimeline::default();
-    let mut clicks = Vec::new();
+    let mut directs = Vec::new();
     for event in events {
         let (at, change) = match event {
             InputEvent::Press { at, action } => (at, InputChange::Press(action)),
@@ -1791,7 +1857,11 @@ pub fn run(
             InputEvent::Movement { at, value } => (at, InputChange::Movement(value)),
             InputEvent::Look { at, value } => (at, InputChange::Look(value)),
             InputEvent::Click { at, entity } => {
-                clicks.push((at, entity));
+                directs.push((at, Direct::Click(entity)));
+                continue;
+            }
+            InputEvent::Escape { at } => {
+                directs.push((at, Direct::Escape));
                 continue;
             }
         };
@@ -1879,6 +1949,7 @@ pub fn run(
         sounds: Recent::default(),
         events: Recent::default(),
         saves: Recent::default(),
+        pauses: Recent::default(),
     };
     let save = request
         .save
@@ -1910,6 +1981,8 @@ pub fn run(
         state_hash: String::new(),
         replay: None,
         stopped_at: None,
+        paused: false,
+        pauses: Vec::new(),
         setup: applied,
         scene_changes: Vec::new(),
         logs: Vec::new(),
@@ -1937,17 +2010,29 @@ pub fn run(
     let samples = request.samples.max(1) as usize;
     let due = |k: usize| (k * steps + samples / 2) / samples;
     let mut next_sample = 1;
-    let mut clicks = clicks.into_iter().peekable();
+    let mut directs = directs.into_iter().peekable();
+    // Sair do jogo ends the run whatever `until` asks.
+    let check = |runtime: &Runtime, happened: &Happened| {
+        if runtime.quit_requested {
+            return Some(StoppedAt {
+                time: rounded(runtime.time),
+                reason: "quit",
+                kind: None,
+                detail: "O jogo pediu para sair (Sair do jogo)".into(),
+            });
+        }
+        stop.as_ref().and_then(|s| s.check(runtime, happened))
+    };
     // What the scene start logic did happens at time 0.
     let started = recorder.collect(&mut runtime);
     twin.compare(recorder.lookup(&runtime), 0);
-    let mut stopped = stop.as_ref().and_then(|s| s.check(&runtime, &started));
+    let mut stopped = check(&runtime, &started);
     if stopped.is_none() {
         for step in 1..=steps {
-            while clicks.peek().is_some_and(|(at, _)| *at <= runtime.time) {
-                let (_, entity) = clicks.next().unwrap();
-                runtime.click(&entity);
-                twin.click(&entity);
+            while directs.peek().is_some_and(|(at, _)| *at <= runtime.time) {
+                let (_, direct) = directs.next().unwrap();
+                direct.apply(&mut runtime);
+                twin.direct(&direct);
             }
             let mut frame = InputFrame::default();
             timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
@@ -1955,7 +2040,7 @@ pub fn run(
             twin.advance(&frame);
             let happened = recorder.collect(&mut runtime);
             twin.compare(recorder.lookup(&runtime), step);
-            stopped = stop.as_ref().and_then(|s| s.check(&runtime, &happened));
+            stopped = check(&runtime, &happened);
             if stopped.is_some() {
                 break;
             }
@@ -1972,6 +2057,7 @@ pub fn run(
         }
     }
     report.stopped_at = stopped;
+    report.paused = runtime.game_paused();
     for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
         watched
             .samples

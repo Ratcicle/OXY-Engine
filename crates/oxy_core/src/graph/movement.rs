@@ -480,7 +480,7 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
         "event.step" => (
             "Executa antes do movimento, uma vez por passo fixo de simulação.",
             "Renove a intenção de um personagem controlado por nós.",
-            "Não acompanha a taxa de desenho. Esperas criam continuações independentes e respeitam o orçamento.",
+            "Não acompanha a taxa de desenho. Esperas criam continuações independentes e respeitam o orçamento. Na pausa do jogo (Pausar / retomar jogo), não executa: o mundo fica parado.",
         ),
         "event.character" => (
             "Entrega uma transição com dados imutáveis do personagem naquele instante.",
@@ -490,7 +490,7 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
         "input.read" | "input.axes" | "time.read" => (
             "Lê entrada ou tempo do passo atual sem consumir novamente as ações.",
             "Ligue o eixo de movimento a Definir intenção; consulte o tempo para um cronômetro.",
-            "Olhar é deslocamento relativo, não velocidade. Não multiplique o mouse por dt nem por escala da interface.",
+            "Olhar é deslocamento relativo, não velocidade. Não multiplique o mouse por dt nem por escala da interface. O tempo é o do jogo: para na pausa do jogo e segue de onde parou ao retomar.",
         ),
         "character.state" => (
             "Lê velocidades, apoio, postura e bloqueios atuais do motor.",

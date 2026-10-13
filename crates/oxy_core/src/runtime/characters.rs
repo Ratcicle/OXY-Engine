@@ -152,6 +152,26 @@ impl Characters {
             state.previous_yaw = state.yaw;
         }
     }
+    /// Shows everyone where the last step left them, with no movement still to interpolate,
+    /// as the game pause starts or ends. What logic asked of them stays, a toggled crouch too.
+    pub(super) fn settle(&mut self) {
+        self.paths.clear();
+        for state in self.states.values_mut() {
+            state.previous_position = state.position;
+            state.previous_eye_height = state.eye_height;
+            state.previous_yaw = state.yaw;
+        }
+        for frame in self.platforms.values_mut() {
+            frame.delta = Vec3::ZERO;
+        }
+    }
+    /// Drops the one-step requests logic made (movement, jumps, slides), which the game pause
+    /// kept from running.
+    pub(super) fn forget_requests(&mut self) {
+        self.intents.clear();
+        self.jumps.clear();
+        self.slides.clear();
+    }
     fn step(
         &mut self,
         scene: &mut Scene,
@@ -582,6 +602,8 @@ impl Runtime {
         };
         self.cameras = cameras;
         let mut characters = std::mem::take(&mut self.characters);
+        // Timing windows (coyote time, jump buffer) run on the game clock, across the pause.
+        let time = self.game_time();
         let scene = self
             .project
             .scenes
@@ -593,7 +615,7 @@ impl Runtime {
             &self.project.surfaces,
             input,
             control.as_ref(),
-            self.time,
+            time,
             FIXED_DT,
         );
         let failed = result.is_err();
@@ -662,8 +684,10 @@ impl Runtime {
         self.characters.jumps.insert(id.into());
         Ok(())
     }
+    /// Whether the host should grab the cursor: a camera that turns with the mouse, outside the
+    /// game pause, whose menu needs a free cursor.
     pub fn wants_relative_mouse(&self) -> bool {
-        self.cameras.relative(self.scene())
+        !self.game_paused && self.cameras.relative(self.scene())
     }
     /// Presentation-only pose. Unconsumed look is displayed immediately, without
     /// changing collision positions or consuming the same delta a second time.
@@ -683,7 +707,7 @@ impl Runtime {
         let forward = rotation * -Vec3::Z;
         let initial = CharacterState::new(position, (-forward.x).atan2(-forward.z));
         let state = self.characters.states.get(target).unwrap_or(&initial);
-        let pending = if state.look_blocks.is_empty() {
+        let pending = if state.look_blocks.is_empty() && !self.game_paused {
             Vec2::from(self.pending_look)
                 + self
                     .input_timeline
@@ -692,7 +716,7 @@ impl Runtime {
             Vec2::ZERO
         };
         let (yaw, pitch) = rig.look(state.yaw, state.pitch, pending);
-        let alpha = (self.accumulator / FIXED_DT).clamp(0., 1.);
+        let alpha = self.presentation_alpha();
         Some(GameCameraPose {
             position: state.previous_position.lerp(state.position, alpha)
                 + Vec3::Y

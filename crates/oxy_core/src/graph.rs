@@ -16,6 +16,8 @@ pub const INPUT_MODES: [(&str, &str); 3] = [
     ("held", "Manter"),
     ("released", "Soltar"),
 ];
+/// Which change of the game pause Ao pausar ou retomar answers.
+pub const PAUSE_CHANGES: [(&str, &str); 2] = [("pause", "Ao pausar"), ("resume", "Ao retomar")];
 /// Parts of an object that Ativar / desativar componente switches.
 pub const COMPONENTS: [(&str, &str); 6] = [
     ("collider", "Colisão / área (2D e 3D)"),
@@ -45,6 +47,7 @@ pub fn choices(
         .or_else(|| game_choices(operation, parameter))
         .or(match (operation, parameter) {
             ("event.input", "mode") => Some(&INPUT_MODES),
+            ("event.pause", "when") => Some(&PAUSE_CHANGES),
             ("action.component", "component") => Some(&COMPONENTS),
             ("condition.compare", "operator") => Some(&COMPARISONS),
             _ => None,
@@ -381,6 +384,11 @@ fn build_registry() -> Vec<OperationDef> {
             "event.animation",
             "Marcador de animação",
             vec![text("marker", "Marcador", "Impacto")],
+        ),
+        (
+            "event.pause",
+            "Ao pausar ou retomar",
+            vec![text("when", "Quando", "pause")],
         ),
     ] {
         result.push(OperationDef {

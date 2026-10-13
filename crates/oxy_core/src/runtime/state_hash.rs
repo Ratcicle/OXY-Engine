@@ -199,6 +199,8 @@ impl Runtime {
             sounds_before_change: _,
             query_work: _,
             paused,
+            game_paused,
+            quit_requested,
             stopped,
             logs_written,
             traces_written,
@@ -224,12 +226,22 @@ impl Runtime {
             serial,
             run,
         } = self;
+        let RunState {
+            seed,
+            rolls,
+            spawns,
+            variables,
+            save,
+            paused_for,
+        } = run;
         let mut digest = StateDigest::default();
         digest.add(None, "scene", |s| {
-            s.debug(scene_id).debug(&(paused, stopped));
+            s.debug(scene_id)
+                .debug(&(paused, stopped))
+                .debug(&(game_paused, quit_requested));
         });
         digest.add(None, "time", |s| {
-            s.debug(time).debug(accumulator);
+            s.debug(time).debug(accumulator).debug(paused_for);
         });
         digest.add(None, "input", |s| {
             s.debug(pending_pressed)
@@ -278,13 +290,6 @@ impl Runtime {
         digest.add(None, "characters", |s| {
             let _ = characters.write_shared(s);
         });
-        let RunState {
-            seed,
-            rolls,
-            spawns,
-            variables,
-            save,
-        } = run;
         digest.add(None, "random", |s| {
             s.debug(seed).debug(rolls).debug(spawns);
         });

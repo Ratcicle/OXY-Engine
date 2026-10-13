@@ -59,7 +59,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, ações de entrada, superfícies físicas, variáveis do jogo, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_import` | Importa uma imagem PNG ou um som WAV como recurso do projeto e, se pedido, já aplica a imagem num objeto |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria ou o que nele pararia com erro |
-| `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a câmera, a interface do jogo, os objetos observados, as variáveis do jogo e o resumo do estado no fim; se pedido, confere que o teste se repete |
+| `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a pausa do jogo, a câmera, a interface do jogo, os objetos observados, as variáveis do jogo e o resumo do estado no fim; se pedido, confere que o teste se repete |
 | `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
 | `oxy_select`, `oxy_frame` | Ao vivo: seleciona e enquadra objetos para você ver do que o agente fala |
 | `oxy_undo`, `oxy_redo` | Ao vivo: desfaz ou refaz o último passo |
@@ -173,6 +173,13 @@ Sem opções, o catálogo traz também:
 - O teste do editor guarda o progresso na memória, separado do jogo exportado: o próximo **Jogar** começa dele, e ele some ao abrir outro projeto ou com **Apagar progresso do teste**, em **Variáveis do jogo**. Cada gravação e cada apagamento viram uma linha no Console, como `Teste: progresso salvo — Recorde · Cena 2 = 41.2`.
 - O `oxy_simulate` nunca lê nem grava esses progressos: o progresso entra pelo `save` e sai no relatório (veja abaixo).
 
+**Pausa do jogo e sair.** O jogo pode se pausar sozinho, para mostrar um menu de pausa feito na lógica. Essa pausa é do jogo e fica separada da pausa da engine (o **Pausar** do teste do editor, a perda de foco): as duas podem acontecer juntas, e retomar a engine volta o jogo ao estado em que estava, pausado ou não.
+- `game.pause` (**Pausar / retomar jogo**, categoria **Jogo**) pausa, retoma ou alterna a pausa, conforme `mode`: `pause`, `resume` ou `toggle` (o padrão). `game.read` (**Ler estado do jogo**) fornece `paused` (booleano).
+- `event.pause` (**Ao pausar ou retomar**, categoria **Eventos**) dispara a cada mudança da pausa do jogo, qualquer que seja a causa, conforme `when`: `pause` ou `resume`. Uma cena com esse evento tem menu de pausa: a tecla Esc pausa e retoma o jogo, em vez de pausar a engine. Um menu típico é um grupo de interface oculto ao começar, que `event.pause(pause)` mostra e `event.pause(resume)` esconde com `action.component` (`visible`), com um botão Continuar (`event.click -> game.pause(resume)`).
+- Na pausa do jogo, o mundo para: movimento, animações, áreas, `event.step` e as esperas (`control.wait`), inclusive as iniciadas durante a pausa, que só terminam depois de retomar. A lógica, as ações de entrada e os cliques nos elementos da interface continuam; cliques em objetos do mundo são ignorados, e o mouse fica livre. As ações de entrada continuam disparando: para ignorá-las na pausa, a lógica lê `game.read`. O tempo do jogo (`time.read`, as esperas) para na pausa; os tempos do relatório do `oxy_simulate` seguem o relógio da simulação, que não para.
+- Mudar de cena termina a pausa, sem disparar o `event.pause`: a cena nova começa sem pausa.
+- `game.quit` (**Sair do jogo**) encerra o jogo: o jogo exportado fecha a janela, o teste do editor para (como **Parar**) e o `oxy_simulate` termina, com `stopped_at` de `reason` `quit`.
+
 Os comandos de ações de entrada, de superfícies e de variáveis valem para o projeto todo e, como os de cena, não recebem `scene`.
 
 **Colisores.**
@@ -219,6 +226,7 @@ Os comandos de ações de entrada, de superfícies e de variáveis valem para o 
 - `save_model` recusa o nome de outro modelo; `fit_collider` é novo.
 - Há variáveis do jogo (`create_variable`, `update_variable` e `delete_variable`), os nós `variable.get` e `variable.set` e os de progresso salvo, `save.write`, `save.clear` e `save.state`.
 - O `action.scene` ganhou a entrada `scene` e há os nós `scene.current`, na categoria nova **Jogo**, e `value.scene` (**Referência de cena**), em **Dados**. Não há migração: a entrada não é salva no nó, só a conexão. O aviso de nós copiados que ainda abrem ou nomeiam a cena de onde vieram deixa de fora os que têm essa entrada ligada e sugere ligá-la, e esses nós também não impedem o `delete_scene`.
+- Há a pausa do jogo e o sair: os nós `game.pause`, `game.read` e `game.quit`, em **Jogo**, e o evento `event.pause`, em **Eventos** (veja **Pausa do jogo e sair**). O `time.read` e as esperas passaram a contar o tempo do jogo, que para na pausa do jogo; sem pausa, ele é igual ao de antes.
 
 ## Testes com `oxy_simulate`
 
@@ -228,14 +236,15 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
   - `press` e `release` usam o ID ou o nome de uma ação de entrada do projeto (ou `"$N"` de uma ação criada no `setup`). Uma ação que o projeto não tem é recusada, com a lista das ações; na 0.5.0, ela era apertada em vão.
   - `movement` é a intenção de andar, `[direita, frente]` de -1 a 1, e vale até o próximo `movement`.
   - `look` é um movimento do mouse, aplicado uma vez: cada unidade gira a câmera pela sensibilidade dela (no controle de câmera, 0,12° por padrão). `x` positivo vira para a direita e `y` positivo olha para baixo, a menos que a câmera inverta o eixo.
-  - `click` clica num objeto ou botão da interface.
+  - `click` clica num objeto ou botão da interface, como uma pessoa: um elemento oculto (ele mesmo ou um grupo acima dele) não recebe o clique, e uma linha do log diz `Clique ignorado: Continuar está oculto…`. Na pausa do jogo, só os elementos da interface recebem cliques.
+  - `escape` faz o que a tecla Esc faz no jogo: numa cena com menu de pausa (um nó `event.pause`), pausa ou retoma o jogo; sem ele, uma linha do log diz que a cena não tem menu de pausa.
 - **Preparar o teste** (`setup` e `spawn`):
   - `setup` aplica comandos do `oxy_apply` só na cópia, por exemplo um objeto de teste ou outro valor de atributo. Os comandos sem cena usam a cena em que o teste começa: a de `scene` ou, sem ela, a cena inicial do projeto. Ao vivo também é assim; o `oxy_apply`, ao contrário, usa a cena aberta no editor.
   - Para começar uma variável do jogo em outro valor (testar com 1 vida em vez de 3, por exemplo), use `update_variable` no `setup`: o teste sempre começa com os valores iniciais da cópia (as salvas entre partidas começam no `save`, quando ele vem).
   - `save` é o progresso que um jogador que volta ao jogo tem: `{variável: valor}`, com cada variável salva entre partidas pelo ID ou pelo nome (vale `"$N"` do `setup`), `Nome · chave` para o valor de uma chave e o valor simples ou com o tipo, como em `{"Recorde · Cena 2": 41.2, "Moedas": {"Number": 3}}`. Sem `save`, o jogo roda como recém-instalado. Uma variável que o projeto não tem, ou que não é salva entre partidas, é recusada; para testar uma variável comum com outro valor, use `update_variable` no `setup`.
   - `spawn` coloca um objeto, como o jogador, numa posição do mundo (e virado para um lado) antes de começar.
   - Os IDs criados no `setup` valem como `"$0"`, `"$1"`… (`"$0.1"` para o segundo ID do comando 0) no resto do pedido, e o relatório os lista em `setup`.
-- **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, uma variável do jogo que chega a um valor (`variable: {variable, key?, op, value}`, com o ID ou o nome da variável e, para comparar o valor de uma chave, `key`), um objeto que some ou um evento (pulo, aterrissagem, entrada numa área…). `seconds` vira o limite, e `stopped_at` diz o que parou o teste (`reason`) e quando, com o que aconteceu em palavras em `detail`, como `Jogador aterrissou em Pouso`; quando é um evento, `kind` traz o tipo dele (`land`, `jump`…), como em `events`. O valor comparado precisa ser do tipo do atributo ou da variável; num atributo de objeto ou de superfície, o texto é o ID (vale `"$0"`).
+- **Parar quando algo acontecer** (`until`): troca de cena, um texto no log, um atributo que chega a um valor, uma variável do jogo que chega a um valor (`variable: {variable, key?, op, value}`, com o ID ou o nome da variável e, para comparar o valor de uma chave, `key`), um objeto que some, um evento (pulo, aterrissagem, entrada numa área…) ou a pausa do jogo (`paused: true` para quando ela começa, `false` para quando termina; o `ui` do fim mostra então o menu). `seconds` vira o limite, e `stopped_at` diz o que parou o teste (`reason`) e quando, com o que aconteceu em palavras em `detail`, como `Jogador aterrissou em Pouso`; quando é um evento, `kind` traz o tipo dele (`land`, `jump`…), como em `events`. O valor comparado precisa ser do tipo do atributo ou da variável; num atributo de objeto ou de superfície, o texto é o ID (vale `"$0"`). Um `game.quit` encerra o teste mesmo sem `until`, com `reason` `quit`.
 - **Objetos observados** (`watch`): posição, rotação e escala no mundo, visibilidade e atributos (todos, alguns ou nenhum). Para personagens 3D, também velocidade, chão, postura, apoio e direção do olhar. As amostras (`samples`) são exatamente as pedidas, a última com o estado final, e ficam espaçadas ao longo de `seconds`, no máximo uma por passo de 1/60 s. Um teste que o `until` para cedo traz menos amostras.
 - **Relatório:**
   - trocas de cena, com `reload` quando a cena reinicia;
@@ -243,6 +252,7 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
   - um resumo das ações da lógica: cada ação aparece uma vez por nome de objeto, com quantas vezes rodou e quando;
   - sons, inclusive os pedidos no mesmo passo de uma troca de cena, como um som tocado logo antes de reiniciar a fase (o jogo também os toca). Ficam de fora só os sons de uma cena que começa e termina no mesmo passo, como numa cena que se reinicia ao começar;
   - eventos de movimento (pulo, aterrissagem, saída do chão, contato lateral, superfície, postura) e de áreas (entrada e saída);
+  - a pausa do jogo: `pauses` lista cada mudança, `{time, paused}`, com o novo estado (só quando houve alguma), e `paused` diz se o jogo terminou pausado;
   - a câmera do jogo no fim;
   - a interface do jogo no fim (`ui`), na ordem em que é desenhada: cada elemento com o tipo, se está visível, o retângulo na vista do jogo, o texto como aparece (com o valor ligado, como `Tempo: 12.50`; para ler `Tempo: 01:23.45`, a lógica formata os segundos com o nó `text.time` e grava o texto num atributo de texto ligado ao elemento), o quanto uma barra está cheia (`fraction`) e se um botão dá para clicar. O retângulo é medido numa vista de `width` × `height` pixels (960×540 por padrão). `ui: false` deixa a interface fora do relatório;
   - as variáveis do jogo no fim (`variables`), pelo nome, com o valor e o tipo (`{"Moedas": {"Number": 12}}`); o valor de uma chave vem como `Nome · chave`, como `Pontos · Cena 2`. Vêm até 300 valores: primeiro o valor único de cada variável, depois os das chaves, em ordem de nome; `truncated` conta os que ficaram de fora. Num projeto sem variáveis, o campo não vem;
@@ -261,6 +271,7 @@ O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no 
 - `samples` traz exatamente o número pedido; antes, quando os passos não se dividiam igualmente, vinha uma amostra a mais.
 - O `detail` de um `stopped_at` por evento passou de `land de Jogador (Pouso)` para `Jogador aterrissou em Pouso`, e o tipo do evento ganhou o campo `kind`.
 - O relatório traz `seed`, a semente dos sorteios, e `state_hash`, o resumo do estado no fim; as cópias do `action.spawn` mantêm os IDs de uma execução para outra.
+- Um `click` num elemento da interface oculto é ignorado, com uma linha no log, como no jogo; na 0.5, o clique chegava à lógica. O relatório traz `paused` e, quando o jogo pausou, `pauses`.
 
 **Resumo das ações.**
 - A lógica que roda a cada passo (`event.step`), como cronômetros, fica fora do resumo, a menos que o agente peça (`actions_filter: {exclude_operations: []}`).
@@ -298,7 +309,7 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 
 ## Console e teste ao vivo
 
-- **`oxy_status`** traz `play`: `{running: true, paused, scene: {id, name}, time, seed, variables, variables_truncated}` enquanto você testa o jogo no editor, ou `{running: false, seed}` depois do teste (só `{running: false}` antes do primeiro teste do projeto). Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo. `seed` é a semente dos sorteios do teste atual ou do último, nova a cada vez que você joga: no `oxy_simulate`, a mesma semente dá a cada nó `random.number` os mesmos números, na mesma ordem. `variables` traz as variáveis do jogo naquele momento do teste, como no relatório do `oxy_simulate`, até 300 valores (só quando o projeto tem variáveis); `variables_truncated` conta os que ficaram de fora.
+- **`oxy_status`** traz `play`: `{running: true, paused, game_paused, scene: {id, name}, time, seed, variables, variables_truncated}` enquanto você testa o jogo no editor (`paused` é a pausa do teste, e `game_paused`, a pausa do próprio jogo, a do menu de pausa; as duas podem valer juntas), ou `{running: false, seed}` depois do teste (só `{running: false}` antes do primeiro teste do projeto). Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo. `seed` é a semente dos sorteios do teste atual ou do último, nova a cada vez que você joga: no `oxy_simulate`, a mesma semente dá a cada nó `random.number` os mesmos números, na mesma ordem. `variables` traz as variáveis do jogo naquele momento do teste, como no relatório do `oxy_simulate`, até 300 valores (só quando o projeto tem variáveis); `variables_truncated` conta os que ficaram de fora.
 - **`oxy_console`** lê o Console do editor aberto. Cada linha vem com `seq`, `origin` e `text`:
   - `editor`: mensagens do editor; `warning: true` marca as que também viraram aviso;
   - `agente`: as edições do agente e os erros delas;

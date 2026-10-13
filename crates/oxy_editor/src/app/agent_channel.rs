@@ -313,6 +313,8 @@ impl Editor {
                         let mut play = json!({
                             "running": true,
                             "paused": runtime.paused,
+                            // The game's own pause (its menu), apart from the test's.
+                            "game_paused": runtime.game_paused(),
                             "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
                             "time": runtime.time,
                             "seed": self.play.seed,

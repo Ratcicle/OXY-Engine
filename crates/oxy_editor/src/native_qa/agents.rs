@@ -484,6 +484,7 @@ impl NativeQa {
                 let status = get("status", 0)??;
                 let play = &status["play"];
                 if play["running"] != true
+                    || play["game_paused"] != false
                     || play["scene"]["id"] != json!(self.editor.scene_id)
                     || !play["time"].is_number()
                     || play["seed"]
