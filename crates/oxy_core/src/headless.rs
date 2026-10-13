@@ -703,8 +703,9 @@ fn rounded(time: f64) -> f64 {
     (time * 10_000.).round() / 10_000.
 }
 
-/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th, and
-/// `"$$N"` for the text "$N" (see [`command::Placeholder`]); other text is an ID as it is.
+/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th,
+/// `"$N@<id>"` for the copy of `<id>` it made, and `"$$N"` for the text "$N" (see
+/// [`command::Placeholder`]); other text is an ID as it is.
 pub fn resolve(id: &str, applied: &[Applied]) -> Result<Id, String> {
     match command::Placeholder::parse(id) {
         None => Ok(id.into()),

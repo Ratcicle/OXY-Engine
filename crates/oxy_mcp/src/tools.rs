@@ -528,11 +528,16 @@ game will ignore, stop on or take otherwise than it may seem: a node naming an i
 project lacks, two actions on one key (the game fires both), an action.component whose target \
 parameter names an object lacking the part it switches (the node stops with an error), a \
 variable.set whose value parameter is not of the variable's type (the same), a box \
-collider left at an object's old dimensions, logic copied to another scene that still opens the \
-scene it came from.
+collider left at an object's old dimensions, a convex or mesh collider left at an object's old \
+shape, logic copied to another scene that still opens the scene it came from.
 Placeholders: in later commands, a whole string \"$N\" is the first ID created by command N \
-(0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included; \"$$N\" is the \
-text \"$N\" itself. Other text with '$', such as \"$10 de bônus\", stays as it is.
+(0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included. \"$N@<id>\" \
+(\"$N.M@<id>\") is the copy of the object, node or animation <id> in what command N copied \
+(the copy of its M-th created ID): duplicate_entities (with count 3, \"$N.1@<node>\" is that \
+node in the second copy), copy_entities, save_model (the copy in the model), place_model (<id> \
+as the model holds it, which reads never show: \"$P@$S@<id>\" when save_model S saved it in \
+the batch) and duplicate_scene; <id> may be \"$K\" or \"$K.M\". \"$$N\" (\"$$N@<id>\") is the \
+text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 de bônus\", stays as it is.
 Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
@@ -586,23 +591,32 @@ e.g. {\"Number\": 3}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}. A box collider takes the shape's dimensions \
 when added and follows the object's scale, not later dimension changes
-- fit_collider {entity, children?: bool (default false), margin?: metres (default 0)}: fits the \
-object's box collider to its shape, or with children to its shape and every piece under it, \
-plus margin on every side, like the editor's Ajustar ao objeto / Ajustar ao grupo/filhos. A 3D \
-box (collider3d or sensor3d) stays turned with the object, its size and center in the object's \
-axes; a 2D box collider takes the world box. Capsules, spheres, convex and mesh colliders and \
-3D characters (their body is the collider) are refused
+- fit_collider {entity, children?: bool (default false), margin?: metres (default 0), shape?: \
+box|sphere|capsule|convex|mesh|auto (default: the shape it has)}: fits the object's collider to \
+its shape, or with children to its shape and every piece under it, plus margin on every side, \
+like the editor's Ajustar ao objeto / Ajustar ao grupo/filhos; only the shape and center change \
+(sensor, filter, surface and enabled stay). box stays turned with the object, its size and center \
+in the object's axes (a 2D collider is always a box and takes the world box); sphere: radius the \
+largest half side; capsule: upright (Y), radius the larger of half X and half Z, as tall as the \
+shape; both need a uniform scale. convex and mesh: the hull or the triangles of the object's \
+own shape (the editor's Convexo / Malha estática da peça), without children or margin. auto: \
+box for Cube, Plane and with children, sphere for a round Sphere, convex for a Sphere its \
+dimensions or scale stretch and for Cylinder, Cone and Pyramid, mesh for Tube and editable \
+meshes. 3D characters (their body is the collider) are refused
 - update_entity {entity, patch}: JSON merge patch over the object's document form (oxy_entity \
 with graph and geometry full) for fields without a dedicated command
 - add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
-to_node, to_port}. Parameter values are tagged like attributes, or plain when oxy_catalog gives \
-the parameter's type: a number for a Number parameter, a text for Text, true/false for Bool \
-(\"mode\": \"held\"). A parameter with an input port of the same id of type any (attribute.set \
-value, condition.compare a and b) takes any type: its default is only where it starts, and a \
-plain number, text or true/false keeps that type. Other plain values are refused with the \
-tagged form expected. A parameter \
-with choices in oxy_catalog takes only those values. An input action parameter (ref \
+to_node, to_port}. Nodes added without position (best left out) are laid out when the batch \
+ends, around the nodes that stay: events in the first column, execution left to right, data \
+left of what it feeds, a band per event, right of the nodes that feed them or below the graph. \
+arrange_logic {entity, nodes?} lays out those nodes (default all); the others stay. Parameter \
+values are tagged like attributes, or plain when oxy_catalog gives the parameter's type: a \
+number for a Number parameter, a text for Text, true/false for Bool (\"mode\": \"held\"). A \
+parameter with an input port of the same id of type any (attribute.set value, condition.compare \
+a and b) takes any type: its default is only where it starts, and a plain number, text or \
+true/false keeps that type. Other plain values are refused with the tagged form expected. A \
+parameter with choices in oxy_catalog takes only those values. An input action parameter (ref \
 input_action) takes the action's ID or name and stores the ID, which the game reads.
 - create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
 key}; delete_input_action {action}, refused while used (oxy_project lists used_by). action is \
@@ -2538,6 +2552,107 @@ mod tests {
             "plain when oxy_catalog gives",
             "of type any (attribute.set",
             "two actions on one key",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Authoring helpers on files: logic laid out, colliders shaped like the piece and copies
+    /// reached by their originals in the batch that made them.
+    #[test]
+    fn files_lay_out_logic_fit_shaped_colliders_and_reach_copies() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-helpers-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ajudas", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Moeda"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Sphere"},
+                 "name": "Corpo", "parent": "$0"},
+                {"op": "add_component", "entity": "$1", "component": "sensor3d"},
+                {"op": "fit_collider", "entity": "$1", "shape": "auto"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Moeda"}},
+                {"op": "connect", "entity": "$0", "from_node": "$4", "from_port": "exec",
+                 "to_node": "$5", "to_port": "exec"},
+                {"op": "duplicate_entities", "ids": ["$0"], "offset": [2, 0, 0], "count": 2},
+                {"op": "set_node_params", "entity": "$7.1", "node": "$7.1@$5",
+                 "params": {"message": "Segunda moeda"}},
+            ]}),
+        )
+        .unwrap();
+        let second = applied["created"]["7"][1]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let graph = call(
+            "oxy_entity",
+            json!({"id": second, "graph": "full", "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        let nodes = graph["graph"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes[0]["position"], json!([0.0, 0.0]), "{graph}");
+        assert_eq!(nodes[1]["position"], json!([260.0, 0.0]), "{graph}");
+        assert_eq!(
+            nodes[1]["params"]["message"],
+            json!({"Text": "Segunda moeda"})
+        );
+        let body = applied["created"]["1"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let collider = call("oxy_entity", json!({"id": body, "fields": ["physics3d"]})).unwrap();
+        assert_eq!(
+            collider["physics3d"]["shape"],
+            json!({"Sphere": {"radius": 0.5}}),
+            "{collider}"
+        );
+        assert_eq!(collider["physics3d"]["sensor"], json!(true));
+        let moeda = applied["created"]["0"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "arrange_logic", "entity": moeda}]}),
+        )
+        .unwrap();
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "duplicate_entities", "ids": [moeda]},
+                {"op": "rename_entity", "entity": "$0@fantasma", "name": "X"},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("Comando 1 (rename_entity, o 2º do lote): \"$0@fantasma\"")
+                && error.contains("não está entre o que o comando 0"),
+            "{error}"
+        );
+        for text in [
+            "\"$N@<id>\"",
+            "\"$P@$S@<id>\" when save_model S saved it",
+            "arrange_logic {entity, nodes?}",
+            "laid out when the batch ends",
+            "box|sphere|capsule|convex|mesh|auto",
+            "a convex or mesh collider left at an object's old shape",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }

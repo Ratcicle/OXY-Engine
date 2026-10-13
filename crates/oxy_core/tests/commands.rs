@@ -1026,6 +1026,26 @@ fn placeholders_reach_every_created_id_patches_included_and_dollars_can_be_escap
         Placeholder::parse("$$1.4"),
         Some(Placeholder::Escaped("$1.4"))
     );
+    assert_eq!(
+        Placeholder::parse("$5.1@abc"),
+        Some(Placeholder::Copied {
+            command: 5,
+            nth: 1,
+            original: "abc"
+        })
+    );
+    assert_eq!(
+        Placeholder::parse("$2@$0.1"),
+        Some(Placeholder::Copied {
+            command: 2,
+            nth: 0,
+            original: "$0.1"
+        })
+    );
+    assert_eq!(
+        Placeholder::parse("$$2@x"),
+        Some(Placeholder::Escaped("$2@x"))
+    );
     for text in [
         "$",
         "$$",
@@ -1037,6 +1057,10 @@ fn placeholders_reach_every_created_id_patches_included_and_dollars_can_be_escap
         "$10 de bônus",
         "1",
         "a$1",
+        "$2@",
+        "$@x",
+        "$2.@x",
+        "a$2@x",
     ] {
         assert_eq!(Placeholder::parse(text), None, "{text}");
     }
@@ -1472,8 +1496,8 @@ fn fit_collider_wraps_the_shape_or_its_pieces_and_a_box_left_behind_is_warned() 
             "Seção não tem forma própria; com children: true",
         ),
         (
-            json!({"op": "fit_collider", "entity": ball}),
-            "é uma esfera",
+            json!({"op": "fit_collider", "entity": ball, "shape": "convex", "children": true}),
+            "O colisor convex usa a forma do próprio Bola, sem as peças dentro dele",
         ),
         (
             json!({"op": "fit_collider", "entity": loose}),
@@ -2447,4 +2471,136 @@ fn game_variables_are_created_updated_and_deleted_by_command() {
     assert!(oxy_core::variables::get(&project, &coins).is_none());
     assert_eq!(project.variables.len(), 3);
     assert!(validate_project(&project).is_ok());
+}
+
+/// The rectangles of `graph`'s nodes, as the editor draws them, never overlap.
+fn assert_nodes_apart(graph: &graph::Graph) {
+    let rects: Vec<[f32; 4]> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let [w, h] = graph::node_extent(graph::definition(&n.operation));
+            [
+                n.position[0],
+                n.position[1],
+                n.position[0] + w,
+                n.position[1] + h,
+            ]
+        })
+        .collect();
+    for (k, a) in rects.iter().enumerate() {
+        for b in &rects[k + 1..] {
+            assert!(
+                a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1],
+                "{a:?} overlaps {b:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nodes_added_without_a_position_are_laid_out_when_the_batch_ends() {
+    use graph::layout::{BAND_GAP, COLUMN_STEP};
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta"},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "position": [900.0, -300.0]},
+            {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$0", "operation": "condition.branch"},
+            {"op": "add_node", "entity": "$0", "operation": "value.bool"},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message"},
+            {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+             "to_node": "$3", "to_port": "exec"},
+            {"op": "connect", "entity": "$0", "from_node": "$4", "from_port": "value",
+             "to_node": "$3", "to_port": "condition"},
+            {"op": "connect", "entity": "$0", "from_node": "$3", "from_port": "then",
+             "to_node": "$5", "to_port": "exec"},
+        ])),
+    )
+    .unwrap();
+    let id = |i: usize| applied[i].created[0].clone();
+    let porta = id(0);
+    let positions = |project: &Project| -> Vec<[f32; 2]> {
+        let graph = &project.scene(&scene).unwrap().entity(&porta).unwrap().graph;
+        (1..=5)
+            .map(|i| graph.node(&id(i)).unwrap().position)
+            .collect()
+    };
+    let at = positions(&project);
+    assert_eq!(at[0], [900., -300.], "a position given stays");
+    // The new chain goes below what was there, its event first, its data left of the branch.
+    let message = graph::node_extent(graph::definition("debug.message"))[1];
+    assert_eq!(at[1], [900., -300. + message + BAND_GAP]);
+    assert_eq!(at[2][0], at[1][0] + COLUMN_STEP);
+    assert_eq!(at[3][0], at[2][0] - COLUMN_STEP);
+    assert_eq!(at[4][0], at[2][0] + COLUMN_STEP);
+    assert_nodes_apart(&project.scene(&scene).unwrap().entity(&porta).unwrap().graph);
+
+    // A node added later, fed by one that stays, starts right of it, below what is there.
+    let more = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": porta, "operation": "attribute.set"},
+            {"op": "connect", "entity": porta, "from_node": id(3), "from_port": "else",
+             "to_node": "$0", "to_port": "exec"},
+        ])),
+    )
+    .unwrap();
+    let graph = &project.scene(&scene).unwrap().entity(&porta).unwrap().graph;
+    assert_eq!(positions(&project), at, "nodes already placed stay");
+    let set = graph.node(&more[0].created[0]).unwrap().position;
+    assert_eq!(set[0], at[2][0] + COLUMN_STEP);
+    assert!(set[1] > at[4][1], "below the message in its column");
+    assert_nodes_apart(graph);
+
+    // arrange_logic lays out every node, as one undo step.
+    let mut images = TextureCache::default();
+    let before = project.clone();
+    let mut history = CommandHistory::new();
+    history.begin("Agente: Organizar lógica", &project, &images);
+    let arrange = batch(json!({"op": "arrange_logic", "entity": porta}));
+    assert_eq!(arrange[0].label(), "Organizar lógica");
+    command::apply(&mut project, &scene, &arrange).unwrap();
+    history.commit(&project, &mut images).unwrap();
+    let after = positions(&project);
+    assert_eq!(after[1], [0., 0.], "the event leads column 0");
+    assert_eq!(after[0][0], 0., "the loose message goes below, in column 0");
+    assert!(after[0][1] > after[3][1]);
+    assert_nodes_apart(&project.scene(&scene).unwrap().entity(&porta).unwrap().graph);
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, before);
+
+    // Only the nodes named move; unknown nodes and objects without logic are refused.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "arrange_logic", "entity": porta, "nodes": [id(1)]})),
+    )
+    .unwrap();
+    assert_eq!(positions(&project)[1..], at[1..]);
+    for (commands, expected) in [
+        (
+            json!({"op": "arrange_logic", "entity": porta, "nodes": ["fantasma"]}),
+            "Nó fantasma não existe neste objeto",
+        ),
+        (
+            json!({"op": "arrange_logic", "entity": porta, "nodes": []}),
+            "Informe ao menos um nó",
+        ),
+        (
+            json!([{"op": "create_entity", "kind": {"type": "group"}, "name": "Vazio"},
+                   {"op": "arrange_logic", "entity": "$0"}]),
+            "Vazio não tem lógica para organizar",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(commands)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
 }

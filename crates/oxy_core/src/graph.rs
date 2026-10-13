@@ -5,10 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 mod audio;
 mod game;
+pub mod layout;
 mod math;
 mod movement;
 pub use audio::{SOUND_CHANNELS, STOP_CHANNELS, VOLUME_CHANNELS, audio_choices, audio_help};
 pub use game::{game_choices, game_help};
+pub use layout::{arrange, node_extent};
 pub use math::{ARITHMETIC, math_choices, math_help};
 pub use movement::{movement_choices, movement_help};
 

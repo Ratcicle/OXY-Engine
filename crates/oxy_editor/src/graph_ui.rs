@@ -13,17 +13,13 @@ use egui::{
     Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Vec2,
 };
 use oxy_core::document::{Id, Project, Scene, Value};
-use oxy_core::graph::{Edge, Graph, Node, OperationDef, ParamDef, PortDef, PortType, registry};
+use oxy_core::graph::layout::{BODY_TOP, HEADER_HEIGHT, ROW_HEIGHT, port_rows, summary_params};
+use oxy_core::graph::{Edge, Graph, Node, OperationDef, PortDef, PortType, registry};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub use oxy_render::input::text_input_active;
 
-const NODE_WIDTH: f32 = 200.;
-const HEADER_HEIGHT: f32 = 30.;
-const ROW_HEIGHT: f32 = 22.;
-const BODY_TOP: f32 = 6.;
-const BODY_BOTTOM: f32 = 8.;
 const MIN_ZOOM: f32 = 0.35;
 const MAX_ZOOM: f32 = 1.6;
 const DEFAULT_PAN: Vec2 = Vec2::new(35., 45.);
@@ -205,26 +201,9 @@ fn bezier(points: [Pos2; 4], stroke: Stroke) -> egui::Shape {
         .into()
 }
 
-/// Parameters without an input port of the same name: rows of the node body.
-fn summary_params(op: &OperationDef) -> impl Iterator<Item = &ParamDef> {
-    op.params
-        .iter()
-        .filter(|param| !op.inputs.iter().any(|port| port.id == param.id))
-}
-
-fn port_rows(op: &OperationDef) -> usize {
-    op.inputs.len().max(op.outputs.len())
-}
-
-/// Size of a node in graph units. An unknown operation keeps one row for its identifier.
+/// Size of a node in graph units ([`oxy_core::graph::node_extent`], which agents' layouts use).
 fn node_size(op: Option<&OperationDef>) -> Vec2 {
-    let rows = op
-        .map_or(1, |op| port_rows(op) + summary_params(op).count())
-        .max(1);
-    Vec2::new(
-        NODE_WIDTH,
-        HEADER_HEIGHT + BODY_TOP + rows as f32 * ROW_HEIGHT + BODY_BOTTOM,
-    )
+    Vec2::from(oxy_core::graph::node_extent(op))
 }
 
 fn row_center(row: usize) -> f32 {

@@ -1289,3 +1289,275 @@ fn uses_name_the_model_holding_them_and_a_model_lists_its_placements() {
         ])
     );
 }
+
+/// The logic of `id`'s object: each node's operation, message and position, in order.
+fn logic(project: &Project, scene: &str, id: &str) -> Vec<(String, String, [f32; 2])> {
+    entity(project, scene, id)
+        .graph
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.operation.clone(),
+                n.text("message").to_owned(),
+                n.position,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn copies_are_reached_in_the_same_batch_by_their_original() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    // A group with a child and logic, duplicated three times; the second copy's node and child,
+    // and the third copy itself, are edited by their originals in the same batch.
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Marco"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Base",
+             "parent": "$0"},
+            {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "params": {"message": "Original"}},
+            {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+             "to_node": "$3", "to_port": "exec"},
+            {"op": "duplicate_entities", "ids": ["$0"], "offset": [5.0, 0.0, 0.0], "count": 3},
+            {"op": "set_node_params", "entity": "$5.1", "node": "$5.1@$3",
+             "params": {"message": "Segunda"}},
+            {"op": "rename_entity", "entity": "$5.1@$1", "name": "Base da segunda"},
+            {"op": "set_attribute", "entity": "$5.2@$0", "name": "ordem",
+             "value": {"Number": 3}},
+            {"op": "set_attribute", "entity": "$0", "name": "rótulo", "value": {"Text": "$$5@x"}},
+        ]),
+    );
+    let original = applied[0].created[0].clone();
+    let copies = applied[5].created.clone();
+    assert_eq!(copies.len(), 3);
+    let messages: Vec<String> = [&original, &copies[0], &copies[1], &copies[2]]
+        .iter()
+        .map(|id| logic(&project, &scene, id)[1].1.clone())
+        .collect();
+    assert_eq!(messages, ["Original", "Original", "Segunda", "Original"]);
+    // The copies took the logic laid out, as the original is.
+    let laid_out: Vec<[f32; 2]> = logic(&project, &scene, &original)
+        .iter()
+        .map(|n| n.2)
+        .collect();
+    assert_eq!(laid_out[0], [0., 0.]);
+    for copy in &copies {
+        let positions: Vec<[f32; 2]> = logic(&project, &scene, copy).iter().map(|n| n.2).collect();
+        assert_eq!(positions, laid_out);
+    }
+    let child_of = |project: &Project, root: &str| {
+        project
+            .scene(&scene)
+            .unwrap()
+            .entities
+            .iter()
+            .find(|e| e.parent.as_deref() == Some(root))
+            .unwrap()
+            .name
+            .clone()
+    };
+    assert_eq!(child_of(&project, &copies[1]), "Base da segunda");
+    assert_eq!(child_of(&project, &copies[0]), "Base");
+    assert_eq!(
+        entity(&project, &scene, &copies[2]).attributes["ordem"],
+        Value::Number(3.)
+    );
+    assert!(
+        !entity(&project, &scene, &copies[1])
+            .attributes
+            .contains_key("ordem")
+    );
+    assert_eq!(
+        entity(&project, &scene, &original).attributes["rótulo"],
+        Value::Text("$5@x".into()),
+        "\"$$\" still escapes"
+    );
+
+    // Originals by their own IDs, from a batch before; copies to another scene and copies of
+    // the scene itself.
+    let child = applied[1].created[0].clone();
+    let message = applied[3].created[0].clone();
+    let copy_of = |command: &str, id: &str| format!("${command}@{id}");
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "copy_entities", "ids": [original], "to_scene": "$0"},
+            {"op": "set_node_params", "scene": "$0", "entity": copy_of("1", &original),
+             "node": copy_of("1", &message), "params": {"message": "Na fase 2"}},
+            {"op": "rename_entity", "scene": "$0", "entity": copy_of("1", &child),
+             "name": "Base da fase 2"},
+            {"op": "duplicate_scene", "scene": scene},
+            {"op": "set_node_params", "scene": "$4", "entity": copy_of("4", &original),
+             "node": copy_of("4", &message), "params": {"message": "Na cópia da cena"}},
+        ]),
+    );
+    let (second, copied) = (applied[0].created[0].clone(), applied[1].created[0].clone());
+    assert_eq!(logic(&project, &second, &copied)[1].1, "Na fase 2");
+    assert!(
+        project
+            .scene(&second)
+            .unwrap()
+            .entities
+            .iter()
+            .any(|e| e.name == "Base da fase 2" && e.parent.as_ref() == Some(&copied))
+    );
+    let third = applied[4].created[0].clone();
+    let in_copy = project
+        .scene(&third)
+        .unwrap()
+        .entities
+        .iter()
+        .find(|e| e.name == "Marco")
+        .unwrap();
+    assert_eq!(in_copy.graph.nodes[1].text("message"), "Na cópia da cena");
+    assert_eq!(logic(&project, &scene, &original)[1].1, "Original");
+
+    // place_model: the originals are the model's own pieces and nodes.
+    let model = apply(
+        &mut project,
+        &scene,
+        json!({"op": "save_model", "entity": original, "name": "Marco"}),
+    )[0]
+    .created[0]
+        .clone();
+    let pieces = project.asset(&model).unwrap().model.clone().unwrap();
+    let root = pieces.iter().find(|e| e.parent.is_none()).unwrap();
+    let model_message = root.graph.nodes[1].id.clone();
+    let model_child = pieces
+        .iter()
+        .find(|e| e.parent.is_some())
+        .unwrap()
+        .id
+        .clone();
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "place_model", "model": model, "position": [0.0, 0.0, 20.0]},
+            {"op": "place_model", "model": model, "position": [0.0, 0.0, 30.0]},
+            {"op": "set_node_params", "entity": "$1", "node": copy_of("1.1", &model_message),
+             "params": {"message": "Colocado"}},
+            {"op": "rename_entity", "entity": copy_of("1", &model_child),
+             "name": "Base colocada"},
+        ]),
+    );
+    let (first_placed, placed) = (&applied[0].created, &applied[1].created);
+    assert_eq!(logic(&project, &scene, &placed[0])[1].1, "Colocado");
+    assert_eq!(logic(&project, &scene, &first_placed[0])[1].1, "Original");
+    assert_eq!(entity(&project, &scene, &placed[1]).name, "Base colocada");
+
+    // Reads never reach inside a model, but save_model maps what it saved: in the batch that
+    // saves it, "$P@$S@<id>" is the placed copy of the scene's own piece or node.
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "save_model", "entity": original, "name": "Marco salvo"},
+            {"op": "place_model", "model": "$0", "position": [0.0, 0.0, 40.0]},
+            {"op": "set_node_params", "entity": "$1", "node": format!("$1@$0@{message}"),
+             "params": {"message": "Salvo e colocado"}},
+            {"op": "rename_entity", "entity": format!("$1@$0@{child}"), "name": "Base salva"},
+        ]),
+    );
+    let saved = project
+        .asset(&applied[0].created[0])
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap();
+    assert!(saved.iter().all(|piece| piece.name != "Base salva"));
+    let placed = &applied[1].created;
+    assert_eq!(logic(&project, &scene, &placed[0])[1].1, "Salvo e colocado");
+    assert_eq!(entity(&project, &scene, &placed[1]).name, "Base salva");
+    assert_eq!(logic(&project, &scene, &original)[1].1, "Original");
+
+    // Two objects duplicated twice: the copies come round after round, each root in order
+    // ([A1, B1, A2, B2]), and each round reaches what it copied of both.
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Poste"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+             "name": "Lâmpada", "parent": "$0"},
+            {"op": "duplicate_entities", "ids": [original, "$0"], "count": 2},
+            {"op": "rename_entity", "entity": "$2.1@$1", "name": "Lâmpada da primeira"},
+            {"op": "set_node_params", "entity": "$2.2", "node": copy_of("2.2", &message),
+             "params": {"message": "Segunda rodada"}},
+        ]),
+    );
+    let rounds = &applied[2].created;
+    assert_eq!(rounds.len(), 4);
+    let names: Vec<&str> = rounds
+        .iter()
+        .map(|id| entity(&project, &scene, id).name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Marco (cópia 1)",
+            "Poste (cópia 1)",
+            "Marco (cópia 2)",
+            "Poste (cópia 2)"
+        ]
+    );
+    assert_eq!(child_of(&project, &rounds[1]), "Lâmpada da primeira");
+    assert_eq!(child_of(&project, &rounds[3]), "Lâmpada");
+    assert_eq!(logic(&project, &scene, &rounds[2])[1].1, "Segunda rodada");
+    assert_eq!(logic(&project, &scene, &rounds[0])[1].1, "Original");
+
+    // An original the command did not copy, or a command that copies nothing, is refused,
+    // saying why, and nothing changes.
+    let other = apply(
+        &mut project,
+        &scene,
+        json!({"op": "create_entity", "kind": {"type": "group"}, "name": "Outro"}),
+    )[0]
+    .created[0]
+        .clone();
+    for (commands, expected) in [
+        (
+            json!([{"op": "duplicate_entities", "ids": [original]},
+                   {"op": "rename_entity", "entity": copy_of("0", &other), "name": "X"}]),
+            format!(
+                "\"$0@{other}\": o objeto Outro ({other}) não está entre o que o comando 0 \
+                 (duplicate_entities, o 1º do lote) copiou"
+            ),
+        ),
+        (
+            json!([{"op": "duplicate_entities", "ids": [original]},
+                   {"op": "rename_entity", "entity": "$0@fantasma", "name": "X"}]),
+            "fantasma (nenhum objeto, nó ou animação do projeto tem esse ID)".to_owned(),
+        ),
+        (
+            json!([{"op": "duplicate_entities", "ids": [original]},
+                   {"op": "rename_entity", "entity": copy_of("0.1", &original), "name": "X"}]),
+            "o comando 0 (duplicate_entities, o 1º do lote) criou só 1 ID, \"$0.0\"".to_owned(),
+        ),
+        (
+            json!([{"op": "duplicate_entities", "ids": [original, other], "count": 2},
+                   {"op": "rename_entity", "entity": copy_of("0.4", &original), "name": "X"}]),
+            "criou 4 IDs, de \"$0.0\" a \"$0.3\"".to_owned(),
+        ),
+        (
+            json!([{"op": "create_entity", "kind": {"type": "group"}},
+                   {"op": "rename_entity", "entity": copy_of("0", &original), "name": "X"}]),
+            "não copia objetos".to_owned(),
+        ),
+        (
+            json!([{"op": "duplicate_entities", "ids": [original]},
+                   {"op": "rename_entity", "entity": "$0@$1", "name": "X"}]),
+            "\"$1\" não se refere a um ID criado antes no lote".to_owned(),
+        ),
+    ] {
+        let error = refused(&mut project, &scene, commands);
+        assert!(error.contains(&expected), "{error}");
+    }
+}

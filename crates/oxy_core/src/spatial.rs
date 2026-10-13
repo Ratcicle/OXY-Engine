@@ -2,10 +2,11 @@
 use crate::{
     collision::Aabb,
     document::*,
-    physics3d::{Collider3d, CollisionShape},
+    physics3d::{Collider3d, CollisionShape, generate_collider},
     scene_view::SceneView,
 };
 use glam::{Mat4, Vec3};
+use serde::{Deserialize, Serialize};
 
 pub fn invertible_world(scene: &Scene, id: &str) -> Result<Mat4, String> {
     let world = scene.world_matrix(id)?;
@@ -183,17 +184,73 @@ pub fn fits_shape(e: &Entity, size: [f32; 3], scale: Vec3) -> bool {
     margin.is_some()
 }
 
+/// The shape [`fit_collider`] gives a 3D collider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitShape {
+    /// A box in the object's axes; the only shape of a 2D collider.
+    Box,
+    /// A sphere at the center of the pieces, its radius their largest half side.
+    Sphere,
+    /// An upright capsule (Y axis), as wide as the larger horizontal side.
+    Capsule,
+    /// The convex hull of the object's own shape (Convexo da peça).
+    Convex,
+    /// The triangles of the object's own shape, openings kept (Malha estática da peça).
+    Mesh,
+    /// What suits the piece ([`auto_shape`]).
+    Auto,
+}
+
+/// What [`FitShape::Auto`] gives: a box for cubes, planes and, with `children`, groups; a
+/// sphere for spheres that stay round, with equal sides and a uniform world `scale`; the
+/// convex hull for stretched spheres, cylinders, cones and pyramids; the triangles for tubes
+/// and editable meshes.
+pub fn auto_shape(e: &Entity, children: bool, scale: Vec3) -> FitShape {
+    if children {
+        return FitShape::Box;
+    }
+    if e.mesh.is_some() {
+        return FitShape::Mesh;
+    }
+    match e.primitive {
+        Some(Primitive::Sphere) if uniform(Vec3::from(e.dimensions)) && uniform(scale) => {
+            FitShape::Sphere
+        }
+        Some(Primitive::Sphere | Primitive::Cylinder | Primitive::Cone | Primitive::Pyramid) => {
+            FitShape::Convex
+        }
+        Some(Primitive::Tube) => FitShape::Mesh,
+        _ => FitShape::Box,
+    }
+}
+
+/// Whether the three axes are the same but for f32 rounding, as spheres and capsules need of
+/// the world scale.
+fn uniform(v: Vec3) -> bool {
+    v.max_element() - v.min_element() <= 1e-5
+}
+
 /// Fits the collider of `id` to its shape or, with `children`, to its shape and every piece
 /// under it, as the editor's Ajustar ao objeto and Ajustar ao grupo/filhos do (cameras and
-/// interface elements left out), with `margin` metres more on every side. A 3D box collider
-/// (solid or sensor) stays turned with the object and takes the box of the pieces in the
-/// object's own axes, its size and center; the 2D box collider takes their world box.
-/// Capsules, spheres, convex and triangle shapes and the 3D character's body are refused.
+/// interface elements left out), with `margin` metres more on every side. `shape` is what the
+/// 3D collider becomes (by default, the shape it has); only the shape and center change, so a
+/// sensor stays a sensor and the filter, surface and switch stay as they are:
+/// - a box stays turned with the object and takes the box of the pieces in the object's own
+///   axes, its size and center; the 2D box collider takes their world box;
+/// - a sphere is centered on that box, its radius the box's largest half side, and a capsule
+///   stands along the object's Y, as wide as the larger of X and Z and as tall as the box (at
+///   least its width); both need a uniform scale;
+/// - convex and mesh take the object's own shape, as the editor's Convexo da peça and Malha
+///   estática da peça, with no margin and not the pieces under it.
+///
+/// The 3D character's body is refused.
 pub fn fit_collider(
     scene: &mut Scene,
     id: &str,
     children: bool,
     margin: f32,
+    shape: Option<FitShape>,
 ) -> Result<(), String> {
     if !margin.is_finite() || margin < 0. {
         return Err("margin precisa ser um número finito de metros, 0 ou mais".into());
@@ -208,22 +265,13 @@ pub fn fit_collider(
              e raio próprios, que se mudam com update_entity"
         ));
     }
-    let box3d = match e.physics3d.as_ref().map(|c| &c.shape) {
-        Some(CollisionShape::Box { .. }) => true,
-        Some(shape) => {
-            let what = match shape {
-                CollisionShape::Capsule { .. } => "uma cápsula",
-                CollisionShape::Sphere { .. } => "uma esfera",
-                CollisionShape::Convex { .. } => "o convexo da peça",
-                _ => "a malha estática da peça",
-            };
-            return Err(format!(
-                "O colisor 3D de {name} é {what}, e fit_collider ajusta só caixas. Para uma \
-                 caixa, remova o componente e adicione-o de novo (remove_component e \
-                 add_component), ou troque a forma no editor"
-            ));
-        }
-        None if e.collider.is_some() => false,
+    let current = match e.physics3d.as_ref().map(|c| &c.shape) {
+        Some(CollisionShape::Box { .. }) => Some(FitShape::Box),
+        Some(CollisionShape::Sphere { .. }) => Some(FitShape::Sphere),
+        Some(CollisionShape::Capsule { .. }) => Some(FitShape::Capsule),
+        Some(CollisionShape::Convex { .. }) => Some(FitShape::Convex),
+        Some(CollisionShape::TriMesh { .. }) => Some(FitShape::Mesh),
+        None if e.collider.is_some() => None,
         None => {
             return Err(format!(
                 "{name} não tem colisor: adicione um com add_component (collider3d ou sensor3d \
@@ -231,6 +279,55 @@ pub fn fit_collider(
             ));
         }
     };
+    // None: the 2D box collider.
+    let wanted = match (current, shape) {
+        (None, None | Some(FitShape::Box | FitShape::Auto)) => None,
+        (None, Some(_)) => {
+            return Err(format!(
+                "O colisor de {name} é 2D, sempre uma caixa: shape aceita box ou auto"
+            ));
+        }
+        (Some(_), Some(FitShape::Auto)) => Some(auto_shape(
+            e,
+            children,
+            physical_scale(invertible_world(scene, id)?),
+        )),
+        (Some(current), shape) => Some(shape.unwrap_or(current)),
+    };
+    if let Some(convex @ (FitShape::Convex | FitShape::Mesh)) = wanted {
+        let label = if convex == FitShape::Convex {
+            "convex"
+        } else {
+            "mesh"
+        };
+        if children {
+            return Err(format!(
+                "O colisor {label} usa a forma do próprio {name}, sem as peças dentro dele; para \
+                 envolvê-las, use shape box, sphere ou capsule com children: true"
+            ));
+        }
+        if margin > 0. {
+            return Err(format!(
+                "O colisor {label} segue a forma da peça e não leva margin; para uma folga, use \
+                 shape box, sphere ou capsule"
+            ));
+        }
+        if !e.has_geometry() {
+            return Err(format!(
+                "{name} não tem forma própria para o colisor {label}; com children: true, shape \
+                 box, sphere ou capsule envolvem as peças dentro dele"
+            ));
+        }
+        let generated = generate_collider(e, convex == FitShape::Convex)
+            .map_err(|error| format!("{name}: {error}"))?;
+        let collider = scene
+            .entity_mut(id)
+            .and_then(|e| e.physics3d.as_mut())
+            .ok_or("Objeto sem colisor")?;
+        collider.shape = generated.shape;
+        collider.center = [0.; 3];
+        return Ok(());
+    }
     let ids = if children {
         scene.descendants(id)
     } else {
@@ -254,13 +351,21 @@ pub fn fit_collider(
             )
         });
     }
-    if !box3d {
+    let Some(wanted) = wanted else {
         let mut bounds = visual_bounds(scene, &pieces)?;
         bounds.min -= Vec3::splat(margin);
         bounds.max += Vec3::splat(margin);
         return set_collider_bounds(scene, id, bounds);
-    }
+    };
     let world = invertible_world(scene, id)?;
+    let scale = physical_scale(world);
+    if wanted != FitShape::Box && !uniform(scale) {
+        return Err(format!(
+            "{name} tem escala não uniforme no mundo ({}, {}, {}), e esfera e cápsula exigem \
+             escala uniforme; use box ou convex",
+            scale.x, scale.y, scale.z
+        ));
+    }
     let inverse = world.inverse();
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
@@ -277,20 +382,34 @@ pub fn fit_collider(
             max = max.max(p);
         }
     }
-    // The margin is in metres of the world; the box is in the object's scaled axes.
-    let room = Vec3::splat(margin) / physical_scale(world);
+    // The margin is in metres of the world; the shape is in the object's scaled axes.
+    let room = Vec3::splat(margin) / scale;
     let size = (max - min).max(Vec3::splat(FIT_MIN_SIZE)) + room * 2.;
     let center = (min + max) * 0.5;
     if !size.is_finite() || !center.is_finite() {
         return Err("Não foi possível medir as peças para o colisor".into());
     }
+    let half = size * 0.5;
+    let shape = match wanted {
+        FitShape::Sphere => CollisionShape::Sphere {
+            radius: half.max_element(),
+        },
+        FitShape::Capsule => {
+            let radius = half.x.max(half.z);
+            CollisionShape::Capsule {
+                height: size.y.max(radius * 2.),
+                radius,
+            }
+        }
+        _ => CollisionShape::Box {
+            size: size.to_array(),
+        },
+    };
     let collider = scene
         .entity_mut(id)
         .and_then(|e| e.physics3d.as_mut())
         .ok_or("Objeto sem colisor")?;
-    collider.shape = CollisionShape::Box {
-        size: size.to_array(),
-    };
+    collider.shape = shape;
     collider.center = center.to_array();
     Ok(())
 }

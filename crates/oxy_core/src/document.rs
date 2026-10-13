@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub const SCHEMA_VERSION: u32 = 5;
 pub type Id = String;
+/// The IDs a copy took: each original object, node and animation (and scene) to its copy.
+pub type CopyMap = HashMap<Id, Id>;
 pub fn new_id() -> Id {
     uuid::Uuid::new_v4().to_string()
 }
@@ -536,8 +538,9 @@ pub fn translate_entity_and_tracks(entities: &mut [Entity], target: &str, delta:
         }
     }
 }
-/// Remaps only exact stable identifiers; names and relative paths remain untouched.
-pub fn remap_entities(entities: &mut [Entity], map: &HashMap<Id, Id>) -> Result<(), String> {
+/// Remaps only exact stable identifiers; names and relative paths remain untouched. Answers
+/// the whole map: `map` plus the new IDs of the clips and nodes.
+pub fn remap_entities(entities: &mut [Entity], map: &HashMap<Id, Id>) -> Result<CopyMap, String> {
     remap_entities_with(entities, map, &mut |_| new_id())
 }
 /// [`remap_entities`] with the new IDs of the clips and nodes `map` leaves out from `ids`,
@@ -546,7 +549,7 @@ pub fn remap_entities_with(
     entities: &mut [Entity],
     map: &HashMap<Id, Id>,
     ids: &mut dyn FnMut(&str) -> Id,
-) -> Result<(), String> {
+) -> Result<CopyMap, String> {
     let mut map = map.clone();
     for e in entities.iter() {
         for clip in &e.clips {
@@ -600,7 +603,7 @@ pub fn remap_entities_with(
         remap_json(&mut json, &map);
         e.graph = serde_json::from_value(json).map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(map)
 }
 fn remap_json(value: &mut serde_json::Value, map: &HashMap<Id, Id>) {
     match value {
@@ -727,6 +730,17 @@ impl Project {
         entity_id: &str,
         name: impl Into<String>,
     ) -> Result<Id, String> {
+        self.save_model_mapped(scene_id, entity_id, name)
+            .map(|(model, _)| model)
+    }
+    /// [`Self::save_model`] with the IDs the model took: each object, node and animation saved
+    /// to its copy in the model.
+    pub fn save_model_mapped(
+        &mut self,
+        scene_id: &str,
+        entity_id: &str,
+        name: impl Into<String>,
+    ) -> Result<(Id, CopyMap), String> {
         let name = name.into();
         if let Some(other) = self.model_named(&name) {
             return Err(format!(
@@ -746,7 +760,7 @@ impl Project {
             .cloned()
             .collect();
         let map: HashMap<_, _> = pieces.iter().map(|e| (e.id.clone(), new_id())).collect();
-        remap_entities(&mut pieces, &map)?;
+        let map = remap_entities(&mut pieces, &map)?;
         let root_id = &map[entity_id];
         let offset = pieces
             .iter()
@@ -772,15 +786,25 @@ impl Project {
             self.assets.pop();
             return Err(error);
         }
-        Ok(id)
+        Ok((id, map))
     }
     pub fn instantiate_model(&mut self, asset_id: &str, scene_id: &str) -> Result<Id, String> {
+        self.instantiate_model_mapped(asset_id, scene_id)
+            .map(|(root, _)| root)
+    }
+    /// [`Self::instantiate_model`] with the IDs the copy took: each piece, node and animation
+    /// of the model to its copy in the scene.
+    pub fn instantiate_model_mapped(
+        &mut self,
+        asset_id: &str,
+        scene_id: &str,
+    ) -> Result<(Id, CopyMap), String> {
         let mut model = self
             .asset(asset_id)
             .and_then(|a| a.model.clone())
             .ok_or("Modelo não encontrado")?;
         let map: HashMap<_, _> = model.iter().map(|e| (e.id.clone(), new_id())).collect();
-        remap_entities(&mut model, &map)?;
+        let map = remap_entities(&mut model, &map)?;
         let mut roots: Vec<_> = model
             .iter()
             .filter(|e| e.parent.is_none())
@@ -805,7 +829,7 @@ impl Project {
             .ok_or("Cena não encontrada")?
             .entities
             .extend(model);
-        Ok(root)
+        Ok((root, map))
     }
 }
 pub fn validate_project(project: &Project) -> Result<(), String> {
