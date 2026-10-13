@@ -137,6 +137,8 @@ pub(crate) struct PlaySession {
     /// What Salvar progresso recorded in this editor session's tests, which the next test
     /// starts from (see `test_progress`).
     pub(crate) test_save: oxy_core::save::SaveSlot,
+    /// The test's sounds and the Library's Ouvir.
+    pub(crate) mixer: oxy_audio::Mixer,
 }
 impl Default for PlaySession {
     fn default() -> Self {
@@ -149,16 +151,32 @@ impl Default for PlaySession {
             game_size: None,
             seed: None,
             test_save: Default::default(),
+            mixer: Default::default(),
         }
     }
 }
 impl PlaySession {
-    /// What another project must not inherit: the running test, its seed and the test progress.
+    /// What another project must not inherit: the running test, its seed, its sounds and the
+    /// test progress.
     pub(crate) fn forget_project(&mut self) {
-        self.runtime = None;
-        self.capture = false;
+        self.end();
         self.seed = None;
         self.test_save = Default::default();
+    }
+    /// Parar: the test ends, and nothing it played goes on.
+    pub(crate) fn end(&mut self) {
+        self.runtime = None;
+        self.capture = false;
+        self.last_runtime_scene = None;
+        self.mixer.stop_all();
+    }
+    /// Plays what the test asked for and follows its pauses; what went wrong, for the Console.
+    /// Also called when the test pauses, since the Logic tab does not draw the game.
+    pub(crate) fn update_audio(&mut self, root: &Path) -> Vec<String> {
+        if let Some(runtime) = &mut self.runtime {
+            self.mixer.update(runtime, root);
+        }
+        self.mixer.take_errors()
     }
 }
 #[derive(Default)]
@@ -848,6 +866,8 @@ impl Editor {
         self.cancel_mesh_operation();
         self.set_spatial_tool(Tool::Object);
         self.finish_history(true);
+        // A new test starts in silence, the Library's Ouvir included.
+        self.play.mixer.stop_all();
         // Every test draws differently, as the exported game does. The low half of a v4 UUID
         // has its fixed bits above the 53 kept.
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
@@ -876,15 +896,21 @@ impl Editor {
         // What the last frame saved, and its logs, reach the Console and agents after the test.
         self.take_test_saves();
         self.sync_console_feed();
-        self.play.runtime = None;
-        self.play.capture = false;
+        self.play.end();
         self.set_tab(self.play.previous_tab);
-        self.play.last_runtime_scene = None;
     }
     fn pause(&mut self) {
         self.play.capture = false;
         if let Some(rt) = &mut self.play.runtime {
             rt.set_paused(true);
+        }
+        self.update_test_audio();
+    }
+    /// The test's sounds follow it (see `PlaySession::update_audio`); problems go to the Console.
+    fn update_test_audio(&mut self) {
+        let root = self.root();
+        for error in self.play.update_audio(&root) {
+            self.log(error);
         }
     }
     pub fn select(&mut self, id: Option<Id>) {
@@ -1179,19 +1205,7 @@ impl Editor {
                 }
             }
         }
-        let sounds = if let Some(rt) = &mut self.play.runtime {
-            std::mem::take(&mut rt.sounds)
-        } else {
-            Vec::new()
-        };
-        for request in sounds {
-            if let Some(asset) = self.state.project.asset(&request.asset)
-                && let Err(e) =
-                    oxy_core::audio::play_wav(&self.root().join(&asset.path), request.volume)
-            {
-                self.log(e);
-            }
-        }
+        self.update_test_audio();
         self.take_test_saves();
         // Sair do jogo ends the test as Parar does; the exported game would close.
         if self
@@ -1590,6 +1604,9 @@ impl eframe::App for Editor {
             self.log(error);
         }
         self.frame.cpu_ms = frame_started.elapsed().as_secs_f32() * 1000.;
+        // The sound device rests a second after the last sound, the Library's Ouvir and a
+        // stopped test included; frames come back to let it.
+        let sounding = self.play.mixer.rest_when_quiet();
         if let Some(delay) = diagnostics::repaint_delay(
             self.play.runtime.as_ref().is_some_and(|r| !r.paused) && self.showing_game(),
             self.studio.playing
@@ -1597,7 +1614,9 @@ impl eframe::App for Editor {
                 && self.studio.tab == StudioTab::Animation,
             ctx.input(|i| i.pointer.any_down()),
             self.frame.visible,
-        ) {
+        )
+        .or(sounding.then_some(std::time::Duration::from_millis(500)))
+        {
             ctx.request_repaint_after(delay);
         }
     }
@@ -1638,3 +1657,89 @@ pub fn vector3(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64
 
 #[cfg(all(test, target_os = "windows"))]
 mod native_perf;
+
+#[cfg(test)]
+mod play_tests {
+    use super::*;
+    use oxy_core::graph::{Edge, Node};
+
+    /// A project in a new folder whose scene plays Bip, 50 ms long, as it starts.
+    fn beeping() -> (Project, PathBuf) {
+        let root = std::env::temp_dir().join(format!("oxy-editor-sound-{}", new_id()));
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wav = hound::WavWriter::create(root.join("assets/bip.wav"), spec).unwrap();
+        for _ in 0..400 {
+            wav.write_sample(16384i16).unwrap();
+        }
+        wav.finalize().unwrap();
+        let mut project = Project::new("Som");
+        let asset = new_id();
+        project.assets.push(Asset {
+            id: asset.clone(),
+            name: "Bip".into(),
+            path: "assets/bip.wav".into(),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        let mut speaker = Entity::new("Alto-falante", None);
+        let start = Node::new("event.scene_start", [0.; 2]);
+        let mut sound = Node::new("action.sound", [200., 0.]);
+        sound.params.insert("asset".into(), Value::Text(asset));
+        speaker.graph.edges.push(Edge {
+            from_node: start.id.clone(),
+            from_port: "exec".into(),
+            to_node: sound.id.clone(),
+            to_port: "exec".into(),
+        });
+        speaker.graph.nodes.extend([start, sound]);
+        project.scenes[0].entities.push(speaker);
+        (project, root)
+    }
+
+    #[test]
+    fn parar_and_another_project_silence_the_test() {
+        let (project, root) = beeping();
+        let scene = project.start_scene.clone();
+        let mut play = PlaySession {
+            mixer: oxy_audio::Mixer::silent(),
+            ..Default::default()
+        };
+        let jogar = |play: &mut PlaySession| {
+            play.runtime = Some(Runtime::with_options(&project, &scene, play.options(7)).unwrap());
+            assert!(play.update_audio(&root).is_empty());
+            assert_eq!(play.mixer.voice_count(), 1);
+        };
+        let paused = |play: &mut PlaySession, paused| {
+            play.runtime.as_mut().unwrap().set_paused(paused);
+            assert!(play.update_audio(&root).is_empty());
+        };
+        let later = |play: &mut PlaySession| {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            assert!(play.update_audio(&root).is_empty());
+        };
+        jogar(&mut play);
+        // Pausar freezes the sound, which holds its place past its length; Retomar lets it end.
+        paused(&mut play, true);
+        later(&mut play);
+        assert_eq!(play.mixer.voice_count(), 1);
+        paused(&mut play, false);
+        assert_eq!(play.mixer.voice_count(), 1);
+        later(&mut play);
+        assert_eq!(play.mixer.voice_count(), 0);
+        // Parar silences what plays.
+        jogar(&mut play);
+        play.end();
+        assert!(play.runtime.is_none());
+        assert_eq!(play.mixer.voice_count(), 0);
+        jogar(&mut play);
+        play.forget_project();
+        assert_eq!(play.mixer.voice_count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

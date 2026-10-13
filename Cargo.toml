@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/oxy_core", "crates/oxy_render", "crates/oxy_editor", "crates/oxy_player", "crates/oxy_mcp"]
+members = ["crates/oxy_core", "crates/oxy_render", "crates/oxy_audio", "crates/oxy_editor", "crates/oxy_player", "crates/oxy_mcp"]
 resolver = "2"
 
 [workspace.package]
@@ -22,8 +22,10 @@ bytemuck = { version = "=1.24.0", features = ["derive"] }
 rfd = "=0.15.4"
 hound = "=3.5.1"
 rapier3d = { version = "=0.35.3", default-features = false, features = ["dim3", "f32", "std"] }
+cpal = "=0.18.2"
 oxy_core = { path = "crates/oxy_core" }
 oxy_render = { path = "crates/oxy_render" }
+oxy_audio = { path = "crates/oxy_audio" }
 
 [profile.dev]
 opt-level = 1

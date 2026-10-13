@@ -126,11 +126,24 @@ impl Editor {
                 }
             }
             AssetKind::Audio => {
-                if ui.button("Ouvir").clicked()
-                    && let Err(e) = oxy_core::audio::play_wav(&self.root().join(&asset.path), 0.6)
-                {
-                    self.log(e);
-                    self.notice_last(false);
+                if ui.button("Ouvir").clicked() {
+                    // Through the test's mixer, from the file the game plays.
+                    let heard =
+                        oxy_core::persistence::resolve_asset_path(&self.root(), &asset.path)
+                            .map_err(String::from)
+                            .and_then(|path| self.play.mixer.preview(&path, 0.6))
+                            .map_err(|error| format!("Som {}: {error}", asset.name));
+                    let errors: Vec<String> = heard
+                        .err()
+                        .into_iter()
+                        .chain(self.play.mixer.take_errors())
+                        .collect();
+                    for error in &errors {
+                        self.log(error.clone());
+                    }
+                    if !errors.is_empty() {
+                        self.notice_last(false);
+                    }
                 }
             }
         }

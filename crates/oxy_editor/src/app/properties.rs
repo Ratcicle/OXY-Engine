@@ -400,7 +400,7 @@ impl Editor {
                 );
                 crate::widgets::hint(
                     ui,
-                    "O menu é do jogo: física, personagens e animações param, e a interface continua. O mouse fica livre. Pausar, na barra, pausa o teste inteiro.",
+                    "O menu é do jogo: física, personagens, animações e efeitos param, e a interface continua. O mouse fica livre. Pausar, na barra, pausa o teste inteiro.",
                 );
             });
     }

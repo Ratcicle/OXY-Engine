@@ -3,8 +3,8 @@
 #[cfg(all(test, target_os = "windows"))]
 mod native_qa;
 use egui::{Color32, Rect, Sense, Vec2};
+use oxy_audio::Mixer;
 use oxy_core::{
-    audio,
     document::Project,
     persistence, random,
     runtime::{Runtime, RuntimeOptions},
@@ -55,8 +55,12 @@ struct Player {
     last_update: Instant,
     last_size: Vec2,
     show_diagnostics: bool,
+    /// The folder games keep their progress in (see [`save_folder`]), decided as the player
+    /// starts.
+    saves: Option<PathBuf>,
     /// Where this game's progress lives and what it holds now; none when it cannot be saved.
     progress: Option<(PathBuf, SaveSlot)>,
+    mixer: Mixer,
 }
 impl Player {
     fn new(cc: &eframe::CreationContext<'_>, path: PathBuf) -> Self {
@@ -78,7 +82,12 @@ impl Player {
             last_update: Instant::now(),
             last_size: Vec2::ZERO,
             show_diagnostics: false,
+            saves: save_folder(
+                std::env::var_os("OXY_SAVE_DIR"),
+                std::env::var_os("APPDATA"),
+            ),
             progress: None,
+            mixer: Mixer::new(),
         };
         if let Some(renderer) = &mut player.renderer {
             renderer.show_grid = false;
@@ -92,15 +101,18 @@ impl Player {
         player
     }
     fn reload(&mut self) {
+        // Nothing of the old run goes on playing.
+        self.mixer.stop_all();
         // Every run draws differently; the low half of a v4 UUID has its fixed bits above the
         // 53 kept.
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
         let mut notes = Vec::new();
+        let saves = self.saves.clone();
         let loaded = persistence::load_project(&self.path)
             .map_err(String::from)
             .and_then(|project| {
                 // The progress is read before the run, which starts from it.
-                let (progress, problems) = load_progress(&project);
+                let (progress, problems) = load_progress_in(saves, &project);
                 notes = problems;
                 let options = RuntimeOptions {
                     seed,
@@ -262,20 +274,9 @@ impl eframe::App for Player {
                         runtime.click(&id);
                     }
                 }
-                for request in std::mem::take(&mut runtime.sounds) {
-                    let result = runtime
-                        .project()
-                        .asset(&request.asset)
-                        .ok_or_else(|| format!("Recurso de áudio ausente: {}", request.asset))
-                        .and_then(|asset| {
-                            persistence::resolve_asset_path(&self.root, &asset.path)
-                                .map_err(String::from)
-                        })
-                        .and_then(|path| audio::play_wav(&path, request.volume));
-                    if let Err(error) = result {
-                        new_diagnostics.push(error)
-                    }
-                }
+                // Also while paused: the pauses freeze what plays.
+                self.mixer.update(runtime, &self.root);
+                new_diagnostics.extend(self.mixer.take_errors());
                 new_diagnostics.extend(renderer.take_errors());
                 new_diagnostics.extend(self.game_ui.take_errors());
             });
@@ -381,14 +382,6 @@ fn save_folder(override_dir: Option<OsString>, appdata: Option<OsString>) -> Opt
             .filter(set)
             .map(|dir| PathBuf::from(dir).join("OXY Engine").join("Jogos"))
     })
-}
-/// The progress of `project` in the folder this process saves games in (see [`save_folder`]).
-fn load_progress(project: &Project) -> (Option<(PathBuf, SaveSlot)>, Vec<String>) {
-    let folder = save_folder(
-        std::env::var_os("OXY_SAVE_DIR"),
-        std::env::var_os("APPDATA"),
-    );
-    load_progress_in(folder, project)
 }
 /// The progress of `project` under `folder`: where it lives and what it holds, with what could
 /// not be used, for the diagnostics. None when there is nowhere to save it.
@@ -526,6 +519,77 @@ fn progress_is_stored_once_per_frame_and_starts_the_next_run() {
         "{problems:?}"
     );
     store_progress(&mut nowhere, &project, vec![write(2.)]).unwrap();
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn a_reload_silences_the_old_run() {
+    use oxy_core::{
+        document::{Asset, AssetKind, Entity, Value, new_id},
+        graph::{Edge, Node},
+    };
+    let folder = std::env::temp_dir().join(format!("oxy-player-sound-{}", new_id()));
+    std::fs::create_dir_all(folder.join("assets")).unwrap();
+    // Five seconds of sound, which the scene plays as it starts.
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 8000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav = hound::WavWriter::create(folder.join("assets/bip.wav"), spec).unwrap();
+    for _ in 0..40_000 {
+        wav.write_sample(16384i16).unwrap();
+    }
+    wav.finalize().unwrap();
+    let mut project = Project::new("Som");
+    let asset = new_id();
+    project.assets.push(Asset {
+        id: asset.clone(),
+        name: "Bip".into(),
+        path: "assets/bip.wav".into(),
+        kind: AssetKind::Audio,
+        model: None,
+    });
+    let mut speaker = Entity::new("Alto-falante", None);
+    let start = Node::new("event.scene_start", [0.; 2]);
+    let mut sound = Node::new("action.sound", [200., 0.]);
+    sound.params.insert("asset".into(), Value::Text(asset));
+    speaker.graph.edges.push(Edge {
+        from_node: start.id.clone(),
+        from_port: "exec".into(),
+        to_node: sound.id.clone(),
+        to_port: "exec".into(),
+    });
+    speaker.graph.nodes.extend([start, sound]);
+    project.scenes[0].entities.push(speaker);
+    let path = folder.join(persistence::PROJECT_FILE);
+    persistence::save_project(&path, &project).unwrap();
+    let mut player = Player {
+        path,
+        root: folder.clone(),
+        runtime: None,
+        renderer: None,
+        game_ui: GameUi::new(),
+        error: None,
+        diagnostics: Vec::new(),
+        last_update: Instant::now(),
+        last_size: Vec2::ZERO,
+        show_diagnostics: false,
+        saves: Some(folder.join("progresso")),
+        progress: None,
+        mixer: Mixer::silent(),
+    };
+    player.reload();
+    assert_eq!(player.error, None);
+    // A frame plays it.
+    let runtime = player.runtime.as_mut().unwrap();
+    player.mixer.update(runtime, &player.root);
+    assert_eq!(player.mixer.voice_count(), 1);
+    // Starting over leaves nothing of the old run playing.
+    player.reload();
+    assert_eq!(player.mixer.voice_count(), 0);
+    assert!(player.mixer.take_errors().is_empty());
     std::fs::remove_dir_all(folder).unwrap();
 }
 

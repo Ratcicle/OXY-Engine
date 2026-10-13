@@ -1,0 +1,13 @@
+[package]
+name = "oxy_audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+oxy_core.workspace = true
+cpal.workspace = true
+
+[dev-dependencies]
+hound.workspace = true

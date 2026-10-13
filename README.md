@@ -50,6 +50,7 @@ Nesta máquina, `scripts/cargo.ps1` configura o compilador GNU preparado; passe 
 |---|---|
 | `oxy_core` | Documentos, persistência, migração, geometria, física, runtime e grafo de lógica. Sem GPU nem interface. |
 | `oxy_render` | Renderer wgpu, seleção, interface de jogo e tema visual compartilhado. |
+| `oxy_audio` | Som do editor e do player: o dispositivo de saída (cpal) e um mixador próprio. |
 | `oxy_editor` | O editor (`OXY Engine.exe`). |
 | `oxy_player` | O runtime dos jogos (`oxy_player.exe`). |
 
