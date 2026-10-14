@@ -84,6 +84,7 @@ pub struct ImportRequest {
     /// interface element. A sprite takes the image's proportions, as in the editor.
     #[serde(default)]
     pub apply_to: Option<Id>,
+    /// The scene of `apply_to`, by its ID or name.
     #[serde(default)]
     pub scene: Option<Id>,
 }
@@ -387,8 +388,8 @@ pub fn apply_texture(entity: &mut Entity, asset: &str, size: Option<[u32; 2]>) {
 }
 
 /// Copies `source` into the project in `root` and adds the asset, applied to the request's
-/// `apply_to` in its `scene` (`scene` by default). The project is validated before it changes;
-/// on failure it is left as it was and no file stays behind.
+/// `apply_to` in its `scene`, by ID or name (`scene` by default). The project is validated
+/// before it changes; on failure it is left as it was and no file stays behind.
 pub fn import(
     project: &mut Project,
     root: &Path,
@@ -396,14 +397,11 @@ pub fn import(
     request: &ImportRequest,
     source: &ImportSource,
 ) -> Result<Imported, String> {
-    let scene = request.scene.as_deref().unwrap_or(scene);
+    let found = project.find_scene(request.scene.as_deref().unwrap_or(scene), "scene")?;
     if let Some(target) = &request.apply_to {
         if source.kind != ImportKind::Texture {
             return Err("apply_to só vale para imagens: um som toca pelo nó action.sound.".into());
         }
-        let found = project
-            .scene(scene)
-            .ok_or_else(|| format!("Cena {scene} não existe"))?;
         let entity = found
             .entity(target)
             .ok_or_else(|| format!("Objeto {target} não existe na cena {}", found.name))?;
@@ -414,6 +412,7 @@ pub fn import(
             ));
         }
     }
+    let scene = found.id.clone();
     let mut copy = project.clone();
     let id = persistence::store_asset(
         &mut copy,
@@ -426,7 +425,7 @@ pub fn import(
     let path = copy.asset(&id).map(|a| a.path.clone()).unwrap_or_default();
     let size = source.image.as_ref().map(|i| [i.width, i.height]);
     if let Some(target) = &request.apply_to
-        && let Some(entity) = copy.scene_mut(scene).and_then(|s| s.entity_mut(target))
+        && let Some(entity) = copy.scene_mut(&scene).and_then(|s| s.entity_mut(target))
     {
         apply_texture(entity, &id, size);
     }

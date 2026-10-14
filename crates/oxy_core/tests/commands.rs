@@ -2045,7 +2045,7 @@ fn the_current_scene_wires_into_the_scene_change_and_the_catalog_lists_both() {
         .entity(&control)
         .unwrap()
         .graph;
-    let summary = query::graph_summary(&project, graph);
+    let summary = query::graph_summary(&project, project.scene(&scene).unwrap(), graph);
     assert!(
         summary["edges"]
             .as_array()
@@ -2674,4 +2674,181 @@ fn nodes_added_without_a_position_are_laid_out_when_the_batch_ends() {
         assert!(error.message.contains(expected), "{error}");
         assert_eq!(project, before);
     }
+}
+
+#[test]
+fn commands_and_scene_parameters_take_a_scene_by_name_and_store_its_id() {
+    let (mut project, start) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([
+            {"op": "create_scene", "name": "Menu", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta", "scene": "menu"},
+            {"op": "add_node", "entity": "$1", "scene": "MENU", "operation": "action.scene",
+             "params": {"scene": " cena 3d "}},
+            {"op": "add_node", "entity": "$1", "scene": "Menu", "operation": "value.scene",
+             "params": {"scene": "Menu"}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Placa"},
+            {"op": "copy_entities", "ids": ["$4"], "to_scene": "menu"},
+            {"op": "set_start_scene", "scene": "Menu"},
+        ])),
+    )
+    .unwrap();
+    let menu = applied[0].created[0].clone();
+    assert_eq!(project.start_scene, menu);
+    let door = project
+        .scene(&menu)
+        .unwrap()
+        .entity(&applied[1].created[0])
+        .unwrap();
+    assert_eq!(door.graph.nodes[0].text("scene"), start);
+    assert_eq!(door.graph.nodes[1].text("scene"), menu);
+    assert!(
+        project
+            .scene(&menu)
+            .unwrap()
+            .entity(&applied[5].created[0])
+            .is_some()
+    );
+    // set_node_params too; and the default scene of a batch may be a name.
+    let (door_id, change) = (door.id.clone(), door.graph.nodes[0].id.clone());
+    command::apply(
+        &mut project,
+        "menu",
+        &batch(json!([
+            {"op": "set_node_params", "entity": door_id, "node": change,
+             "params": {"scene": "Menu"}},
+            {"op": "rename_scene", "scene": "Cena 3D", "name": "Pista"},
+        ])),
+    )
+    .unwrap();
+    let door = project.scene(&menu).unwrap().entity(&door_id).unwrap();
+    assert_eq!(door.graph.nodes[0].text("scene"), menu);
+    assert_eq!(project.scene(&start).unwrap().name, "Pista");
+    // A scene the project lacks: what received it, and the scenes.
+    let scenes = format!(
+        "Cenas: [{{\"id\":\"{start}\",\"name\":\"Pista\"}},{{\"id\":\"{menu}\",\"name\":\"Menu\"}}]"
+    );
+    let before = project.clone();
+    for (commands, expected) in [
+        (
+            json!([{"op": "add_node", "entity": door_id, "scene": "Menu",
+                    "operation": "action.scene", "params": {"scene": "Fase 9"}}]),
+            format!(
+                "Comando 0 (add_node, o 1º do lote): O parâmetro scene do nó action.scene \
+                 recebeu \"Fase 9\", que não é o ID nem o nome de uma cena do projeto. \
+                 {scenes}. Nada foi alterado."
+            ),
+        ),
+        (
+            json!([{"op": "create_entity", "kind": {"type": "group"}, "scene": "Fase 9"}]),
+            format!(
+                "Comando 0 (create_entity, o 1º do lote): scene recebeu \"Fase 9\", que não é o \
+                 ID nem o nome de uma cena do projeto. {scenes}. Nada foi alterado."
+            ),
+        ),
+        (
+            json!([{"op": "copy_entities", "ids": [door_id], "scene": "Menu",
+                    "to_scene": "Fase 9"}]),
+            format!(
+                "Comando 0 (copy_entities, o 1º do lote): to_scene recebeu \"Fase 9\", que não é \
+                 o ID nem o nome de uma cena do projeto. {scenes}. Nada foi alterado."
+            ),
+        ),
+    ] {
+        let error = command::apply(&mut project, &start, &batch(commands)).unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(project, before);
+    }
+    // Two scenes with one name: the name is refused, the ID taken.
+    command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "create_scene", "name": "MENU", "kind": "2d"}])),
+    )
+    .unwrap();
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "set_start_scene", "scene": "menu"}])),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("scene recebeu \"menu\", o nome de 2 cenas; use o ID: [{\"id\":"),
+        "{error}"
+    );
+    command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "set_start_scene", "scene": menu}])),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_broken_scene_reference_names_the_node_and_the_parameter_not_its_id() {
+    let (mut project, start) = project(SceneKind::ThreeD);
+    let mut portal = Entity::new("Portal", None);
+    let mut change = graph::Node::new("action.scene", [0.; 2]);
+    change
+        .params
+        .insert("scene".into(), Value::Text("cena-inexistente".into()));
+    let node = change.id.clone();
+    portal.graph.nodes.push(change);
+    project.scene_mut(&start).unwrap().entities.push(portal);
+    let error = validate_project(&project).unwrap_err();
+    // People read it too, in the editor: the scenes by name only.
+    assert_eq!(
+        error,
+        "Referência quebrada: objeto Portal, nó Mudar de cena (action.scene): o parâmetro scene \
+         recebeu \"cena-inexistente\". Cenas: Cena 3D"
+    );
+    assert!(!error.contains(&node) && !error.contains(&start), "{error}");
+}
+
+#[test]
+fn update_entity_refuses_the_degrees_reads_add_to_keyframes() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Disco"},
+            {"op": "set_clip", "entity": "$0", "name": "Giro", "duration": 1.0, "tracks": [
+                {"keyframes": [{"time": 0.0}, {"time": 1.0, "rotation": [0.0, 90.0, 0.0]}]}]},
+        ])),
+    )
+    .unwrap();
+    let disc = applied[0].created[0].clone();
+    let mut clips = query::entity(&project, &scene, &disc).unwrap()["clips"].clone();
+    clips[0]["tracks"][0]["keyframes"][1]["rotation_degrees"] = json!([0.0, 45.0, 0.0]);
+    let before = project.clone();
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([{"op": "update_entity", "entity": disc, "patch": {"clips": clips}}])),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("Patch inválido: os quadros-chave das animações não guardam")
+            && error.message.contains("use set_clip"),
+        "{error}"
+    );
+    assert_eq!(project, before);
+    // Without it, the keyframes as read go back as they were.
+    for keyframe in clips[0]["tracks"][0]["keyframes"].as_array_mut().unwrap() {
+        keyframe.as_object_mut().unwrap().remove("rotation_degrees");
+    }
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([{"op": "update_entity", "entity": disc, "patch": {"clips": clips}}])),
+    )
+    .unwrap();
+    assert_eq!(project, before);
 }

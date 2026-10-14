@@ -110,6 +110,12 @@ pub fn derived_id(parts: &[&[u8]]) -> Id {
         .to_string()
 }
 
+/// Whether `id` is shaped like the IDs [`derived_id`] makes (a version 8 UUID), such as those
+/// of the copies `action.spawn` makes while a game runs; the editor's IDs are version 4.
+pub fn is_derived_id(id: &str) -> bool {
+    uuid::Uuid::parse_str(id).is_ok_and(|id| id.get_version_num() == 8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +224,8 @@ mod tests {
         assert!("89ab".contains(&id[19..20]), "{id}");
         let parsed = uuid::Uuid::parse_str(&id).unwrap();
         assert_eq!(parsed.get_version_num(), 8);
+        assert!(is_derived_id(&id));
+        assert!(!is_derived_id(&crate::document::new_id()));
+        assert!(!is_derived_id("Jogar"));
     }
 }

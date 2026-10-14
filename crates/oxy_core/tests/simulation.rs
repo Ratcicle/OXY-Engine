@@ -3413,3 +3413,130 @@ fn escape_opens_the_pause_menu_whose_buttons_resume_and_quit() {
     assert!(reload.scene_changes.last().unwrap().reload);
     assert_eq!(shown(&reload, "Continuar"), (false, false));
 }
+
+#[test]
+fn clicks_and_scenes_go_by_name_and_a_click_elsewhere_says_so() {
+    let (mut project, level, resume, _) = paused_level();
+    // The menu scene opens the level at 1 s; the pause menu's Continuar is in the level.
+    let report = run(
+        &project,
+        json!({"seconds": 1.5, "inputs": [
+            {"type": "click", "at": 0.5, "entity": "continuar"},
+            {"type": "escape", "at": 1.2},
+            {"type": "click", "at": 1.3, "entity": " CONTINUAR "},
+        ]}),
+    );
+    let ignored: Vec<_> = report
+        .logs
+        .iter()
+        .filter(|l| l.text.starts_with("Clique ignorado"))
+        .collect();
+    assert_eq!(ignored.len(), 1, "{:?}", report.logs);
+    assert_eq!(
+        ignored[0].text,
+        "Clique ignorado: Continuar não está na cena atual (Cena 2D)."
+    );
+    assert!(near(ignored[0].time, 0.5), "{:?}", ignored[0]);
+    let pauses: Vec<_> = report.pauses.iter().map(|p| p.paused).collect();
+    assert_eq!(pauses, [true, false], "the click by name resumed the game");
+    // The scene to start in and the scene to stop at, by name.
+    let report = run(&project, json!({"seconds": 0.5, "scene": "fase"}));
+    assert_eq!(report.start_scene, level);
+    let report = run(
+        &project,
+        json!({"seconds": 3.0, "until": {"scene_change": "FASE"}}),
+    );
+    let stopped = report.stopped_at.as_ref().unwrap();
+    assert_eq!(stopped.reason, "scene_change");
+    assert!(near(stopped.time, 1.0), "{stopped:?}");
+    // What no object or scene is called is refused before the run.
+    let refused = |project: &Project, value: serde_json::Value| {
+        headless::simulate(project, &request(value)).unwrap_err()
+    };
+    assert_eq!(
+        refused(
+            &project,
+            json!({"seconds": 1.0, "inputs": [
+            {"type": "click", "at": 0.1, "entity": "Jogar"}]})
+        ),
+        "click: \"Jogar\" não é o ID nem o nome de um objeto do projeto"
+    );
+    let stray = new_id();
+    assert!(
+        refused(
+            &project,
+            json!({"seconds": 1.0, "inputs": [
+            {"type": "click", "at": 0.1, "entity": stray}]})
+        )
+        .contains(&format!("\"{stray}\" não é o ID nem o nome")),
+    );
+    let error = refused(&project, json!({"seconds": 1.0, "scene": "Nada"}));
+    assert!(
+        error.starts_with("scene recebeu \"Nada\", que não é o ID nem o nome de uma cena")
+            && error.contains("\"name\":\"Fase\""),
+        "{error}"
+    );
+    let error = refused(
+        &project,
+        json!({"seconds": 1.0, "until": {"scene_change": "Nada"}}),
+    );
+    assert!(
+        error.starts_with("until: scene_change recebeu \"Nada\""),
+        "{error}"
+    );
+    // A copy action.spawn makes is clicked by its ID, though it does not exist yet; the line
+    // does not show the ID.
+    let copy = oxy_core::random::derived_id(&[b"copia"]);
+    let report = run(
+        &project,
+        json!({"seconds": 0.2, "inputs": [{"type": "click", "at": 0.1, "entity": copy}]}),
+    );
+    let ignored: Vec<_> = report
+        .logs
+        .iter()
+        .filter(|l| l.text.starts_with("Clique ignorado"))
+        .map(|l| l.text.as_str())
+        .collect();
+    assert_eq!(
+        ignored,
+        ["Clique ignorado: o objeto clicado não está na cena atual (Cena 2D)."]
+    );
+    // An object the game removed keeps its name.
+    let mut target = Entity::new("Alvo", None);
+    let start = node(&mut target, "event.scene_start", &[]);
+    let remove = node(&mut target, "action.remove", &[]);
+    link(&mut target, &start, &remove);
+    let mut removing = project.clone();
+    removing.scene_mut(&level).unwrap().entities.push(target);
+    let report = run(
+        &removing,
+        json!({"seconds": 0.2, "scene": "Fase", "inputs": [
+            {"type": "click", "at": 0.1, "entity": "alvo"}]}),
+    );
+    assert!(
+        report
+            .logs
+            .iter()
+            .any(|l| l.text == "Clique ignorado: Alvo não está na cena atual (Fase)."),
+        "{:?}",
+        report.logs
+    );
+    // A name two objects share needs the ID.
+    let mut twin = Entity::new("Continuar", None);
+    twin.ui = Some(UiElement::default());
+    project.scenes[0].entities.push(twin);
+    let error = refused(
+        &project,
+        json!({"seconds": 1.0, "inputs": [
+        {"type": "click", "at": 0.1, "entity": "Continuar"}]}),
+    );
+    assert!(
+        error.starts_with("click: há 2 objetos chamados \"Continuar\"; use o ID: ")
+            && error.contains(&format!("{resume} (cena Fase)")),
+        "{error}"
+    );
+    run(
+        &project,
+        json!({"seconds": 0.2, "inputs": [{"type": "click", "at": 0.1, "entity": resume}]}),
+    );
+}

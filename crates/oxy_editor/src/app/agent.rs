@@ -190,11 +190,11 @@ impl Editor {
             .images
             .configure(&self.root(), &self.state.project);
     }
-    /// An agent's `play` request: start (in `scene`, else the open one, as Jogar), stop, pause,
-    /// resume or input. Its test never takes the mouse or the keyboard. The agent may pause
-    /// any test, but stops, resumes and sends inputs only to the one it plays: the person's,
-    /// theirs from the start or since Assumir or Retomar, stays theirs. Answers the play
-    /// state, as `status` gives it.
+    /// An agent's `play` request: start (in `scene`, by its ID or name, else the open one, as
+    /// Jogar), stop, pause, resume or input. Its test never takes the mouse or the keyboard. The
+    /// agent may pause any test, but stops, resumes and sends inputs only to the one it plays:
+    /// the person's, theirs from the start or since Assumir or Retomar, stays theirs. Answers
+    /// the play state, as `status` gives it.
     pub(crate) fn agent_play(&mut self, params: &Json) -> Result<Json, String> {
         let action = params["action"].as_str().unwrap_or_default();
         if self.home.visible {
@@ -223,16 +223,9 @@ impl Editor {
                 if let Some(reason) = self.agent_busy() {
                     return Err(reason.into());
                 }
-                let scene = params["scene"]
-                    .as_str()
-                    .map_or_else(|| self.scene_id.clone(), str::to_owned);
-                let name = self
-                    .state
-                    .project
-                    .scene(&scene)
-                    .ok_or_else(|| format!("Cena {scene} não existe"))?
-                    .name
-                    .clone();
+                let scene = params["scene"].as_str().unwrap_or(&self.scene_id);
+                let found = self.state.project.find_scene(scene, "scene")?;
+                let (scene, name) = (found.id.clone(), found.name.clone());
                 self.start_with(&scene, Driver::Agent)?;
                 self.log(format!("{AGENT_PREFIX}Teste iniciado em {name}"));
             }
@@ -422,9 +415,10 @@ mod tests {
         }
         let now = play.runtime.as_ref().unwrap().time;
         assert!(now > 0.4);
+        // The door by name, as oxy_simulate takes it: queued by its ID.
         play.queue_agent_inputs(&inputs(json!([
             {"type": "press", "at": 0.25, "action": "abrir porta"},
-            {"type": "click", "at": 0.5, "entity": door_id},
+            {"type": "click", "at": 0.5, "entity": "porta"},
         ])))
         .unwrap();
         assert_eq!(play.queued_until(), Some(now + 0.5));
@@ -451,6 +445,15 @@ mod tests {
             ))
             .unwrap_err();
         assert!(error.contains("\"voar\" não existe"), "{error}");
+        let error = play
+            .queue_agent_inputs(&inputs(
+                json!([{"type": "click", "at": 0.0, "entity": "Janela"}]),
+            ))
+            .unwrap_err();
+        assert!(
+            error.contains("\"Janela\" não é o ID nem o nome de um objeto"),
+            "{error}"
+        );
         // Actions are those of the game that runs, whatever the document gains meanwhile.
         input_actions::create(&mut project, "Acenar", "K").unwrap();
         let error = play

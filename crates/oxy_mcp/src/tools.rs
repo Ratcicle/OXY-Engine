@@ -81,22 +81,27 @@ pub struct Tools {
 
 const PROJECT: &str = "Optional path to the project folder or its project.oxy.json. When omitted, \
 the single open editor that allows agents is used.";
-const SCENE: &str = "Optional scene ID. Defaults to the scene open in the editor (live) or the \
-project's start scene (files).";
+const SCENE: &str = "Optional scene: its ID or its name (any case; refused when two scenes share \
+it, and an unknown one is refused with the scenes [{id, name}]). Defaults to the scene open in \
+the editor (live) or the project's start scene (files).";
 /// The game always starts in the start scene, live too, unlike the editing tools.
-const START_SCENE: &str = "Optional scene the game starts in. Defaults to the project's start \
-scene, also live (not the scene open in the editor); setup commands without a scene use it too.";
+const START_SCENE: &str = "Optional scene the game starts in, by its ID or name (as for the other \
+tools' scene). Defaults to the project's start scene, also live (not the scene open in the \
+editor); setup commands without a scene use it too.";
 const INPUTS: &str = "Timed inputs at simulated second `at`: {type: press|release, at, action} \
 with an input action of the project, by ID or name (see oxy_project), or \"$N\" from setup; \
 others are refused; {type: movement, at, value: [right, \
 forward]}, each -1 to 1, held until the next movement; {type: look, at, value: [x, y]}, a mouse \
 displacement applied once: each unit turns the camera by its sensitivity (camera control, 0.12 \
 degrees by default), +x turns right and +y looks down unless the camera inverts an axis; {type: \
-click, at, entity}: an object or its interface button; a hidden element (itself or a group above \
-it) takes no click, which a log line notes, and in the game pause only interface elements take \
-clicks; {type: escape, at}: what Esc does in the game, pausing or resuming it when the scene has \
-a pause menu (an event.pause node), else a log line says it has none. They survive scene \
-changes and reloads; a key held across one stays held.";
+click, at, entity}: an object or its interface button, of any scene, by ID, by name (any case, \
+when no other object of the project has it) or \"$N\" from setup; an ID or name no object has \
+is refused before the run (the IDs of copies action.spawn makes are taken); a hidden element \
+(itself or a group above it) takes no click, nor does an object that is not in the scene \
+running then, which log lines note (Clique ignorado: X não está na cena atual), and in the game \
+pause only interface elements take clicks; {type: escape, at}: what Esc does in the game, \
+pausing or resuming it when the scene has a pause menu (an event.pause node), else a log line \
+says it has none. They survive scene changes and reloads; a key held across one stays held.";
 const COLLIDERS: &str = "Draws colliders (green) and sensor areas (yellow) over the image, \
 invisible objects' too, as the editor's collider view does.";
 const SEED: &str = "Seed of the random.number draws, an integer from 0 to 9007199254740991 \
@@ -137,19 +142,31 @@ set_transform takes it); scale (local); dimensions (of its shape); visual_bounds
 {min, max, center} of the collider the game uses (the 3D character body, the 3D collider or the \
 box collider), with sensor: true for areas and enabled: false when off; bounds, both boxes.";
 const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
-radians plus rotation_degrees, material, attributes, components, logic graph, animation clips; \
-empty (null) parts are left out) plus world {position, rotation_degrees, scale}, visual_bounds \
-and collider_bounds as oxy_scene describes them, components and can_add_components. \
-world.rotation_degrees is rotation_degrees for a root object; under parents it is, of the angle \
-triples that give the same rotation, the one nearest to the object's own, in (-180, 180] (a \
-piece turned 120° with its group reads [0, 120, 0], not [180, 60, 180]). The logic \
-graph is summarized by default: nodes maps each node's label (its operation, then its main \
-parameter in parentheses; a label repeated in the graph ends in #N, N being the node's index in \
-the stored graph) to {id, params}, params holding only the values that differ from the \
-operation's defaults (see oxy_catalog), and edges are text such as \
-\"event.input(reiniciar).exec -> character.teleport.exec\" (label.port -> label.port). Meshes \
+radians plus rotation_degrees, material, attributes, components, logic graph, animation clips, \
+each keyframe with rotation_degrees too, as set_clip takes it, which update_entity refuses in \
+keyframes, as they keep radians; empty (null) parts are left out) plus world {position, \
+rotation_degrees, scale}, visual_bounds and collider_bounds as oxy_scene describes them, \
+components, can_add_components and referenced_by. world.rotation_degrees is rotation_degrees for \
+a root object; under parents it is, of the angle triples that give the same rotation, the one \
+nearest to the object's own, in (-180, 180] (a piece turned 120° with its group reads [0, 120, \
+0], not [180, 60, 180]). referenced_by lists what names the object [{scene {id, name}, entity, \
+name (the object holding the reference), role, ...}]: role is attribute <name>, ui (an \
+interface element shows its attribute), camera_control (param target or hidden), animation \
+(another object's clip moves it) or a node's operation, with node (its label in the summary) \
+and param, unless an input connected to that param replaces it; up to 50, referenced_by_total \
+counting them when there are more; left out when nothing does. The logic graph is summarized by \
+default: nodes maps each node's label to {id, params}. A label is the operation, then in \
+parentheses its main parameter, by name when it names a scene, audio, clip, input action, game \
+variable or surface, and \"→\" with the name of the object its object parameter names, such as \
+action.component(visible → Resultado); a parameter whose input of the same id is connected is \
+left out, the game using the input. Nodes that would share a label add the first parameter they \
+use whose value differs among them, such as attribute.set(Aviso, value = \"3\"); a label still \
+repeated ends in #N, N being the node's index in the stored graph. params holds only the values \
+that differ from the operation's defaults (see oxy_catalog), a value that names something with \
+its name too ({\"Object\": \"<id>\", \"name\": \"Resultado\"}), and edges are text such as \
+\"event.input(Reiniciar).exec -> character.teleport.exec\" (label.port -> label.port). Meshes \
 and convex/triangle collision geometry come as counts. graph=full and geometry=full give them as \
-stored, the form update_entity patches.";
+stored, IDs only, the form update_entity patches.";
 const CATALOG_DESCRIPTION: &str = "Catalog of logic nodes, components, shapes, interface \
 elements, presets [{id, description, creates, params}] (creates lists the pieces in the order \
 create_entity answers them; params are the preset's options), movement_profiles [{id, label, \
@@ -161,9 +178,9 @@ their ports with types and parameters with defaults (only those nodes come back)
 with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
 any other. ref says what a parameter names: scene, audio, clip, object, attribute, \
 input_action, surface, marker or variable (a game variable; oxy_project lists them) (an ID, or \
-for attribute and marker a name; an input_action or a variable also by its name, which add_node \
-and set_node_params store as the ID). value_format says how values are written. Read it before \
-building logic.";
+for attribute and marker a name; a scene, an input_action or a variable also by its name, which \
+add_node and set_node_params store as the ID). value_format says how values are written. Read \
+it before building logic.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
@@ -199,8 +216,12 @@ pub fn definitions() -> Json {
         tool(
             "oxy_status",
             "Lists open OXY editors that allow AI agents (project, active scene, unsaved changes, \
-             whether the editor is busy and why) and explains how tools pick a target. play says \
-             whether the game is being tested in the editor: {running, paused? (the test is \
+             whether the editor is busy and why, editor: its version) and explains how tools pick \
+             a target. server says which oxy-mcp answers: {version, build (16 hex digits \
+             fingerprinting its executable: another build, another value), built_at (when the \
+             executable was written, UTC)}, so a server older than the engine the person uses \
+             shows (an editor of another version, or a build older than their last one). play \
+             says whether the game is being tested in the editor: {running, paused? (the test is \
              paused), game_paused? (the game is in its own pause, from game.pause or Esc with a \
              pause menu; either pause can hold alone, or both), driven_by? (person, or agent for \
              a test you started with oxy_play, until the person clicks Assumir, or Retomar on a \
@@ -291,7 +312,11 @@ pub fn definitions() -> Json {
                    "fields": {"type": "array", "items": {"type": "string"}, "description":
                        "Only these parts, besides id and name: top-level keys of the answer or \
                         dotted paths such as character3d.actions, transform.position or \
-                        graph.edges (numbers index lists). A missing part is null."},
+                        graph.edges (numbers index lists). Component names read the part that \
+                        holds them: collider3d and sensor3d physics3d, character character3d, \
+                        camera_control camera_rig, collider2d and sensor2d collider, \
+                        controller2d controller. A missing part is null; referenced_by comes as \
+                        [] when nothing names the object."},
                    "graph": {"type": "string", "enum": ["summary", "full"], "description":
                        "The logic graph: summary (default) or full, as stored (node positions, \
                         every parameter, edges by node ID)."},
@@ -438,7 +463,8 @@ pub fn definitions() -> Json {
                         (and yaw) on the copy before the run, e.g. the player at a section."},
                    "until": {"type": "object", "properties": {
                        "scene_change": {"anyOf": [{"type": "boolean"}, {"type": "string"}],
-                           "description": "true: any scene start, reloads included; or a scene ID."},
+                           "description": "true: any scene start, reloads included; or a scene, \
+                            by its ID or name."},
                        "log_contains": {"type": "string"},
                        "attribute": {"type": "object", "properties": {
                            "entity": {"type": "string"}, "name": {"type": "string"},
@@ -547,8 +573,9 @@ pub fn definitions() -> Json {
                        "start: a new test; stop: ends a test you play; pause: any test; resume: \
                         a paused test you play; input: sends inputs to the test you play."},
                    "scene": {"type": "string", "description":
-                       "start: the scene the test starts in. Default: the scene open in the \
-                        editor, as Jogar (not the start scene oxy_simulate uses)."},
+                       "start: the scene the test starts in, by its ID or name. Default: the \
+                        scene open in the editor, as Jogar (not the start scene oxy_simulate \
+                        uses)."},
                    "inputs": {"type": "array", "items": {"type": "object"}, "description":
                        PLAY_INPUTS}}),
             json!(["action"])
@@ -702,7 +729,8 @@ box for Cube, Plane and with children, sphere for a round Sphere, convex for a S
 dimensions or scale stretch and for Cylinder, Cone and Pyramid, mesh for Tube and editable \
 meshes. 3D characters (their body is the collider) are refused
 - update_entity {entity, patch}: JSON merge patch over the object's document form (oxy_entity \
-with graph and geometry full) for fields without a dedicated command
+with graph and geometry full) for fields without a dedicated command; the rotation_degrees reads \
+add to keyframes is refused (keyframes keep radians; set_clip takes degrees)
 - add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
 to_node, to_port}. Nodes added without position (best left out) are laid out when the batch \
@@ -748,7 +776,11 @@ whether there is any; nothing is saved without save.write. The exported game kee
 %APPDATA%\\OXY Engine\\Jogos\\<project id>\\progresso.json, the editor test in memory until \
 another project opens; oxy_simulate takes and reports it (save, saves).
 Project, scene, input action, surface and variable commands take no `scene`; the others accept \
-it, and the tool's `scene` fills it when absent (for copy_entities, the scene copied from).";
+it, and the tool's `scene` fills it when absent (for copy_entities, the scene copied from). \
+Wherever a command or a node takes a scene (scene, to_scene, the scene parameter of \
+action.scene and value.scene, ref scene in oxy_catalog), it takes the scene's ID or its name, in \
+any case, when no other scene has it, and nodes store the ID; an unknown or shared name is \
+refused saying what the field received, with the scenes [{id, name}].";
 
 const IMPORT_DESCRIPTION: &str = "Imports a PNG image or a WAV sound as a project asset, as the \
 editor's Importar does: the source is checked (extension, header, full content, at most 64 MB, \
@@ -888,9 +920,9 @@ opening Lógica, for one, pauses the test). Play in real time differs from run t
 results that must repeat with oxy_simulate.";
 
 const PLAY_INPUTS: &str = "action input: inputs in oxy_simulate's form (press, release, \
-movement, look, click, escape; actions by ID or name), `at` being seconds of game time from now, \
-or from the last input still waiting (queued_until), so batches queue up in order; a batch with \
-one bad input queues none. Refused while the test is paused. A pause, a scene change or a restart drops the inputs still waiting, and keys \
+movement, look, click, escape; actions and clicked objects by ID or name), `at` being seconds of \
+game time from now, or from the last input still waiting (queued_until), so batches queue up in \
+order; a batch with one bad input queues none. Refused while the test is paused. A pause, a scene change or a restart drops the inputs still waiting, and keys \
 and movement held stop.";
 
 const SAVE_DESCRIPTION: &str = "Live only: saves the project open in the editor, as its Salvar \
@@ -941,6 +973,71 @@ fn view_size(args: &Json) -> [u32; 2] {
         side("width", headless::VIEW_SIZE[0]),
         side("height", headless::VIEW_SIZE[1]),
     ]
+}
+
+/// This server as oxy_status reports it: its version and, without git, which build runs: a
+/// fingerprint of its executable and when the executable was written. Read once.
+fn server_info() -> Json {
+    static INFO: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
+    INFO.get_or_init(|| {
+        let mut info = json!({"version": export::engine_version()});
+        if let Ok(executable) = std::env::current_exe() {
+            if let Ok(bytes) = std::fs::read(&executable) {
+                info["build"] = json!(fingerprint(&bytes));
+            }
+            if let Ok(written) = std::fs::metadata(&executable).and_then(|m| m.modified()) {
+                info["built_at"] = json!(utc(written));
+            }
+        }
+        info
+    })
+    .clone()
+}
+
+/// 16 hex digits that change with any byte of `bytes`: another build, another fingerprint.
+fn fingerprint(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for chunk in bytes.chunks(8) {
+        let mut word = [0; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        hash = (hash ^ u64::from_le_bytes(word))
+            .wrapping_mul(0x0000_0100_0000_01b3)
+            .rotate_left(29);
+    }
+    let length = bytes.len() as u64;
+    format!(
+        "{:016x}",
+        random::hash(&[&hash.to_le_bytes(), &length.to_le_bytes()])
+    )
+}
+
+/// `time` in UTC, as "2026-10-14T01:02:03Z".
+fn utc(time: std::time::SystemTime) -> String {
+    let seconds = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    // The civil date of a day count (H. Hinnant's days_from_civil, reversed).
+    let days = (seconds / 86_400) as i64 + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted + 2) / 5 + 1;
+    let month = if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    let second = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second / 3600,
+        second % 3600 / 60,
+        second % 60
+    )
 }
 
 /// A short number for reports: f32 noise such as 0.4000000059604645 would hide the value.
@@ -1185,6 +1282,7 @@ impl Tools {
             }
         }
         Ok(Output::json(json!({
+            "server": server_info(),
             "editors": editors,
             "how_targets_work": "With one editor open (agents allowed in Preferências do editor), \
                 tools act on it live: edits show at once, are undoable with Ctrl+Z and the person \
@@ -1916,7 +2014,7 @@ mod tests {
         for option in ["category", "operations", "brief", "offset", "limit"] {
             assert!(catalog[option]["description"].is_string(), "{option}");
         }
-        assert!(ENTITY_DESCRIPTION.contains("event.input(reiniciar).exec"));
+        assert!(ENTITY_DESCRIPTION.contains("event.input(Reiniciar).exec"));
         assert!(TREE_FIELDS.contains("world_position") && TREE_FIELDS.contains("pivot"));
         assert!(CATALOG_DESCRIPTION.contains("brief"));
         assert!(APPLY_DESCRIPTION.contains("graph and geometry full"));
@@ -4191,5 +4289,228 @@ mod tests {
         }
         assert_eq!(walk(&dir), before, "nothing was written");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The parkour build's frictions on files: scenes and clicks by name, summaries that name
+    /// what nodes name, who references an object and keyframes in degrees.
+    #[test]
+    fn files_take_scenes_and_clicks_by_name_and_read_names_and_references() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-names-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Nomes", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // The menu's Jogar opens the track, both named; the tool's scene is a name too.
+        let applied = call(
+            "oxy_apply",
+            json!({"scene": "cena 3d", "commands": [
+                {"op": "create_scene", "name": "Menu", "kind": "3d"},
+                {"op": "set_start_scene", "scene": "menu"},
+                {"op": "create_entity", "kind": {"type": "ui", "element": "Button"},
+                 "name": "Jogar", "scene": "Menu"},
+                {"op": "add_node", "entity": "$2", "scene": "Menu", "operation": "event.click"},
+                {"op": "add_node", "entity": "$2", "scene": "Menu", "operation": "action.scene",
+                 "params": {"scene": "CENA 3D"}},
+                {"op": "connect", "entity": "$2", "scene": "Menu", "from_node": "$3",
+                 "from_port": "exec", "to_node": "$4", "to_port": "exec"},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Resultado"},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle"},
+                {"op": "add_node", "entity": "$7", "operation": "action.component",
+                 "params": {"component": "visible", "enabled": false,
+                            "target": {"Object": "$6"}}},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Disco"},
+                {"op": "set_clip", "entity": "$9", "name": "Giro", "duration": 4.0, "tracks": [
+                    {"keyframes": [{"time": 0.0}, {"time": 1.0, "rotation": [0.0, 90.0, 0.0]}]}]},
+                {"op": "rename_scene", "scene": "Cena 3D", "name": "Pista"},
+            ]}),
+        )
+        .unwrap();
+        let id = |command: &str| {
+            applied["created"][command][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let (menu, panel, control) = (id("0"), id("6"), id("7"));
+        let saved = persistence::load_project(&file).unwrap();
+        let track = saved.scenes[0].id.clone();
+        assert_eq!(saved.start_scene, menu);
+        let button = saved.scene(&menu).unwrap().entity(&id("2")).unwrap();
+        assert_eq!(
+            button.graph.nodes[1].text("scene"),
+            track,
+            "stored as the ID"
+        );
+
+        let tree = call("oxy_scene", json!({"scene": "MENU"})).unwrap();
+        assert_eq!(tree["objects"][0]["name"], "Jogar");
+        let read = call("oxy_entity", json!({"scene": "pista", "id": panel})).unwrap();
+        assert_eq!(
+            read["referenced_by"],
+            json!([{"scene": {"id": track, "name": "Pista"}, "entity": control,
+                    "name": "Controle", "role": "action.component",
+                    "node": "action.component(visible → Resultado)", "param": "target"}])
+        );
+        let logic = call(
+            "oxy_entity",
+            json!({"scene": "Pista", "id": control, "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            logic["graph"]["nodes"]["action.component(visible → Resultado)"]["params"]["target"],
+            json!({"Object": panel, "name": "Resultado"})
+        );
+        let jump = call(
+            "oxy_entity",
+            json!({"scene": "Menu", "id": id("2"), "fields": ["graph.edges"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            jump["graph"]["edges"],
+            json!(["event.click.exec -> action.scene(Pista).exec"])
+        );
+        let clips = call(
+            "oxy_entity",
+            json!({"scene": "Pista", "id": id("9"), "fields": ["clips"]}),
+        )
+        .unwrap();
+        let keyframes = &clips["clips"][0]["tracks"][0]["keyframes"];
+        assert_eq!(keyframes[1]["rotation_degrees"], json!([0.0, 90.0, 0.0]));
+        // The stored rotation stays in radians.
+        let radians = keyframes[1]["transform"]["rotation"][1].as_f64().unwrap();
+        assert!(
+            (radians - std::f64::consts::FRAC_PI_2).abs() < 1e-4,
+            "{radians}"
+        );
+
+        // A click by name, and one on an object of another scene.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 1.0, "ui": false, "inputs": [
+                {"type": "click", "at": 0.1, "entity": "resultado"},
+                {"type": "click", "at": 0.2, "entity": "Jogar"},
+            ], "until": {"scene_change": "pista"}}),
+        )
+        .unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "scene_change", "{report}");
+        assert_eq!(report["stopped_at"]["time"], 0.2167);
+        assert_eq!(
+            report["logs"][0]["text"],
+            "Clique ignorado: Resultado não está na cena atual (Menu)."
+        );
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "scene": "Pista"}),
+        )
+        .unwrap();
+        assert_eq!(report["start_scene"], track);
+        for (tool, args, expected) in [
+            (
+                "oxy_simulate",
+                json!({"seconds": 1.0, "inputs": [{"type": "click", "at": 0.1,
+                                                    "entity": "Sair"}]}),
+                "click: \"Sair\" não é o ID nem o nome de um objeto do projeto".to_owned(),
+            ),
+            (
+                "oxy_scene",
+                json!({"scene": "Fase 9"}),
+                format!(
+                    "scene recebeu \"Fase 9\", que não é o ID nem o nome de uma cena do \
+                     projeto. Cenas: [{{\"id\":\"{track}\",\"name\":\"Pista\"}},\
+                     {{\"id\":\"{menu}\",\"name\":\"Menu\"}}]"
+                ),
+            ),
+            (
+                "oxy_apply",
+                json!({"scene": "Menu", "commands": [{"op": "add_node", "entity": id("2"),
+                       "operation": "value.scene", "params": {"scene": "Fase 9"}}]}),
+                "O parâmetro scene do nó value.scene recebeu \"Fase 9\"".to_owned(),
+            ),
+        ] {
+            let error = call(tool, args).unwrap_err();
+            assert!(error.contains(&expected), "{tool}: {error}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn status_tells_which_server_answers_and_descriptions_say_what_takes_names() {
+        let server = server_info();
+        assert_eq!(server["version"], export::engine_version());
+        let build = server["build"].as_str().unwrap();
+        assert!(build.len() == 16 && build.chars().all(|c| c.is_ascii_hexdigit()));
+        let built = server["built_at"].as_str().unwrap();
+        assert!(built.len() == 20 && built.ends_with('Z'), "{built}");
+        assert_eq!(fingerprint(b"oxy"), fingerprint(b"oxy"));
+        assert_ne!(fingerprint(b"oxy"), fingerprint(b"oxz"));
+        assert_ne!(fingerprint(b""), fingerprint(&[0]), "the length counts");
+        let at =
+            |seconds: u64| utc(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds));
+        assert_eq!(at(0), "1970-01-01T00:00:00Z");
+        assert_eq!(at(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(at(1_791_939_723), "2026-10-14T01:02:03Z");
+        let description = |name: &str| {
+            definitions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap()["description"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let status = description("oxy_status");
+        for text in [
+            "server says which oxy-mcp answers",
+            "build (16 hex",
+            "built_at",
+        ] {
+            assert!(status.contains(text), "{text}");
+        }
+        for scene in [SCENE, START_SCENE] {
+            assert!(scene.contains("ID or") && scene.contains("name"), "{scene}");
+        }
+        assert!(SCENE.contains("[{id, name}]"));
+        assert!(INPUTS.contains("by name") && INPUTS.contains("não está na cena atual"));
+        assert!(INPUTS.contains("refused before the run"));
+        assert!(PLAY_INPUTS.contains("clicked objects by ID or name"));
+        for text in [
+            "action.component(visible → Resultado)",
+            "referenced_by",
+            "each keyframe with rotation_degrees",
+            "which update_entity refuses in keyframes",
+            "unless an input connected to that param replaces it",
+            "attribute.set(Aviso, value = \"3\"); a label still repeated ends in #N",
+            "{\"Object\": \"<id>\", \"name\": \"Resultado\"}",
+        ] {
+            assert!(ENTITY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(APPLY_DESCRIPTION.contains("it takes the scene's ID or its name"));
+        assert!(CATALOG_DESCRIPTION.contains("a scene, an input_action or a variable"));
+        let entity = schema("oxy_entity");
+        let fields = entity["fields"]["description"].as_str().unwrap();
+        assert!(fields.contains("camera_control camera_rig"), "{fields}");
+        let simulate = schema("oxy_simulate");
+        let until = &simulate["until"]["properties"]["scene_change"]["description"];
+        assert!(until.as_str().unwrap().contains("by its ID or name"));
+        let play = schema("oxy_play");
+        assert!(
+            play["scene"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("by its ID or name")
+        );
     }
 }

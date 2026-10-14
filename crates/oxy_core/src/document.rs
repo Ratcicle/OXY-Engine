@@ -771,6 +771,34 @@ impl Project {
     pub fn scene_mut(&mut self, id: &str) -> Option<&mut Scene> {
         self.scenes.iter_mut().find(|s| s.id == id)
     }
+    /// The scene `text` names, as agents give it: its ID or, when no scene has that ID, its
+    /// name in any case, when no other scene has it. `what` is who gave it ("scene", "O
+    /// parâmetro scene do nó action.scene"…): the refusal says what it received and lists the
+    /// scenes.
+    pub fn find_scene(&self, text: &str, what: &str) -> Result<&Scene, String> {
+        if let Some(scene) = self.scene(text) {
+            return Ok(scene);
+        }
+        let wanted = text.trim().to_lowercase();
+        let named: Vec<&Scene> = self
+            .scenes
+            .iter()
+            .filter(|s| s.name.trim().to_lowercase() == wanted)
+            .collect();
+        match named.as_slice() {
+            [one] => Ok(one),
+            [] => Err(format!(
+                "{what} recebeu \"{text}\", que não é o ID nem o nome de uma cena do projeto. \
+                 Cenas: {}",
+                scene_list(self.scenes.iter())
+            )),
+            many => Err(format!(
+                "{what} recebeu \"{text}\", o nome de {} cenas; use o ID: {}",
+                many.len(),
+                scene_list(many.iter().copied())
+            )),
+        }
+    }
     pub fn asset(&self, id: &str) -> Option<&Asset> {
         self.assets.iter().find(|a| a.id == id)
     }
@@ -1166,6 +1194,38 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     }
     Ok(())
 }
+/// Scenes that messages list; more are only counted.
+const SCENES_LISTED: usize = 30;
+
+/// Up to [`SCENES_LISTED`] scenes as `[{"id": …, "name": …}]`, for refusals of what agents
+/// give, which may need the ID.
+fn scene_list<'a>(scenes: impl Iterator<Item = &'a Scene>) -> String {
+    let scenes: Vec<&Scene> = scenes.collect();
+    let listed: Vec<serde_json::Value> = scenes
+        .iter()
+        .take(SCENES_LISTED)
+        .map(|s| serde_json::json!({"id": s.id, "name": s.name}))
+        .collect();
+    let text = serde_json::to_string(&listed).unwrap_or_default();
+    with_more(text, scenes.len())
+}
+/// The names of up to [`SCENES_LISTED`] of the project's scenes, for messages people read.
+fn scene_names(project: &Project) -> String {
+    let names: Vec<&str> = project
+        .scenes
+        .iter()
+        .take(SCENES_LISTED)
+        .map(|s| s.name.as_str())
+        .collect();
+    with_more(names.join(", "), project.scenes.len())
+}
+fn with_more(mut text: String, scenes: usize) -> String {
+    if scenes > SCENES_LISTED {
+        text.push_str(&format!(" e mais {}", scenes - SCENES_LISTED));
+    }
+    text
+}
+
 /// The scenes, audios, clips and game variables named by the logic of `entities`, a scene's
 /// objects or the pieces of the model named `model`. Clips are checked in scenes only: a model
 /// may name the clip of an object it is placed with, such as the visitor of its area.
@@ -1180,7 +1240,7 @@ fn validate_action_references(
         .collect();
     for e in entities {
         for node in &e.graph.nodes {
-            let missing = node_references(node).any(|(param, reference, _)| {
+            let missing = node_references(node).find(|(param, reference, _)| {
                 let id = node.text(param.id);
                 !id.is_empty()
                     && match reference {
@@ -1193,12 +1253,22 @@ fn validate_action_references(
                         _ => false,
                     }
             });
-            if missing {
+            if let Some((param, reference, _)) = missing {
                 // A piece exists only in its model: the scenes do not show it.
                 let holder = model.map_or(String::new(), |name| format!("modelo {name}, "));
+                let label = crate::graph::definition(&node.operation).map_or("", |d| d.label);
+                let scenes = if reference == Reference::Scene {
+                    format!(". Cenas: {}", scene_names(project))
+                } else {
+                    String::new()
+                };
                 return Err(format!(
-                    "Referência quebrada: {holder}objeto {}, nó {} ({})",
-                    e.name, node.id, node.operation
+                    "Referência quebrada: {holder}objeto {}, nó {label} ({}): o parâmetro {} \
+                     recebeu \"{}\"{scenes}",
+                    e.name,
+                    node.operation,
+                    param.id,
+                    node.text(param.id)
                 ));
             }
         }

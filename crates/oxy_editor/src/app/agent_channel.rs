@@ -291,14 +291,15 @@ impl Editor {
     pub(crate) fn agent_connected(&self) -> bool {
         self.agents.as_ref().is_some_and(AgentChannel::connected)
     }
+    /// The scene a request names by its ID or name, else the one open in the editor.
     fn agent_scene(&self, params: &Json) -> Result<Id, String> {
         if self.home.visible {
             return Err("Nenhum projeto aberto no editor.".into());
         }
-        Ok(params["scene"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.scene_id.clone()))
+        match params["scene"].as_str() {
+            Some(scene) => Ok(self.state.project.find_scene(scene, "scene")?.id.clone()),
+            None => Ok(self.scene_id.clone()),
+        }
     }
     /// The test of the game as agents read it, in `status` and in answers to `play`.
     pub(crate) fn play_status(&self) -> Json {

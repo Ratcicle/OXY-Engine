@@ -552,7 +552,7 @@ fn entities_summarize_logic_as_labelled_edges() {
         Value::Text("Uma mensagem bem mais longa que o rótulo".into()),
     );
     named.nodes = vec![change, long];
-    let labels = query::graph_summary(&project, &named)["nodes"]
+    let labels = query::graph_summary(&project, project.scene(&scene).unwrap(), &named)["nodes"]
         .as_object()
         .unwrap()
         .keys()
@@ -881,4 +881,364 @@ fn reading_never_changes_the_project() {
         query::answer(&project, &scene, request, &args).unwrap();
     }
     assert_eq!(project, before);
+}
+
+/// A level whose logic, attributes, interface, camera and animations name things: a menu scene,
+/// an input action, a game variable, an animation, a panel, a first-person player and a door
+/// whose animation moves its leaf.
+fn named_level() -> (Project, Id, Vec<Applied>) {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_scene", "name": "Menu", "kind": "3d"},
+            {"op": "create_input_action", "name": "Reiniciar", "key": "R"},
+            {"op": "create_variable", "name": "Recorde", "value": 0},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Resultado"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Disco"},
+            {"op": "set_clip", "entity": "$4", "name": "Giro", "duration": 4.0, "tracks": [
+                {"keyframes": [{"time": 0.0}, {"time": 1.0, "rotation": [0.0, 90.0, 0.0]}]}]},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle"},
+            {"op": "add_node", "entity": "$6", "operation": "event.input",
+             "params": {"action": "reiniciar"}},
+            {"op": "add_node", "entity": "$6", "operation": "action.component",
+             "params": {"component": "visible", "target": {"Object": "$3"}}},
+            {"op": "add_node", "entity": "$6", "operation": "action.scene",
+             "params": {"scene": "menu"}},
+            {"op": "add_node", "entity": "$6", "operation": "action.animation",
+             "params": {"clip": "$5", "target": {"Object": "$4"}}},
+            {"op": "add_node", "entity": "$6", "operation": "variable.get",
+             "params": {"variable": "Recorde"}},
+            {"op": "add_node", "entity": "$6", "operation": "condition.branch"},
+            {"op": "add_node", "entity": "$6", "operation": "value.bool"},
+            {"op": "connect", "entity": "$6", "from_node": "$13", "from_port": "value",
+             "to_node": "$12", "to_port": "condition"},
+            {"op": "connect", "entity": "$6", "from_node": "$7", "from_port": "exec",
+             "to_node": "$8", "to_port": "exec"},
+            {"op": "set_attribute", "entity": "$4", "name": "Painel", "value": {"Object": "$3"}},
+            {"op": "create_entity", "kind": {"type": "ui", "element": "Text"}, "name": "Placar"},
+            {"op": "update_entity", "entity": "$17",
+             "patch": {"ui": {"binding_object": "$3", "binding_attribute": "Pontos"}}},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Folha",
+             "parent": "$20"},
+            {"op": "set_clip", "entity": "$20", "name": "Abrir", "duration": 1.0, "tracks": [
+                {"target": "$21", "keyframes": [{"time": 0.0},
+                                                {"time": 1.0, "rotation": [0.0, 90.0, 0.0]}]}]},
+        ]),
+    );
+    (project, scene, applied)
+}
+
+#[test]
+fn summaries_name_what_nodes_name_and_leave_out_parameters_inputs_replace() {
+    let (project, scene, applied) = named_level();
+    let id = |command: usize| applied[command].created[0].clone();
+    let view = query::entity(&project, &scene, &id(6)).unwrap();
+    let nodes = view["graph"]["nodes"].as_object().unwrap();
+    let mut labels: Vec<&str> = nodes.keys().map(String::as_str).collect();
+    labels.sort_unstable();
+    assert_eq!(
+        labels,
+        [
+            "action.animation(Giro → Disco)",
+            "action.component(visible → Resultado)",
+            "action.scene(Menu)",
+            // Its condition comes through the input: the parameter is not what it uses.
+            "condition.branch",
+            "event.input(Reiniciar)",
+            "value.bool(false)",
+            "variable.get(Recorde)",
+        ]
+    );
+    assert_eq!(
+        view["graph"]["edges"],
+        json!([
+            "value.bool(false).value -> condition.branch.condition",
+            "event.input(Reiniciar).exec -> action.component(visible → Resultado).exec",
+        ])
+    );
+    // Parameters keep the IDs the game reads, with the names beside them.
+    assert_eq!(
+        nodes["action.component(visible → Resultado)"]["params"],
+        json!({"component": {"Text": "visible"},
+               "target": {"Object": id(3), "name": "Resultado"}})
+    );
+    assert_eq!(
+        nodes["action.scene(Menu)"]["params"],
+        json!({"scene": {"Text": id(0), "name": "Menu"}})
+    );
+    assert_eq!(
+        nodes["event.input(Reiniciar)"]["params"],
+        json!({"action": {"Text": id(1), "name": "Reiniciar"}})
+    );
+    assert_eq!(
+        nodes["action.animation(Giro → Disco)"]["params"]["clip"],
+        json!({"Text": id(5), "name": "Giro"})
+    );
+    assert_eq!(
+        nodes["variable.get(Recorde)"]["params"],
+        json!({"variable": {"Text": id(2), "name": "Recorde"}})
+    );
+    // No ID in a label or an edge.
+    let summary = view["graph"].to_string();
+    let labels_and_edges = format!("{:?} {}", labels, view["graph"]["edges"]);
+    for command in [0, 1, 2, 3, 4, 5] {
+        assert!(!labels_and_edges.contains(&id(command)), "{summary}");
+    }
+    // In full, the graph is the stored one: IDs only.
+    let full = query::entities(
+        &project,
+        &scene,
+        &EntityQuery::parse(&json!({"id": id(6), "graph": "full"})).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !full["graph"].to_string().contains("\"name\""),
+        "{}",
+        full["graph"]
+    );
+}
+
+#[test]
+fn objects_list_what_references_them_with_the_scene() {
+    let (project, scene, applied) = named_level();
+    let id = |command: usize| applied[command].created[0].clone();
+    let place = json!({"id": scene, "name": "Cena 3D"});
+    let panel = query::entity(&project, &scene, &id(3)).unwrap();
+    assert_eq!(
+        panel["referenced_by"],
+        json!([
+            {"scene": place, "entity": id(4), "name": "Disco", "role": "attribute Painel"},
+            {"scene": place, "entity": id(6), "name": "Controle", "role": "action.component",
+             "node": "action.component(visible → Resultado)", "param": "target"},
+            {"scene": place, "entity": id(17), "name": "Placar", "role": "ui"},
+        ])
+    );
+    assert!(panel.get("referenced_by_total").is_none());
+    // Another object's logic moves the disc; its own animation is not a reference.
+    let disc = query::entity(&project, &scene, &id(4)).unwrap();
+    assert_eq!(
+        disc["referenced_by"],
+        json!([{"scene": place, "entity": id(6), "name": "Controle",
+                "role": "action.animation", "node": "action.animation(Giro → Disco)",
+                "param": "target"}])
+    );
+    // The door's animation moves its leaf.
+    assert_eq!(
+        query::entity(&project, &scene, &id(21)).unwrap()["referenced_by"],
+        json!([{"scene": place, "entity": id(20), "name": "Porta", "role": "animation",
+                "clip": "Abrir"}])
+    );
+    // The preset's camera follows the player and hides its look.
+    let player = &applied[19].created;
+    let camera = json!({"scene": place, "entity": player[2], "name": "Câmera principal",
+                        "role": "camera_control"});
+    let mut target = camera.clone();
+    target["param"] = json!("target");
+    let mut hidden = camera;
+    hidden["param"] = json!("hidden");
+    let read = |object: &str| query::entity(&project, &scene, object).unwrap();
+    assert_eq!(read(&player[0])["referenced_by"], json!([target]));
+    assert_eq!(read(&player[1])["referenced_by"], json!([hidden]));
+    // Nothing names the control: left out unless asked for.
+    let control = read(&id(6));
+    assert!(control.get("referenced_by").is_none(), "{control}");
+    let asked = query::entities(
+        &project,
+        &scene,
+        &EntityQuery::parse(&json!({"id": id(6), "fields": ["referenced_by"]})).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        asked,
+        json!({"id": id(6), "name": "Controle", "referenced_by": []})
+    );
+}
+
+#[test]
+fn keyframes_read_in_degrees_as_set_clip_writes_them() {
+    let (project, scene, applied) = named_level();
+    let disc = query::entity(&project, &scene, &applied[4].created[0]).unwrap();
+    let keyframes = &disc["clips"][0]["tracks"][0]["keyframes"];
+    near(&keyframes[0]["rotation_degrees"], &[0., 0., 0.]);
+    near(&keyframes[1]["rotation_degrees"], &[0., 90., 0.]);
+    near(
+        &keyframes[1]["transform"]["rotation"],
+        &[0., 90f32.to_radians(), 0.],
+    );
+    let picked = query::entities(
+        &project,
+        &scene,
+        &EntityQuery::parse(&json!({"id": applied[4].created[0],
+                                    "fields": ["clips.0.tracks.0.keyframes.1"]}))
+        .unwrap(),
+    )
+    .unwrap();
+    near(
+        &picked["clips"]["0"]["tracks"]["0"]["keyframes"]["1"]["rotation_degrees"],
+        &[0., 90., 0.],
+    );
+}
+
+#[test]
+fn reads_take_a_scene_by_name_and_fields_by_component_name() {
+    let (mut project, scene, applied) = named_level();
+    let menu = applied[0].created[0].clone();
+    let tree = query::answer(&project, "MENU", "scene_tree", &json!({})).unwrap();
+    assert_eq!((&tree["id"], &tree["name"]), (&json!(menu), &json!("Menu")));
+    let placed = query::entity(&project, " cena 3d ", &applied[3].created[0]).unwrap();
+    assert_eq!(placed["name"], "Resultado");
+    let error = query::answer(&project, "Fase 9", "scene_tree", &json!({})).unwrap_err();
+    assert_eq!(
+        error,
+        format!(
+            "scene recebeu \"Fase 9\", que não é o ID nem o nome de uma cena do projeto. Cenas: \
+             [{{\"id\":\"{scene}\",\"name\":\"Cena 3D\"}},{{\"id\":\"{menu}\",\"name\":\"Menu\"}}]"
+        )
+    );
+    // Component names read the part of the document that holds them.
+    let camera = applied[19].created[2].clone();
+    let rig = query::entities(
+        &project,
+        &scene,
+        &EntityQuery::parse(&json!({"id": camera, "fields": ["camera_control.target"]})).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        rig,
+        json!({"id": camera, "name": "Câmera principal",
+               "camera_rig": {"target": applied[19].created[0]}})
+    );
+    let parsed =
+        EntityQuery::parse(&json!({"id": "a", "fields": ["sensor3d", "character"]})).unwrap();
+    assert_eq!(parsed.fields, ["physics3d", "character3d"]);
+    let error = EntityQuery::parse(&json!({"id": "a", "fields": ["sensor"]})).unwrap_err();
+    assert!(
+        error.contains("Campo desconhecido: sensor") && error.contains("sensor3d → physics3d"),
+        "{error}"
+    );
+    // Two scenes with one name: the ID tells them apart.
+    apply(
+        &mut project,
+        &scene,
+        json!([{"op": "create_scene", "name": "menu", "kind": "2d"}]),
+    );
+    let error = query::answer(&project, "Menu", "scene_tree", &json!({})).unwrap_err();
+    assert!(
+        error.starts_with("scene recebeu \"Menu\", o nome de 2 cenas; use o ID: [{\"id\":"),
+        "{error}"
+    );
+    assert!(query::answer(&project, &menu, "scene_tree", &json!({})).is_ok());
+}
+
+#[test]
+fn labels_tell_apart_nodes_that_share_one_and_inputs_replace_references() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Placa"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Contagem"},
+            {"op": "add_node", "entity": "$1", "operation": "attribute.set",
+             "params": {"attribute": "Aviso", "value": {"Text": "3"}}},
+            {"op": "add_node", "entity": "$1", "operation": "attribute.set",
+             "params": {"attribute": "Aviso", "value": {"Text": "2"}}},
+            {"op": "add_node", "entity": "$1", "operation": "attribute.set",
+             "params": {"attribute": "Aviso", "value": {"Text": "3"}}},
+            {"op": "add_node", "entity": "$1", "operation": "condition.branch"},
+            {"op": "add_node", "entity": "$1", "operation": "condition.branch"},
+            {"op": "add_node", "entity": "$1", "operation": "value.bool"},
+            {"op": "connect", "entity": "$1", "from_node": "$7", "from_port": "value",
+             "to_node": "$5", "to_port": "condition"},
+            {"op": "connect", "entity": "$1", "from_node": "$7", "from_port": "value",
+             "to_node": "$6", "to_port": "condition"},
+            {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$1", "operation": "action.remove",
+             "params": {"target": {"Object": "$0"}}},
+            {"op": "connect", "entity": "$1", "from_node": "$10", "from_port": "self",
+             "to_node": "$11", "to_port": "target"},
+            {"op": "add_node", "entity": "$1", "operation": "action.component",
+             "params": {"component": "visible", "target": {"Object": "$0"}}},
+            {"op": "add_node", "entity": "$1", "operation": "action.component",
+             "params": {"component": "visible", "enabled": false, "target": {"Object": "$0"}}},
+        ]),
+    );
+    let id = |command: usize| applied[command].created[0].clone();
+    let view = query::entity(&project, &scene, &id(1)).unwrap();
+    let nodes = view["graph"]["nodes"].as_object().unwrap();
+    let mut labels: Vec<&str> = nodes.keys().map(String::as_str).collect();
+    labels.sort_unstable();
+    assert_eq!(
+        labels,
+        [
+            // What tells them apart, else their place in the graph.
+            "action.component(visible → Placa, enabled = false)",
+            "action.component(visible → Placa, enabled = true)",
+            // Its target comes through the input.
+            "action.remove",
+            "attribute.set(Aviso, value = \"2\")",
+            "attribute.set(Aviso, value = \"3\")#0",
+            "attribute.set(Aviso, value = \"3\")#2",
+            "condition.branch#3",
+            "condition.branch#4",
+            "event.scene_start",
+            "value.bool(false)",
+        ]
+    );
+    assert_eq!(
+        nodes["attribute.set(Aviso, value = \"2\")"]["id"],
+        json!(id(3))
+    );
+    // The removal's parameter names the panel, but the input decides: it is not a reference.
+    let panel = query::entity(&project, &scene, &id(0)).unwrap();
+    let place = json!({"id": scene, "name": "Cena 3D"});
+    assert_eq!(
+        panel["referenced_by"],
+        json!([
+            {"scene": place, "entity": id(1), "name": "Contagem", "role": "action.component",
+             "node": "action.component(visible → Placa, enabled = true)", "param": "target"},
+            {"scene": place, "entity": id(1), "name": "Contagem", "role": "action.component",
+             "node": "action.component(visible → Placa, enabled = false)", "param": "target"},
+        ])
+    );
+}
+
+#[test]
+fn many_references_and_many_scenes_are_counted_past_the_listed_ones() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let target = Entity::new("Alvo", None);
+    let id = target.id.clone();
+    let entities = &mut project.scene_mut(&scene).unwrap().entities;
+    entities.push(target);
+    for n in 0..51 {
+        let mut pointer = Entity::new(format!("Seta {n}"), None);
+        pointer
+            .attributes
+            .insert("Alvo".into(), Value::Object(Some(id.clone())));
+        entities.push(pointer);
+    }
+    let read = query::entity(&project, &scene, &id).unwrap();
+    let listed = read["referenced_by"].as_array().unwrap();
+    assert_eq!(listed.len(), 50);
+    assert_eq!(listed[49]["name"], "Seta 49");
+    assert_eq!(read["referenced_by_total"], 51);
+    // A scene the project lacks lists 30 scenes and counts the others.
+    for n in 1..=31 {
+        project
+            .scenes
+            .push(Scene::new(format!("Fase {n}"), SceneKind::ThreeD));
+    }
+    let error = query::answer(&project, "Fase 99", "scene_tree", &json!({})).unwrap_err();
+    assert!(
+        error.ends_with(&format!(
+            "{{\"id\":\"{}\",\"name\":\"Fase 29\"}}] e mais 2",
+            project.scenes[29].id
+        )),
+        "{error}"
+    );
+    assert!(!error.contains("Fase 30"), "{error}");
 }

@@ -519,10 +519,25 @@ impl Runtime {
         self.run = RunState::new(&self.source, 0);
     }
     /// A click on an object or on its interface element. An element hidden, by itself or by a
-    /// group above it, takes no click, as a person could not click it: it is logged. In the
-    /// game pause only interface elements take clicks.
+    /// group above it, takes no click, as a person could not click it: it is logged, as is a
+    /// click on an object of another scene. In the game pause only interface elements take
+    /// clicks.
     pub fn click(&mut self, entity: &str) {
         if self.paused || self.stopped {
+            return;
+        }
+        if self.entity(entity).is_none() {
+            // An object the game removed is named as the project had it; a copy action.spawn
+            // has not made has no name, and its ID is not shown.
+            let name = [&self.project, &self.source]
+                .into_iter()
+                .flat_map(|project| &project.scenes)
+                .find_map(|s| s.entity(entity))
+                .map_or_else(|| "o objeto clicado".to_owned(), |e| e.name.clone());
+            let scene = self.scene().name.clone();
+            self.log(format!(
+                "Clique ignorado: {name} não está na cena atual ({scene})."
+            ));
             return;
         }
         if let Some(e) = self.entity(entity).filter(|e| e.ui.is_some()) {

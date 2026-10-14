@@ -1655,12 +1655,13 @@ fn resolve_placeholders(
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
+/// The scene of a command: `scene` by its ID or name, `default` when absent.
 fn scene_id(project: &Project, scene: &Option<Id>, default: &str) -> Result<Id, String> {
-    let id = scene.as_deref().unwrap_or(default);
-    project
-        .scene(id)
-        .map(|s| s.id.clone())
-        .ok_or_else(|| format!("Cena {id} não existe"))
+    scene_named(project, scene.as_deref().unwrap_or(default), "scene")
+}
+/// The ID of the scene `text` names by ID or name; `what` is the field that gave it.
+fn scene_named(project: &Project, text: &str, what: &str) -> Result<Id, String> {
+    project.find_scene(text, what).map(|s| s.id.clone())
 }
 fn scene_mut<'a>(project: &'a mut Project, id: &str) -> &'a mut Scene {
     project.scene_mut(id).expect("scene checked by scene_id")
@@ -1811,7 +1812,7 @@ fn apply_one(
             parent,
         } => {
             let from = scene_id(project, scene, default)?;
-            let to = scene_id(project, &Some(to_scene.clone()), default)?;
+            let to = scene_named(project, to_scene, "to_scene")?;
             let (roots, map) = copy_entities(project, &from, ids, &to, parent.as_ref())?;
             copies.extend(std::iter::repeat_n(Arc::new(map), roots.len()));
             // Logic that opens the scene it came from, such as a restart, still opens it.
@@ -2124,6 +2125,24 @@ fn apply_one(
             if value.get("id").and_then(Json::as_str) != Some(entity.as_str()) {
                 return Err("O patch não pode mudar o ID do objeto".into());
             }
+            // Reads add it to keyframes, which keep only the rotation in radians.
+            let degrees = value["clips"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|clip| clip["tracks"].as_array())
+                .flatten()
+                .filter_map(|track| track["keyframes"].as_array())
+                .flatten()
+                .any(|keyframe| keyframe.get("rotation_degrees").is_some());
+            if degrees {
+                return Err(
+                    "Patch inválido: os quadros-chave das animações não guardam \
+                            rotation_degrees. A rotação deles fica em transform.rotation, em \
+                            radianos; para escrevê-la em graus, use set_clip."
+                        .into(),
+                );
+            }
             let dimensions = e.dimensions;
             // A collider made from the shape keeps the geometry: one that matched the old shape
             // no longer matches the new one. Once it stays behind, later patches add nothing.
@@ -2424,10 +2443,10 @@ fn apply_one(
 
 /// The parameters `given` to a node of `def`, as the node keeps them: plain values read by the
 /// catalog's types (by their form where the input port takes any type), fixed choices checked,
-/// and an input action or a game variable given by name kept by its ID, which is what the game
-/// reads. An action the project lacks stays as given, and the batch warns about it; a name two
-/// actions share is refused, as by input action commands. A variable the project lacks is
-/// refused.
+/// and an input action, a game variable or a scene given by name kept by its ID, which is what
+/// the game reads. An action the project lacks stays as given, and the batch warns about it; a
+/// name two actions share is refused, as by input action commands. A variable or a scene the
+/// project lacks is refused.
 fn node_params(
     project: &Project,
     def: &OperationDef,
@@ -2467,6 +2486,17 @@ fn node_params(
             && !variable.is_empty()
         {
             *variable = variables::find(project, variable)?;
+        }
+        // So would a scene: refused with what the parameter received and the scenes.
+        if graph::reference(def.id, param) == Some(Reference::Scene)
+            && let Value::Text(scene) = &mut value
+            && !scene.is_empty()
+        {
+            *scene = scene_named(
+                project,
+                scene,
+                &format!("O parâmetro {key} do nó {}", def.id),
+            )?;
         }
         params.insert(key.clone(), value);
     }

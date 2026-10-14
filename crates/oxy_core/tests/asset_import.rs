@@ -158,6 +158,52 @@ fn a_png_from_a_path_is_copied_into_assets_and_shown_by_the_object_asked() {
 }
 
 #[test]
+fn the_scene_of_an_import_goes_by_its_name_and_one_the_project_lacks_is_refused() {
+    let dir = folder("scene-name");
+    let source_dir = folder("scene-name-source");
+    let (mut project, scene, [sprite, ..]) = project_with_targets(&dir);
+    let source = source_dir.join("Placa.png");
+    std::fs::write(&source, png(8, 8)).unwrap();
+    let name = project.scene(&scene).unwrap().name.to_uppercase();
+    let asked =
+        request(json!({"path": path_arg(&source), "apply_to": sprite, "scene": name})).unwrap();
+    let imported =
+        asset_import::import(&mut project, &dir, "outra", &asked, &asked.read().unwrap()).unwrap();
+    let placed = project.scene(&scene).unwrap().entity(&sprite).unwrap();
+    assert_eq!(placed.material.texture.as_ref(), Some(&imported.asset));
+    // Applied to an object or not, before anything is written.
+    let before = project.clone();
+    let files = std::fs::read_dir(dir.join("assets")).unwrap().count();
+    for args in [
+        json!({"path": path_arg(&source), "scene": "Fase 9"}),
+        json!({"path": path_arg(&source), "apply_to": sprite, "scene": "Fase 9"}),
+    ] {
+        let refused = request(args).unwrap();
+        let error = asset_import::import(
+            &mut project,
+            &dir,
+            &scene,
+            &refused,
+            &refused.read().unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with(
+                "scene recebeu \"Fase 9\", que não é o ID nem o nome de uma cena do projeto"
+            ),
+            "{error}"
+        );
+    }
+    assert_eq!(project, before);
+    assert_eq!(
+        std::fs::read_dir(dir.join("assets")).unwrap().count(),
+        files
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
+}
+
+#[test]
 fn a_wav_sent_inline_is_found_by_its_header_and_reports_its_length() {
     let dir = folder("wav");
     let (mut project, scene, _) = project_with_targets(&dir);

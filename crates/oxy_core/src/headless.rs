@@ -64,8 +64,9 @@ pub enum InputEvent {
         at: f64,
         value: [f32; 2],
     },
-    /// Clicks an object or its interface button. A hidden element takes no click, nor does a
-    /// world object in the game pause, as in the game.
+    /// Clicks an object or its interface button, by its ID or name. A hidden element takes no
+    /// click, nor does a world object in the game pause, as in the game, nor an object that is
+    /// not in the running scene (a log line says so).
     Click {
         at: f64,
         entity: Id,
@@ -199,7 +200,7 @@ pub struct Spawn {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Until {
-    /// `true`: any scene start, reloads included; a scene ID: that scene starting.
+    /// `true`: any scene start, reloads included; a scene's ID or name: that scene starting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_change: Option<SceneCondition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -362,7 +363,7 @@ pub enum EventKind {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SimulationRequest {
-    /// Scene to start in; the project's start scene when absent.
+    /// Scene to start in, by its ID or name; the project's start scene when absent.
     #[serde(default)]
     pub scene: Option<Id>,
     /// Simulated seconds; the upper bound when `until` is set.
@@ -1552,11 +1553,9 @@ impl Stop {
         let scene = match &until.scene_change {
             None | Some(SceneCondition::Any(false)) => None,
             Some(SceneCondition::Any(true)) => Some(None),
-            Some(SceneCondition::Scene(id)) => {
-                let id = resolve(id, applied)?;
-                if project.scene(&id).is_none() {
-                    return Err(format!("until: cena {id} não existe"));
-                }
+            Some(SceneCondition::Scene(text)) => {
+                let text = resolve(text, applied)?;
+                let id = project.find_scene(&text, "until: scene_change")?.id.clone();
                 Some(Some(id))
             }
         };
@@ -1930,6 +1929,39 @@ impl Direct {
 /// Inputs planned for a running game: the timed ones, and the clicks and Esc by game time.
 pub type PlannedInputs = (Vec<TimedInput>, Vec<(f64, Direct)>);
 
+/// The object a click names: the ID of an object of any scene of `project`, or the name (any
+/// case) of exactly one. An ID no object has is refused, but for the copies `action.spawn`
+/// makes, which exist only while the game runs ([`random::is_derived_id`]).
+fn clicked(project: &Project, text: &str) -> Result<Id, String> {
+    let objects = || {
+        project
+            .scenes
+            .iter()
+            .flat_map(|s| s.entities.iter().map(move |e| (s, e)))
+    };
+    if objects().any(|(_, e)| e.id == text) || random::is_derived_id(text) {
+        return Ok(text.into());
+    }
+    let wanted = text.trim().to_lowercase();
+    let named: Vec<_> = objects()
+        .filter(|(_, e)| e.name.trim().to_lowercase() == wanted)
+        .collect();
+    match named.as_slice() {
+        [(_, e)] => Ok(e.id.clone()),
+        [] => Err(format!(
+            "click: \"{text}\" não é o ID nem o nome de um objeto do projeto"
+        )),
+        many => Err(format!(
+            "click: há {} objetos chamados \"{text}\"; use o ID: {}",
+            many.len(),
+            many.iter()
+                .map(|(s, e)| format!("{} (cena {})", e.id, s.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 /// `inputs` for a game whose clock reads `start`, each `at` counted from it: presses, releases,
 /// movement and look as timed inputs in time order, for an [`InputTimeline`] or
 /// [`Runtime::queue_timed_inputs`], and clicks and Esc, which the host gives the game once its
@@ -1943,7 +1975,9 @@ pub fn plan_inputs(
     let mut events = inputs.to_vec();
     for event in &mut events {
         match event {
-            InputEvent::Click { entity, .. } => *entity = resolve(entity, applied)?,
+            InputEvent::Click { entity, .. } => {
+                *entity = clicked(project, &resolve(entity, applied)?)?;
+            }
             // A name the project does not have would be pressed in vain.
             InputEvent::Press { action, .. } | InputEvent::Release { action, .. } => {
                 *action = input_actions::find(project, &resolve(action, applied)?)?;
@@ -2140,20 +2174,19 @@ pub fn run(
     }
     // Setup and spawn change only this copy.
     let mut copy = Cow::Borrowed(project);
-    let default_scene = request
+    let asked = request
         .scene
-        .clone()
-        .unwrap_or_else(|| project.start_scene.clone());
+        .as_deref()
+        .map(|scene| project.find_scene(scene, "scene").map(|s| s.id.clone()))
+        .transpose()?;
+    let default_scene = asked.clone().unwrap_or_else(|| project.start_scene.clone());
     let applied = if request.setup.is_empty() {
         Vec::new()
     } else {
         command::apply(copy.to_mut(), &default_scene, &request.setup)
             .map_err(|e| format!("Preparação (setup): {e}"))?
     };
-    let start = request
-        .scene
-        .clone()
-        .unwrap_or_else(|| copy.start_scene.clone());
+    let start = asked.unwrap_or_else(|| copy.start_scene.clone());
     if copy.scene(&start).is_none() {
         return Err(format!("Cena {start} não existe"));
     }
