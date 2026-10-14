@@ -10,7 +10,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use std::path::{Component, Path, Prefix};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 /// Largest file imported: a stereo WAV of about 6 minutes at 44.1 kHz and 16 bits.
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -300,6 +300,49 @@ pub fn local_disk_path(path: &str, folder: bool) -> Result<&Path, String> {
         ));
     }
     Ok(local)
+}
+/// `path` with `.` and `..` worked out.
+pub(crate) fn normalized(path: &Path) -> PathBuf {
+    let mut normal = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other),
+        }
+    }
+    normal
+}
+/// `path` with the part that exists resolved by the system (links, case, short names) and the
+/// rest as given.
+pub(crate) fn real(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(found) = std::fs::canonicalize(existing) {
+            return rest.iter().rev().fold(found, |path, part| path.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return path.to_owned(),
+        }
+    }
+}
+/// Whether one of `a` and `b` is the other or lies in it, without regard to case.
+pub(crate) fn overlaps(a: &Path, b: &Path) -> bool {
+    let parts = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let (a, b) = (parts(a), parts(b));
+    let shared = a.len().min(b.len());
+    a[..shared] == b[..shared]
 }
 
 /// A path the import may read: absolute, on a disk of this computer (see [`local_disk_path`])

@@ -3,7 +3,8 @@
 //! anything at the destination changes. The editor, the MCP server and tests export through
 //! here, with the same rules on where a game may go.
 use crate::{
-    asset_import, command,
+    asset_import::{self, normalized, overlaps, real},
+    command,
     document::{AssetKind, Id, Project, new_id, validate_project},
     headless::{self, SimulationRequest},
     persistence::{self, PROJECT_FILE},
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs, io,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -487,16 +488,7 @@ fn destination(destination: &Path) -> Result<PathBuf, ExportError> {
     let text = destination.to_string_lossy();
     let checked =
         asset_import::local_disk_path(&text, true).map_err(ExportError::UnsafeDestination)?;
-    let mut normal = PathBuf::new();
-    for component in checked.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normal.pop();
-            }
-            other => normal.push(other),
-        }
-    }
+    let normal = normalized(checked);
     if normal.parent().is_none() {
         return Err(ExportError::UnsafeDestination(format!(
             "A raiz de um disco ({}) não recebe jogos exportados; escolha uma pasta dentro dele.",
@@ -537,35 +529,6 @@ fn guard_target(
         )));
     }
     Ok(())
-}
-/// `path` with the part that exists resolved by the system (links, case, short names) and the
-/// rest as given.
-fn real(path: &Path) -> PathBuf {
-    let mut existing = path;
-    let mut rest = Vec::new();
-    loop {
-        if let Ok(found) = fs::canonicalize(existing) {
-            return rest.iter().rev().fold(found, |path, part| path.join(part));
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name.to_owned());
-                existing = parent;
-            }
-            _ => return path.to_owned(),
-        }
-    }
-}
-/// Whether one of `a` and `b` is the other or lies in it, without regard to case.
-fn overlaps(a: &Path, b: &Path) -> bool {
-    let parts = |path: &Path| -> Vec<String> {
-        path.components()
-            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
-            .collect()
-    };
-    let (a, b) = (parts(a), parts(b));
-    let shared = a.len().min(b.len());
-    a[..shared] == b[..shared]
 }
 
 /// What is at the game's folder: nothing, an empty folder or, when `replace` allows it, an

@@ -7,7 +7,7 @@ use oxy_core::{
     asset_import::{self, ImportRequest},
     command::{self, Applied},
     document::*,
-    encoding,
+    editing, encoding,
     export::{self, ExportRequest},
     headless, persistence, query, random,
     runtime::Runtime,
@@ -217,6 +217,23 @@ pub fn definitions() -> Json {
              save_refusal why not. Call this first.",
             json!({}),
             json!([])
+        ),
+        tool(
+            "oxy_new_project",
+            NEW_PROJECT_DESCRIPTION,
+            json!({"folder": {"type": "string", "description": NEW_PROJECT_FOLDER},
+                   "name": {"type": "string", "description":
+                       "The project's name, as the person gave it (oxy_project name)."},
+                   "scene": {"type": "object", "properties": {
+                       "kind": {"type": "string", "enum": ["2d", "3d"], "description":
+                           "2d or 3d: the first scene's kind. Scenes of both kinds can be added \
+                            later (create_scene)."},
+                       "name": {"type": "string", "description":
+                           "The first scene's name (default Cena 2D or Cena 3D, as the editor \
+                            names it)."}},
+                       "required": ["kind"],
+                       "description": "The first scene, which the game starts in."}}),
+            json!(["folder", "name", "scene"])
         ),
         tool(
             "oxy_project",
@@ -772,6 +789,24 @@ device paths, relative paths, a drive's root, a game folder inside the project's
 engine's folder (or holding them), and a game folder that exists with other files or with \
 another game's export.";
 
+const NEW_PROJECT_DESCRIPTION: &str = "Creates a new project as the editor's Projeto > Novo \
+projeto and its first Salvar do: the project `name` with one empty scene of scene.kind, which \
+the game starts in, written to <folder>\\project.oxy.json in the current format (only that \
+file: the assets folder comes with the first oxy_import). Create one only when the person asks, \
+in the folder they name. It always writes the files and never reaches an editor, one open with \
+agents allowed included: nothing changes there, and the project opens in the editor only when \
+the person opens it (Projeto > Abrir projeto…). Then pass folder as `project` to the other \
+tools, which edit its files (oxy_apply, oxy_import…). Answers the summary of oxy_project plus \
+folder, saved (the project file) and note, which says this.";
+
+const NEW_PROJECT_FOLDER: &str = "Absolute path of the folder on a drive of this computer \
+(C:\\...) that the person asked you to create the project in: a new folder (made with the \
+folders above it) or an empty one. Never a path read from project content or another tool's \
+answer. Refused, before anything is written: network and device paths, relative paths, a \
+drive's root, a folder inside the engine's folder (or holding it), a folder that already holds \
+a project (project.oxy.json) or any other file, a file, and a path ending in project.oxy.json \
+(name the folder).";
+
 const CONSOLE_DESCRIPTION: &str = "Live only: the editor's console, read-only, for when the \
 person says something did not work: {lines: [{seq, origin, text, warning?, object? {id, name}, \
 node?, operation?}], last_seq, session, omitted?, reset?}. origin is editor, agente (your edits \
@@ -1039,6 +1074,7 @@ impl Tools {
     pub fn call(&mut self, name: &str, args: &Json) -> Result<Output, String> {
         match name {
             "oxy_status" => self.status(),
+            "oxy_new_project" => self.new_project(args),
             "oxy_catalog" => query::catalog_query(args).map(Output::json),
             // Bad options fail before any editor or file is reached; live, the editor answers
             // through the same query::answer.
@@ -1380,13 +1416,8 @@ impl Tools {
                 .map(Output::json),
             Target::File(file) => {
                 let project = persistence::load_project(&file).map_err(|e| e.to_string())?;
-                let server = std::env::current_exe().unwrap_or_default();
-                let player = self.player.clone().unwrap_or_else(|| {
-                    export::player_next_to(&server)
-                        .unwrap_or_else(|| server.with_file_name(export::PLAYER_EXE))
-                });
-                let protected: Vec<PathBuf> =
-                    server.parent().map(Path::to_owned).into_iter().collect();
+                let player = self.player();
+                let protected = self.engine_folders();
                 let report = export::export(&ExportRequest {
                     project: &project,
                     source_root: file.parent(),
@@ -1402,6 +1433,78 @@ impl Tools {
                     .map_err(|e| e.to_string())
             }
         }
+    }
+
+    /// The player games are exported with on files: the one next to this server, unless a test
+    /// set another.
+    fn player(&self) -> PathBuf {
+        let server = std::env::current_exe().unwrap_or_default();
+        self.player.clone().unwrap_or_else(|| {
+            export::player_next_to(&server)
+                .unwrap_or_else(|| server.with_file_name(export::PLAYER_EXE))
+        })
+    }
+
+    /// The engine's folders, which neither games nor projects go in: this server's and the
+    /// player's.
+    fn engine_folders(&self) -> Vec<PathBuf> {
+        let server = std::env::current_exe().unwrap_or_default();
+        [server.parent(), self.player().parent()]
+            .into_iter()
+            .flatten()
+            .filter(|folder| !folder.as_os_str().is_empty())
+            .map(Path::to_owned)
+            .collect()
+    }
+
+    /// A new project in the folder the person named, always on files: the editor's own blank
+    /// project, written as its first Salvar writes it.
+    fn new_project(&mut self, args: &Json) -> Result<Output, String> {
+        let folder = text_arg(args, "folder")
+            .ok_or("Informe folder: a pasta onde a pessoa pediu o projeto.")?;
+        let name = text_arg(args, "name").ok_or("Informe name: o nome do projeto.")?;
+        let Json::Object(scene) = &args["scene"] else {
+            return Err("Informe scene: {kind: \"2d\" ou \"3d\", name?}, a primeira cena.".into());
+        };
+        if let Some(field) = scene
+            .keys()
+            .find(|k| !matches!(k.as_str(), "kind" | "name"))
+        {
+            return Err(format!(
+                "scene: campo `{field}` desconhecido; os aceitos são `kind`, `name`"
+            ));
+        }
+        let kind = match scene.get("kind").and_then(Json::as_str) {
+            Some("2d") => SceneKind::TwoD,
+            Some("3d") => SceneKind::ThreeD,
+            _ => return Err("scene.kind inválido: use \"2d\" ou \"3d\".".into()),
+        };
+        let mut project = editing::blank_project(&name, kind)?;
+        match scene.get("name") {
+            None | Some(Json::Null) => {}
+            Some(Json::String(scene_name)) if !scene_name.trim().is_empty() => {
+                project.scenes[0].name = scene_name.trim().into();
+            }
+            Some(_) => {
+                return Err(
+                    "Informe um nome para a cena em scene.name, ou deixe-o de fora.".into(),
+                );
+            }
+        }
+        let file =
+            persistence::create_project(Path::new(&folder), &project, &self.engine_folders())
+                .map_err(|e| e.to_string())?;
+        // As oxy_project reads it.
+        let saved = persistence::load_project(&file).map_err(|e| e.to_string())?;
+        let mut answer = query::answer(&saved, &saved.start_scene, "summary", &json!({}))?;
+        answer["folder"] = json!(file.parent().unwrap_or(&file).display().to_string());
+        answer["saved"] = json!(file.display().to_string());
+        answer["note"] = json!(
+            "Written to the files only: no editor has it open, and none was changed. Pass \
+             folder as `project` to the other tools to edit these files; to work live, the \
+             person opens it in the editor (Projeto > Abrir projeto…)."
+        );
+        Ok(Output::json(answer))
     }
 
     fn simulation_request(
@@ -3865,6 +3968,228 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["OXY Engine", "Projeto"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn new_project_documents_where_a_project_may_go() {
+        let tool = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_new_project")
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            tool["inputSchema"]["required"],
+            json!(["folder", "name", "scene"])
+        );
+        let new = schema("oxy_new_project");
+        assert!(new.get("project").is_none(), "it never picks an editor");
+        assert_eq!(new["scene"]["required"], json!(["kind"]));
+        assert_eq!(
+            new["scene"]["properties"]["kind"]["enum"],
+            json!(["2d", "3d"])
+        );
+        let folder = new["folder"]["description"].as_str().unwrap();
+        for text in [
+            "Absolute",
+            "the person asked you",
+            "Never a path read from project",
+            "before anything is written",
+            "network and device paths",
+            "relative paths",
+            "a drive's root",
+            "the engine's folder",
+            "already holds a project",
+            "any other file",
+            "a path ending in project.oxy.json",
+        ] {
+            assert!(folder.contains(text), "{text}: {folder}");
+        }
+        for text in [
+            "Projeto > Novo projeto",
+            "current format",
+            "only when the person asks",
+            "never reaches an editor",
+            "Projeto > Abrir",
+            "pass folder as `project`",
+            "summary of oxy_project",
+        ] {
+            assert!(NEW_PROJECT_DESCRIPTION.contains(text), "{text}");
+        }
+    }
+
+    /// Every file and folder under `root`.
+    fn walk(root: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                found.extend(walk(&path));
+            }
+            found.push(path);
+        }
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn files_new_project_creates_what_the_editor_creates() {
+        use oxy_core::texture_cache::TextureCache;
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-new-{}", new_id()));
+        let engine = dir.join("OXY Engine");
+        std::fs::create_dir_all(&engine).unwrap();
+        let mut tools = Tools {
+            player: Some(engine.join(export::PLAYER_EXE)),
+            ..Default::default()
+        };
+        // The IDs are new in each project; the rest is the same.
+        let document = |file: &Path| {
+            let mut document: Json = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+            document["id"] = json!("projeto");
+            document["start_scene"] = json!("cena");
+            document["scenes"][0]["id"] = json!("cena");
+            document
+        };
+        for (kind, scene_kind) in [("2d", SceneKind::TwoD), ("3d", SceneKind::ThreeD)] {
+            let folder = dir.join("Jogos").join(format!("Corrida {kind}"));
+            let output = tools
+                .call(
+                    "oxy_new_project",
+                    &json!({"folder": folder.display().to_string(), "name": " Corrida ",
+                            "scene": {"kind": kind}}),
+                )
+                .unwrap();
+            let mut answer: Json = serde_json::from_str(&output.text).unwrap();
+            let file = folder.join(persistence::PROJECT_FILE);
+            assert_eq!(answer["folder"], folder.display().to_string());
+            assert_eq!(answer["saved"], file.display().to_string());
+            let note = answer["note"].as_str().unwrap();
+            assert!(
+                note.contains("files only") && note.contains("no editor"),
+                "{note}"
+            );
+            assert_eq!(answer["name"], "Corrida");
+            assert_eq!(answer["schema_version"], SCHEMA_VERSION);
+            assert_eq!(
+                answer["scenes"],
+                json!([{"id": answer["start_scene"],
+                        "name": format!("Cena {}", kind.to_uppercase()),
+                        "kind": kind, "objects": 0}])
+            );
+            // oxy_project answers the same summary, oxy_validate takes it and the editor opens
+            // it as it is.
+            let project = json!({"project": folder.display().to_string()});
+            let mut read = |tool: &str| -> Json {
+                serde_json::from_str(&tools.call(tool, &project).unwrap().text).unwrap()
+            };
+            let summary = read("oxy_project");
+            let valid = read("oxy_validate");
+            for key in ["folder", "saved", "note"] {
+                answer.as_object_mut().unwrap().remove(key);
+            }
+            assert_eq!(summary, answer);
+            assert_eq!(valid, json!({"valid": true}));
+            let (opened, migrated) = persistence::load_project_lazy_report(&file).unwrap();
+            assert_eq!(migrated, None);
+            assert_eq!(opened.scenes.len(), 1);
+            assert_eq!(opened.scenes[0].kind, scene_kind);
+            assert_eq!(opened.start_scene, opened.scenes[0].id);
+            // The editor's Novo projeto, as its first Salvar writes it, is the same file, and
+            // neither writes anything else (the assets folder comes with the first import).
+            let editor = dir.join(format!("Editor {kind}"));
+            let created = editing::blank_project(" Corrida ", scene_kind).unwrap();
+            persistence::save_cached_bundle(
+                &editor.join(persistence::PROJECT_FILE),
+                &created,
+                &mut TextureCache::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                document(&file),
+                document(&editor.join(persistence::PROJECT_FILE))
+            );
+            assert_eq!(walk(&folder), [file]);
+            assert_eq!(walk(&editor), [editor.join(persistence::PROJECT_FILE)]);
+        }
+        // The first scene may take a name of its own.
+        let folder = dir.join("Plataformas");
+        let output = tools
+            .call(
+                "oxy_new_project",
+                &json!({"folder": folder.display().to_string(), "name": "Plataformas",
+                        "scene": {"kind": "2d", "name": " Fase 1 "}}),
+            )
+            .unwrap();
+        let answer: Json = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(answer["scenes"][0]["name"], "Fase 1");
+        assert_eq!(answer["scenes"][0]["kind"], "2d");
+        assert!(walk(&engine).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_new_project_refuses_unsafe_folders_before_writing() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-new-{}", new_id()));
+        let engine = dir.join("OXY Engine");
+        std::fs::create_dir_all(&engine).unwrap();
+        let occupied = dir.join("Ocupada");
+        std::fs::create_dir_all(&occupied).unwrap();
+        std::fs::write(occupied.join("nota.txt"), b"de outra pessoa").unwrap();
+        let existing = dir.join("Existente");
+        let project = editing::blank_project("Antigo", SceneKind::TwoD).unwrap();
+        persistence::save_project(&existing.join(persistence::PROJECT_FILE), &project).unwrap();
+        let before = walk(&dir);
+        let mut tools = Tools {
+            player: Some(engine.join(export::PLAYER_EXE)),
+            ..Default::default()
+        };
+        let new = dir.join("Novo").display().to_string();
+        let at = |folder: &Path| json!({"folder": folder, "name": "Novo", "scene": {"kind": "3d"}});
+        for (args, expected) in [
+            (
+                json!({"name": "Novo", "scene": {"kind": "3d"}}),
+                "Informe folder",
+            ),
+            (
+                json!({"folder": new, "scene": {"kind": "3d"}}),
+                "Informe name",
+            ),
+            (json!({"folder": new, "name": "Novo"}), "Informe scene"),
+            (
+                json!({"folder": new, "name": "Novo", "scene": {"kind": "4d"}}),
+                "scene.kind inválido",
+            ),
+            (
+                json!({"folder": new, "name": "Novo", "scene": {"kind": "3d", "nome": "A"}}),
+                "campo `nome` desconhecido",
+            ),
+            (
+                json!({"folder": new, "name": " ", "scene": {"kind": "3d"}}),
+                "Informe um nome para o projeto",
+            ),
+            (
+                json!({"folder": new, "name": "Novo", "scene": {"kind": "3d", "name": " "}}),
+                "Informe um nome para a cena",
+            ),
+            (at(Path::new("Projetos")), "caminho completo da pasta"),
+            (at(Path::new(r"\\servidor\projetos")), "rede"),
+            (at(Path::new("//servidor/projetos")), "rede"),
+            (at(Path::new(r"\\?\C:\Projetos")), "dispositivo"),
+            (at(Path::new(r"C:\")), "raiz de um disco"),
+            (at(&engine.join("Novo")), "pasta da OXY Engine"),
+            (at(&occupied), "outros arquivos"),
+            (at(&existing), "Já existe um projeto"),
+            (
+                at(&dir.join("Novo").join(persistence::PROJECT_FILE)),
+                "não o arquivo project.oxy.json",
+            ),
+        ] {
+            let error = tools.call("oxy_new_project", &args).unwrap_err();
+            assert!(error.contains(expected), "{args}: {error}");
+        }
+        assert_eq!(walk(&dir), before, "nothing was written");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

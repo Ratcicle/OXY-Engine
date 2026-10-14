@@ -16,9 +16,10 @@ const INSTRUCTIONS: &str = "OXY Engine is a desktop game editor (Rust). A projec
 (2D or 3D); a scene is a flat list of objects with parent links; objects have a transform, an \
 optional shape, material, attributes, components (colliders, character, platform, camera \
 control, 2D movement), a logic graph of nodes and animation clips. Start with oxy_status, then \
-oxy_project and oxy_scene. Read oxy_catalog before building logic. Reads are compact JSON with \
-floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long \
-lists come in pages (limit, offset, next_offset), oxy_entity \
+oxy_project and oxy_scene; when the person wants a new game, oxy_new_project creates its project \
+(on files) in the folder they name. Read oxy_catalog before building logic. Reads are compact \
+JSON with floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): \
+long lists come in pages (limit, offset, next_offset), oxy_entity \
 summarizes logic and geometry unless asked in full, and world positions and boxes (oxy_scene \
 fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
 (atomic batches, validated with the editor's own rules) and oxy_import (PNG and WAV files the \
@@ -142,15 +143,17 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(
-            names.contains(&"oxy_apply".to_owned()) && names.len() == 19,
+            names.contains(&"oxy_apply".to_owned()) && names.len() == 20,
             "{names:?}"
         );
         assert!(names.contains(&"oxy_play".to_owned()) && names.contains(&"oxy_save".to_owned()));
+        assert!(names.contains(&"oxy_new_project".to_owned()));
         // Saving live is the person's choice.
         let instructions = init["result"]["instructions"].as_str().unwrap();
         assert!(instructions.contains("never save unless they enabled it"));
         assert!(instructions.contains("can_save") && instructions.contains("oxy_play"));
         assert!(instructions.contains("oxy_export) only when the person asks"));
+        assert!(instructions.contains("oxy_new_project creates its project"));
         let call = handle(
             &mut tools,
             &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -303,6 +306,14 @@ mod tests {
         );
         let export = echo("oxy_export", json!({"destination": games}));
         assert_eq!(export["params"]["replace"], false);
+        // A new project goes to the files with an editor open too, and never reaches it.
+        let created = dir.join("Novo jogo");
+        let new = echo(
+            "oxy_new_project",
+            json!({"folder": created, "name": "Novo jogo", "scene": {"kind": "2d"}}),
+        );
+        assert_eq!(new["name"], "Novo jogo");
+        assert!(created.join("project.oxy.json").is_file());
         let error = tools
             .call("oxy_export", &json!({"destination": "Jogos"}))
             .unwrap_err();
@@ -329,6 +340,10 @@ mod tests {
             "{methods:?}"
         );
         assert!(methods.contains(&"save".to_owned()), "{methods:?}");
+        assert!(
+            !methods.iter().any(|m| m == "summary" || m == "document"),
+            "{methods:?}"
+        );
         assert_eq!(
             methods.iter().filter(|m| *m == "export").count(),
             2,

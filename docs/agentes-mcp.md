@@ -1,6 +1,7 @@
 # Agentes de IA (MCP)
 
 A OXY Engine traz um servidor MCP, o `oxy-mcp.exe`, que deixa agentes de IA como o Claude ajudarem no desenvolvimento dos jogos. Com ele, o agente:
+- cria um projeto novo, quando você pede, na pasta que você indicar;
 - lê o projeto e consulta o catálogo de nós;
 - edita cenas, objetos, componentes e lógica;
 - importa imagens PNG e sons WAV;
@@ -54,6 +55,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | Ferramenta | O que faz |
 | --- | --- |
 | `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer, se há um teste do jogo rodando e quem joga, e se o agente pode salvar |
+| `oxy_new_project` | Cria um projeto novo, como o **Novo projeto** do editor, numa pasta nova ou vazia que você indicar; sempre nos arquivos, sem passar pelo editor |
 | `oxy_project` | Cenas, recursos (com o arquivo e quem usa cada um), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas, variáveis do jogo (com o valor inicial e quem usa cada uma), nomes dos grupos de colisão e como o jogo exportado abre (título, janela e tela cheia) |
 | `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
@@ -354,6 +356,17 @@ O mesmo pedido ao `oxy_simulate` dá o mesmo jogo: os passos têm duração fixa
   - `first_difference` diz onde se separaram: o tempo, o objeto (`object`, com o nome) e a parte (`part`): `transform`, `visible`, `attributes.Vida`, `document` (o resto do objeto), `character`, `animation`… ou, sem objeto, `tasks`, `random` (os sorteios), `variables.Moedas` (uma variável do jogo, pelo nome), `save` (o progresso salvo), `audio` (o que toca), `camera`…; `exists` quando só uma das cópias tem o objeto, e `order` quando as duas o têm, em outra ordem na cena.
   - Uma diferença é um defeito da engine, não da lógica do jogo. A conferência custa algumas vezes o tempo de um teste comum. O `oxy_screenshot` aceita o mesmo `check_replay` e traz `replay` no texto.
 
+## Criar um projeto com `oxy_new_project`
+
+Para começar um jogo do zero, o agente cria o projeto como o **Projeto → Novo projeto** do editor seguido do primeiro **Salvar**, mas só quando você pede, na pasta que você indicar.
+
+- **Pedido:** `folder`, o caminho completo da pasta do projeto num disco deste computador (`C:\...`); `name`, o nome do projeto; e `scene: {kind, name}`, a primeira cena, onde o jogo começa. `kind` é `"2d"` ou `"3d"`; `name` é opcional e, sem ele, a cena se chama **Cena 2D** ou **Cena 3D**, como no editor. Cenas dos dois tipos podem vir depois, com o `create_scene` do `oxy_apply`.
+- **O que é escrito:** só o `project.oxy.json`, no formato 5, igual ao que o editor grava para o mesmo nome e o mesmo tipo de cena (só os IDs mudam). A pasta é criada, com as pastas acima dela que faltarem; a pasta `assets` aparece na primeira importação, como no editor.
+- **Recusados, antes de escrever qualquer coisa:** caminhos relativos, de rede ou de dispositivo, a raiz de um disco, uma pasta dentro da pasta da OXY Engine (ou que a contenha), uma pasta que já tem um projeto (`project.oxy.json`) ou qualquer outro arquivo, um arquivo e um caminho que termina em `project.oxy.json` (o pedido nomeia a pasta, não o arquivo).
+- **Sempre nos arquivos:** mesmo com o editor aberto e os agentes permitidos, o projeto é criado só nos arquivos, e o editor não muda. Para trabalhar ao vivo, abra o projeto no editor (**Projeto → Abrir projeto…**); até lá, o agente passa a pasta em `project` nas outras ferramentas e edita os arquivos.
+- **Resposta:** o resumo do `oxy_project` (nome, formato, cena inicial, cenas…), com `folder` (a pasta), `saved` (o arquivo do projeto) e `note`, que lembra que o projeto só existe nos arquivos.
+- **Segurança:** o agente só cria um projeto quando você pede, e só na pasta que você indicou. A descrição da ferramenta pede que ele nunca use um caminho que leu no projeto ou na resposta de outra ferramenta.
+
 ## Importar imagens e sons com `oxy_import`
 
 O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e copiado para a pasta `assets` do projeto com um nome novo, e vira um recurso. Nada fora dessa pasta é escrito.
@@ -436,4 +449,4 @@ Por padrão, o agente não salva: quem salva é você. Ligando **Permitir que ag
 - **Progresso salvo:** o agente não lê nem apaga o progresso do jogo exportado nem o do teste do editor, que também não aparece no `oxy_status`; no `oxy_simulate`, o progresso entra pelo `save` e sai no relatório.
 - **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.
 - **Cópias de modelos:** no `place_model`, o `"$N@<ID>"` usa os IDs das peças, nós e animações como o modelo os guarda, e as leituras não mostram os nós de dentro de um modelo (o `oxy_entity` não chega lá). Esses IDs só se alcançam no lote que salva o modelo, encadeando os marcadores (`"$P@$S@<ID>"`, veja **Cópias no mesmo lote**). Para mudar a lógica de um modelo salvo num lote anterior, coloque-o e leia a peça colocada com o `oxy_entity`, ou, no mesmo lote, use o `duplicate_entities` ou o `copy_entities` a partir de um objeto da cena, que aceitam os IDs que você leu.
-- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto. A exportação escreve uma pasta de jogo, com um executável, só onde você indicar: nunca na pasta do projeto, na da OXY Engine ou na raiz de um disco, e só substitui uma exportação anterior do mesmo jogo, quando você pede. Ao vivo, o agente só salva com **Permitir que agentes salvem** ligada, e só o projeto aberto, como o **Salvar** do editor, guardando antes o `.agente.bak`.
+- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto. A criação de projeto escreve só o `project.oxy.json`, numa pasta nova ou vazia que você indicou, nunca na da OXY Engine nem na raiz de um disco. A exportação escreve uma pasta de jogo, com um executável, só onde você indicar: nunca na pasta do projeto, na da OXY Engine ou na raiz de um disco, e só substitui uma exportação anterior do mesmo jogo, quando você pede. Ao vivo, o agente só salva com **Permitir que agentes salvem** ligada, e só o projeto aberto, como o **Salvar** do editor, guardando antes o `.agente.bak`.
