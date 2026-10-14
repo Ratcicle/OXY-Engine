@@ -273,6 +273,19 @@ mod tests {
             import["params"],
             json!({"path": image, "apply_to": "e", "scene": "cena-1"})
         );
+        // Several files go to the editor as one request, for one undo step.
+        let files = json!([image, {"path": image, "name": "Placa", "apply_to": "e"}]);
+        let batch = echo(
+            "oxy_import",
+            json!({"project": "C:/ao-vivo/project.oxy.json", "paths": files, "scene": "cena-1"}),
+        );
+        assert_eq!(
+            (&batch["method"], &batch["params"]),
+            (
+                &json!("import"),
+                &json!({"paths": files, "scene": "cena-1"})
+            )
+        );
         // The test and saving reach the editor, which plays and saves; input times stay
         // relative, for the editor to count from its game clock.
         let start = echo("oxy_play", json!({"action": "start", "scene": "cena-2"}));

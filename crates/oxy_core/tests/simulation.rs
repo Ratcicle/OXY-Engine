@@ -444,12 +444,12 @@ fn the_music_goes_on_through_restarts_and_another_track_crossfades() {
     assert_eq!(
         sound_entries(&report),
         [
-            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 0.8, "fade": 1.0}),
-            json!({"text": "Vento", "kind": "loop", "started": true, "channel": "effects", "volume": 0.5}),
-            json!({"text": "Trilha", "kind": "loop", "channel": "music", "volume": 0.4}),
-            json!({"text": "Trilha", "kind": "loop", "channel": "music", "volume": 0.8}),
-            json!({"text": "Vento", "kind": "loop", "started": true, "channel": "effects", "volume": 0.5}),
-            json!({"text": "Chefe", "kind": "loop", "started": true, "channel": "music", "volume": 1.0, "fade": 2.0}),
+            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 0.8, "effective_volume": 0.8, "fade": 1.0}),
+            json!({"text": "Vento", "kind": "loop", "started": true, "channel": "effects", "volume": 0.5, "effective_volume": 0.5}),
+            json!({"text": "Trilha", "kind": "loop", "channel": "music", "volume": 0.4, "effective_volume": 0.4}),
+            json!({"text": "Trilha", "kind": "loop", "channel": "music", "volume": 0.8, "effective_volume": 0.8}),
+            json!({"text": "Vento", "kind": "loop", "started": true, "channel": "effects", "volume": 0.5, "effective_volume": 0.5}),
+            json!({"text": "Chefe", "kind": "loop", "started": true, "channel": "music", "volume": 1.0, "effective_volume": 1.0, "fade": 2.0}),
         ]
     );
     let times: Vec<_> = report.sounds.iter().map(|s| s.time).collect();
@@ -659,14 +659,19 @@ fn stops_pick_the_channel_and_volumes_last_the_whole_run() {
             {"type": "press", "at": 0.6, "action": "seguir"},
         ]}),
     );
-    // Stopping what does not play is not listed, and neither is a volume already so.
+    // Stopping what does not play is not listed, and neither is a volume already so. The
+    // loops started as the scene starts are heard at the volumes that step ends with: the music
+    // at 1 × 0.25 × 0.5, the effects at 1 × 1 × 0.5; a channel's volume under the general one.
     assert_eq!(
-        sound_entries(&report)[3..],
+        sound_entries(&report),
         [
-            json!({"text": "Música", "kind": "volume", "channel": "music", "volume": 0.25}),
-            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5}),
-            json!({"text": "Chuva", "kind": "stop", "channel": "all", "fade": 0.5}),
-            json!({"text": "Todos os sons do canal", "kind": "stop", "channel": "effects"}),
+            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 1.0, "effective_volume": 0.125}),
+            json!({"text": "Vento", "kind": "loop", "started": true, "channel": "effects", "volume": 1.0, "effective_volume": 0.5}),
+            json!({"text": "Chuva", "kind": "loop", "started": true, "channel": "effects", "volume": 1.0, "effective_volume": 0.5}),
+            json!({"text": "Música", "kind": "volume", "channel": "music", "volume": 0.25, "effective_volume": 0.125}),
+            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5, "effective_volume": 0.5}),
+            json!({"text": "Chuva", "kind": "stop", "channel": "all", "effective_volume": 0.0, "fade": 0.5}),
+            json!({"text": "Todos os sons do canal", "kind": "stop", "channel": "effects", "effective_volume": 0.0}),
         ]
     );
     let audio = report.audio.unwrap();
@@ -756,8 +761,8 @@ fn a_scene_left_within_the_step_leaves_its_effect_loops_out_of_the_report() {
     assert_eq!(
         sound_entries(&report),
         [
-            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 1.0}),
-            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5}),
+            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 1.0, "effective_volume": 0.5}),
+            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5, "effective_volume": 0.5}),
         ]
     );
     let audio = report.audio.unwrap();
@@ -792,19 +797,84 @@ fn a_scene_left_within_the_step_leaves_its_effect_loops_out_of_the_report() {
     assert_eq!(
         sound_entries(&report),
         [
-            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5}),
-            json!({"text": "Chefe", "kind": "loop", "started": true, "channel": "music", "volume": 1.0}),
+            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.5, "effective_volume": 0.5}),
+            json!({"text": "Chefe", "kind": "loop", "started": true, "channel": "music", "volume": 1.0, "effective_volume": 0.5}),
         ]
     );
     assert_eq!(report.audio.unwrap().music.unwrap().name, "Chefe");
-    // A one-shot keeps the shape it had.
+    // A one-shot plays on the effects.
     let beeps = run(
         &beep_then_restart(false),
         json!({"seconds": 1.0, "inputs": [{"type": "press", "at": 0.5, "action": "reiniciar"}]}),
     );
-    assert_eq!(sound_entries(&beeps), [json!({"text": "Bip"})]);
+    assert_eq!(
+        sound_entries(&beeps),
+        [json!({"text": "Bip", "channel": "effects", "effective_volume": 1.0})]
+    );
     assert!(beeps.audio.is_none());
     assert!(serde_json::to_value(&beeps).unwrap().get("audio").is_none());
+}
+
+#[test]
+fn sounds_report_their_channel_and_how_loud_they_are_heard() {
+    // An options menu: "baixar" turns the effects down to half and clicks, "mudo" turns the
+    // general volume off and clicks; the music loops at 0.5 from the start.
+    let mut project = Project::new("Opções");
+    for (action, key) in [("baixar", "B"), ("mudo", "M")] {
+        project.input_bindings.insert(action.into(), key.into());
+    }
+    let track = audio(&mut project, "Trilha");
+    let click = audio(&mut project, "Clique");
+    project.scenes[0].kind = SceneKind::TwoD;
+    let mut menu = Entity::new("Menu", None);
+    let start = node(&mut menu, "event.scene_start", &[]);
+    let music = looping(&mut menu, &track, "music", 0.5, 0.);
+    link(&mut menu, &start, &music);
+    let sound = |menu: &mut Entity| {
+        node(
+            menu,
+            "action.sound",
+            &[("asset", text(&click)), ("volume", Value::Number(0.75))],
+        )
+    };
+    let effects = node(
+        &mut menu,
+        "action.volume",
+        &[("channel", text("effects")), ("volume", Value::Number(0.5))],
+    );
+    let clicked = sound(&mut menu);
+    on_input(&mut menu, "baixar", &[effects, clicked]);
+    let master = node(
+        &mut menu,
+        "action.volume",
+        &[("channel", text("master")), ("volume", Value::Number(0.))],
+    );
+    let muted = sound(&mut menu);
+    on_input(&mut menu, "mudo", &[master, muted]);
+    project.scenes[0].entities.push(menu);
+    validate_project(&project).unwrap();
+
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "inputs": [
+            {"type": "press", "at": 0.25, "action": "baixar"},
+            {"type": "press", "at": 0.5, "action": "mudo"},
+        ]}),
+    );
+    // A sound played once is on the effects, heard at its volume × the effects' × the general
+    // volume as its step ends: the volume set before it in the same step counts.
+    assert_eq!(
+        sound_entries(&report),
+        [
+            json!({"text": "Trilha", "kind": "loop", "started": true, "channel": "music", "volume": 0.5, "effective_volume": 0.5}),
+            json!({"text": "Clique", "channel": "effects", "volume": 0.75, "effective_volume": 0.375}),
+            json!({"text": "Efeitos", "kind": "volume", "channel": "effects", "volume": 0.5, "effective_volume": 0.5}),
+            json!({"text": "Clique", "channel": "effects", "volume": 0.75, "effective_volume": 0.0}),
+            json!({"text": "Geral", "kind": "volume", "channel": "master", "volume": 0.0, "effective_volume": 0.0}),
+        ]
+    );
+    let times: Vec<_> = report.sounds.iter().map(|s| s.time).collect();
+    assert!(near(times[1], 0.25) && near(times[3], 0.5), "{times:?}");
 }
 
 /// `beep_then_restart(false)` with the restart wired: Cena atual gives Mudar de cena the scene
@@ -1325,6 +1395,169 @@ fn samples_are_as_many_as_asked_and_end_at_the_final_state() {
     assert_eq!(times(1., 1), [1.]);
     // Fewer steps than samples: one per step.
     assert_eq!(times(0.05, 7), [0.0167, 0.0333, 0.05]);
+}
+
+/// The times of the samples of the first watched object.
+fn sample_times(report: &SimulationReport) -> Vec<f64> {
+    report.watched[0].samples.iter().map(|s| s.time).collect()
+}
+
+#[test]
+fn samples_spread_over_the_time_run_when_the_run_stops_early() {
+    // The menu opens the level at 1 s, which stops the run.
+    let (project, _) = menu_and_level();
+    let menu = project.scenes[0].entities[0].id.clone();
+    let report = run(
+        &project,
+        json!({"seconds": 10.0, "samples": 4, "watch": [menu],
+               "until": {"scene_change": true}}),
+    );
+    let end = report.stopped_at.as_ref().unwrap().time;
+    assert!(near(end, 1.), "{:?}", report.stopped_at);
+    let times = sample_times(&report);
+    assert_eq!(times.len(), 4, "{times:?}");
+    assert_eq!(*times.last().unwrap(), end);
+    for (k, time) in times.iter().enumerate() {
+        let wanted = end * (k + 1) as f64 / 4.;
+        assert!((time - wanted).abs() <= 1. / 120. + 1e-4, "{times:?}");
+    }
+    // A run that goes on to `seconds` samples as before.
+    let whole = run(
+        &project,
+        json!({"seconds": 2.0, "samples": 4, "watch": [menu],
+               "until": {"log_contains": "nunca"}}),
+    );
+    assert_eq!(sample_times(&whole), [0.5, 1.0, 1.5, 2.0]);
+
+    // Past SPREAD_KEPT steps the kept steps thin out, and the samples stay near their place.
+    // Sair do jogo stops a run early too, with no until.
+    let mut project = Project::new("Espera longa");
+    project.scenes[0].kind = SceneKind::TwoD;
+    let mut timer = Entity::new("Cronômetro", None);
+    let start = node(&mut timer, "event.scene_start", &[]);
+    let wait = node(
+        &mut timer,
+        "control.wait",
+        &[("seconds", Value::Number(40.))],
+    );
+    let done = node(&mut timer, "debug.message", &[("message", text("fim"))]);
+    let quit = node(&mut timer, "game.quit", &[]);
+    link(&mut timer, &start, &wait);
+    link(&mut timer, &wait, &done);
+    link(&mut timer, &done, &quit);
+    let timer_id = timer.id.clone();
+    project.scenes[0].entities.push(timer);
+    for until in [json!({"log_contains": "fim"}), json!(null)] {
+        let report = run(
+            &project,
+            json!({"seconds": 60.0, "samples": 8, "watch": [timer_id], "until": until}),
+        );
+        let end = report.stopped_at.as_ref().unwrap().time;
+        assert!(near(end, 40.), "{:?}", report.stopped_at);
+        let times = sample_times(&report);
+        assert_eq!(times.len(), 8, "{until}: {times:?}");
+        let steps = end * 60.;
+        let slack = (steps / headless::SPREAD_KEPT as f64 + 1.) / 60.;
+        for (k, time) in times.iter().enumerate() {
+            let wanted = end * (k + 1) as f64 / 8.;
+            assert!((time - wanted).abs() <= slack, "{until}: {times:?}");
+        }
+    }
+}
+
+#[test]
+fn sample_every_and_samples_at_choose_when_samples_are_taken() {
+    let (project, clock, _) = clock();
+    let times = |extra: serde_json::Value| {
+        let mut asked = json!({"seconds": 3.0, "watch": [clock]});
+        asked
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        sample_times(&run(&project, asked))
+    };
+    // Every half second, and the final state.
+    assert_eq!(
+        times(json!({"sample_every": 0.5})),
+        [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+    );
+    // The times asked, the start (0) included, in order and once each, and the final state.
+    assert_eq!(
+        times(json!({"samples_at": [2.0, 0.0, 0.5, 0.5]})),
+        [0.0, 0.5, 2.0, 3.0]
+    );
+    assert_eq!(times(json!({"samples_at": [3.0]})), [3.0]);
+    // samples_at wins over sample_every, which wins over samples.
+    assert_eq!(
+        times(json!({"samples_at": [1.0], "sample_every": 0.5, "samples": 6})),
+        [1.0, 3.0]
+    );
+    assert_eq!(
+        times(json!({"sample_every": 1.0, "samples": 6})),
+        [1.0, 2.0, 3.0]
+    );
+    // Less than a step samples every step; the most recent MAX_SAMPLES stay, counted.
+    let dense = run(
+        &project,
+        json!({"seconds": 3.0, "watch": [clock], "sample_every": 0.001}),
+    );
+    let kept = sample_times(&dense);
+    assert_eq!(kept.len(), headless::MAX_SAMPLES);
+    assert_eq!(*kept.last().unwrap(), 3.0);
+    assert!(near(kept[0], 61. / 60.), "{kept:?}");
+    assert_eq!(dense.truncated["samples"], 180 - headless::MAX_SAMPLES);
+    // As many times as there is room for besides the final state: MAX_SAMPLES in all.
+    let every_step: Vec<f64> = (0..headless::MAX_SAMPLES - 1)
+        .map(|step| step as f64 / 60.)
+        .collect();
+    let full = run(
+        &project,
+        json!({"seconds": 3.0, "watch": [clock], "samples_at": every_step}),
+    );
+    let times_full = sample_times(&full);
+    assert_eq!(times_full.len(), headless::MAX_SAMPLES, "{times_full:?}");
+    assert_eq!(*times_full.last().unwrap(), 3.0);
+    assert!(full.truncated.is_empty(), "{:?}", full.truncated);
+
+    // A run that until stops early takes the times it reached.
+    let (level_project, _) = menu_and_level();
+    let menu = level_project.scenes[0].entities[0].id.clone();
+    let stopped = |extra: serde_json::Value| {
+        let mut asked = json!({"seconds": 3.0, "watch": [menu],
+                               "until": {"scene_change": true}});
+        asked
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        sample_times(&run(&level_project, asked))
+    };
+    let at = stopped(json!({"samples_at": [0.5, 2.0]}));
+    assert!(at.len() == 2 && at[0] == 0.5 && near(at[1], 1.), "{at:?}");
+    let every = stopped(json!({"sample_every": 0.4}));
+    assert!(
+        every.len() == 3 && every[..2] == [0.4, 0.8] && near(every[2], 1.),
+        "{every:?}"
+    );
+
+    for (extra, expected) in [
+        (json!({"sample_every": 0.0}), "sample_every precisa"),
+        (json!({"sample_every": -1.0}), "sample_every precisa"),
+        (json!({"samples_at": [4.0]}), "de 0 a 3"),
+        (json!({"samples_at": [-0.5]}), "de 0 a 3"),
+        (
+            json!({"samples_at": vec![1.0; headless::MAX_SAMPLES]}),
+            "no máximo 119 tempos (com o estado final, 120 amostras)",
+        ),
+        (json!({"samples": 121}), "No máximo 120"),
+    ] {
+        let mut asked = json!({"seconds": 3.0, "watch": [clock]});
+        asked
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let error = headless::simulate(&project, &request(asked)).unwrap_err();
+        assert!(error.contains(expected), "{extra}: {error}");
+    }
 }
 
 const BODY: &str = "00000000-0000-4000-8000-000000000002";
@@ -3357,9 +3590,25 @@ fn escape_opens_the_pause_menu_whose_buttons_resume_and_quit() {
     );
     let stopped = quitting.stopped_at.as_ref().unwrap();
     assert_eq!(stopped.reason, "quit");
-    assert_eq!(stopped.detail, "O jogo pediu para sair (Sair do jogo)");
+    // The detail and the object name the button, not only the node every quit has.
+    assert_eq!(
+        stopped.detail,
+        "Sair pediu para sair do jogo (nó Sair do jogo)"
+    );
+    assert_eq!(
+        stopped.object,
+        Some(headless::Named {
+            id: quit.clone(),
+            name: "Sair".into()
+        })
+    );
     assert!(near(stopped.time, 1.5167), "{stopped:?}");
     assert_eq!(quitting.final_scene, level);
+    let json = serde_json::to_value(stopped).unwrap();
+    assert_eq!(json["object"], json!({"id": quit, "name": "Sair"}));
+    // Other reasons name no object.
+    let json = serde_json::to_value(stop.stopped_at.as_ref().unwrap()).unwrap();
+    assert!(json.get("object").is_none(), "{json}");
 
     // A hidden button takes no click, as for a person, and says so.
     let hidden = run(

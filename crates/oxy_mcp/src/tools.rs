@@ -4,7 +4,7 @@
 use crate::editors::{self, LiveEditor};
 use glam::Vec3;
 use oxy_core::{
-    asset_import::{self, ImportRequest},
+    asset_import::{self, ImportBatch},
     command::{self, Applied},
     document::*,
     editing, encoding,
@@ -15,7 +15,7 @@ use oxy_core::{
 use oxy_render::{CameraState, offscreen::ShotView};
 use serde_json::{Value as Json, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -77,6 +77,8 @@ pub struct Tools {
     gpu: Option<(oxy_render::RenderState, oxy_render::Renderer)>,
     /// The player games are exported with on files; none for the one next to this server.
     player: Option<PathBuf>,
+    /// Project files this session already kept a previous version of.
+    kept: HashSet<PathBuf>,
 }
 
 const PROJECT: &str = "Optional path to the project folder or its project.oxy.json. When omitted, \
@@ -372,6 +374,18 @@ pub fn definitions() -> Json {
                    "data_base64": {"type": "string", "description":
                        "The file's content in base64 (a data: URL too), instead of path; up to \
                         16 MB decoded."},
+                   "paths": {"type": "array", "maxItems": 32, "items": {"anyOf": [
+                       {"type": "string"},
+                       {"type": "object", "properties": {
+                           "path": {"type": "string"},
+                           "name": {"type": "string"},
+                           "kind": {"type": "string", "enum": ["texture", "audio"]},
+                           "apply_to": {"type": "string"}},
+                        "required": ["path"]}]},
+                       "description": "Several files at once, instead of path and data_base64: \
+                        each an absolute path, as path takes it, or {path, name?, kind?, \
+                        apply_to?} with the options below for that file (name, kind and apply_to \
+                        go there, not beside paths; scene stays beside it)."},
                    "kind": {"type": "string", "enum": ["texture", "audio"], "description":
                        "texture (PNG) or audio (WAV). Optional: found from the extension and \
                         the content, and refused when they disagree."},
@@ -430,9 +444,22 @@ pub fn definitions() -> Json {
                         look_yaw and pitch in degrees for 3D characters. attributes: false leaves \
                         them out, a list keeps only those names."},
                    "samples": {"type": "integer", "description":
-                       "Samples of watched objects (max 120, at most one per 1/60 s step), exactly \
-                        this many, the last being the final state. They are spaced evenly across \
-                        `seconds`, so a run that until stops early returns fewer."},
+                       "Samples of watched objects (max 120, at most one per 1/60 s step), this \
+                        many, the last being the final state, spaced evenly across the time the \
+                        run lasts: `seconds`, or the time it ran when until or a game.quit stops \
+                        it early."},
+                   "sample_every": {"type": "number", "description":
+                       "A sample of watched objects every this many seconds of the run (the \
+                        report's clock, which the game pause does not stop; at most one per step) \
+                        and the final state, in place of samples. The most recent 120 stay, the \
+                        final state among them; truncated.samples counts those dropped from each \
+                        object."},
+                   "samples_at": {"type": "array", "items": {"type": "number"}, "maxItems": 119,
+                       "description": "Samples of watched objects at these times, seconds from \
+                        0 (the start) to seconds, each at the nearest step, and the final state \
+                        (up to 119 times, 120 samples with it); times after a run that stopped \
+                        early are not taken. Precedence: samples_at, then sample_every, then \
+                        samples; only the first one given is used."},
                    "actions": {"type": "string", "enum": ["none", "summary", "all"], "description":
                        "Logic actions that ran. summary (default): one line per object name and \
                         action with count, first and last time (objects sharing a name, such as \
@@ -502,7 +529,8 @@ pub fn definitions() -> Json {
                        "description": "Stops at the first moment any condition holds; the report \
                         says which in stopped_at {time, reason, kind (the event's, for event), \
                         detail (what happened, in words)}. A game.quit node ends the run whatever \
-                        until asks, with reason quit."},
+                        until asks, with reason quit and object {id, name}, the object whose \
+                        logic asked."},
                    "ui": {"type": "boolean", "description":
                        "Reports the game interface at the end (default true): ui, in drawing order \
                         (the topmost last), [{id, name, kind: Text|Image|Button|Bar, visible, rect: \
@@ -637,10 +665,10 @@ const APPLY_DESCRIPTION: &str = "Edits the project with a batch of commands, all
 one fails, nothing changes and the error names it as \"Comando N (op, o Kº do lote)\", N being \
 its 0-based index, the one \"$N\" and created use (K = N + 1). Live, the batch is one undo step \
 labelled 'Agente: …' in the editor and the person saves (or oxy_save, if they allow it); on \
-files, the project file is saved \
-(the previous version is kept as project.oxy.json.agente.bak; a project from an older OXY is \
-saved in the current format and its original is kept once as \
-project.oxy.json.schema-N.….backup.json). The answer is {created, \
+files, the project file is saved (project.oxy.json.agente.bak keeps it as it was before this \
+server session first changed it: taken once per session, not on every call, and answered as \
+previous_version; a project from an older OXY is saved in the current format and its original \
+is kept once as project.oxy.json.schema-N.….backup.json). The answer is {created, \
 warnings?}: created maps the index of each command that created something to [{id, name}] \
 (every piece of a preset, its root first; a node's name is its operation; what a later command \
 removed keeps the name it was created with), and warnings lists what the batch left that the \
@@ -782,20 +810,22 @@ action.scene and value.scene, ref scene in oxy_catalog), it takes the scene's ID
 any case, when no other scene has it, and nodes store the ID; an unknown or shared name is \
 refused saying what the field received, with the scenes [{id, name}].";
 
-const IMPORT_DESCRIPTION: &str = "Imports a PNG image or a WAV sound as a project asset, as the \
-editor's Importar does: the source is checked (extension, header, full content, at most 64 MB, \
+const IMPORT_DESCRIPTION: &str = "Imports PNG images and WAV sounds as project assets, as the \
+editor's Importar does: each source is checked (extension, header, full content, at most 64 MB, \
 16 MB inline) and copied into the project's assets folder under a new name; nothing else is \
-written. Import only files the person asked for. Give exactly one of path and data_base64. \
-Live, it is one undo step 'Agente: Importar \
-recurso' and the person saves (or oxy_save, if they allow it; the project needs a folder: \
-refused before its first save); on \
-files, the project file is saved (previous version in project.oxy.json.agente.bak; an older \
-project is saved in the current format and its original is kept once as \
-project.oxy.json.schema-N.….backup.json). Answers \
-{asset, name, kind, path (relative to the project folder), width and height (images), seconds \
-(sounds), applied_to?}. Use the asset ID in set_material texture, an interface element's \
-ui.texture (update_entity) or the asset parameter of an action.sound (once), action.sound_loop \
-or action.sound_stop node.";
+written. Import only files the person asked for. Give exactly one of path, data_base64 and \
+paths. paths imports several files in one call (up to 32, 256 MB together), all of them or \
+none: every file is read and checked first, and an error names the file as paths[N] (from 0). \
+Live, it is one undo step 'Agente: Importar recurso' ('Agente: Importar N recursos' for N \
+files) and the person saves (or oxy_save, if they allow it; the project needs a folder: \
+refused before its first save); on files, the project file is saved once \
+(project.oxy.json.agente.bak keeps it as it was before this server session first changed it, \
+as oxy_apply does; an older project is saved in the current format and its original is kept \
+once as project.oxy.json.schema-N.….backup.json). Answers {asset, name, kind, path (relative \
+to the project folder), width and height (images), seconds (sounds), applied_to?}; with paths, \
+{imported: [one such entry per file, in the order of paths]}. Use the asset ID in set_material \
+texture, an interface element's ui.texture (update_entity) or the asset parameter of an \
+action.sound (once), action.sound_loop or action.sound_stop node.";
 
 const EXPORT_DESCRIPTION: &str = "Exports the game as the editor's Projeto > Exportar jogo \
 does, into <destination>\\<game name>: the game name is game.title of oxy_project (set with \
@@ -855,11 +885,14 @@ counts older lines left out by limit. oxy_status says whether a test is running.
 const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
 the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
 when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
-sounds [{time, text: the audio's name, kind?, started?, channel?, volume?, fade?}] (no kind: \
-played once by action.sound; loop, stop and volume: what logic changed in what plays, only when \
-it changed; a loop has started: true when it starts or starts over, and none when it was \
-already playing and only took another volume; channel music|effects, all for a stop, master \
-for a volume), audio at the end {music?: {asset, name, volume}, loops: [same], volumes: \
+sounds [{time, text: the audio's name, kind?, started?, channel, volume?, effective_volume, \
+fade?}] (no kind: played once by action.sound, always on the effects channel; loop, stop and \
+volume: what logic changed in what plays, only when it changed; a loop has started: true when \
+it starts or starts over, and none when it was already playing and only took another volume; \
+channel music|effects, all for a stop, master for a volume; effective_volume: how loud it is \
+heard, its volume × its channel's volume × the master volume as they are when its step ends, \
+for a volume what a full-volume sound on that channel is heard at, 0 for a stop), audio at the \
+end {music?: {asset, name, volume}, loops: [same], volumes: \
 {master, music, effects}} (left out when nothing loops and every volume is 1; the music goes on \
 through scene changes and restarts, effect loops end with their scene, the game pause freezes \
 effects only), movement and area events {time, kind: jump|land|leave|side|surface|posture|\
@@ -867,8 +900,8 @@ area_enter|area_exit, object, other?} as the game fires them (also when its logi
 the objects involved or changes scene), the game's own pause (pauses: [{time, paused}], each change, left \
 out when none; paused: the state at the end; in the pause the world, waits included, stands \
 still while logic, input actions and interface clicks go on; a game.quit node ends the run, \
-stopped_at reason quit), the game camera at the end {active, mode, position, forward, fov}, \
-the game interface at the end (ui: texts with their values, bars, buttons), the watched \
+stopped_at reason quit with the object that asked), the game camera at the end {active, mode, \
+position, forward, fov}, the game interface at the end (ui: texts with their values, bars, buttons), the watched \
 objects and the game variables at the end (variables: {name: tagged value, as {\"Number\": 3}}, \
 \"name · key\" for the value of a key; up to 300, the variables' own values before the keys', \
 the rest counted in truncated; left out when the project has none). Each run starts the \
@@ -1219,8 +1252,8 @@ impl Tools {
                         }
                         "oxy_save" => {
                             "Nos arquivos não há o que salvar: cada oxy_apply e cada oxy_import \
-                             já salva o projeto, com a versão anterior em \
-                             project.oxy.json.agente.bak."
+                             já salva o projeto, e project.oxy.json.agente.bak guarda como ele \
+                             estava antes da primeira mudança desta sessão do servidor."
                         }
                         _ => "Esta ferramenta só funciona com o projeto aberto no editor.",
                     }
@@ -1442,9 +1475,7 @@ impl Tools {
                 let start = project.start_scene.clone();
                 let mut report = command::apply_and_report(&mut project, &start, &parsed)
                     .map_err(|e| e.to_string())?;
-                let backup = file.with_extension("json.agente.bak");
-                std::fs::copy(&file, &backup)
-                    .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))?;
+                let backup = self.keep_previous_version(&file)?;
                 persistence::save_project(&file, &project).map_err(|e| e.to_string())?;
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
@@ -1453,39 +1484,53 @@ impl Tools {
         }
     }
 
+    /// Keeps the project file as it was before this session first changed it, in
+    /// project.oxy.json.agente.bak, so the copy is what the session can go back to however
+    /// many writes follow: taken once per session (and again if someone deleted it).
+    fn keep_previous_version(&mut self, file: &Path) -> Result<PathBuf, String> {
+        let backup = file.with_extension("json.agente.bak");
+        let key = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
+        if !self.kept.contains(&key) || !backup.is_file() {
+            std::fs::copy(file, &backup)
+                .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))?;
+            self.kept.insert(key);
+        }
+        Ok(backup)
+    }
+
     fn import(&mut self, args: &Json) -> Result<Output, String> {
         let mut params = args.clone();
         if let Some(map) = params.as_object_mut() {
             map.remove("project");
         }
-        // Checked before the editor or the project is looked for; the source is read where it
-        // is imported (live, by the editor).
-        let request = ImportRequest::parse(&params)?;
+        // Checked before the editor or the project is looked for; the sources are read where
+        // they are imported (live, by the editor).
+        let batch = ImportBatch::parse(&params)?;
         match self.target(args)? {
             Target::Live(port) => self.live(port, "import", params).map(Output::json),
             Target::File(file) => {
-                let source = request.read()?;
+                let sources = batch.read()?;
                 let mut project = persistence::load_project(&file).map_err(|e| e.to_string())?;
                 let root = file
                     .parent()
                     .map_or_else(|| PathBuf::from("."), Path::to_owned);
                 let start = project.start_scene.clone();
                 let imported =
-                    asset_import::import(&mut project, &root, &start, &request, &source)?;
-                let backup = file.with_extension("json.agente.bak");
-                let saved = std::fs::copy(&file, &backup)
-                    .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))
-                    .and_then(|_| {
-                        persistence::save_project(&file, &project).map_err(|e| e.to_string())
-                    });
-                if let Err(error) = saved {
-                    // The project file does not name the copy: it goes too.
-                    if let Ok(copy) = persistence::resolve_asset_path(&root, &imported.path) {
-                        let _ = std::fs::remove_file(copy);
+                    asset_import::import_batch(&mut project, &root, &start, &batch, &sources)?;
+                let saved = self.keep_previous_version(&file).and_then(|backup| {
+                    persistence::save_project(&file, &project)
+                        .map(|()| backup)
+                        .map_err(|e| e.to_string())
+                });
+                let backup = match saved {
+                    Ok(backup) => backup,
+                    Err(error) => {
+                        // The project file does not name the copies: they go too.
+                        asset_import::remove_copies(&root, &imported);
+                        return Err(error);
                     }
-                    return Err(error);
-                }
-                let mut report = serde_json::to_value(&imported).map_err(|e| e.to_string())?;
+                };
+                let mut report = batch.answer(&imported)?;
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
                 Ok(Output::json(report))
@@ -1629,6 +1674,15 @@ impl Tools {
                 .as_u64()
                 .unwrap_or(0)
                 .min(u64::from(u32::MAX)) as u32,
+            sample_every: arg("sample_every")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("sample_every inválido (segundos)"))?,
+            samples_at: arg("samples_at")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("samples_at inválido (lista de segundos)"))?
+                .unwrap_or_default(),
             setup: arg("setup")
                 .map(|commands| command::parse(&commands))
                 .transpose()
@@ -1905,8 +1959,36 @@ mod tests {
             until["description"]
                 .as_str()
                 .unwrap()
-                .contains("reason quit")
+                .contains("reason quit and object {id, name}")
         );
+        // Every sound says its channel and how loud it is heard.
+        for text in [
+            "channel, volume?, effective_volume",
+            "always on the effects channel",
+            "its volume × its channel's volume × the master volume",
+        ] {
+            assert!(SIMULATE_DESCRIPTION.contains(text), "{text}");
+        }
+        // Samples spread over the time run, or at a rate or at times asked, in this precedence.
+        assert_eq!(simulate["sample_every"]["type"], "number");
+        assert_eq!(simulate["samples_at"]["items"]["type"], "number");
+        // The final state is one more sample: the times leave room for it.
+        assert_eq!(
+            simulate["samples_at"]["maxItems"],
+            oxy_core::headless::MAX_SAMPLES - 1
+        );
+        let samples = simulate["samples"]["description"].as_str().unwrap();
+        assert!(samples.contains("the time it ran when until or a game.quit stops it early"));
+        assert!(!samples.contains("returns fewer"), "{samples}");
+        let every = simulate["sample_every"]["description"].as_str().unwrap();
+        assert!(every.contains("most recent 120") && every.contains("truncated.samples"));
+        assert!(
+            every.contains("which the game pause does not stop"),
+            "{every}"
+        );
+        let at = simulate["samples_at"]["description"].as_str().unwrap();
+        assert!(at.contains("Precedence: samples_at, then sample_every, then samples"));
+        assert!(at.contains("up to 119 times, 120 samples with it"), "{at}");
         // The bot plays a character along points in both tools, and until can wait for it.
         assert_eq!(shot["bot"], simulate["bot"]);
         assert_eq!(simulate["bot"]["required"], json!(["entity", "path"]));
@@ -3438,6 +3520,239 @@ mod tests {
             let error = simulate(json!({"seed": bad})).unwrap_err();
             assert!(error.contains(refusal), "{bad}: {error}");
         }
+    }
+
+    #[test]
+    fn simulate_reads_when_to_sample_and_names_who_quit() {
+        let request = Tools::simulation_request(
+            &json!({"samples": 4, "sample_every": 0.25, "samples_at": [0, 1.5]}),
+            2.,
+        )
+        .unwrap();
+        assert_eq!(
+            (request.samples, request.sample_every, request.samples_at),
+            (4, Some(0.25), vec![0., 1.5])
+        );
+        let plain =
+            Tools::simulation_request(&json!({"sample_every": null, "samples_at": null}), 2.)
+                .unwrap();
+        assert!(plain.sample_every.is_none() && plain.samples_at.is_empty());
+        for (args, refusal) in [
+            (json!({"sample_every": "meio"}), "sample_every inválido"),
+            (json!({"samples_at": 1.5}), "samples_at inválido"),
+            (json!({"samples_at": ["1"]}), "samples_at inválido"),
+        ] {
+            let error = Tools::simulation_request(&args, 2.).unwrap_err();
+            assert!(error.contains(refusal), "{args}: {error}");
+        }
+
+        // On files: a door that asks to quit half a second in, sampled every tenth of a second.
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-quit-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Saída", SceneKind::TwoD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let applied = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "control.wait",
+                 "params": {"seconds": 0.5}},
+                {"op": "add_node", "entity": "$0", "operation": "game.quit"},
+                {"op": "connect", "entity": "$0", "from_node": "$1", "from_port": "exec",
+                 "to_node": "$2", "to_port": "exec"},
+                {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+                 "to_node": "$3", "to_port": "exec"},
+            ]}),
+        )
+        .unwrap();
+        let door = applied["created"]["0"][0]["id"].clone();
+        let report = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_simulate",
+            json!({"seconds": 2, "watch": [door], "sample_every": 0.1}),
+        )
+        .unwrap();
+        let stopped = &report["stopped_at"];
+        assert_eq!(
+            (&stopped["reason"], &stopped["object"], &stopped["detail"]),
+            (
+                &json!("quit"),
+                &json!({"id": door, "name": "Porta"}),
+                &json!("Porta pediu para sair do jogo (nó Sair do jogo)")
+            ),
+            "{report}"
+        );
+        let end = stopped["time"].as_f64().unwrap();
+        let times: Vec<_> = report["watched"][0]["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["time"].as_f64().unwrap())
+            .collect();
+        assert_eq!(times[..4], [0.1, 0.2, 0.3, 0.4], "{times:?}");
+        assert_eq!(*times.last().unwrap(), end, "{times:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `tool` on the project files in `project`, with `extra` arguments.
+    fn on_files(tools: &mut Tools, project: &str, tool: &str, extra: Json) -> Result<Json, String> {
+        let mut args = json!({"project": project});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        tools
+            .call(tool, &args)
+            .map(|output| serde_json::from_str(&output.text).unwrap())
+    }
+
+    #[test]
+    fn files_import_several_files_at_once_and_keep_the_session_start_as_the_backup() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-batch-{}", new_id()));
+        let sources = dir.join("origem");
+        std::fs::create_dir_all(&sources).unwrap();
+        let file = dir.join("jogo").join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Lote", SceneKind::ThreeD).unwrap();
+        let sign = Entity::new("Placa", Some(Primitive::Cube));
+        let sign_id = sign.id.clone();
+        project.scenes[0].entities.push(sign);
+        persistence::save_project(&file, &project).unwrap();
+        let original = std::fs::read(&file).unwrap();
+        let music = sources.join("musica.wav");
+        std::fs::write(&music, wav(16_000, 16_000)).unwrap();
+        let jump = sources.join("pulo.wav");
+        std::fs::write(&jump, wav(1_600, 16_000)).unwrap();
+        let image = sources.join("placa.png");
+        std::fs::write(
+            &image,
+            oxy_core::painting::PaintImage::new(8, 8, [10, 200, 10, 255])
+                .unwrap()
+                .to_png()
+                .unwrap(),
+        )
+        .unwrap();
+        let broken = sources.join("quebrado.wav");
+        std::fs::write(&broken, "não é som").unwrap();
+        let [music, jump, image, broken] =
+            [&music, &jump, &image, &broken].map(|path| path.display().to_string());
+        let root = file.parent().unwrap().to_owned();
+        let project_arg = root.display().to_string();
+        let assets = || std::fs::read_dir(root.join("assets")).unwrap().count();
+        let mut tools = Tools::default();
+
+        let imported = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_import",
+            json!({"paths": [{"path": music, "name": "Música"}, jump,
+                             {"path": image, "apply_to": sign_id}]}),
+        )
+        .unwrap();
+        let list = imported["imported"].as_array().unwrap();
+        let names: Vec<_> = list.iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Música", "pulo", "placa"]);
+        assert_eq!(
+            (&list[0]["kind"], &list[0]["seconds"]),
+            (&json!("audio"), &json!(1.0))
+        );
+        assert_eq!(list[2]["applied_to"], json!(sign_id));
+        assert_eq!(assets(), 3);
+        let saved = persistence::load_project(&file).unwrap();
+        assert_eq!(saved.assets.len(), 3);
+        assert_eq!(
+            saved.scenes[0].entity(&sign_id).unwrap().material.texture,
+            list[2]["asset"].as_str().map(str::to_owned)
+        );
+        let backup = PathBuf::from(imported["previous_version"].as_str().unwrap());
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+
+        // Later writes of the same session keep the backup at the state the session started
+        // from: it is what the session can go back to.
+        on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Lote 2"}]}),
+        )
+        .unwrap();
+        on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_import",
+            json!({"path": jump}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+
+        // A file that fails imports none of the batch, and the error names it.
+        let before = std::fs::read(&file).unwrap();
+        let count = assets();
+        let error = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_import",
+            json!({"paths": [jump, broken]}),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("paths[1] (o 2º arquivo): "), "{error}");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        assert_eq!(assets(), count);
+
+        // Another session keeps the state it starts from, and a backup someone deleted is
+        // taken again before the next write.
+        let mut next = Tools::default();
+        let start = std::fs::read(&file).unwrap();
+        on_files(
+            &mut next,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Lote 3"}]}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), start);
+        std::fs::remove_file(&backup).unwrap();
+        let current = std::fs::read(&file).unwrap();
+        on_files(
+            &mut next,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Lote 4"}]}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), current);
+
+        // The descriptions say so.
+        let import = schema("oxy_import");
+        assert_eq!(import["paths"]["maxItems"], 32);
+        assert!(
+            import["paths"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("{path, name?, kind?, apply_to?}")
+        );
+        for text in [
+            "Give exactly one of path, data_base64 and paths",
+            "all of them or none",
+            "paths[N]",
+            "{imported: [one such entry per file",
+            "'Agente: Importar N recursos'",
+            "saved once",
+        ] {
+            assert!(IMPORT_DESCRIPTION.contains(text), "{text}");
+        }
+        for description in [IMPORT_DESCRIPTION, APPLY_DESCRIPTION] {
+            assert!(
+                description.contains("before this server session first changed it"),
+                "{description}"
+            );
+        }
+        assert!(APPLY_DESCRIPTION.contains("taken once per session, not on every call"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -5,3 +5,4 @@
 /qa/**/native-qa-labels.txt
 /qa/**/project/
 *.tmp
+*.agente.bak

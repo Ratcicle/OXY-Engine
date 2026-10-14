@@ -1,11 +1,11 @@
-//! Edits requested by AI agents. Each batch of project commands, and each imported PNG or WAV,
+//! Edits requested by AI agents. Each batch of project commands, and each import of PNGs or WAVs,
 //! is one undo step labelled "Agente: …", logged in the console with the Agente origin, and
 //! refused while a person is in the middle of something the edit could collide with. Agents
 //! also play tests of the game without taking the mouse (see [`Driver`]), and save when the
 //! person allowed it in Preferências do editor.
 use super::*;
 use oxy_core::{
-    asset_import::{self, ImportKind, ImportRequest},
+    asset_import::{self, ImportBatch, ImportKind},
     command::{self, Command},
     headless::{self, InputEvent},
 };
@@ -109,13 +109,13 @@ impl Editor {
             }
         }
     }
-    /// Imports a PNG or WAV for an agent, as the editor's Importar does but without the dialog:
-    /// one undo step that carries the image, so the texture cache holds its pixels, the viewport
-    /// and the game interface show it at once, and undo takes them away again. `scene` is where
-    /// `apply_to` is looked for.
+    /// Imports PNGs or WAVs for an agent, as the editor's Importar does but without the dialog:
+    /// one undo step, for every file of the batch, that carries the images, so the texture
+    /// cache holds their pixels, the viewport and the game interface show them at once, and
+    /// undo takes them away again. `scene` is where `apply_to` is looked for.
     pub(crate) fn import_agent(
         &mut self,
-        request: &ImportRequest,
+        batch: &ImportBatch,
         scene: &str,
     ) -> Result<Json, String> {
         if let Some(reason) = self.agent_busy() {
@@ -128,23 +128,26 @@ impl Editor {
                     .into(),
             );
         }
-        let source = match request.read() {
-            Ok(source) => source,
+        let sources = match batch.read() {
+            Ok(sources) => sources,
             Err(error) => {
                 self.log(format!("{AGENT_PREFIX}{error}"));
                 return Err(error);
             }
         };
         let root = self.root();
-        self.history.begin(
-            "Agente: Importar recurso",
-            &self.state.project,
-            &self.state.images,
-        );
-        match asset_import::import(&mut self.state.project, &root, scene, request, &source) {
+        let label = match batch.requests.len() {
+            1 => "Agente: Importar recurso".to_owned(),
+            count => format!("Agente: Importar {count} recursos"),
+        };
+        self.history
+            .begin(label, &self.state.project, &self.state.images);
+        match asset_import::import_batch(&mut self.state.project, &root, scene, batch, &sources) {
             Ok(imported) => {
-                if let Some(image) = source.image {
-                    self.state.images.insert(imported.asset.clone(), image);
+                for (done, source) in imported.iter().zip(sources) {
+                    if let Some(image) = source.image {
+                        self.state.images.insert(done.asset.clone(), image);
+                    }
                 }
                 if let Err(error) = self
                     .history
@@ -152,15 +155,19 @@ impl Editor {
                 {
                     self.log(error);
                 }
-                self.log(format!(
-                    "{AGENT_PREFIX}Recurso importado como cópia local: {}",
-                    imported.name
-                ));
-                self.after_external_edit();
-                if imported.kind == ImportKind::Texture {
-                    self.refresh_texture(&imported.asset);
+                for done in &imported {
+                    self.log(format!(
+                        "{AGENT_PREFIX}Recurso importado como cópia local: {}",
+                        done.name
+                    ));
                 }
-                serde_json::to_value(&imported).map_err(|e| e.to_string())
+                self.after_external_edit();
+                for done in &imported {
+                    if done.kind == ImportKind::Texture {
+                        self.refresh_texture(&done.asset);
+                    }
+                }
+                batch.answer(&imported)
             }
             Err(error) => {
                 self.history
@@ -277,7 +284,8 @@ impl Editor {
         }
     }
     /// Saves for an agent, as Ctrl+S does, everything unsaved included, after keeping the
-    /// previous file as project.oxy.json.agente.bak, as the MCP server does on files.
+    /// file as it was before this save as project.oxy.json.agente.bak (the MCP server on files
+    /// keeps the one from before its session's first write).
     pub(crate) fn agent_save(&mut self) -> Result<Json, String> {
         if let Some(reason) = self.save_refusal() {
             return Err(reason.into());

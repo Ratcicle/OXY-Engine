@@ -6,7 +6,7 @@
 //! requests `{"id": 1, "method": "...", "params": {...}}`, one per line, and receives
 //! `{"id": 1, "result": ...}` or `{"id": 1, "error": "..."}`. Requests run on the UI thread
 //! in the next frame, and edits wait while a person is dragging or typing. Besides edits and
-//! reads, an agent can import a PNG or WAV (`import`), read the console (`console`), play a
+//! reads, an agent can import PNGs and WAVs (`import`), read the console (`console`), play a
 //! test of the game (`play`), save when the person allowed it (`save`) and export the game
 //! (`export`, answered when the export, on its own thread, is over), and `status` says whether
 //! the game is being tested, and by whom.
@@ -399,8 +399,8 @@ impl Editor {
             }
             "import" => {
                 let scene = self.agent_scene(params)?;
-                let request = oxy_core::asset_import::ImportRequest::parse(params)?;
-                self.import_agent(&request, &scene)
+                let batch = oxy_core::asset_import::ImportBatch::parse(params)?;
+                self.import_agent(&batch, &scene)
             }
             "undo" | "redo" => {
                 let label = self.agent_undo(method == "redo")?;

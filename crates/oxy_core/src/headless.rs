@@ -12,7 +12,7 @@
 //! events and spawned objects come from the runtime's `Recording`, taken when they happen, so
 //! logic that removes the objects involved in the same step cannot hide them.
 use crate::{
-    audio::{AudioChange, AudioSettings, ChangeKind},
+    audio::{AudioChange, AudioSettings, ChangeKind, Channel},
     bot::{self, Bot, BotEvent, BotState},
     character::{CameraMode, CharacterState, MovementEvent, Posture},
     command::{self, Applied, Command},
@@ -40,6 +40,11 @@ pub const MAX_SECONDS: f64 = 600.;
 pub const MAX_ENTRIES: usize = 300;
 /// Game view the interface is laid out in when a request gives no size, in pixels.
 pub const VIEW_SIZE: [u32; 2] = [960, 540];
+/// Most samples a watched object reports, the final state included.
+pub const MAX_SAMPLES: usize = 120;
+/// Steps a run keeps to spread `samples` over the time it ran when `until` or Sair do jogo stops
+/// it early: past it, every other one goes and only every second step after is kept, and so on.
+pub const SPREAD_KEPT: usize = 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -373,11 +378,25 @@ pub struct SimulationRequest {
     /// Objects reported in every sample.
     #[serde(default)]
     pub watch: Vec<Watch>,
-    /// Evenly spaced samples of the watched objects, exactly this many, the last one being the
-    /// final state (0 or 1 report only the final state; at most 120, and at most one per step).
-    /// They are spaced across `seconds`, so a run that `until` stops early reports fewer.
+    /// Evenly spaced samples of the watched objects, this many, the last one being the final
+    /// state (0 or 1 report only the final state; at most [`MAX_SAMPLES`], and at most one per
+    /// step). They are spaced across the time the run lasts: across `seconds`, or, when `until`
+    /// or Sair do jogo stops it early, across the time it ran, each at the step nearest its
+    /// place (in runs longer than [`SPREAD_KEPT`] steps, within 1/[`SPREAD_KEPT`] of the run
+    /// from it).
     #[serde(default)]
     pub samples: u32,
+    /// A sample every this many seconds of run time (at most one per step), in place of
+    /// `samples`, and the final state: the most recent [`MAX_SAMPLES`] stay, the final state
+    /// among them, and those dropped are counted in the report's `truncated`.
+    #[serde(default)]
+    pub sample_every: Option<f64>,
+    /// Samples at these run times, in seconds from 0 to `seconds` (each at the step nearest it;
+    /// 0 is the start), in place of `samples` and `sample_every`, and the final state: at most
+    /// [`MAX_SAMPLES`] − 1 times, for [`MAX_SAMPLES`] with it. Times past the end of a run that
+    /// stopped early are not taken.
+    #[serde(default)]
+    pub samples_at: Vec<f64>,
     /// Commands applied to the copy before the run, as in a batch; commands without a scene
     /// use the start scene. IDs they create are `"$N"` (or `"$N.M"`) in watch, inputs, spawn,
     /// bot and until. update_variable here gives a game variable another initial value.
@@ -502,12 +521,16 @@ pub struct SoundEvent {
     /// volume, as a restarted scene asking for its music at another volume.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub started: bool,
-    /// music or effects; all for a stop of both, master for the general volume.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel: Option<&'static str>,
+    /// music or effects (always effects for a sound played once); all for a stop of both,
+    /// master for the general volume.
+    pub channel: &'static str,
     /// What a loop or a volume was set to; a one-shot's when below 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume: Option<f64>,
+    /// How loud it is heard: its volume times its channel's and the general volume, as they
+    /// are when the step ends and the game plays it. For a volume, what a sound at full volume
+    /// on that channel is heard at; 0 for a stop.
+    pub effective_volume: f64,
     /// Seconds a loop fades in, or loops stopped fade out, when not at once.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fade: Option<f64>,
@@ -599,6 +622,9 @@ pub struct StoppedAt {
     /// The event that met an `event` condition.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<EventKind>,
+    /// For quit, the object whose logic asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<Named>,
     /// What happened, in words.
     pub detail: String,
 }
@@ -744,7 +770,8 @@ pub struct SimulationReport {
     /// What plays at the end and the volumes; absent when nothing loops and every volume is 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioReport>,
-    /// Entries dropped per list because it reached `MAX_ENTRIES`.
+    /// Entries dropped per list because it reached `MAX_ENTRIES`; for samples, those of
+    /// `sample_every` each watched object dropped past [`MAX_SAMPLES`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub truncated: BTreeMap<&'static str, usize>,
 }
@@ -1010,6 +1037,8 @@ struct Happened {
     sounds: Vec<Id>,
     /// How the bot ended in the step (done or stuck), in words.
     bot: Option<(BotEnd, String)>,
+    /// The object whose Sair do jogo ran.
+    quit: Option<Named>,
 }
 
 /// "Object · Action", with the action's label.
@@ -1136,6 +1165,7 @@ impl Recorder<'_> {
             spawned,
             pauses,
             audio,
+            quit,
         } = recording;
         for &paused in &pauses {
             self.pauses.push(PauseEvent {
@@ -1185,20 +1215,25 @@ impl Recorder<'_> {
                 .asset(asset)
                 .map_or_else(|| asset.to_owned(), |a| a.name.clone())
         };
+        // The hosts play what a step asked at the volumes it ends with.
+        let settings = runtime.audio().settings;
         for sound in sounds {
+            let volume = f64::from(sound.volume);
             self.sounds.push(SoundEvent {
                 time: rounded(time),
                 text: name(&sound.asset),
                 kind: None,
                 started: false,
-                channel: None,
-                volume: (sound.volume < 1.).then_some(f64::from(sound.volume)),
+                channel: "effects",
+                volume: (volume < 1.).then_some(volume),
+                effective_volume: volume * settings.gain(Channel::Effects),
                 fade: None,
             });
             happened.sounds.push(sound.asset);
         }
         for change in audio {
-            self.sounds.push(sound_change(rounded(time), &change, name));
+            self.sounds
+                .push(sound_change(rounded(time), &change, &settings, name));
             if change.started
                 && let Some(asset) = change.asset
             {
@@ -1223,6 +1258,7 @@ impl Recorder<'_> {
             source: self.source,
             spawned: &self.spawned,
         };
+        happened.quit = quit.map(|object| lookup.named(&object));
         let mut events = Vec::new();
         let event = |kind, object: &str, other: Option<&str>| GameEvent {
             time: rounded(time),
@@ -1347,8 +1383,13 @@ impl Recorder<'_> {
     }
 }
 
-/// A change of what plays as the report lists it.
-fn sound_change(time: f64, change: &AudioChange, name: impl Fn(&str) -> String) -> SoundEvent {
+/// A change of what plays as the report lists it, heard at `settings`.
+fn sound_change(
+    time: f64,
+    change: &AudioChange,
+    settings: &AudioSettings,
+    name: impl Fn(&str) -> String,
+) -> SoundEvent {
     let text = match (change.kind, &change.asset) {
         (_, Some(asset)) => name(asset),
         (ChangeKind::Volume, None) => graph::VOLUME_CHANNELS
@@ -1360,13 +1401,24 @@ fn sound_change(time: f64, change: &AudioChange, name: impl Fn(&str) -> String) 
             .unwrap_or_default()
             .to_owned(),
     };
+    let effective_volume = match change.kind {
+        ChangeKind::Stop => 0.,
+        ChangeKind::Loop if change.channel == "music" => {
+            change.volume * settings.gain(Channel::Music)
+        }
+        ChangeKind::Loop => change.volume * settings.gain(Channel::Effects),
+        // The general volume, or a channel's under it.
+        ChangeKind::Volume if change.channel == "master" => change.volume,
+        ChangeKind::Volume => change.volume * settings.master,
+    };
     SoundEvent {
         time,
         text,
         kind: Some(change.kind),
         started: change.started,
-        channel: Some(change.channel),
+        channel: change.channel,
         volume: (change.kind != ChangeKind::Stop).then_some(change.volume),
+        effective_volume,
         fade: (change.fade > 0.).then_some(change.fade),
     }
 }
@@ -1398,6 +1450,160 @@ struct WatchPlan {
     fields: BTreeSet<Field>,
     /// None: every attribute.
     attributes: Option<BTreeSet<String>>,
+}
+
+/// The steps a request samples before the final state, which always ends the lists:
+/// `samples_at` when given, else `sample_every`, else `samples`.
+enum SamplePlan {
+    /// Sample k of `count` at the step nearest k/count of the planned run.
+    Even { count: usize, next: usize },
+    /// The steps asked, in order; 0 is the start.
+    At { steps: Vec<usize>, next: usize },
+    /// Sample k at the step nearest k × `every` seconds.
+    Every { every: f64, next: usize },
+}
+
+/// A sample of every watched object, and the step it was taken at.
+type Taken = (usize, Vec<Sample>);
+
+/// Takes the samples of the watched objects as the run goes, and picks the ones reported.
+struct Sampler {
+    plan: SamplePlan,
+    /// The steps the run lasts unless `until` or Sair do jogo stops it.
+    steps: usize,
+    taken: VecDeque<Taken>,
+    /// Samples of `sample_every` dropped to keep the most recent.
+    dropped: usize,
+    /// With `samples`, every `stride`-th step (at most [`SPREAD_KEPT`]), to spread the samples
+    /// over the time run when the run stops early.
+    spread: Option<(usize, Vec<Taken>)>,
+}
+impl Sampler {
+    fn new(request: &SimulationRequest, steps: usize) -> Self {
+        let plan = if !request.samples_at.is_empty() {
+            let mut at: Vec<usize> = request
+                .samples_at
+                .iter()
+                .map(|at| (at / f64::from(FIXED_DT)).round() as usize)
+                .collect();
+            at.sort_unstable();
+            at.dedup();
+            SamplePlan::At { steps: at, next: 0 }
+        } else if let Some(every) = request.sample_every {
+            // At most one per step.
+            SamplePlan::Every {
+                every: every.max(f64::from(FIXED_DT)),
+                next: 1,
+            }
+        } else {
+            SamplePlan::Even {
+                count: request.samples.max(1) as usize,
+                next: 1,
+            }
+        };
+        // Any run may stop early: Sair do jogo ends it whatever `until` asks.
+        let spread =
+            matches!(plan, SamplePlan::Even { count, .. } if count > 1).then(|| (1, Vec::new()));
+        Self {
+            plan,
+            steps,
+            taken: VecDeque::new(),
+            dropped: 0,
+            spread,
+        }
+    }
+
+    /// Samples the state after `step` when the plan asks for it; the last step's is the final
+    /// state, taken apart.
+    fn take(&mut self, step: usize, sample: impl FnOnce() -> Vec<Sample>) {
+        if step >= self.steps {
+            return;
+        }
+        let steps = self.steps;
+        let planned = match &mut self.plan {
+            // With fewer steps than samples, every step has one.
+            SamplePlan::Even { count, next } => {
+                let due = |k: usize| (k * steps + *count / 2) / *count;
+                while *next < *count && due(*next) < step {
+                    *next += 1;
+                }
+                step > 0 && *next < *count && due(*next) == step
+            }
+            SamplePlan::At { steps, next } => {
+                while *next < steps.len() && steps[*next] < step {
+                    *next += 1;
+                }
+                *next < steps.len() && steps[*next] == step
+            }
+            SamplePlan::Every { every, next } => {
+                let due = |k: usize| (k as f64 * *every / f64::from(FIXED_DT)).round() as usize;
+                let reached = due(*next) <= step;
+                while due(*next) <= step {
+                    *next += 1;
+                }
+                reached
+            }
+        };
+        let spread = step > 0
+            && self
+                .spread
+                .as_ref()
+                .is_some_and(|(stride, _)| step.is_multiple_of(*stride));
+        if !planned && !spread {
+            return;
+        }
+        let samples = sample();
+        if spread && let Some((stride, kept)) = &mut self.spread {
+            kept.push((step, samples.clone()));
+            if kept.len() >= SPREAD_KEPT {
+                *stride *= 2;
+                let stride = *stride;
+                kept.retain(|(step, _)| step.is_multiple_of(stride));
+            }
+        }
+        if planned {
+            if matches!(self.plan, SamplePlan::Every { .. }) && self.taken.len() == MAX_SAMPLES - 1
+            {
+                self.taken.pop_front();
+                self.dropped += 1;
+            }
+            self.taken.push_back((step, samples));
+        }
+    }
+
+    /// Each watched object's samples, oldest first, the final state `end` (after step `last`)
+    /// ending them, and how many `sample_every` dropped.
+    fn finish(self, last: usize, end: Vec<Sample>) -> (Vec<Vec<Sample>>, usize) {
+        let picked: Vec<Vec<Sample>> = match (self.spread, &self.plan) {
+            // Stopped early: the samples spread over the time the run lasted.
+            (Some((_, kept)), SamplePlan::Even { count, .. }) if last < self.steps => {
+                let mut picks = BTreeSet::new();
+                for k in 1..*count {
+                    let due = (k * last + count / 2) / count;
+                    let after = kept.partition_point(|(step, _)| *step < due);
+                    let nearest = [after.checked_sub(1), Some(after)]
+                        .into_iter()
+                        .flatten()
+                        .filter(|&i| i < kept.len())
+                        .min_by_key(|&i| kept[i].0.abs_diff(due));
+                    picks.extend(nearest);
+                }
+                kept.into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| picks.contains(i))
+                    .map(|(_, (_, samples))| samples)
+                    .collect()
+            }
+            _ => self.taken.into_iter().map(|(_, samples)| samples).collect(),
+        };
+        let mut lists: Vec<Vec<Sample>> = end.iter().map(|_| Vec::new()).collect();
+        for samples in picked.into_iter().chain([end]) {
+            for (list, sample) in lists.iter_mut().zip(samples) {
+                list.push(sample);
+            }
+        }
+        (lists, self.dropped)
+    }
 }
 
 fn sample(lookup: Lookup, watch: &WatchPlan) -> Sample {
@@ -1735,6 +1941,7 @@ impl Stop {
             time: rounded(runtime.time),
             reason,
             kind: None,
+            object: None,
             detail,
         };
         if let Some(target) = &self.scene
@@ -2159,8 +2366,31 @@ pub fn run(
             "Informe uma duração entre 0 e {MAX_SECONDS} segundos"
         ));
     }
-    if request.samples > 120 {
-        return Err("No máximo 120 amostras".into());
+    if request.samples as usize > MAX_SAMPLES {
+        return Err(format!("No máximo {MAX_SAMPLES} amostras"));
+    }
+    if request
+        .sample_every
+        .is_some_and(|every| !every.is_finite() || every <= 0.)
+    {
+        return Err("sample_every precisa ser um número de segundos maior que 0".into());
+    }
+    // The final state is one more sample.
+    if request.samples_at.len() >= MAX_SAMPLES {
+        return Err(format!(
+            "samples_at: no máximo {} tempos (com o estado final, {MAX_SAMPLES} amostras)",
+            MAX_SAMPLES - 1
+        ));
+    }
+    if request
+        .samples_at
+        .iter()
+        .any(|at| !at.is_finite() || *at < 0. || *at > request.seconds)
+    {
+        return Err(format!(
+            "samples_at: os tempos precisam ser segundos de 0 a {} (seconds)",
+            request.seconds
+        ));
     }
     if request.seed > random::MAX_SEED {
         return Err(format!(
@@ -2369,20 +2599,33 @@ pub fn run(
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
-    // Sample k of n is taken at the step nearest k/n of the run, the last one being the final
-    // state; with fewer steps than samples, every step has one.
-    let samples = request.samples.max(1) as usize;
-    let due = |k: usize| (k * steps + samples / 2) / samples;
-    let mut next_sample = 1;
+    let mut sampler = Sampler::new(request, steps);
+    let take = |sampler: &mut Sampler, step: usize, runtime: &Runtime, recorder: &Recorder| {
+        if !watches.is_empty() {
+            sampler.take(step, || {
+                let lookup = recorder.lookup(runtime);
+                watches
+                    .iter()
+                    .map(|(watch, _)| sample(lookup, watch))
+                    .collect()
+            });
+        }
+    };
     let mut directs = directs.into_iter().peekable();
     // Sair do jogo ends the run whatever `until` asks.
     let check = |runtime: &Runtime, happened: &Happened| {
         if runtime.quit_requested {
+            let node = graph::definition("game.quit").map_or("Sair do jogo", |def| def.label);
+            let asked = happened
+                .quit
+                .as_ref()
+                .map_or("O jogo", |object| object.name.as_str());
             return Some(StoppedAt {
                 time: rounded(runtime.time),
                 reason: "quit",
                 kind: None,
-                detail: "O jogo pediu para sair (Sair do jogo)".into(),
+                object: happened.quit.clone(),
+                detail: format!("{asked} pediu para sair do jogo (nó {node})"),
             });
         }
         stop.as_ref().and_then(|s| s.check(runtime, happened))
@@ -2391,8 +2634,12 @@ pub fn run(
     let started = recorder.collect(&mut runtime);
     twin.compare(recorder.lookup(&runtime), 0);
     let mut stopped = check(&runtime, &started);
+    // Steps run.
+    let mut last = 0;
     if stopped.is_none() {
+        take(&mut sampler, 0, &runtime, &recorder);
         for step in 1..=steps {
+            last = step;
             while directs.peek().is_some_and(|(at, _)| *at <= runtime.time) {
                 let (_, direct) = directs.next().unwrap();
                 direct.apply(&mut runtime);
@@ -2410,25 +2657,25 @@ pub fn run(
             if stopped.is_some() {
                 break;
             }
-            while next_sample < samples && due(next_sample) < step {
-                next_sample += 1;
-            }
-            if next_sample < samples && due(next_sample) == step && step != steps {
-                for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
-                    watched
-                        .samples
-                        .push(sample(recorder.lookup(&runtime), watch));
-                }
-            }
+            take(&mut sampler, step, &runtime, &recorder);
         }
     }
     report.stopped_at = stopped;
     report.bot = bot.map(|bot| bot.report);
     report.paused = runtime.game_paused();
-    for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
-        watched
-            .samples
-            .push(sample(recorder.lookup(&runtime), watch));
+    let end = {
+        let lookup = recorder.lookup(&runtime);
+        watches
+            .iter()
+            .map(|(watch, _)| sample(lookup, watch))
+            .collect()
+    };
+    let (lists, dropped) = sampler.finish(last, end);
+    for (watched, samples) in report.watched.iter_mut().zip(lists) {
+        watched.samples = samples;
+    }
+    if dropped > 0 {
+        report.truncated.insert("samples", dropped);
     }
     report.camera = camera(&runtime);
     if request.ui {

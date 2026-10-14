@@ -70,6 +70,8 @@ foreach ($dll in @('libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll')
     $source = Join-Path $compilerBin $dll
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-Item -LiteralPath $source -Destination (Join-Path $stagingPath $dll) -Force }
 }
+# Backups an agent leaves next to a project (project.oxy.json.agente.bak) never ship.
+Get-ChildItem -LiteralPath $stagingPath -Recurse -File -Filter '*.agente.bak' | Remove-Item -Force
 $previousPath = $null
 if (Test-Path -LiteralPath $destinationPath) {
     if (!(Test-Path -LiteralPath $destinationPath -PathType Container)) { throw 'O destino existente deve ser uma pasta.' }

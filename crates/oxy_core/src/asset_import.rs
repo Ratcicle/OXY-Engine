@@ -1,8 +1,9 @@
 //! PNG images and WAV sounds imported by AI agents: the editor's Importar without the file
 //! dialog. The source, a file the person pointed to or bytes sent inline, is checked first (its
 //! type, size and header), then copied into the project's assets folder under a new name, as
-//! the editor does; nothing outside that folder is written. The MCP server imports this way on
-//! files and the editor on its live channel, so both accept and refuse the same sources.
+//! the editor does; nothing outside that folder is written. One call may import several files
+//! (`paths`), all of them or none. The MCP server imports this way on files and the editor on
+//! its live channel, so both accept and refuse the same sources.
 use crate::{
     document::*,
     painting::PaintImage,
@@ -18,6 +19,10 @@ pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_INLINE_BYTES: usize = 16 * 1024 * 1024;
 /// Longest asset name kept, in characters.
 const MAX_NAME_CHARS: usize = 80;
+/// Files one call imports at most (`paths`).
+pub const MAX_FILES: usize = 32;
+/// Most bytes the files of one call add up to.
+pub const MAX_BATCH_BYTES: u64 = 4 * MAX_FILE_BYTES;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
@@ -128,7 +133,11 @@ impl ImportRequest {
         match (&request.path, &request.data_base64) {
             (Some(_), Some(_)) => return Err("Informe path ou data_base64, não os dois.".into()),
             (None, None) => {
-                return Err("Informe path (um arquivo .png ou .wav) ou data_base64.".into());
+                return Err(
+                    "Informe path (um arquivo .png ou .wav), data_base64 ou paths \
+                     (vários arquivos)."
+                        .into(),
+                );
             }
             (Some(path), None) => {
                 let found = check_path(path)?;
@@ -256,6 +265,144 @@ impl ImportRequest {
             seconds,
         })
     }
+}
+
+/// What one call imports: one source (`path` or `data_base64`), or several files in `paths`,
+/// each a path or `{path, name?, kind?, apply_to?}`, imported together or not at all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportBatch {
+    pub requests: Vec<ImportRequest>,
+    /// Given as `paths`: errors name the file, and the answer lists them.
+    pub listed: bool,
+}
+
+impl ImportBatch {
+    /// The batch from the tool's arguments, each file checked as [`ImportRequest::parse`]
+    /// checks one. With `paths`, `scene` is the one of every `apply_to`.
+    pub fn parse(args: &Json) -> Result<Self, String> {
+        let Some(paths) = args.get("paths").filter(|paths| !paths.is_null()) else {
+            // A null paths, as some clients send for what they leave out, is no field at all.
+            let mut args = args.clone();
+            if let Some(map) = args.as_object_mut() {
+                map.remove("paths");
+            }
+            return ImportRequest::parse(&args).map(|request| Self {
+                requests: vec![request],
+                listed: false,
+            });
+        };
+        const ENTRY: &str = "{path, name?, kind?, apply_to?}";
+        let Json::Array(paths) = paths else {
+            return Err(format!(
+                "paths precisa ser uma lista de arquivos: caminhos ou {ENTRY}."
+            ));
+        };
+        for (key, value) in args.as_object().into_iter().flatten() {
+            match key.as_str() {
+                "paths" | "scene" => {}
+                _ if value.is_null() => {}
+                "path" | "data_base64" => {
+                    return Err("Informe path, data_base64 ou paths, só um deles.".into());
+                }
+                "name" | "kind" | "apply_to" => {
+                    return Err(format!(
+                        "Com paths, {key} vai em cada arquivo ({ENTRY}), não fora da lista."
+                    ));
+                }
+                other => return Err(format!("Importação inválida: campo `{other}` desconhecido")),
+            }
+        }
+        if paths.is_empty() {
+            return Err("paths está vazia: informe ao menos um arquivo.".into());
+        }
+        if paths.len() > MAX_FILES {
+            return Err(format!(
+                "paths tem {} arquivos; importe no máximo {MAX_FILES} por chamada.",
+                paths.len()
+            ));
+        }
+        let requests = paths
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let mut fields = match entry {
+                    Json::String(path) => serde_json::json!({ "path": path }),
+                    Json::Object(map) => {
+                        if let Some(key) = map
+                            .keys()
+                            .find(|k| !matches!(k.as_str(), "path" | "name" | "kind" | "apply_to"))
+                        {
+                            return Err(file_error(
+                                i,
+                                format!("campo `{key}` desconhecido; cada arquivo é {ENTRY}"),
+                            ));
+                        }
+                        if !map.contains_key("path") {
+                            return Err(file_error(i, format!("informe path ({ENTRY})")));
+                        }
+                        entry.clone()
+                    }
+                    _ => {
+                        return Err(file_error(
+                            i,
+                            format!("cada arquivo é um caminho ou {ENTRY}"),
+                        ));
+                    }
+                };
+                if let Some(scene) = args.get("scene").filter(|scene| !scene.is_null()) {
+                    fields["scene"] = scene.clone();
+                }
+                ImportRequest::parse(&fields).map_err(|error| file_error(i, error))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            requests,
+            listed: true,
+        })
+    }
+
+    /// Reads and checks every source in full, as [`ImportRequest::read`] does one, before
+    /// anything is written.
+    pub fn read(&self) -> Result<Vec<ImportSource>, String> {
+        let mut total = 0;
+        let mut sources = Vec::new();
+        for (i, request) in self.requests.iter().enumerate() {
+            let source = request.read().map_err(|error| self.error(i, error))?;
+            total += source.bytes.len() as u64;
+            if total > MAX_BATCH_BYTES {
+                return Err(format!(
+                    "Os arquivos de paths passam de {} MB juntos; importe-os em mais de uma \
+                     chamada.",
+                    MAX_BATCH_BYTES / (1024 * 1024)
+                ));
+            }
+            sources.push(source);
+        }
+        Ok(sources)
+    }
+
+    /// The tool's answer: what the import added or, for `paths`, `{imported: [...]}` in their
+    /// order.
+    pub fn answer(&self, imported: &[Imported]) -> Result<Json, String> {
+        match imported {
+            [one] if !self.listed => serde_json::to_value(one).map_err(|e| e.to_string()),
+            all => Ok(serde_json::json!({ "imported": all })),
+        }
+    }
+
+    /// `error` of file `i`, naming it when the batch lists files.
+    fn error(&self, i: usize, error: String) -> String {
+        if self.listed {
+            file_error(i, error)
+        } else {
+            error
+        }
+    }
+}
+
+/// `error` of file `i` of `paths`, counted from 0 and in words.
+fn file_error(i: usize, error: String) -> String {
+    format!("paths[{i}] (o {}º arquivo): {error}", i + 1)
 }
 
 fn too_large_inline() -> String {
@@ -446,4 +593,38 @@ pub fn import(
         seconds: source.seconds,
         applied_to: request.apply_to.clone(),
     })
+}
+
+/// Imports every file of `batch`, read as `sources`, as [`import`] does one: all of them, in
+/// order, or none, with no copy left behind and the error naming the file.
+pub fn import_batch(
+    project: &mut Project,
+    root: &Path,
+    scene: &str,
+    batch: &ImportBatch,
+    sources: &[ImportSource],
+) -> Result<Vec<Imported>, String> {
+    let mut copy = project.clone();
+    let mut imported = Vec::new();
+    for (i, (request, source)) in batch.requests.iter().zip(sources).enumerate() {
+        match import(&mut copy, root, scene, request, source) {
+            Ok(done) => imported.push(done),
+            Err(error) => {
+                remove_copies(root, &imported);
+                return Err(batch.error(i, error));
+            }
+        }
+    }
+    *project = copy;
+    Ok(imported)
+}
+
+/// Takes away the files `imported` copied into the project in `root`, when the project that
+/// names them is not saved after all.
+pub fn remove_copies(root: &Path, imported: &[Imported]) {
+    for imported in imported {
+        if let Ok(file) = resolve_asset_path(root, &imported.path) {
+            let _ = std::fs::remove_file(file);
+        }
+    }
 }

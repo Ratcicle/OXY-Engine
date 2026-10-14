@@ -69,8 +69,8 @@ ler, editar, testar e capturar projetos da OXY. No Claude Code, registre com
 No editor, ligue Permitir agentes de IA em Preferências do editor (Interface: 100%,
 na barra de status). Com o projeto aberto, as mudanças do agente aparecem na hora,
 entram no histórico como "Agente: ..." e podem ser desfeitas com Ctrl+Z; quem salva
-é você. Sem o editor aberto, o agente edita os arquivos do projeto e guarda a versão
-anterior em project.oxy.json.agente.bak.
+é você. Sem o editor aberto, o agente edita os arquivos do projeto e guarda o projeto
+como estava antes da primeira mudança de cada sessão em project.oxy.json.agente.bak.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
@@ -81,6 +81,8 @@ não abrem projetos salvos pela 0.6.
 Sem instalador, atualização automática ou assinatura digital.
 "@
 [IO.File]::WriteAllText((Join-Path $destinationPath 'LEIA-ME.txt'), $instructions, [Text.Encoding]::UTF8)
+# Backups an agent leaves next to a project (project.oxy.json.agente.bak) stay out of the ZIP.
+Get-ChildItem -LiteralPath $destinationPath -Recurse -File -Filter '*.agente.bak' | Remove-Item -Force
 $zip = "$destinationPath.zip"
 $temporaryZip = "$destinationPath.$([Guid]::NewGuid()).zip"
 Compress-Archive -LiteralPath $destinationPath -DestinationPath $temporaryZip -CompressionLevel Optimal

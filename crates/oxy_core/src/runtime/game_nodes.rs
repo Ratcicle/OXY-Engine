@@ -135,7 +135,12 @@ impl Runtime {
                 "toggle" => self.toggle_game_pause(),
                 _ => return Err("Ação de pausa desconhecida; use pause/resume/toggle".into()),
             },
-            "game.quit" => self.quit_requested = true,
+            "game.quit" => {
+                self.quit_requested = true;
+                if let Some(recording) = &mut self.recording {
+                    recording.quit.get_or_insert_with(|| context.owner.clone());
+                }
+            }
             _ => return self.audio_action(graph, node, context, budget),
         }
         Ok(true)

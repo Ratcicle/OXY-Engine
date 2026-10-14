@@ -146,6 +146,8 @@ pub struct Recording {
     /// loop started right before the change or a music the next scene replaced, was never
     /// heard either: its start is left out.
     pub audio: Vec<crate::audio::AudioChange>,
+    /// The object whose first Sair do jogo ran.
+    pub quit: Option<Id>,
 }
 #[derive(Clone, Debug)]
 struct Context {

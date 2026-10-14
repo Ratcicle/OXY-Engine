@@ -1,7 +1,9 @@
 //! Imports of PNG and WAV files for agents (asset_import), the assets as oxy_project lists
 //! them, and the runtime's log counters that the editor's console feed reads.
 use oxy_core::{
-    asset_import::{self, ImportKind, ImportRequest, MAX_FILE_BYTES, MAX_INLINE_BYTES},
+    asset_import::{
+        self, ImportBatch, ImportKind, ImportRequest, MAX_FILE_BYTES, MAX_INLINE_BYTES,
+    },
     command,
     document::*,
     editing, encoding,
@@ -333,6 +335,134 @@ fn sources_are_refused_by_place_type_header_and_size_before_anything_is_written(
         (ImportKind::Texture, "imagem")
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn several_files_import_together_in_order_or_not_at_all() {
+    let dir = folder("batch");
+    let source_dir = folder("batch-source");
+    let (mut project, scene, [sprite, _, _]) = project_with_targets(&dir);
+    let music = source_dir.join("musica.wav");
+    std::fs::write(&music, wav(44_100, 44_100)).unwrap();
+    let jump = source_dir.join("pulo.wav");
+    std::fs::write(&jump, wav(4_410, 44_100)).unwrap();
+    let sign = source_dir.join("placa.png");
+    std::fs::write(&sign, png(64, 32)).unwrap();
+    let broken = source_dir.join("quebrado.wav");
+    std::fs::write(&broken, "não é som").unwrap();
+    let batch = ImportBatch::parse(&json!({
+        "scene": scene,
+        "paths": [
+            {"path": path_arg(&music), "name": "Música", "kind": "audio"},
+            path_arg(&jump),
+            {"path": path_arg(&sign), "apply_to": sprite},
+        ],
+    }))
+    .unwrap();
+    assert!(batch.listed);
+    let sources = batch.read().unwrap();
+    let imported =
+        asset_import::import_batch(&mut project, &dir, &scene, &batch, &sources).unwrap();
+    let names: Vec<_> = imported.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["Música", "pulo", "placa"]);
+    assert_eq!(imported[0].seconds, Some(1.));
+    assert_eq!(imported[2].applied_to.as_ref(), Some(&sprite));
+    for done in &imported {
+        assert!(dir.join(&done.path).is_file(), "{}", done.path);
+        assert_eq!(project.asset(&done.asset).unwrap().name, done.name);
+    }
+    let placed = project.scene(&scene).unwrap().entity(&sprite).unwrap();
+    assert_eq!(placed.material.texture.as_ref(), Some(&imported[2].asset));
+    // The answer lists them in their order; one file given alone keeps its own shape.
+    let answer = batch.answer(&imported).unwrap();
+    assert_eq!(answer["imported"].as_array().unwrap().len(), 3);
+    assert_eq!(answer["imported"][1]["name"], "pulo");
+    let single = ImportBatch::parse(&json!({"path": path_arg(&jump)})).unwrap();
+    assert!(!single.listed);
+    assert_eq!(single.answer(&imported[1..2]).unwrap()["name"], "pulo");
+    // A null paths, as clients send for what they leave out, is the single form.
+    assert_eq!(
+        ImportBatch::parse(&json!({"path": path_arg(&jump), "paths": null})).unwrap(),
+        single
+    );
+    let one = ImportBatch::parse(&json!({"paths": [path_arg(&jump)]})).unwrap();
+    assert!(one.answer(&imported[1..2]).unwrap()["imported"].is_array());
+
+    // A file that fails stops the whole batch: the project and the assets folder stay as they
+    // were, and the error names the file.
+    let before = project.clone();
+    let copies = std::fs::read_dir(dir.join("assets")).unwrap().count();
+    let batch =
+        ImportBatch::parse(&json!({"paths": [path_arg(&jump), path_arg(&broken)]})).unwrap();
+    let error = batch.read().unwrap_err();
+    assert!(
+        error.starts_with("paths[1] (o 2º arquivo): ") && error.contains("nem um som WAV"),
+        "{error}"
+    );
+    // So does one that reads well but cannot go into the project (an object the scene lacks).
+    let batch = ImportBatch::parse(&json!({"paths": [
+        path_arg(&jump),
+        {"path": path_arg(&sign), "apply_to": "fantasma"},
+    ]}))
+    .unwrap();
+    let sources = batch.read().unwrap();
+    let error =
+        asset_import::import_batch(&mut project, &dir, &scene, &batch, &sources).unwrap_err();
+    assert!(
+        error.starts_with("paths[1] (o 2º arquivo): ") && error.contains("fantasma"),
+        "{error}"
+    );
+    assert_eq!(project, before);
+    assert_eq!(
+        std::fs::read_dir(dir.join("assets")).unwrap().count(),
+        copies,
+        "the first file's copy is taken away again"
+    );
+
+    // Each file is checked as one alone, and the batch's own shape too.
+    let many: Vec<Json> = (0..=asset_import::MAX_FILES)
+        .map(|_| json!(path_arg(&jump)))
+        .collect();
+    for (args, expected) in [
+        (json!({"paths": []}), "paths está vazia"),
+        (json!({"paths": path_arg(&jump)}), "precisa ser uma lista"),
+        (json!({"paths": many}), "no máximo 32"),
+        (
+            json!({"paths": [path_arg(&jump)], "path": path_arg(&jump)}),
+            "só um deles",
+        ),
+        (
+            json!({"paths": [path_arg(&jump)], "name": "Pulo"}),
+            "name vai em cada arquivo",
+        ),
+        (
+            json!({"paths": [path_arg(&jump)], "pasta": "x"}),
+            "campo `pasta` desconhecido",
+        ),
+        (
+            json!({"paths": [path_arg(&jump), "relativo/pulo.wav"]}),
+            "paths[1] (o 2º arquivo): Informe o caminho completo",
+        ),
+        (
+            json!({"paths": [{"path": path_arg(&jump), "data_base64": "AAAA"}]}),
+            "paths[0] (o 1º arquivo): campo `data_base64` desconhecido",
+        ),
+        (json!({"paths": [{"name": "Pulo"}]}), "informe path"),
+        (json!({"paths": [3]}), "cada arquivo é um caminho"),
+        (
+            json!({"paths": [{"path": path_arg(&sign), "kind": "audio"}]}),
+            "kind pede som WAV",
+        ),
+        (
+            json!({"paths": [{"path": path_arg(&jump), "apply_to": sprite}]}),
+            "apply_to só vale para imagens",
+        ),
+    ] {
+        let error = ImportBatch::parse(&args).unwrap_err();
+        assert!(error.contains(expected), "{args}: {error}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(source_dir).unwrap();
 }
 
 #[test]
