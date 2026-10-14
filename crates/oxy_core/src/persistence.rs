@@ -1,6 +1,6 @@
 //! Validated documents and staged, recoverable file replacement.
 use crate::{
-    document::{Asset, AssetKind, Id, Project, new_id, validate_project},
+    document::{Asset, AssetKind, GameSettings, Id, Project, new_id, validate_project},
     migration::MigrationError,
     painting::PaintImage,
     texture_cache::TextureCache,
@@ -132,6 +132,32 @@ fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), 
         validate_asset_files(&project, root)?;
     }
     Ok((project, migrated))
+}
+/// The game's title (its name, else the project's) and its settings, read from the document at
+/// `path` without loading the project: the player opens its window before that. None when the
+/// document cannot be read; settings it cannot use read as the defaults. Loading then says what
+/// is wrong.
+pub fn read_game_settings(path: &Path) -> Option<(String, GameSettings)> {
+    let path = if path.is_dir() {
+        path.join(PROJECT_FILE)
+    } else {
+        path.to_owned()
+    };
+    if fs::metadata(&path).ok()?.len() > 64 * 1024 * 1024 {
+        return None;
+    }
+    let document: serde_json::Value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+    let game = document
+        .get("game")
+        .and_then(|game| serde_json::from_value::<GameSettings>(game.clone()).ok())
+        .filter(|game| game.validate().is_ok())
+        .unwrap_or_default();
+    let title = match game.title.trim() {
+        "" => document["name"].as_str()?.trim(),
+        title => title,
+    }
+    .to_owned();
+    (!title.is_empty()).then_some((title, game))
 }
 pub fn save_project(path: &Path, project: &Project) -> Result<(), PersistenceError> {
     validate_project(project).map_err(PersistenceError::InvalidProject)?;
@@ -426,7 +452,7 @@ fn validate_asset_file(asset: &Asset, path: &Path) -> Result<(), PersistenceErro
     }
     Ok(())
 }
-fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
+pub(crate) fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
     let meta = fs::metadata(path).map_err(|source| PersistenceError::AssetMissing {
         name: asset.name.clone(),
         source,
@@ -773,6 +799,43 @@ mod tests {
         assert!(save_project(&path, &bad).is_err());
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(load_project(&path).unwrap(), p);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn game_settings_are_read_without_loading_the_project() {
+        let dir = temp();
+        let path = dir.join(PROJECT_FILE);
+        let mut project = Project::new("Corrida");
+        save_project(&path, &project).unwrap();
+        assert_eq!(
+            read_game_settings(&dir),
+            Some(("Corrida".to_owned(), GameSettings::default()))
+        );
+        project.game = GameSettings {
+            title: "Corrida Noturna".into(),
+            window: [800, 600],
+            fullscreen: true,
+        };
+        save_project(&path, &project).unwrap();
+        assert_eq!(
+            read_game_settings(&path),
+            Some(("Corrida Noturna".to_owned(), project.game.clone()))
+        );
+        // A project that would not load still opens its window; settings out of range or a
+        // document that cannot be read give the defaults.
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["scenes"] = serde_json::json!([]);
+        json["game"]["window"] = serde_json::json!([10, 10]);
+        fs::write(&path, json.to_string()).unwrap();
+        assert!(load_project(&path).is_err());
+        assert_eq!(
+            read_game_settings(&path),
+            Some(("Corrida".to_owned(), GameSettings::default()))
+        );
+        fs::write(&path, b"{ quebrado").unwrap();
+        assert_eq!(read_game_settings(&path), None);
+        assert_eq!(read_game_settings(&dir.join("ausente")), None);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

@@ -14,7 +14,7 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 - **Animação** rígida por peças, com timeline, quadros-chave e eventos.
 - **Lógica visual** por nós, com ações de entrada e um guia offline com doze receitas prontas.
 - **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa e um laboratório de movimento editável.
-- **Player separado** (`oxy_player.exe`) para distribuir só o jogo, sem o editor.
+- **Jogos exportados** pelo editor: uma pasta com o executável do jogo (o player, `oxy_player.exe`, com o nome do jogo), os dados e as licenças, para distribuir só o jogo, sem o editor.
 - **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam e capturam o projeto, ao vivo no editor e com tudo desfazível. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
 
 ## Baixar e abrir
@@ -66,9 +66,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 # Engine portátil: editor + player + exemplos. -SkipBuild reutiliza o release já compilado.
 ./scripts/package-engine.ps1
 ./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.5.1-windows-x64.zip'
-# Exportar um jogo: só runtime e dados, sem depender do editor.
-./scripts/package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
 ```
+
+Para exportar um jogo, use o editor: **Projeto → Exportar jogo…** cria `<Destino>\<Nome do jogo>` com `<Nome do jogo>.exe`, a pasta `data`, as licenças e um `LEIA-ME.txt`, e confere o jogo (que ele abre e roda) antes de pôr a pasta no lugar; uma exportação anterior do mesmo jogo só é substituída depois disso. O título, a janela e a tela cheia do jogo ficam no projeto. `scripts/package.ps1` continua sendo o empacotador da engine, usado pelo `package-engine.ps1`, e o `test-portable.ps1` roda `oxy_player.exe --verificar` nos dados do pacote.
 
 Os testes nativos e as medições gravam capturas e relatórios em `target/qa/` (ou na pasta de `OXY_QA_DIR`). Benchmarks e comparações estão descritos em [`benchmarks/README.md`](benchmarks/README.md).
 

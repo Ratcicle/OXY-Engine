@@ -5,8 +5,8 @@ mod native_qa;
 use egui::{Color32, Rect, Sense, Vec2};
 use oxy_audio::Mixer;
 use oxy_core::{
-    document::Project,
-    persistence, random,
+    document::{GameSettings, Project},
+    export, persistence, random,
     runtime::{Runtime, RuntimeOptions},
     save::{self, SaveRequest, SaveSlot},
 };
@@ -14,34 +14,165 @@ use oxy_render::{CameraState, GameUi, Renderer};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
+    process::ExitCode,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
-fn main() -> eframe::Result {
-    let project_path = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|path| path.parent().map(Path::to_owned))
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("data")
-                .join(persistence::PROJECT_FILE)
-        });
+/// The window's title when the project cannot be read.
+const DEFAULT_TITLE: &str = "OXY Engine — Jogo";
+/// Frames the window check (`--verificar --janela`) draws before it reports.
+const WINDOW_CHECK_FRAMES: u32 = 60;
+
+fn main() -> ExitCode {
+    let launch = match Launch::parse(std::env::args_os().skip(1)) {
+        Ok(launch) => launch,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (path, check) = match launch {
+        Launch::Verify {
+            report,
+            window: false,
+        } => return verify_exported(report.as_deref()),
+        Launch::Verify {
+            report,
+            window: true,
+        } => (exported_project(), Some(WindowCheck::new(report))),
+        Launch::Play(path) => (path.unwrap_or_else(exported_project), None),
+    };
+    // The window opens as the game sets it, before the project loads.
+    let (title, game) = persistence::read_game_settings(&path)
+        .unwrap_or_else(|| (DEFAULT_TITLE.to_owned(), GameSettings::default()));
+    let passed = check.as_ref().map(|check| check.passed.clone());
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default()
-            .with_title("OXY Engine — Jogo")
-            .with_inner_size([1280., 720.])
-            .with_min_inner_size([640., 360.]),
+        viewport: viewport(&title, &game),
         ..Default::default()
     };
-    eframe::run_native(
-        "OXY Engine — Jogo",
+    let result = eframe::run_native(
+        DEFAULT_TITLE,
         options,
-        Box::new(move |cc| Ok(Box::new(Player::new(cc, project_path)))),
-    )
+        Box::new(move |cc| {
+            let mut player = Player::new(cc, path);
+            player.check = check;
+            Ok(Box::new(player))
+        }),
+    );
+    match (result, passed) {
+        (Err(error), _) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+        (Ok(()), Some(passed)) if !passed.load(Ordering::Relaxed) => ExitCode::FAILURE,
+        (Ok(()), _) => ExitCode::SUCCESS,
+    }
+}
+
+/// What the player was asked to do.
+#[derive(Debug, PartialEq)]
+enum Launch {
+    /// Play the project at the path, or the exported game next to the executable.
+    Play(Option<PathBuf>),
+    /// `--verificar [relatório] [--janela]`: check the exported game next to the executable,
+    /// without a window, and write the report (to the output when no file is given); with
+    /// `--janela`, open its window, draw some frames and report how the window opened.
+    Verify {
+        report: Option<PathBuf>,
+        window: bool,
+    },
+}
+impl Launch {
+    fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
+        let mut args = args.into_iter();
+        let Some(first) = args.next() else {
+            return Ok(Self::Play(None));
+        };
+        if first != "--verificar" {
+            return Ok(Self::Play(Some(first.into())));
+        }
+        let mut report = None;
+        let mut window = false;
+        for arg in args {
+            if arg == "--janela" {
+                window = true;
+            } else if report.is_none() && !arg.to_string_lossy().starts_with("--") {
+                report = Some(PathBuf::from(arg));
+            } else {
+                return Err(format!(
+                    "Argumento inesperado: {}. Use --verificar [relatório.json] [--janela].",
+                    arg.to_string_lossy()
+                ));
+            }
+        }
+        Ok(Self::Verify { report, window })
+    }
+}
+
+/// The project of the exported game: data\project.oxy.json next to the executable.
+fn exported_project() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_owned))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("data")
+        .join(persistence::PROJECT_FILE)
+}
+
+/// The window as the game sets it: its title, size and full screen, with the OXY icon.
+fn viewport(title: &str, game: &GameSettings) -> egui::ViewportBuilder {
+    let [width, height] = game.window.map(|side| side as f32);
+    egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_icon(oxy_render::branding::oxy_icon())
+        .with_inner_size([width, height])
+        .with_min_inner_size([width.min(640.), height.min(360.)])
+        .with_fullscreen(game.fullscreen)
+}
+
+/// `--verificar` without a window: checks the exported game as the export does and writes the
+/// report. Fails when the game does not pass or the report cannot be written.
+fn verify_exported(report: Option<&Path>) -> ExitCode {
+    let data = exported_project()
+        .parent()
+        .map(Path::to_owned)
+        .unwrap_or_default();
+    let checked = export::verify(&data, export::VERIFY_SECONDS);
+    let text = serde_json::to_string_pretty(&checked).unwrap_or_default();
+    let written = match report {
+        Some(path) => std::fs::write(path, text).is_ok(),
+        None => {
+            println!("{text}");
+            true
+        }
+    };
+    if checked.ok && written {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// `--verificar --janela`: the game in its real window for some frames, then a report of how
+/// the window opened.
+struct WindowCheck {
+    report: Option<PathBuf>,
+    frames: u32,
+    passed: Arc<AtomicBool>,
+}
+impl WindowCheck {
+    fn new(report: Option<PathBuf>) -> Self {
+        Self {
+            report,
+            frames: 0,
+            passed: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 struct Player {
@@ -61,6 +192,7 @@ struct Player {
     /// Where this game's progress lives and what it holds now; none when it cannot be saved.
     progress: Option<(PathBuf, SaveSlot)>,
     mixer: Mixer,
+    check: Option<WindowCheck>,
 }
 impl Player {
     fn new(cc: &eframe::CreationContext<'_>, path: PathBuf) -> Self {
@@ -88,6 +220,7 @@ impl Player {
             ),
             progress: None,
             mixer: Mixer::new(),
+            check: None,
         };
         if let Some(renderer) = &mut player.renderer {
             renderer.show_grid = false;
@@ -151,6 +284,41 @@ impl Player {
             }
         }
     }
+    /// Counts the frames of `--verificar --janela` and, after enough of them or once the game
+    /// fails to open, reports how the window opened and closes it.
+    fn window_check(&mut self, ctx: &egui::Context) {
+        let Some(check) = &mut self.check else {
+            return;
+        };
+        check.frames += 1;
+        if check.frames < WINDOW_CHECK_FRAMES && self.error.is_none() {
+            return;
+        }
+        let info = ctx.input(|i| i.viewport().clone());
+        let errors: Vec<&String> = self.error.iter().chain(&self.diagnostics).collect();
+        let report = serde_json::json!({
+            "ok": errors.is_empty(),
+            "engine": export::engine_version(),
+            "title": info.title,
+            "inner_size": info.inner_rect.map(|rect| [rect.width(), rect.height()]),
+            "fullscreen": info.fullscreen,
+            "frames": check.frames,
+            "errors": errors,
+        });
+        let text = serde_json::to_string_pretty(&report).unwrap_or_default();
+        let written = match &check.report {
+            Some(path) => std::fs::write(path, text).is_ok(),
+            None => {
+                println!("{text}");
+                true
+            }
+        };
+        check
+            .passed
+            .store(errors.is_empty() && written, Ordering::Relaxed);
+        self.check = None;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
     fn push_diagnostic(&mut self, error: String) {
         if self.diagnostics.last() != Some(&error) {
             self.diagnostics.push(error);
@@ -170,6 +338,27 @@ impl eframe::App for Player {
         if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
             self.show_diagnostics = !self.show_diagnostics;
         }
+        // Alt+Enter switches between the window and full screen, once per press (held, it would
+        // repeat); the game never sees it.
+        let toggle = ctx.input(|i| {
+            i.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                        ..
+                    } if modifiers.alt
+                )
+            })
+        });
+        if toggle {
+            let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+        }
+        self.window_check(ctx);
         // Losing focus always pauses the engine, with its window over whatever the game shows.
         // Esc is the game's own pause when the scene has a pause menu, else the engine's.
         if let Some(runtime) = &mut self.runtime {
@@ -188,7 +377,7 @@ impl eframe::App for Player {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.);
-                    ui.heading("OXY Engine — não foi possível abrir o jogo");
+                    ui.heading("Não foi possível abrir o jogo");
                     ui.add_space(20.);
                     ui.colored_label(Color32::from_rgb(255, 155, 140), error);
                     ui.label(self.path.display().to_string());
@@ -323,9 +512,9 @@ impl eframe::App for Player {
                         menu = runtime.has_pause_menu();
                     }
                     ui.label(if menu {
-                        "Esc: menu de pausa do jogo · F3: diagnóstico"
+                        "Esc: menu de pausa do jogo · Alt+Enter: tela cheia · F3: diagnóstico"
                     } else {
-                        "Esc: pausar · F3: diagnóstico"
+                        "Esc: pausar · Alt+Enter: tela cheia · F3: diagnóstico"
                     });
                     if ui.button("Sair").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -579,6 +768,7 @@ fn a_reload_silences_the_old_run() {
         saves: Some(folder.join("progresso")),
         progress: None,
         mixer: Mixer::silent(),
+        check: None,
     };
     player.reload();
     assert_eq!(player.error, None);
@@ -591,6 +781,65 @@ fn a_reload_silences_the_old_run() {
     assert_eq!(player.mixer.voice_count(), 0);
     assert!(player.mixer.take_errors().is_empty());
     std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn the_player_plays_a_project_or_checks_the_exported_game() {
+    let parse = |args: &[&str]| Launch::parse(args.iter().map(OsString::from));
+    assert_eq!(parse(&[]), Ok(Launch::Play(None)));
+    assert_eq!(
+        parse(&["C:\\Jogos\\Corrida\\project.oxy.json"]),
+        Ok(Launch::Play(Some(
+            "C:\\Jogos\\Corrida\\project.oxy.json".into()
+        )))
+    );
+    assert_eq!(
+        parse(&["--verificar"]),
+        Ok(Launch::Verify {
+            report: None,
+            window: false
+        })
+    );
+    assert_eq!(
+        parse(&["--verificar", "relatorio.json"]),
+        Ok(Launch::Verify {
+            report: Some("relatorio.json".into()),
+            window: false
+        })
+    );
+    assert_eq!(
+        parse(&["--verificar", "--janela", "relatorio.json"]),
+        Ok(Launch::Verify {
+            report: Some("relatorio.json".into()),
+            window: true
+        })
+    );
+    for args in [
+        &["--verificar", "a.json", "b.json"][..],
+        &["--verificar", "--outro"],
+    ] {
+        let error = parse(args).unwrap_err();
+        assert!(error.contains("Argumento inesperado"), "{error}");
+    }
+}
+
+#[test]
+fn the_window_opens_as_the_game_sets_it() {
+    let game = GameSettings {
+        title: "Corrida".into(),
+        window: [800, 300],
+        fullscreen: true,
+    };
+    let built = viewport("Corrida Noturna", &game);
+    assert_eq!(built.title.as_deref(), Some("Corrida Noturna"));
+    assert_eq!(built.inner_size, Some(Vec2::new(800., 300.)));
+    assert_eq!(built.min_inner_size, Some(Vec2::new(640., 300.)));
+    assert_eq!(built.fullscreen, Some(true));
+    assert!(built.icon.is_some_and(|icon| icon.width > 0));
+    let built = viewport(DEFAULT_TITLE, &GameSettings::default());
+    assert_eq!(built.inner_size, Some(Vec2::new(1280., 720.)));
+    assert_eq!(built.min_inner_size, Some(Vec2::new(640., 360.)));
+    assert_eq!(built.fullscreen, Some(false));
 }
 
 #[cfg(all(test, target_os = "windows"))]

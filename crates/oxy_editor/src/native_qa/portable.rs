@@ -25,7 +25,7 @@ fn native_portable_home_workflow() {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("OXY Engine — QA portátil")
-            .with_icon(crate::window_icon())
+            .with_icon(oxy_render::branding::oxy_icon())
             .with_inner_size([920., 600.])
             .with_active(false),
         event_loop_builder: Some(Box::new(|builder| {

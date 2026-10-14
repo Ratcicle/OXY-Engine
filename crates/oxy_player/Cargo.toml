@@ -12,9 +12,9 @@ oxy_audio.workspace = true
 eframe.workspace = true
 egui.workspace = true
 uuid.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 hound.workspace = true
-serde_json.workspace = true
 image.workspace = true
 winit = "=0.30.13"

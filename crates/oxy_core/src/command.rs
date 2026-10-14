@@ -245,6 +245,16 @@ pub enum Command {
     SetStartScene {
         scene: Id,
     },
+    /// How the exported game opens: its title (empty for the project's name), the size of its
+    /// window and whether it opens in full screen. Fields left out stay as they are.
+    SetGameSettings {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        window: Option<[u32; 2]>,
+        #[serde(default)]
+        fullscreen: Option<bool>,
+    },
     CreateScene {
         name: String,
         kind: Dimension,
@@ -592,6 +602,7 @@ impl Command {
         match self {
             Self::RenameProject { .. } => "Renomear projeto",
             Self::SetStartScene { .. } => "Escolher cena inicial",
+            Self::SetGameSettings { .. } => "Configurar jogo exportado",
             Self::CreateScene { .. } => "Criar cena",
             Self::RenameScene { .. } => "Renomear cena",
             Self::DuplicateScene { .. } => "Duplicar cena",
@@ -1697,6 +1708,24 @@ fn apply_one(
         C::SetStartScene { scene } => {
             let id = scene_id(project, &Some(scene.clone()), default)?;
             project.start_scene = id;
+            Ok(vec![])
+        }
+        C::SetGameSettings {
+            title,
+            window,
+            fullscreen,
+        } => {
+            let game = &mut project.game;
+            if let Some(title) = title {
+                game.title = title.trim().into();
+            }
+            if let Some(window) = window {
+                game.window = *window;
+            }
+            if let Some(fullscreen) = fullscreen {
+                game.fullscreen = *fullscreen;
+            }
+            game.validate()?;
             Ok(vec![])
         }
         C::CreateScene { name, kind } => {

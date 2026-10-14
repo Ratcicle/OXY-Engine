@@ -29,7 +29,7 @@ impl Home {
             Some(Err(error)) => (Vec::new(), Some(error)),
             None => (Vec::new(), None),
         };
-        let icon = crate::window_icon();
+        let icon = oxy_render::branding::oxy_icon();
         let logo = ctx.load_texture(
             "OXY Engine",
             egui::ColorImage::from_rgba_unmultiplied(

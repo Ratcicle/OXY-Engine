@@ -1,5 +1,6 @@
 //! Shared native WGPU rendering for OXY Engine, Studio and the standalone player.
 //! No editor state is read here. Meshes use real perspective/depth and stable UVs.
+pub mod branding;
 mod cache;
 pub mod camera;
 pub mod collider_debug;

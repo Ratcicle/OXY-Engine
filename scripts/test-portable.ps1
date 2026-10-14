@@ -88,6 +88,28 @@ foreach ($asset in $manifest.assets) {
     $assetPath = [IO.Path]::GetFullPath((Join-Path $data $asset.path))
     if (!$assetPath.StartsWith($data + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Asset inválido/ausente: $($asset.path)" }
 }
+# The player checks the packaged data itself, as an exported game does: no window, so CI runs it too.
+if ([version]$version.ProductVersion -ge [version]'0.6.0') {
+    $verifyReport = Join-Path $testRoot 'verificar.json'
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = Join-Path $package 'oxy_player.exe'
+    $start.Arguments = "--verificar `"$verifyReport`""
+    $start.WorkingDirectory = $testRoot
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.EnvironmentVariables['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+    $player = [Diagnostics.Process]::Start($start)
+    try {
+        if (!$player.WaitForExit(120000)) { $player.Kill(); throw 'oxy_player.exe --verificar não terminou em 120 s.' }
+        if (!(Test-Path -LiteralPath $verifyReport -PathType Leaf)) { throw "oxy_player.exe --verificar não gravou o relatório (código $($player.ExitCode))." }
+        $verified = Get-Content -LiteralPath $verifyReport -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($player.ExitCode -ne 0 -or !$verified.ok) { throw "oxy_player.exe --verificar falhou: $($verified.errors -join ' ')" }
+        if ($verified.engine -ne $version.ProductVersion) { throw "oxy_player.exe é da OXY Engine $($verified.engine), e o editor é $($version.ProductVersion)." }
+        Write-Host "Player conferiu os dados do pacote: $($verified.game), cena inicial $($verified.start_scene)."
+    } finally {
+        $player.Dispose()
+    }
+}
 if (!$ContentOnly) {
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $editor.FullName

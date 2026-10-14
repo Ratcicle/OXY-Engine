@@ -257,12 +257,6 @@ impl ImportRequest {
     }
 }
 
-fn not_on_a_disk() -> String {
-    "Caminhos de rede ou de dispositivo não são aceitos; use um arquivo de um disco deste \
-     computador."
-        .into()
-}
-
 fn too_large_inline() -> String {
     format!(
         "data_base64 passa de {} MB; para arquivos maiores, use path.",
@@ -270,31 +264,50 @@ fn too_large_inline() -> String {
     )
 }
 
-/// A path the import may read: absolute, on a disk of this computer and ending in .png or .wav.
-/// Network paths are refused, since reading one reaches another machine, and so are device
-/// paths (`\\.\`, `\\?\`). Answers the kind it gives.
-fn check_path(path: &str) -> Result<ImportKind, String> {
+/// A path given in full on a disk of this computer, without the spaces around it: network
+/// paths are refused, since one reaches another machine, and so are device paths (`\\.\`,
+/// `\\?\`) and relative ones. The import reads files this way and the export writes games;
+/// `folder` says which the messages name.
+pub fn local_disk_path(path: &str, folder: bool) -> Result<&Path, String> {
     let trimmed = path.trim();
+    let (one, the) = if folder {
+        ("uma pasta", "da pasta")
+    } else {
+        ("um arquivo", "do arquivo")
+    };
+    let not_on_a_disk = || {
+        format!(
+            "Caminhos de rede ou de dispositivo não são aceitos; use {one} de um disco deste \
+             computador."
+        )
+    };
     // Windows takes '/' and '\' alike: "\/servidor/pasta" and "/\servidor\pasta" are network
     // paths as much as "\\servidor\pasta".
     let separators = trimmed.chars().take_while(|c| matches!(c, '/' | '\\'));
     if separators.count() >= 2 {
         return Err(not_on_a_disk());
     }
-    let file = Path::new(trimmed);
+    let local = Path::new(trimmed);
     // And what Windows reads the path as decides: only a drive letter is a disk of this computer.
-    if let Some(Component::Prefix(prefix)) = file.components().next()
+    if let Some(Component::Prefix(prefix)) = local.components().next()
         && !matches!(prefix.kind(), Prefix::Disk(_))
     {
         return Err(not_on_a_disk());
     }
-    if !file.is_absolute() {
+    if !local.is_absolute() {
         return Err(format!(
-            "Informe o caminho completo do arquivo (absoluto), não {trimmed}."
+            "Informe o caminho completo {the} (absoluto), não {trimmed}."
         ));
     }
+    Ok(local)
+}
+
+/// A path the import may read: absolute, on a disk of this computer (see [`local_disk_path`])
+/// and ending in .png or .wav. Answers the kind it gives.
+fn check_path(path: &str) -> Result<ImportKind, String> {
+    let file = local_disk_path(path, false)?;
     ImportKind::of_extension(file)
-        .ok_or_else(|| format!("Só se importam arquivos .png e .wav, não {trimmed}."))
+        .ok_or_else(|| format!("Só se importam arquivos .png e .wav, não {}.", path.trim()))
 }
 
 /// The name shown in the editor: one line, no control characters, at most

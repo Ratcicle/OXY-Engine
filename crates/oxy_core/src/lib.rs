@@ -12,6 +12,7 @@ pub mod document;
 pub mod edit_history;
 pub mod editing;
 pub mod encoding;
+pub mod export;
 pub mod game_ui;
 pub mod geometry;
 pub mod graph;

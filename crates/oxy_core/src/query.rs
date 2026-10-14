@@ -227,6 +227,11 @@ pub fn project_summary(project: &Project) -> Json {
         "surfaces": surfaces,
         "variables": variables,
         "collision_groups": groups,
+        "game": {
+            "title": project.game_title(),
+            "window": project.game.window,
+            "fullscreen": project.game.fullscreen,
+        },
     })
 }
 

@@ -53,12 +53,12 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | Ferramenta | O que faz |
 | --- | --- |
 | `oxy_status` | Editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer, se há um teste do jogo rodando e quem joga, e se o agente pode salvar |
-| `oxy_project` | Cenas, recursos (com o arquivo e quem usa cada um), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas, variáveis do jogo (com o valor inicial e quem usa cada uma) e nomes dos grupos de colisão |
+| `oxy_project` | Cenas, recursos (com o arquivo e quem usa cada um), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas, variáveis do jogo (com o valor inicial e quem usa cada uma), nomes dos grupos de colisão e como o jogo exportado abre (título, janela e tela cheia) |
 | `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida e os componentes que ainda podem receber |
 | `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
 | `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets (o que cada um cria e as opções), perfis de movimento (com os valores) e as teclas que as ações de entrada aceitam |
-| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, organização da lógica, ações de entrada, superfícies físicas, variáveis do jogo, modelos, cópias entre cenas, animações, perfis de movimento…) |
+| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, organização da lógica, ações de entrada, superfícies físicas, variáveis do jogo, jogo exportado, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_import` | Importa uma imagem PNG ou um som WAV como recurso do projeto e, se pedido, já aplica a imagem num objeto |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria ou o que nele pararia com erro |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, um bot que leva um personagem por um caminho, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a pausa do jogo, a câmera, a interface do jogo, os objetos observados, as variáveis do jogo, o que toca e o resumo do estado no fim; se pedido, confere que o teste se repete |
@@ -116,6 +116,7 @@ Sem opções, o catálogo traz também:
 - Um objeto que só existe dentro de um modelo vem em `used_by` com `model`, o nome do modelo: o `oxy_entity` e o `oxy_find` não chegam a ele, que aparece nas cenas onde o modelo for colocado.
 - `used_by` lista até 10 objetos; quando há mais, `used_by_total` diz quantos são.
 - `collision_groups`: os nomes dos grupos de colisão, `{bit, name}`, em que `bit` é o bit da categoria e da máscara dos colisores. Vêm os três grupos com nome padrão e os que o projeto nomeou; os outros se chamam `Grupo N`, com N = bit + 1. Por enquanto só se leem; os nomes se mudam no editor.
+- `game`: como o jogo exportado abre, `{title, window, fullscreen}`. `title` é o nome do jogo, que dá nome à janela, à pasta e ao executável: o título próprio ou, sem ele, o nome do projeto. `window` é `[largura, altura]` da área do jogo e `fullscreen` diz se o jogo abre em tela cheia. Muda com o `set_game_settings` (veja **Jogo exportado**, abaixo).
 
 **Mudanças em relação à 0.5.0:** o `oxy_find` devolve `{objects, total}` em vez de uma lista; o `oxy_entity` resume a lógica e a geometria e deixa de fora as partes vazias; o `oxy_catalog` resume os nós quando não recebe opções e descreve os presets (`presets` passou de uma lista de nomes para uma lista de objetos, com o nome em `id`); o `oxy_scene` devolve até 100 objetos por vez, contando os filhos; e o `oxy_project` lista as ações de entrada como `[{id, name, key, used_by}]`, em vez de um mapa de ID para tecla.
 
@@ -157,6 +158,11 @@ Sem opções, o catálogo traz também:
 - Os outros valores simples são recusados com uma mensagem em português que diz o parâmetro e a forma esperada, como `O parâmetro target do nó action.damage precisa de um valor marcado com o tipo, como {"Object":"abc"}; recebeu "abc"`. Um texto nunca vira objeto ou superfície sozinho, e um tipo com a inicial minúscula (`{"number": 3}`) também é recusado, com o aviso de que o nome do tipo começa com maiúscula.
 - Os atributos não têm tipo no catálogo: o `set_attribute` só aceita valores com o tipo, e um valor simples é recusado da mesma forma (`O atributo vida precisa de um valor marcado com o tipo, como {"Number":3}; recebeu 3`).
 - Antes, todos esses casos davam o erro do leitor de JSON, em inglês, sem dizer o parâmetro.
+
+**Jogo exportado.** `set_game_settings {title?, window?, fullscreen?}` diz como o jogo exportado abre; o que não vier fica como está. É um comando do projeto, sem `scene`, e o editor o desfaz como os outros.
+- `title` é o nome do jogo: o título da janela e o nome da pasta e do executável exportados (sem os caracteres que o Windows não aceita em nomes de arquivo). Tem até 80 caracteres, numa linha só; vazio, vale o nome do projeto, e renomear o projeto renomeia o jogo.
+- `window` é `[largura, altura]` da área do jogo, de 320×240 a 7680×4320, na escala 100% do Windows (`[1280, 720]` por padrão). `fullscreen` (falso por padrão) abre o jogo em tela cheia; no jogo, Alt+Enter alterna entre a janela e a tela cheia.
+- O progresso salvo não depende do título: fica na pasta do jogo pelo ID do projeto (veja **Progresso salvo**).
 
 **Ações de entrada.**
 - `create_input_action {name, key}` cria uma ação. O ID dela é o que os nós e o `oxy_simulate` usam (`"$N"` no mesmo lote).
@@ -204,7 +210,7 @@ Sem opções, o catálogo traz também:
 - `action.volume` (**Volume do canal**) muda o volume de `channel`: `master` (geral, o padrão), `music` ou `effects`, de 0 a 1, pelo parâmetro ou pela entrada `volume`. Cada som é ouvido no volume geral vezes o do canal vezes o dele. Os volumes valem até o fim da partida, também depois de mudar de cena, e cada partida começa com todos em 1. Para o jogo lembrar a escolha, guarde-a numa variável salva entre partidas e aplique-a com `action.volume` ao começar. `audio.read` (**Ler volumes**) fornece `master`, `music` e `effects`.
 - A pausa do jogo congela os efeitos, e a música continua; a pausa da engine congela tudo, e **Parar** silencia o teste.
 
-Os comandos de ações de entrada, de superfícies e de variáveis valem para o projeto todo e, como os de cena, não recebem `scene`.
+Os comandos de ações de entrada, de superfícies, de variáveis e o `set_game_settings` valem para o projeto todo e, como os de cena, não recebem `scene`.
 
 **Colisores.**
 - O `add_component` dá ao colisor de caixa (`collider3d`, `sensor3d`, `collider2d`, `sensor2d`) as dimensões da forma naquele momento. Depois, a caixa acompanha a escala do objeto, mas não as mudanças de dimensões: um `update_entity` em `dimensions` depois do `add_component` deixa a caixa com o tamanho antigo, e o jogador atravessa a parte nova. O lote avisa quando isso acontece, com o tamanho da forma e o da caixa. O aviso vale também para uma caixa que o `fit_collider` ajustou à forma do objeto, com ou sem `margin`; numa forma plana (um `Plane`, um `Rectangle`), a espessura da caixa não conta.
@@ -260,6 +266,7 @@ Os comandos de ações de entrada, de superfícies e de variáveis valem para o 
 - `save_model` recusa o nome de outro modelo; `fit_collider` é novo e, com `shape`, faz esferas, cápsulas e o convexo ou a malha da peça.
 - Os nós sem `position` ganham lugar organizado no fim do lote, em vez de uma fileira só, e há o `arrange_logic`.
 - `"$N@<ID>"` e `"$N.M@<ID>"` chegam às cópias no mesmo lote; um texto assim passou a ser marcador (para o texto em si, `"$$N@<ID>"`).
+- Há o `set_game_settings`, que diz como o jogo exportado abre (título, janela e tela cheia), e o `oxy_project` traz isso em `game`.
 - Há variáveis do jogo (`create_variable`, `update_variable` e `delete_variable`), os nós `variable.get` e `variable.set` e os de progresso salvo, `save.write`, `save.clear` e `save.state`.
 - O `action.scene` ganhou a entrada `scene` e há os nós `scene.current`, na categoria nova **Jogo**, e `value.scene` (**Referência de cena**), em **Dados**. Não há migração: a entrada não é salva no nó, só a conexão. O aviso de nós copiados que ainda abrem ou nomeiam a cena de onde vieram deixa de fora os que têm essa entrada ligada e sugere ligá-la, e esses nós também não impedem o `delete_scene`.
 - Há a pausa do jogo e o sair: os nós `game.pause`, `game.read` e `game.quit`, em **Jogo**, e o evento `event.pause`, em **Eventos** (veja **Pausa do jogo e sair**). O `time.read` e as esperas passaram a contar o tempo do jogo, que para na pausa do jogo; sem pausa, ele é igual ao de antes.

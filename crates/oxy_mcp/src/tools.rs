@@ -223,9 +223,11 @@ pub fn definitions() -> Json {
              fires together), physics surfaces [{id, name, friction, traction, \
              speed_multiplier, conveyor, conveyor_space, used_by}], game variables [{id, name, \
              type: Number|Text|Bool|Vector2|Vector3, value (the initial one, tagged), \
-             persistent, used_by}] and collision groups [{bit, \
+             persistent, used_by}], collision groups [{bit, \
              name}] (bit: the bit of collider category and mask; the groups not listed are \
-             named Grupo N, N being bit + 1). used_by lists up to 10 objects {entity, name, \
+             named Grupo N, N being bit + 1) and how the exported game opens, game {title (its \
+             own, else the project's name), window: [width, height], fullscreen} \
+             (set_game_settings changes it). used_by lists up to 10 objects {entity, name, \
              role, model?}, role being a component (controller2d, character, camera_control, \
              collider3d), a node operation, attribute <name>, or for assets material, ui (an \
              interface element's image) or model (a model's placements, one per placed root); \
@@ -599,6 +601,11 @@ text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 de bônus\"
 Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
+- set_game_settings {title?, window?: [width, height], fullscreen?: bool}: how the exported \
+game opens (oxy_project game); fields left out stay. title (up to 80 characters, one line) names \
+its window, folder and executable; empty, the project's name. window is the window's inside at \
+100% Windows scale, 320x240 to 7680x4320 (default [1280, 720]); fullscreen opens it in full \
+screen (default false). In the game Alt+Enter switches between window and full screen
 - create_entity {kind, name?, parent?, position?: [x,y,z]} where kind is {type: group} | \
 {type: shape, shape: Cube|Sphere|Cylinder|Plane|Pyramid|Cone|Tube (3D) or Rectangle|Circle|Sprite \
 (2D)} | {type: camera} | {type: ui, element: Text|Image|Button|Bar} | {type: preset, preset: \
@@ -824,9 +831,10 @@ const PLAY_ACTIONS: [&str; 5] = ["start", "stop", "pause", "resume", "input"];
 
 /// Project-level commands: they take no `scene`, so the tool's default scene is not added
 /// (commands refuse unknown fields).
-const PROJECT_OPS: [&str; 16] = [
+const PROJECT_OPS: [&str; 17] = [
     "rename_project",
     "set_start_scene",
+    "set_game_settings",
     "create_scene",
     "rename_scene",
     "duplicate_scene",
@@ -2135,6 +2143,8 @@ mod tests {
         let project_commands = [
             json!({"op": "rename_project", "name": "P"}),
             json!({"op": "set_start_scene", "scene": "s"}),
+            json!({"op": "set_game_settings", "title": "Corrida", "window": [1920, 1080],
+                   "fullscreen": true}),
             json!({"op": "create_scene", "name": "S", "kind": "3d"}),
             json!({"op": "rename_scene", "scene": "s", "name": "S"}),
             json!({"op": "duplicate_scene", "scene": "s"}),
@@ -2186,6 +2196,8 @@ mod tests {
             "delete_surface",
             "create_variable",
             "delete_variable",
+            "set_game_settings",
+            "Alt+Enter",
             "warnings",
             "\"$N.M\"",
             "input_keys",
@@ -3375,6 +3387,10 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(project.contains("path (images and sounds") && project.contains("material, ui"));
+        assert!(
+            project.contains("game {title") && project.contains("set_game_settings"),
+            "{project}"
+        );
     }
 
     #[test]

@@ -657,8 +657,78 @@ pub struct Project {
     pub surfaces: Vec<crate::surface::SurfaceMaterial>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<crate::variables::GameVariable>,
+    #[serde(default, skip_serializing_if = "GameSettings::is_default")]
+    pub game: GameSettings,
+}
+/// How the exported game opens: its name and its window. Left out of the document while every
+/// value is the default.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameSettings {
+    /// The window's title and the name of the exported game; empty for the project's name.
+    #[serde(default)]
+    pub title: String,
+    /// Width and height of the window's inside, in pixels at the system's 100% scale.
+    #[serde(default = "GameSettings::default_window")]
+    pub window: [u32; 2],
+    #[serde(default)]
+    pub fullscreen: bool,
+}
+impl Default for GameSettings {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            window: Self::DEFAULT_WINDOW,
+            fullscreen: false,
+        }
+    }
+}
+impl GameSettings {
+    pub const DEFAULT_WINDOW: [u32; 2] = [1280, 720];
+    pub const MIN_WINDOW: [u32; 2] = [320, 240];
+    pub const MAX_WINDOW: [u32; 2] = [7680, 4320];
+    pub const MAX_TITLE_CHARS: usize = 80;
+    fn default_window() -> [u32; 2] {
+        Self::DEFAULT_WINDOW
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.title.chars().count() > Self::MAX_TITLE_CHARS {
+            return Err(format!(
+                "O título do jogo tem mais de {} caracteres",
+                Self::MAX_TITLE_CHARS
+            ));
+        }
+        if self.title.chars().any(char::is_control) {
+            return Err(
+                "O título do jogo não pode ter quebras de linha nem caracteres de controle".into(),
+            );
+        }
+        let [width, height] = self.window;
+        let [min_width, min_height] = Self::MIN_WINDOW;
+        let [max_width, max_height] = Self::MAX_WINDOW;
+        if !(min_width..=max_width).contains(&width) || !(min_height..=max_height).contains(&height)
+        {
+            return Err(format!(
+                "A janela do jogo deve ter de {min_width}×{min_height} a {max_width}×{max_height} \
+                 pixels; recebeu {width}×{height}"
+            ));
+        }
+        Ok(())
+    }
 }
 impl Project {
+    /// The exported game's name: its title, or the project's name when it has none.
+    pub fn game_title(&self) -> &str {
+        let title = self.game.title.trim();
+        if title.is_empty() {
+            self.name.trim()
+        } else {
+            title
+        }
+    }
     pub fn collision_group_label(&self, bit: u8) -> String {
         self.collision_groups
             .get(&bit)
@@ -683,6 +753,7 @@ impl Project {
             collision_groups: BTreeMap::new(),
             surfaces: Vec::new(),
             variables: Vec::new(),
+            game: GameSettings::default(),
             input_bindings: BTreeMap::from([
                 ("mover_esquerda".into(), "A".into()),
                 ("mover_direita".into(), "D".into()),
@@ -852,6 +923,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
     if project.id.is_empty() || project.name.trim().is_empty() {
         return Err("Projeto deve possuir identificador e nome".into());
     }
+    project.game.validate()?;
     if project.input_bindings.len() > 1024 || project.input_labels.len() > 1024 {
         return Err("Limite de 1024 ações de entrada excedido.".into());
     }
@@ -1216,6 +1288,61 @@ mod tests {
                 .collect();
         });
         assert!(error.contains("256"), "{error}");
+    }
+    #[test]
+    fn game_settings_are_optional_and_limited() {
+        let mut p = Project::new("Corrida");
+        // Without settings the document is as before, and an older one loads.
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("game").is_none(), "{json}");
+        assert_eq!(p.game_title(), "Corrida");
+        p.game.title = "  Corrida Noturna ".into();
+        p.game.fullscreen = true;
+        assert_eq!(p.game_title(), "Corrida Noturna");
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["game"]["window"], serde_json::json!([1280, 720]));
+        assert_eq!(serde_json::from_value::<Project>(json.clone()).unwrap(), p);
+        // Fields may be left out; unknown ones may not.
+        let mut short = json.clone();
+        short["game"] = serde_json::json!({"fullscreen": true});
+        let loaded: Project = serde_json::from_value(short).unwrap();
+        assert_eq!(loaded.game.window, GameSettings::DEFAULT_WINDOW);
+        assert!(loaded.game.fullscreen && loaded.game.title.is_empty());
+        let mut unknown = json;
+        unknown["game"]["save_folder"] = "Corrida".into();
+        assert!(serde_json::from_value::<Project>(unknown).is_err());
+
+        let refused = |change: &dyn Fn(&mut GameSettings)| {
+            let mut broken = p.clone();
+            change(&mut broken.game);
+            validate_project(&broken).unwrap_err()
+        };
+        let error = refused(&|g| g.title = "a".repeat(81));
+        assert!(error.contains("80 caracteres"), "{error}");
+        validate_project(&Project {
+            game: GameSettings {
+                title: "é".repeat(80),
+                ..p.game.clone()
+            },
+            ..p.clone()
+        })
+        .unwrap();
+        let error = refused(&|g| g.title = "Linha\nNova".into());
+        assert!(error.contains("quebras de linha"), "{error}");
+        for window in [[319, 240], [320, 239], [7681, 720], [1280, 4321], [0, 0]] {
+            let error = refused(&|g| g.window = window);
+            assert!(
+                error.contains("320×240 a 7680×4320")
+                    && error.contains(&format!("{}×{}", window[0], window[1])),
+                "{error}"
+            );
+        }
+        for window in [GameSettings::MIN_WINDOW, GameSettings::MAX_WINDOW] {
+            let mut edge = p.clone();
+            edge.game.window = window;
+            validate_project(&edge).unwrap();
+        }
     }
     #[test]
     fn cycles_are_rejected_and_world_is_preserved() {

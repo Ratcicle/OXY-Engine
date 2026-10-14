@@ -193,6 +193,77 @@ fn scenes_can_be_created_renamed_started_and_deleted() {
 }
 
 #[test]
+fn game_settings_are_set_by_command_and_listed_in_the_summary() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let summary = query::project_summary(&project);
+    assert_eq!(
+        summary["game"],
+        json!({"title": "Teste", "window": [1280, 720], "fullscreen": false})
+    );
+    let commands = batch(json!([
+        {"op": "set_game_settings", "title": "  Corrida Noturna  ", "window": [1920, 1080]},
+        {"op": "set_game_settings", "fullscreen": true},
+    ]));
+    assert_eq!(commands[0].label(), "Configurar jogo exportado");
+    command::apply(&mut project, &scene, &commands).unwrap();
+    assert_eq!(
+        project.game,
+        GameSettings {
+            title: "Corrida Noturna".into(),
+            window: [1920, 1080],
+            fullscreen: true,
+        }
+    );
+    assert_eq!(
+        query::project_summary(&project)["game"],
+        json!({"title": "Corrida Noturna", "window": [1920, 1080], "fullscreen": true})
+    );
+    // An empty title goes back to the project's name; renaming the project renames the game.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "set_game_settings", "title": " "},
+            {"op": "rename_project", "name": "Corrida"},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(project.game.title, "");
+    assert_eq!(query::project_summary(&project)["game"]["title"], "Corrida");
+    // Limits are refused and the batch changes nothing.
+    for (command, expected) in [
+        (
+            json!({"op": "set_game_settings", "window": [100, 100]}),
+            "de 320×240 a 7680×4320 pixels; recebeu 100×100",
+        ),
+        (
+            json!({"op": "set_game_settings", "title": "x".repeat(81)}),
+            "mais de 80 caracteres",
+        ),
+        (
+            json!({"op": "set_game_settings", "title": "Duas\nlinhas"}),
+            "quebras de linha",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(
+            &mut project,
+            &scene,
+            &batch(json!([{"op": "set_game_settings", "fullscreen": false}, command])),
+        )
+        .unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(error.index, 1);
+        assert_eq!(project, before);
+    }
+    // It takes no scene, like the other project commands.
+    assert!(
+        command::parse(&json!({"op": "set_game_settings", "title": "A", "scene": scene})).is_err()
+    );
+    assert!(command::parse(&json!({"op": "set_game_settings", "icon": "x"})).is_err());
+}
+
+#[test]
 fn queries_describe_the_project_for_agents() {
     let (mut project, scene) = project(SceneKind::ThreeD);
     let commands = batch(json!([
