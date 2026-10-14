@@ -47,6 +47,7 @@ pub enum JumpMode {
 #[serde(rename_all = "snake_case")]
 pub enum MovementProfile {
     Direct,
+    /// Shown as Ágil com embalo; projects and commands keep the ID `parkour`.
     Parkour,
     #[serde(rename = "chained")]
     ChainedJumps,
@@ -63,7 +64,7 @@ impl MovementProfile {
     pub fn label(self) -> &'static str {
         match self {
             Self::Direct => "Direto",
-            Self::Parkour => "Parkour",
+            Self::Parkour => "Ágil com embalo",
             Self::ChainedJumps => "Saltos encadeados",
         }
     }

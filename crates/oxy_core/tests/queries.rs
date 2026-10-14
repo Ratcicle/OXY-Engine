@@ -9,6 +9,7 @@ use oxy_core::{
     query::{self, Detail, EntityQuery, Page, TreeField, TreeQuery},
 };
 use serde_json::{Value as Json, json};
+use std::collections::HashSet;
 
 fn project(kind: SceneKind) -> (Project, Id) {
     let project = editing::blank_project("Consultas", kind).unwrap();
@@ -780,6 +781,25 @@ fn the_catalog_is_brief_by_default_and_full_for_the_nodes_asked_for() {
         brief.to_string().len() * 2 < query::catalog().to_string().len(),
         "brief is far shorter"
     );
+    // When data is read, which the descriptions of single nodes cannot say.
+    let format = brief["value_format"].as_str().unwrap();
+    assert!(
+        format.contains("evaluated when the node that consumes them runs")
+            && format.contains("fresh attribute.get")
+            && format.contains("once per execution"),
+        "{format}"
+    );
+    // The camera family, read brief, tells its nodes apart and gives their units.
+    let cameras = query::catalog_query(&json!({"operations": ["camera."], "brief": true})).unwrap();
+    let described: HashSet<&str> = cameras["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["description"].as_str().unwrap())
+        .collect();
+    assert_eq!(described.len(), cameras["total"].as_u64().unwrap() as usize);
+    let read = cameras["nodes"][0]["description"].as_str().unwrap();
+    assert!(read.contains("graus") && read.contains("−Z"), "{read}");
 
     let actions = query::catalog_query(&json!({"category": "ações"})).unwrap();
     let action_nodes = actions["nodes"].as_array().unwrap();

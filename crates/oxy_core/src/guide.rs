@@ -2,6 +2,8 @@
 use crate::{document::Project, graph::OperationDef};
 pub const FIRST_BEHAVIOR: &str = "1. Crie um objeto; ele será o responsável pelo comportamento. Selecione-o e abra Lógica.\n2. Em Ações de entrada, crie Mostrar mensagem e escolha K.\n3. Adicione Ação de entrada. Escolha Mostrar mensagem e Pressionar.\n4. Adicione Mensagem de diagnóstico e escreva Minha primeira ação funciona!\n5. Conecte a saída de execução do evento à entrada de execução da mensagem.\n6. Use Jogar e pressione K. Abra Console manualmente para ler o resultado. Parar descarta o teste.\nA receita abaixo contém exatamente esses objetos e conexões, editáveis como qualquer projeto.";
 pub const FOUNDATIONS: &str = "Execução (conexões brancas) decide quando uma ação acontece. Dados carregam números, textos, booleanos e referências; os tipos devem ser compatíveis. Ler um atributo consulta o valor atual, inclusive depois de outra ação o alterar.\nParâmetros são valores padrão. Uma porta de dados conectada fornece o valor usado no lugar do parâmetro correspondente.\nPróprio / nenhum como alvo usa o objeto responsável pelo grafo. A saída Objeto de um evento pode fornecer outro objeto: numa área, é quem entrou. Conecte essa referência explicitamente quando quiser agir sobre ele.\nAtributos são os mesmos do painel. Criar Vida não cria regras de morte. O controlador pronto oferece movimento e gravidade sem exigir montar todos os cálculos por nós.\nSequência dispara seus ramos em ordem, mas não aguarda terminar um ramo antes do seguinte. Esperar adia somente a continuação daquele ramo. Não há junção automática.\nO runtime limita o trabalho e cancela tarefas ao remover seu responsável, parar o teste ou mudar de cena. Ciclos de execução sem suporte são recusados. O Console mostra objeto/nó e a trilha recente; uma recusa comum não abre o painel automaticamente.\nLua, nós personalizados, junções de ramos e scripts avançados não estão disponíveis nesta versão.";
+/// The purpose of an operation no help covers yet; the registry contract test refuses it.
+pub const UNDOCUMENTED: &str = "Operação ainda sem documentação pedagógica.";
 pub struct Topic {
     pub operation: &'static OperationDef,
     pub purpose: &'static str,
@@ -144,7 +146,7 @@ pub fn topics() -> &'static [Topic] {
             "control.sequence"=>("Dispara as saídas 1, 2 e 3 nessa ordem.","Inicie som e animação a partir do mesmo evento.","Não aguarda que um ramo termine. Para esperar antes da próxima ação, conecte-as em um mesmo ramo através de Esperar."),
             "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é o do jogo: a pausa da engine e a pausa do jogo suspendem a espera, e uma espera iniciada durante a pausa do jogo só termina depois de retomar. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
             "debug.message"=>("Registra uma mensagem no Console durante o teste.","Ligue à ação K para verificar seu primeiro fluxo.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução."),
-            _=>crate::graph::game_help(operation.id).or_else(||crate::graph::audio_help(operation.id)).or_else(||crate::graph::math_help(operation.id)).or_else(||crate::graph::movement_help(operation.id)).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
+            _=>crate::graph::game_help(operation.id).or_else(||crate::graph::audio_help(operation.id)).or_else(||crate::graph::math_help(operation.id)).or_else(||crate::graph::movement_help(operation.id)).unwrap_or((UNDOCUMENTED,"Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
         };Topic {operation,purpose,example,caution}
     }).collect())
 }
@@ -157,7 +159,7 @@ mod tests {
     #[test]
     fn every_registered_operation_has_help_and_first_recipe_runs_as_data() {
         assert_eq!(topics().len(), crate::graph::registry().len());
-        assert!(topics().iter().all(|t| !t.purpose.contains("ainda sem")));
+        assert!(topics().iter().all(|t| t.purpose != UNDOCUMENTED));
         let project = first_recipe().unwrap();
         let before = project.clone();
         let action = project.input_bindings.keys().next().unwrap().clone();

@@ -622,7 +622,7 @@ fn lab() -> Project {
     );
     p.scenes[0].entities.push(hud(
         "Ajuda de perfis",
-        "1 Direto · 2 Parkour · 3 Encadeados · T/Y pulo automático/manual · I impulso",
+        "1 Direto · 2 Ágil com embalo · 3 Encadeados · T/Y pulo automático/manual · I impulso",
         168.,
         None,
     ));

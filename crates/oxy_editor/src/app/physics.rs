@@ -634,8 +634,8 @@ impl Editor {
                 };
                 sub_section(ui, "character_basic", "Básico", |ui| {
                     ui.menu_button("Aplicar perfil de movimento", |ui| {
-                    for (profile, label) in [(MovementProfile::Direct, "Direto"), (MovementProfile::Parkour, "Parkour"), (MovementProfile::ChainedJumps, "Saltos encadeados")] {
-                        if ui.button(label).on_hover_text("Aplica valores iniciais editáveis. Preserva ações, vínculos e geometria; pode ser desfeito.").clicked() {
+                    for profile in MovementProfile::ALL {
+                        if ui.button(profile.label()).on_hover_text("Aplica valores iniciais editáveis. Preserva ações, vínculos e geometria; pode ser desfeito.").clicked() {
                             config.apply_profile(profile);
                             ui.close();
                         }

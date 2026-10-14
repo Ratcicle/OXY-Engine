@@ -84,22 +84,22 @@ pub(super) fn definitions() -> Vec<OperationDef> {
 pub fn audio_help(id: &str) -> Option<(&'static str, &'static str, &'static str)> {
     Some(match id {
         "action.sound_loop" => (
-            "Toca um WAV em loop. Na Música, o mesmo áudio continua tocando ao trocar ou reiniciar a cena; outro áudio entra com transição. Nos Efeitos, o loop acaba com a cena.",
+            "Toca um WAV em loop, no Volume de 0 a 1, entrando pela Transição, em segundos. Na Música, o mesmo áudio continua tocando ao trocar ou reiniciar a cena; outro áudio entra com transição. Nos Efeitos, o loop acaba com a cena.",
             "Ao iniciar a cena, toque a trilha dela na Música com Transição de 1 segundo: ao reiniciar a cena, a trilha segue de onde estava; numa cena com outra trilha, a nova entra enquanto a anterior sai.",
             "A Música toca um áudio por vez; os Efeitos, até 32 loops, um por áudio: pedir um loop que já toca só muda o volume dele, e o 33º interrompe o comportamento com erro. Transição é a entrada suave em segundos (0 = de uma vez), de 0 a 60; na Música, é também a saída do áudio anterior. A pausa do jogo congela os efeitos e deixa a música tocando; a pausa da engine congela tudo. Parar o teste silencia tudo.",
         ),
         "action.sound_stop" => (
-            "Para os loops de um áudio, ou todos os do canal, com transição opcional.",
+            "Para os loops de um áudio, ou todos os do canal, saindo pela Transição, em segundos (0 = de uma vez).",
             "Ao vencer, pare a Música com Transição de 2 segundos antes de mostrar o placar.",
             "Áudio vazio (Todos os sons do canal) para todos os loops do canal escolhido; o canal Todos vale para a Música e os Efeitos. Parar um som que não toca não faz nada. Sons tocados uma vez, por Reproduzir WAV, não param: eles acabam sozinhos.",
         ),
         "action.volume" => (
-            "Ajusta o volume geral, da música ou dos efeitos durante a partida.",
+            "Ajusta o volume geral, da música ou dos efeitos durante a partida, de 0 a 1.",
             "Num menu de opções, ao clicar no botão + da música, some 0,1 ao valor de Ler volumes · Música, limite entre 0 e 1 e ligue ao Volume; guarde o mesmo valor numa variável salva entre partidas.",
             "Cada som é ouvido no volume geral vezes o do canal vezes o do próprio som; valores fora de 0 a 1 ficam no limite mais próximo. Os volumes valem para toda a partida, também depois de mudar ou reiniciar a cena, e cada partida começa com todos em 1. Para lembrar a escolha, guarde-a numa variável salva entre partidas e aplique-a com este nó ao iniciar o jogo.",
         ),
         "audio.read" => (
-            "Fornece os volumes atuais, para barras de um menu de opções.",
+            "Fornece os volumes atuais (geral, da música e dos efeitos), de 0 a 1, para barras de um menu de opções.",
             "Ao abrir o menu de opções, grave Música num atributo ligado a uma barra da interface: a barra mostra o volume escolhido.",
             "Os valores vão de 0 a 1 e começam em 1 a cada partida; mudam só por Volume do canal.",
         ),

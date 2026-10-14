@@ -6,7 +6,7 @@ use oxy_core::{
     character::{CharacterConfig, MovementProfile, PROFILE_FIELDS},
     command::{self, Applied, Command},
     document::*,
-    editing,
+    editing, graph,
     headless::{self, SimulationRequest},
     query,
 };
@@ -1099,7 +1099,7 @@ fn movement_profiles_are_applied_by_command_and_described_in_the_catalog() {
             .collect::<Vec<_>>(),
         [
             ("direct", "Direto"),
-            ("parkour", "Parkour"),
+            ("parkour", "Ágil com embalo"),
             ("chained", "Saltos encadeados")
         ]
     );
@@ -1111,11 +1111,33 @@ fn movement_profiles_are_applied_by_command_and_described_in_the_catalog() {
     assert_eq!(profiles[1]["values"]["slide_enabled"], true);
     assert_eq!(profiles[2]["values"]["air_acceleration"], 80.0);
     assert_eq!(profiles[0]["values"]["jump_mode"], "Manual");
-    // The profile names commands, nodes and the catalog use are the same.
+    // The profile names commands, nodes and the catalog use are the same, and so are the labels
+    // the node's choices show.
     for profile in MovementProfile::ALL {
         assert_eq!(MovementProfile::from_id(profile.id()), Some(profile));
         assert_eq!(serde_json::to_value(profile).unwrap(), profile.id());
     }
+    assert_eq!(
+        graph::choices("character.profile", "profile").unwrap(),
+        MovementProfile::ALL.map(|profile| (profile.id(), profile.label()))
+    );
+    // Ágil com embalo was called Parkour: its ID is still `parkour`, in commands as in the
+    // nodes of older projects.
+    apply(
+        &mut project,
+        &scene,
+        json!({"op": "apply_movement_profile", "entity": player, "profile": "parkour"}),
+    );
+    expected.apply_profile(MovementProfile::Parkour);
+    assert_eq!(
+        entity(&project, &scene, &player).character3d.as_ref(),
+        Some(&expected)
+    );
+    graph::check_choices(
+        "character.profile",
+        [(&"profile".to_owned(), &Value::Text("parkour".into()))],
+    )
+    .unwrap();
 
     let presets = catalog["presets"].as_array().unwrap();
     let preset = |id: &str| presets.iter().find(|p| p["id"] == id).unwrap();

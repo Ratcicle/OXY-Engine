@@ -181,8 +181,11 @@ with fixed values lists them in choices [{value, label}]: add_node and set_node_
 any other. ref says what a parameter names: scene, audio, clip, object, attribute, \
 input_action, surface, marker or variable (a game variable; oxy_project lists them) (an ID, or \
 for attribute and marker a name; a scene, an input_action or a variable also by its name, which \
-add_node and set_node_params store as the ID). value_format says how values are written. Read \
-it before building logic.";
+add_node and set_node_params store as the ID). Each node's description is its own: what it \
+does, what its outputs mean and their units (metres, m/s, degrees, seconds). value_format says \
+how values are written and when they are read: data nodes are evaluated when the node \
+consuming them runs, so reading a value after setting it needs a fresh read node, while \
+actions store their outputs once per execution. Read it before building logic.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
@@ -2099,6 +2102,11 @@ mod tests {
         assert!(ENTITY_DESCRIPTION.contains("event.input(Reiniciar).exec"));
         assert!(TREE_FIELDS.contains("world_position") && TREE_FIELDS.contains("pivot"));
         assert!(CATALOG_DESCRIPTION.contains("brief"));
+        assert!(
+            CATALOG_DESCRIPTION.contains("fresh read node")
+                && CATALOG_DESCRIPTION.contains("once per execution")
+                && CATALOG_DESCRIPTION.contains("degrees")
+        );
         assert!(APPLY_DESCRIPTION.contains("graph and geometry full"));
     }
 

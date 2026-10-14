@@ -9,7 +9,7 @@ use oxy_core::{
     guide, input_actions, query, variables,
 };
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Every (operation, parameter) whose parameter names a `kind` of the project.
 fn naming(kind: Reference) -> Vec<(&'static str, &'static str)> {
@@ -95,12 +95,75 @@ fn every_registered_operation_keeps_the_registry_contract() {
             .iter()
             .find(|topic| topic.operation.id == id)
             .unwrap_or_else(|| panic!("{id}: sem tópico no guia"));
-        assert!(
-            !topic.purpose.contains("ainda sem documentação"),
+        assert_ne!(
+            topic.purpose,
+            guide::UNDOCUMENTED,
             "{id}: sem ajuda no guia"
         );
     }
     assert!(graph::definition("operação.inexistente").is_none());
+}
+
+/// The catalog's description is all an agent reads to choose a node, and the guide's purpose
+/// opens its help: each says what that node does, never a text shared with the nodes of its
+/// family, and names the units its ports and parameters carry.
+#[test]
+fn every_node_has_its_own_description_with_its_units() {
+    let unknown = graph::description("operação.inexistente");
+    let mut descriptions = HashMap::new();
+    let mut purposes = HashMap::new();
+    for def in graph::registry() {
+        let id = def.id;
+        let description = graph::description(id);
+        assert!(
+            description != unknown && description != guide::UNDOCUMENTED,
+            "{id}: descrição provisória"
+        );
+        if let Some(other) = descriptions.insert(description, id) {
+            panic!("{id} e {other} têm a mesma descrição: {description}");
+        }
+        let topic = guide::topics()
+            .iter()
+            .find(|topic| topic.operation.id == id)
+            .unwrap();
+        if let Some(other) = purposes.insert(topic.purpose, id) {
+            panic!(
+                "{id} e {other} têm o mesmo propósito no guia: {}",
+                topic.purpose
+            );
+        }
+        // A choice may carry the unit too: the rotation of Mover / girar / escalar objeto.
+        let labels = def
+            .inputs
+            .iter()
+            .chain(&def.outputs)
+            .map(|port| port.label)
+            .chain(def.params.iter().map(|param| param.label))
+            .chain(def.params.iter().flat_map(|param| {
+                graph::choices(id, param.id)
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, label)| *label)
+            }));
+        for label in labels {
+            for (unit, word) in [
+                ("(°)", "graus"),
+                ("(°/s)", "graus por segundo"),
+                ("(m/s)", "m/s"),
+                ("(m/s;", "m/s"),
+                ("(m/s²)", "m/s²"),
+                ("(m)", "metros"),
+                ("(m;", "metros"),
+                ("(s)", "segundos"),
+                ("(ms)", "milissegundos"),
+            ] {
+                assert!(
+                    !label.contains(unit) || description.contains(word),
+                    "{id}: a descrição não diz a unidade de {label} ({word})"
+                );
+            }
+        }
+    }
 }
 
 #[test]

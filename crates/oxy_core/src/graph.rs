@@ -243,9 +243,11 @@ pub fn description(operation: &str) -> &'static str {
         }
         "action.animation" => "Reproduz uma animação do objeto escolhido.",
         "action.sound" => {
-            "Toca um áudio WAV do projeto uma vez, no canal de efeitos, no volume configurado."
+            "Toca um áudio WAV do projeto uma vez, no canal de efeitos, no volume configurado, de 0 a 1."
         }
-        "action.spawn" => "Cria uma cópia da hierarquia do objeto durante o jogo.",
+        "action.spawn" => {
+            "Cria uma cópia da hierarquia do objeto durante o jogo, deslocada de X, Y e Z (metros no 3D) em relação ao original, e fornece a cópia em Objeto criado."
+        }
         "action.remove" => "Remove o objeto e seus descendentes durante o jogo.",
         "action.component" => {
             "Ativa ou desativa o componente escolhido do objeto: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel."
@@ -254,7 +256,9 @@ pub fn description(operation: &str) -> &'static str {
             "Encerra a cena atual e abre a cena de destino, ou a que a entrada Cena receber: ligada a Cena atual, reinicia a cena."
         }
         "control.sequence" => "Executa as saídas 1, 2 e 3 nessa ordem.",
-        "control.wait" => "Continua após o tempo indicado, sem interromper o jogo ou o editor.",
+        "control.wait" => {
+            "Continua após os segundos indicados, em tempo de jogo, sem interromper o jogo ou o editor."
+        }
         "debug.message" => "Exibe uma mensagem no diagnóstico durante a execução.",
         // The guide documents every registered operation, movement nodes included.
         _ => crate::guide::topics()
