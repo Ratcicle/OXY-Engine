@@ -80,6 +80,10 @@ impl Editor {
                 self.save_requested = true;
                 ui.close();
             }
+            if ui.button("Exportar jogo…").clicked() {
+                ui.close();
+                self.open_export();
+            }
             ui.separator();
             if ui.button("Importar PNG…").clicked() {
                 self.import(AssetKind::Texture);

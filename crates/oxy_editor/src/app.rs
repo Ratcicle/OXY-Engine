@@ -4,6 +4,7 @@ mod body_tools;
 mod camera_tools;
 mod console_feed;
 mod diagnostics;
+mod export;
 mod hierarchy;
 pub(crate) use hierarchy::entity_icon;
 mod home;
@@ -280,6 +281,8 @@ pub struct Editor {
     body_tools: body_tools::BodyTools,
     new_project: Option<scenes::NewProject>,
     scene_dialog: Option<scenes::SceneDialog>,
+    /// Exportar jogo and an agent's export.
+    export: export::ExportUi,
     logic_ui: logic::LogicUi,
     modeling: modeling::ModelState,
     physics_ui: physics::PhysicsUi,
@@ -412,6 +415,7 @@ impl Editor {
             body_tools: Default::default(),
             new_project: None,
             scene_dialog: None,
+            export: Default::default(),
             logic_ui: Default::default(),
             modeling: Default::default(),
             physics_ui: Default::default(),
@@ -700,7 +704,10 @@ impl Editor {
         }
     }
     fn transition(&mut self, transition: Transition) {
-        if self.dirty() || !self.studio.animation.drafts.is_empty() {
+        if self.export.running() {
+            // The export finishes, and answers, in the project that started it.
+            self.warn("Espere a exportação do jogo terminar para trocar de projeto.");
+        } else if self.dirty() || !self.studio.animation.drafts.is_empty() {
             self.pending = Some(transition)
         } else {
             self.apply_transition(transition)
@@ -1388,6 +1395,15 @@ impl eframe::App for Editor {
             ctx.set_zoom_factor(self.scale);
         }
         self.agent_frame(ctx);
+        let mut close_requested =
+            ctx.input(|i| i.viewport().close_requested()) && !self.allow_close;
+        if close_requested && self.export.running() {
+            // The game's folder is put in place at the end; closing now would leave the work
+            // folder behind.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.warn("Espere a exportação do jogo terminar para fechar o editor.");
+            close_requested = false;
+        }
         if self.home.visible {
             self.stop_navigation(ctx);
             self.home_ui(ctx);
@@ -1413,7 +1429,7 @@ impl eframe::App for Editor {
             self.history
                 .begin("Editar projeto", &self.state.project, &self.state.images);
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+        if close_requested {
             if self.dirty() || !self.studio.animation.drafts.is_empty() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending = Some(Transition::Close);
@@ -1455,6 +1471,7 @@ impl eframe::App for Editor {
             || self.pending_preferences.is_some()
             || self.new_project.is_some()
             || self.scene_dialog.is_some()
+            || self.export.is_open()
             || self.pending.is_some()
             || self.logic_ui.inputs
             || self.logic_ui.variables_open()
@@ -1608,6 +1625,7 @@ impl eframe::App for Editor {
         self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);
         self.project_dialogs(ctx);
+        self.export_dialog(ctx);
         self.preferences_ui(ctx);
         self.logic_dialogs(ctx);
         self.mesh_help(ctx);

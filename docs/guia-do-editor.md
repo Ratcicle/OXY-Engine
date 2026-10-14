@@ -12,7 +12,7 @@ A tela inicial tem **Novo projeto** e **Abrir projeto** em destaque e, em **Exem
 
 ## A tela do editor
 
-- **Barra superior:** à esquerda, o menu **Projeto** (novo, abrir, salvar, importar, tela inicial), Desfazer/Refazer e o estado de salvamento. No centro, os modos **Cena · Estúdio · Lógica**. À direita, **Jogar** e a Ajuda.
+- **Barra superior:** à esquerda, o menu **Projeto** (novo, abrir, salvar, exportar jogo, importar, tela inicial), Desfazer/Refazer e o estado de salvamento. No centro, os modos **Cena · Estúdio · Lógica**. À direita, **Jogar** e a Ajuda.
 - **Hierarquia (esquerda):** seletor de cena com **+** (criar) e **⋯** (renomear, duplicar, excluir, cena inicial), busca por nome e a árvore de objetos com ícone por tipo.
 - **Propriedades (direita):** cabeçalho do objeto (nome, tipo e visibilidade) e blocos recolhíveis para Transformação, Forma e material, cada componente e Atributos. Sem seleção, mostra o projeto: nome, arquivo, cena inicial do jogo e conteúdo. Com vários objetos, mostra os nomes, a visibilidade de todos e o bloco **Transformar o conjunto** (centro, giro e escala em torno do centro).
 - **Painel inferior:** abas **Biblioteca**, **Console** e **Avisos**; clicar na aba aberta recolhe o painel.
@@ -74,6 +74,19 @@ Há duas pausas, que podem valer juntas. A **pausa do teste** (no jogo exportado
 - A perda de foco sempre pausa o teste e, no jogo exportado, abre a janela **Jogo pausado**, mesmo por cima do menu do jogo. **Retomar** volta ao estado em que o jogo estava, inclusive pausado por ele mesmo. A exceção é o teste que um agente de IA joga (veja **Agentes de IA**), que continua com o editor em segundo plano.
 - **Sair do jogo** fecha a janela do jogo exportado; no teste, encerra o teste como **Parar** e escreve uma linha no Console.
 - Com o mouse livre, um clique num botão da interface do jogo é só do botão: não aciona também uma ação de entrada ligada ao botão do mouse, nem quando retoma o jogo. No teste, cliques fora da área do jogo também não chegam ao jogo.
+
+## Exportar o jogo
+
+**Projeto → Exportar jogo…** cria uma pasta com o jogo pronto para jogar sem o editor: `<Nome do jogo>.exe` (o player da OXY com o nome do jogo), a pasta `data` com o projeto, as imagens e os sons, as licenças e um `LEIA-ME.txt`. Um teste em andamento é pausado, e um projeto que nunca foi salvo é salvo antes, como no **Importar**.
+
+- **Jogo:** **Nome do jogo** é o título da janela e o nome do executável (vazio, vale o nome do projeto); a dica embaixo mostra o executável, sem os caracteres que o Windows não aceita em nomes de arquivo. **Cena inicial** é a cena em que o jogo abre. **Janela** dá a largura e a altura, em pixels, e **Tela cheia** faz o jogo começar em tela cheia; no jogo, Alt+Enter alterna entre janela e tela cheia. Essas escolhas ficam no projeto quando você clica em **Exportar**, como um passo do histórico, **Configurar exportação**, que Ctrl+Z desfaz.
+- **Destino:** a pasta onde o jogo será criado, digitada ou escolhida em **Escolher…**; o editor lembra a última usada. O jogo vai para `<Destino>\<Nome do jogo>`, e a linha embaixo diz qual pasta será criada ou, quando ali já há uma exportação deste jogo, que ela será substituída. A pasta do jogo não pode ficar na pasta do projeto nem na da OXY Engine, nem na raiz de um disco, e uma pasta que já existe só serve vazia ou com uma exportação anterior deste mesmo jogo.
+- **Conferência:** o que a exportação encontrou antes de começar. Erros em vermelho (um arquivo de imagem ou som que falta, um nome de jogo inválido, o player ausente) desligam **Exportar**; avisos em amarelo, como as alterações não salvas, que entram na exportação sem que o projeto deixe de estar não salvo, não impedem nada. O player (`oxy_player.exe`) precisa estar ao lado do editor: extraia o ZIP da OXY Engine inteiro.
+- **Exportar:** a exportação roda em segundo plano, com o progresso no diálogo (**Copiando arquivos…**, **Conferindo o jogo exportado…**). O jogo é gravado numa pasta de trabalho no destino, aberto e rodado por 2 segundos pelo próprio executável e só então posto no lugar; uma exportação anterior do mesmo jogo só é apagada depois disso. O editor não fecha nem troca de projeto enquanto a exportação roda.
+- **Pronto:** o diálogo mostra a pasta, quantos arquivos e quanto espaço, e a cena que a conferência abriu; o Console ganha a linha **Jogo exportado: …**. **Abrir pasta** abre a pasta no Explorador e **Jogar agora** abre o jogo. Para jogar em outro computador, copie a pasta inteira. O progresso salvo do jogo fica em `%APPDATA%\OXY Engine\Jogos`.
+- **Falhou:** o diálogo diz o motivo e que nada foi alterado no destino. Com o jogo exportado aberto, a exportação anterior fica intacta e o diálogo pede para fechá-lo; **Tentar de novo** exporta outra vez e **Voltar** retorna às escolhas.
+
+O executável tem o ícone genérico do Windows e não tem assinatura digital, então o Windows pode pedir confirmação ao abri-lo; a janela do jogo usa o ícone da OXY. Um agente de IA também pode exportar o jogo, quando você pedir (veja [Agentes de IA (MCP)](agentes-mcp.md#exportar-o-jogo-com-oxy_export)).
 
 ## Controles e ferramentas
 

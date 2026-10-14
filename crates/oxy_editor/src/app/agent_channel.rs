@@ -7,8 +7,9 @@
 //! `{"id": 1, "result": ...}` or `{"id": 1, "error": "..."}`. Requests run on the UI thread
 //! in the next frame, and edits wait while a person is dragging or typing. Besides edits and
 //! reads, an agent can import a PNG or WAV (`import`), read the console (`console`), play a
-//! test of the game (`play`) and save when the person allowed it (`save`), and `status` says
-//! whether the game is being tested, and by whom.
+//! test of the game (`play`), save when the person allowed it (`save`) and export the game
+//! (`export`, answered when the export, on its own thread, is over), and `status` says whether
+//! the game is being tested, and by whom.
 use super::*;
 use oxy_core::{command, query};
 use serde_json::{Value as Json, json};
@@ -26,6 +27,8 @@ use std::{
 
 /// How long a connection waits for the editor to answer one request.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(60);
+/// An export copies the game and runs it before it answers.
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) struct Incoming {
     method: String,
@@ -199,11 +202,16 @@ fn serve(
             params: request.get("params").cloned().unwrap_or(Json::Null),
             reply,
         };
+        let timeout = if incoming.method == "export" {
+            EXPORT_TIMEOUT
+        } else {
+            REPLY_TIMEOUT
+        };
         if sender.send(incoming).is_err() {
             break;
         }
         ctx.request_repaint();
-        let response = match answer.recv_timeout(REPLY_TIMEOUT) {
+        let response = match answer.recv_timeout(timeout) {
             Ok(Ok(result)) => json!({"id": id, "result": result}),
             Ok(Err(error)) => json!({"id": id, "error": error}),
             Err(_) => json!({"id": id, "error": "O editor não respondeu a tempo."}),
@@ -216,12 +224,12 @@ fn serve(
     ctx.request_repaint();
 }
 
-/// Requests that change the project or the editor's state, and therefore wait for a person's
-/// gesture to end.
+/// Requests that change the project or the editor's state, or take the project as it is
+/// (`save`, `export`), and therefore wait for a person's gesture to end.
 fn edits(method: &str) -> bool {
     matches!(
         method,
-        "apply" | "import" | "undo" | "redo" | "select" | "frame" | "play" | "save"
+        "apply" | "import" | "undo" | "redo" | "select" | "frame" | "play" | "save" | "export"
     )
 }
 
@@ -231,6 +239,8 @@ impl Editor {
     pub(crate) fn agent_frame(&mut self, ctx: &egui::Context) {
         // Before anything else this frame, so the lines of the last frame's test are kept.
         self.sync_console_feed();
+        // Answered even after agents are turned off, for the Console line.
+        self.poll_agent_export(ctx);
         if self.preferences.allow_agents != self.agents.is_some() {
             self.agents = if self.preferences.allow_agents {
                 match AgentChannel::start(ctx) {
@@ -269,6 +279,11 @@ impl Editor {
                 break;
             }
             let request = self.agents.as_mut().unwrap().queue.pop_front().unwrap();
+            if request.method == "export" {
+                // It answers when the export is over, while requests go on.
+                self.agent_export(ctx, &request.params, request.reply);
+                continue;
+            }
             let result = self.agent_request(ctx, &request.method, &request.params);
             let _ = request.reply.send(result);
         }

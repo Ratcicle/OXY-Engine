@@ -300,8 +300,9 @@ pub enum ExportError {
         .0.display()
     )]
     Exists(PathBuf),
+    /// The game's folder, an earlier export or an empty folder, could not move aside.
     #[error(
-        "Feche o jogo exportado antes de exportar de novo: a pasta {} está em uso. A exportação anterior foi mantida.",
+        "A pasta {} está em uso por outro programa, como o jogo exportado aberto: feche-o e tente de novo. Nada mudou no destino.",
         .0.display()
     )]
     InUse(PathBuf),
@@ -339,6 +340,51 @@ pub fn export(request: &ExportRequest) -> Result<ExportReport, ExportError> {
     export_with(request, run_player)
 }
 
+/// What an export is doing, for a progress line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportStage {
+    /// Writing the game to the staging folder.
+    Copying,
+    /// Loading and running the written game, then its executable's own check.
+    Verifying,
+}
+
+/// [`export`], telling `stage` when each [`ExportStage`] starts.
+pub fn export_reporting(
+    request: &ExportRequest,
+    stage: impl FnMut(ExportStage),
+) -> Result<ExportReport, ExportError> {
+    export_staged(request, run_player, stage)
+}
+
+/// Where an export would put the game, as [`plan`] finds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    /// The game's folder.
+    pub folder: PathBuf,
+    /// Whether the folder holds an earlier export of the same project, which an export asked
+    /// to replace it takes the place of.
+    pub replaces: bool,
+}
+
+/// Where an export of the project `id` titled `title` (its [`Project::game_title`]) to
+/// `destination` would put the game, by the export's own rules on destinations and without
+/// writing anything: what the editor shows before exporting. `source_root` and `protected` are
+/// those of the [`ExportRequest`], the player's folder among the protected.
+pub fn plan(
+    id: &str,
+    title: &str,
+    destination: &Path,
+    source_root: Option<&Path>,
+    protected: &[PathBuf],
+) -> Result<Plan, ExportError> {
+    let (_, folder, previous) = locate(id, title, destination, source_root, protected, true)?;
+    Ok(Plan {
+        folder,
+        replaces: matches!(previous, Previous::Export),
+    })
+}
+
 /// What is at the game's folder before the export.
 enum Previous {
     Nothing,
@@ -350,6 +396,16 @@ fn export_with(
     request: &ExportRequest,
     run: impl FnOnce(&Path) -> Result<VerifyReport, ExportError>,
 ) -> Result<ExportReport, ExportError> {
+    export_staged(request, run, |_| {})
+}
+
+/// [`export`], with how the copied executable is checked (tests check it in this process) and
+/// the stages told to `stage_reached`.
+fn export_staged(
+    request: &ExportRequest,
+    run: impl FnOnce(&Path) -> Result<VerifyReport, ExportError>,
+    mut stage_reached: impl FnMut(ExportStage),
+) -> Result<ExportReport, ExportError> {
     let project = request.project;
     let unsaved: HashSet<Id> = request.unsaved_png.keys().cloned().collect();
     let checked = check(project, request.source_root, &unsaved);
@@ -359,16 +415,22 @@ fn export_with(
     if !request.player.is_file() {
         return Err(ExportError::PlayerMissing(request.player.to_owned()));
     }
-    let destination = destination(request.destination)?;
-    let name = file_name(project.game_title());
-    let target = destination.join(&name);
     let mut protected = request.protected.to_vec();
     protected.extend(request.player.parent().map(Path::to_owned));
-    guard_target(&target, request.source_root, &protected)?;
-    let previous = previous(&target, project, request.replace)?;
+    let (destination, target, previous) = locate(
+        &project.id,
+        project.game_title(),
+        request.destination,
+        request.source_root,
+        &protected,
+        request.replace,
+    )?;
+    let name = file_name(project.game_title());
     let executable = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    stage_reached(ExportStage::Copying);
     let staging = Staging::create(&destination)?;
     stage(request, &staging.path, &executable)?;
+    stage_reached(ExportStage::Verifying);
     let verified = verify(&staging.path.join("data"), VERIFY_SECONDS);
     if !verified.ok {
         return Err(ExportError::Verify(Box::new(verified)));
@@ -400,6 +462,23 @@ fn export_with(
         warnings,
         verify: verified,
     })
+}
+
+/// The destination as the export uses it, the game's folder in it and what that folder holds,
+/// refusing what the export refuses (see [`destination`], [`guard_target`] and [`previous`]).
+fn locate(
+    id: &str,
+    title: &str,
+    destination: &Path,
+    source_root: Option<&Path>,
+    protected: &[PathBuf],
+    replace: bool,
+) -> Result<(PathBuf, PathBuf, Previous), ExportError> {
+    let destination = self::destination(destination)?;
+    let target = destination.join(file_name(title));
+    guard_target(&target, source_root, protected)?;
+    let previous = previous(&target, id, replace)?;
+    Ok((destination, target, previous))
 }
 
 /// The destination as the export uses it: a full path on a disk of this computer, not a disk's
@@ -490,8 +569,8 @@ fn overlaps(a: &Path, b: &Path) -> bool {
 }
 
 /// What is at the game's folder: nothing, an empty folder or, when `replace` allows it, an
-/// earlier export of `project`. Anything else is refused.
-fn previous(target: &Path, project: &Project, replace: bool) -> Result<Previous, ExportError> {
+/// earlier export of the project `id`. Anything else is refused.
+fn previous(target: &Path, id: &str, replace: bool) -> Result<Previous, ExportError> {
     let meta = match fs::symlink_metadata(target) {
         Ok(meta) => meta,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Previous::Nothing),
@@ -514,7 +593,7 @@ fn previous(target: &Path, project: &Project, replace: bool) -> Result<Previous,
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ExportMarker>(&bytes).ok());
     match marker {
-        Some(marker) if marker.project_id == project.id => {
+        Some(marker) if marker.project_id == id => {
             if replace {
                 Ok(Previous::Export)
             } else {
@@ -1221,9 +1300,8 @@ mod tests {
             let error = export_with(&fixture.request(&destination, true), checked).unwrap_err();
             assert!(matches!(error, ExportError::InUse(_)), "{error}");
             assert!(
-                error
-                    .to_string()
-                    .starts_with("Feche o jogo exportado antes de exportar de novo"),
+                error.to_string().contains("está em uso por outro programa")
+                    && error.to_string().ends_with("Nada mudou no destino."),
                 "{error}"
             );
             drop(lock);
@@ -1234,6 +1312,72 @@ mod tests {
             assert!(exported.game.fullscreen);
             assert_eq!(names(&destination), ["Corrida Noturna"]);
         }
+    }
+
+    #[test]
+    fn the_plan_says_where_the_game_goes_without_writing_anything() {
+        let fixture = Fixture::new("plano");
+        let destination = fixture.base.join("Jogos");
+        let (id, title) = (fixture.project.id.as_str(), fixture.project.game_title());
+        let planned = |id: &str, title: &str, destination: &Path| {
+            plan(id, title, destination, Some(&fixture.folder), &[])
+        };
+        assert_eq!(
+            planned(id, title, &destination).unwrap(),
+            Plan {
+                folder: destination.join("Corrida Noturna"),
+                replaces: false,
+            }
+        );
+        assert!(!destination.exists());
+        // The export's refusals, with its messages.
+        for (destination, expected) in [
+            (PathBuf::from("Jogos"), "caminho completo da pasta"),
+            (PathBuf::from("C:\\"), "raiz de um disco"),
+            (fixture.folder.join("assets"), "pasta do projeto"),
+        ] {
+            let error = planned(id, title, &destination).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        let error = plan(
+            id,
+            title,
+            &destination,
+            Some(&fixture.folder),
+            std::slice::from_ref(&fixture.base),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("pasta da OXY Engine"), "{error}");
+        // An export says when it copies and when it checks; then the plan replaces it.
+        let mut stages = Vec::new();
+        export_staged(&fixture.request(&destination, false), checked, |stage| {
+            stages.push(stage)
+        })
+        .unwrap();
+        assert_eq!(stages, [ExportStage::Copying, ExportStage::Verifying]);
+        assert!(planned(id, title, &destination).unwrap().replaces);
+        // Another title goes to another folder; another project may not replace this one.
+        assert_eq!(
+            planned(id, "Outra Corrida", &destination).unwrap(),
+            Plan {
+                folder: destination.join("Outra Corrida"),
+                replaces: false,
+            }
+        );
+        let error = planned(&new_id(), title, &destination).unwrap_err();
+        assert!(
+            error.to_string().contains("exportação de outro jogo"),
+            "{error}"
+        );
+        // A refused export reaches no stage.
+        let mut stages = Vec::new();
+        let error = export_staged(&fixture.request(&destination, false), checked, |stage| {
+            stages.push(stage)
+        })
+        .unwrap_err();
+        assert!(matches!(error, ExportError::Exists(_)), "{error}");
+        assert!(stages.is_empty());
+        assert_eq!(names(&destination), ["Corrida Noturna"]);
     }
 
     #[test]

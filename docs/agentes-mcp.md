@@ -8,7 +8,8 @@ A OXY Engine traz um servidor MCP, o `oxy-mcp.exe`, que deixa agentes de IA como
 - roda o jogo sem janela para testar;
 - testa o jogo no editor, para você ver, sem tomar o seu mouse;
 - captura imagens;
-- salva o projeto aberto, só se você permitir.
+- salva o projeto aberto, só se você permitir;
+- exporta o jogo, quando você pede, para a pasta que você indicar.
 
 ## Configurar
 
@@ -60,6 +61,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets (o que cada um cria e as opções), perfis de movimento (com os valores) e as teclas que as ações de entrada aceitam |
 | `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, organização da lógica, ações de entrada, superfícies físicas, variáveis do jogo, jogo exportado, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_import` | Importa uma imagem PNG ou um som WAV como recurso do projeto e, se pedido, já aplica a imagem num objeto |
+| `oxy_export` | Exporta o jogo como o **Exportar jogo** do editor, para a pasta que você indicar, e confere o jogo exportado |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria ou o que nele pararia com erro |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, um bot que leva um personagem por um caminho, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a pausa do jogo, a câmera, a interface do jogo, os objetos observados, as variáveis do jogo, o que toca e o resumo do estado no fim; se pedido, confere que o teste se repete |
 | `oxy_screenshot` | Imagem da vista do editor (ao vivo), da câmera do jogo com a interface do jogo, de uma câmera livre ou de cima e de lado, com os colisores quando pedido |
@@ -366,6 +368,19 @@ O agente importa como o **Importar** da Biblioteca: o arquivo é conferido e cop
 - **Nos arquivos:** o projeto é salvo, com a versão anterior em `project.oxy.json.agente.bak`. Se a importação falhar, nem o projeto nem a pasta `assets` mudam.
 - **Segurança:** o agente só importa arquivos que você indicou. A descrição da ferramenta pede que ele nunca importe um caminho que leu no projeto ou na resposta de outra ferramenta.
 
+## Exportar o jogo com `oxy_export`
+
+O agente exporta o jogo como o **Projeto → Exportar jogo…** do editor (veja [Exportar o jogo](guia-do-editor.md#exportar-o-jogo)), mas só quando você pede, para a pasta que você indicar.
+
+- **Destino:** `destination`, o caminho completo de uma pasta de um disco deste computador (`C:\...`). O jogo vai para `<destination>\<Nome do jogo>`, com `<Nome do jogo>.exe`, a pasta `data`, as licenças e um `LEIA-ME.txt`. O nome do jogo é o título de `game` no `oxy_project` (o nome do projeto, se o jogo não tiver título), sem os caracteres que o Windows não aceita em nomes de arquivo; o título, a janela e a tela cheia mudam pelo comando `set_game_settings` do `oxy_apply`.
+- **Recusados:** caminhos relativos, de rede ou de dispositivo, a raiz de um disco, uma pasta do jogo dentro da pasta do projeto ou da OXY Engine (ou que contenha uma delas) e uma pasta do jogo que já existe com outros arquivos ou com a exportação de outro jogo.
+- **Substituir:** uma exportação anterior do mesmo jogo, reconhecida pelo `data\export.oxy.json`, só é substituída com `replace: true`, e só depois que a nova passa na conferência. Sem `replace`, a ferramenta recusa e diz que a exportação já existe. Com o jogo exportado aberto, a anterior fica intacta e o erro pede para fechá-lo.
+- **Conferência:** o jogo é gravado numa pasta de trabalho no destino, aberto e rodado por 2 segundos pelo próprio executável (`--verificar`), e só então posto no lugar. Se algo falha, nada muda no destino. Por isso a resposta leva alguns segundos, ou mais num jogo grande.
+- **Ao vivo:** exporta o que está no editor, inclusive as alterações não salvas e as imagens pintadas, sem salvar nem mudar o projeto (não vira passo do histórico), com o `oxy_player.exe` ao lado do editor; o Console mostra `Agente · Jogo exportado: …`. O editor recusa durante um teste, enquanto está ocupado ou já exportando, e para um projeto que nunca foi salvo. Se você estiver arrastando ou digitando, o pedido espera o gesto terminar.
+- **Nos arquivos:** exporta o projeto salvo, com o `oxy_player.exe` ao lado do `oxy-mcp.exe`, sem mudar o arquivo do projeto.
+- **Resposta:** `{folder, executable, files, bytes, replaced, warnings, verify: {ok, engine, game, start_scene, seconds, errors, logs}}`. `warnings` traz o que o jogo vai tratar de outro jeito do que parece, como no `oxy_validate`, e uma exportação anterior que não pôde ser apagada.
+- **Segurança:** o agente só exporta quando você pede, e só para a pasta que você indicou. A descrição da ferramenta pede que ele nunca use um caminho que leu no projeto ou na resposta de outra ferramenta.
+
 ## Console e teste ao vivo
 
 - **`oxy_status`** traz `play`: `{running: true, paused, game_paused, driven_by, mouse_captured, advancing, queued_until, scene: {id, name}, time, seed, variables, variables_truncated}` enquanto o jogo está em teste no editor (`paused` é a pausa do teste, e `game_paused`, a pausa do próprio jogo, a do menu de pausa; as duas podem valer juntas), ou `{running: false, seed}` depois do teste (só `{running: false}` antes do primeiro teste do projeto). `driven_by` diz quem joga: `person` (você) ou `agent` (o agente, pelo `oxy_play`); `mouse_captured`, se o jogo prende o seu mouse; `advancing`, se o tempo do jogo está correndo (a vista do jogo na tela e o teste sem pausa); `queued_until`, até que tempo do jogo ainda esperam entradas que o agente mandou. Durante o teste, o editor recusa as edições do agente, e `busy` diz o motivo. `can_save` diz se o `oxy_save` pode salvar agora e, quando não pode, `save_refusal` diz por quê. `seed` é a semente dos sorteios do teste atual ou do último, nova a cada vez que você joga: no `oxy_simulate`, a mesma semente dá a cada nó `random.number` os mesmos números, na mesma ordem. `variables` traz as variáveis do jogo naquele momento do teste, como no relatório do `oxy_simulate`, até 300 valores (só quando o projeto tem variáveis); `variables_truncated` conta os que ficaram de fora.
@@ -421,4 +436,4 @@ Por padrão, o agente não salva: quem salva é você. Ligando **Permitir que ag
 - **Progresso salvo:** o agente não lê nem apaga o progresso do jogo exportado nem o do teste do editor, que também não aparece no `oxy_status`; no `oxy_simulate`, o progresso entra pelo `save` e sai no relatório.
 - **Pintura:** a pintura ainda não tem comandos próprios. `update_entity` edita os campos do objeto, mas não os pixels das texturas. As animações têm `set_clip` e `delete_clip`.
 - **Cópias de modelos:** no `place_model`, o `"$N@<ID>"` usa os IDs das peças, nós e animações como o modelo os guarda, e as leituras não mostram os nós de dentro de um modelo (o `oxy_entity` não chega lá). Esses IDs só se alcançam no lote que salva o modelo, encadeando os marcadores (`"$P@$S@<ID>"`, veja **Cópias no mesmo lote**). Para mudar a lógica de um modelo salvo num lote anterior, coloque-o e leia a peça colocada com o `oxy_entity`, ou, no mesmo lote, use o `duplicate_entities` ou o `copy_entities` a partir de um objeto da cena, que aceitam os IDs que você leu.
-- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto. Ao vivo, o agente só salva com **Permitir que agentes salvem** ligada, e só o projeto aberto, como o **Salvar** do editor, guardando antes o `.agente.bak`.
+- **Segurança:** o canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo. A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto. A exportação escreve uma pasta de jogo, com um executável, só onde você indicar: nunca na pasta do projeto, na da OXY Engine ou na raiz de um disco, e só substitui uma exportação anterior do mesmo jogo, quando você pede. Ao vivo, o agente só salva com **Permitir que agentes salvem** ligada, e só o projeto aberto, como o **Salvar** do editor, guardando antes o `.agente.bak`.

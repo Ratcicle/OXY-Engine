@@ -26,8 +26,9 @@ person points you to). When the project is open in the editor your edits appear 
 person can undo them; the person saves there, and you never save unless they enabled it (Permitir \
 que agentes salvem: oxy_status can_save) and ask or agree, then with oxy_save. After changes, \
 check them with oxy_simulate and oxy_screenshot; oxy_play runs a test in the editor for the \
-person to watch, without taking their mouse. When the person tested the game in the editor, \
-oxy_console has what that test logged. Messages from the engine are in Portuguese; answer the \
+person to watch, without taking their mouse. Export the game (oxy_export) only when the person \
+asks, to the folder they name. When the person tested the game in the editor, oxy_console has \
+what that test logged. Messages from the engine are in Portuguese; answer the \
 person in their language.";
 
 fn handle(tools: &mut tools::Tools, request: &Json) -> Option<Json> {
@@ -141,7 +142,7 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(
-            names.contains(&"oxy_apply".to_owned()) && names.len() == 18,
+            names.contains(&"oxy_apply".to_owned()) && names.len() == 19,
             "{names:?}"
         );
         assert!(names.contains(&"oxy_play".to_owned()) && names.contains(&"oxy_save".to_owned()));
@@ -149,6 +150,7 @@ mod tests {
         let instructions = init["result"]["instructions"].as_str().unwrap();
         assert!(instructions.contains("never save unless they enabled it"));
         assert!(instructions.contains("can_save") && instructions.contains("oxy_play"));
+        assert!(instructions.contains("oxy_export) only when the person asks"));
         let call = handle(
             &mut tools,
             &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -291,6 +293,20 @@ mod tests {
             (&save["method"], &save["params"]),
             (&json!("save"), &json!({}))
         );
+        // The editor exports what it has in memory; where the game may go is checked first.
+        let games = std::env::temp_dir().join("Jogos").display().to_string();
+        let export = echo("oxy_export", json!({"destination": games, "replace": true}));
+        assert_eq!(export["method"], "export");
+        assert_eq!(
+            export["params"],
+            json!({"destination": games, "replace": true})
+        );
+        let export = echo("oxy_export", json!({"destination": games}));
+        assert_eq!(export["params"]["replace"], false);
+        let error = tools
+            .call("oxy_export", &json!({"destination": "Jogos"}))
+            .unwrap_err();
+        assert!(error.contains("caminho completo"), "{error}");
         let error = tools
             .call("oxy_entity", &json!({"id": "a", "geometry": "toda"}))
             .unwrap_err();
@@ -313,6 +329,11 @@ mod tests {
             "{methods:?}"
         );
         assert!(methods.contains(&"save".to_owned()), "{methods:?}");
+        assert_eq!(
+            methods.iter().filter(|m| *m == "export").count(),
+            2,
+            "{methods:?}"
+        );
         assert_eq!(
             methods.iter().filter(|m| *m == "entity").count(),
             1,

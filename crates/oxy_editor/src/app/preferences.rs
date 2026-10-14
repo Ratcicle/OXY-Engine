@@ -11,6 +11,8 @@ pub(super) struct Preferences {
     /// Lets connected agents save the project, the person's unsaved changes included. Off by
     /// default, and off whenever `allow_agents` is.
     pub allow_agent_save: bool,
+    /// The folder Exportar jogo last exported to; none until the first export.
+    pub export_folder: Option<PathBuf>,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -21,6 +23,7 @@ impl Default for Preferences {
             navigation_sensitivity: 0.003,
             allow_agents: false,
             allow_agent_save: false,
+            export_folder: None,
         }
     }
 }
@@ -72,6 +75,14 @@ impl Preferences {
                 })
                 .transpose()?
                 .unwrap_or(false),
+            export_folder: json
+                .get("export_folder")
+                .map(|v| {
+                    v.as_str()
+                        .map(PathBuf::from)
+                        .ok_or("Pasta de exportação inválida")
+                })
+                .transpose()?,
         };
         if !(80..=160).contains(&value.scale_percent) {
             return Err("A escala deve ficar entre 80% e 160%.".into());
@@ -102,12 +113,14 @@ impl Preferences {
         Ok(())
     }
     fn save_to(&self, path: &Path) -> Result<(), String> {
-        let bytes =
-            serde_json::to_vec_pretty(&serde_json::json!({"scale_percent":self.scale_percent,
+        let mut json = serde_json::json!({"scale_percent":self.scale_percent,
             "tool_names":self.tool_names,"navigation_speed":self.navigation_speed,
             "navigation_sensitivity":self.navigation_sensitivity,
-            "allow_agents":self.allow_agents,"allow_agent_save":self.allow_agent_save}))
-            .map_err(|e| e.to_string())?;
+            "allow_agents":self.allow_agents,"allow_agent_save":self.allow_agent_save});
+        if let Some(folder) = &self.export_folder {
+            json["export_folder"] = folder.to_string_lossy().into();
+        }
+        let bytes = serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?;
         Ok(persistence::safe_write(path, &bytes)?)
     }
 }
@@ -337,15 +350,28 @@ mod tests {
             "agents stay off unless the person turns them on"
         );
         assert!(!old.allow_agent_save, "and so does their saving");
+        assert_eq!(old.export_folder, None);
         let mut changed = old;
         changed.allow_agents = true;
         changed.allow_agent_save = true;
+        changed.export_folder = Some(PathBuf::from("D:\\Jogos\\Exportados"));
         changed.navigation_speed = 9.6;
         changed.navigation_sensitivity = 0.006;
         let folder = std::env::temp_dir().join(format!("oxy-preferences-{}", new_id()));
         let path = folder.join("interface.json");
         changed.save_to(&path).unwrap();
         let loaded = Preferences::decode(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            loaded.export_folder.as_deref(),
+            Some(Path::new("D:\\Jogos\\Exportados"))
+        );
+        // Before the first export the key stays out of the file.
+        let mut fresh = loaded.clone();
+        fresh.export_folder = None;
+        fresh.save_to(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.get("export_folder").is_none(), "{written}");
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&folder).unwrap();
         assert_eq!(loaded.navigation_speed, 9.6);
@@ -355,6 +381,7 @@ mod tests {
         assert!(loaded.allow_agents);
         assert!(loaded.allow_agent_save);
         assert!(Preferences::decode(br#"{"scale_percent":100,"allow_agent_save":"sim"}"#).is_err());
+        assert!(Preferences::decode(br#"{"scale_percent":100,"export_folder":3}"#).is_err());
         let bounded = Preferences::decode(
             br#"{"scale_percent":100,"navigation_speed":100000,"navigation_sensitivity":-9}"#,
         )

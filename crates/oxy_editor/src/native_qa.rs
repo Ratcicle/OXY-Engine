@@ -7,6 +7,7 @@ mod camera_authoring;
 mod cameras;
 mod cuts;
 mod direct;
+mod export;
 mod final_flow;
 mod input_guide;
 mod inspector;
@@ -677,6 +678,9 @@ impl NativeQa {
         }
         if label.starts_with("var_") {
             return self.check_variables(label);
+        }
+        if label.starts_with("export_") {
+            return self.check_export(label);
         }
         if label.starts_with("pause_") {
             return self.check_pause(label);

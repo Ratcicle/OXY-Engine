@@ -22,14 +22,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Results = Vec<(String, Result<Json, String>)>;
+pub(super) type Results = Vec<(String, Result<Json, String>)>;
 fn results() -> &'static Mutex<Option<Results>> {
     static RESULTS: OnceLock<Mutex<Option<Results>>> = OnceLock::new();
     RESULTS.get_or_init(|| Mutex::new(None))
 }
 
 /// Runs `requests` against the editor announced in `dir`, storing each answer.
-fn client(dir: PathBuf, requests: Vec<(&'static str, Json)>) {
+pub(super) fn client(dir: PathBuf, requests: Vec<(&'static str, Json)>) {
     let run = || -> Result<Results, String> {
         let deadline = Instant::now() + Duration::from_secs(10);
         let info: Json = loop {
@@ -122,7 +122,12 @@ fn live_reads(editor: &Editor) -> Vec<(&'static str, Json)> {
     ]
 }
 
-fn take_results() -> Result<Results, String> {
+/// Whether the client answered every request, or gave up.
+pub(super) fn client_finished() -> bool {
+    results().lock().unwrap().is_some()
+}
+
+pub(super) fn take_results() -> Result<Results, String> {
     results()
         .lock()
         .unwrap()
@@ -131,7 +136,11 @@ fn take_results() -> Result<Results, String> {
 }
 
 /// The answer to the `index`-th request of `method`.
-fn answer(answers: &Results, method: &str, index: usize) -> Result<Result<Json, String>, String> {
+pub(super) fn answer(
+    answers: &Results,
+    method: &str,
+    index: usize,
+) -> Result<Result<Json, String>, String> {
     answers
         .iter()
         .filter(|(m, _)| m == method)
