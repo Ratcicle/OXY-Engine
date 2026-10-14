@@ -3121,6 +3121,36 @@ fn the_report_lays_out_the_game_interface_at_the_end() {
 }
 
 #[test]
+fn the_report_says_whether_a_person_could_click_the_interface_at_the_end() {
+    // A first person camera holds the mouse; logic shows the cursor on "mostrar".
+    let mut project = course();
+    project.input_bindings.insert("mostrar".into(), "M".into());
+    let body = project.scenes[0].entity_mut(BODY).unwrap();
+    let input = node(body, "event.input", &[("action", text("mostrar"))]);
+    let show = node(body, "game.cursor", &[("mode", text("show"))]);
+    link(body, &input, &show);
+    let held = run(&project, json!({"seconds": 0.5}));
+    assert_eq!(held.cursor_free, Some(false));
+    let shown = run(
+        &project,
+        json!({"seconds": 0.5, "inputs": [{"type": "press", "at": 0.2, "action": "mostrar"}]}),
+    );
+    assert_eq!(shown.cursor_free, Some(true));
+    assert!(shown.logs.is_empty(), "{:?}", shown.logs);
+    assert_ne!(held.state_hash, shown.state_hash);
+    let without = run(&project, json!({"seconds": 0.5, "ui": false}));
+    assert_eq!(without.cursor_free, None);
+    assert!(
+        serde_json::to_value(&without)
+            .unwrap()
+            .get("cursor_free")
+            .is_none()
+    );
+    // Without a camera that turns with the mouse, the cursor is always free.
+    assert_eq!(run(&hud(), json!({"seconds": 0.1})).cursor_free, Some(true));
+}
+
+#[test]
 fn the_interface_reported_is_the_final_scene_one() {
     let (mut project, level) = menu_and_level();
     let mut title = Entity::new("Título", None);

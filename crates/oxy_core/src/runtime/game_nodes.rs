@@ -1,6 +1,6 @@
 //! Operations about the game as a whole, exposed by the typed graph adapter: the game
-//! variables, the saved progress, the scene running and the scenes logic names, the game pause
-//! and quitting.
+//! variables, the saved progress, the scene running and the scenes logic names, the game pause,
+//! the cursor and quitting.
 use super::*;
 use crate::{
     save::{self, SaveRequest, SaveSlot},
@@ -135,6 +135,11 @@ impl Runtime {
                 "toggle" => self.toggle_game_pause(),
                 _ => return Err("Ação de pausa desconhecida; use pause/resume/toggle".into()),
             },
+            "game.cursor" => match node.text("mode") {
+                "show" => self.set_cursor_shown(true),
+                "hide" => self.set_cursor_shown(false),
+                _ => return Err("Ação do cursor desconhecida; use show/hide".into()),
+            },
             "game.quit" => {
                 self.quit_requested = true;
                 if let Some(recording) = &mut self.recording {
@@ -246,6 +251,27 @@ impl Runtime {
     /// Esc then pauses the game rather than the host.
     pub fn has_pause_menu(&self) -> bool {
         self.event_used("event.pause")
+    }
+
+    /// Whether logic showed the cursor (Mostrar / esconder cursor): the host leaves the mouse
+    /// free and visible while the game runs on, and mouse look turns no camera. Hiding it gives
+    /// the mouse back to the camera; a scene starts with it hidden.
+    pub fn cursor_shown(&self) -> bool {
+        self.cursor_shown
+    }
+
+    /// What Mostrar / esconder cursor does. Look already on its way is dropped as the cursor
+    /// shows, so the view stays where it was.
+    pub fn set_cursor_shown(&mut self, shown: bool) {
+        if shown && !self.cursor_shown {
+            self.pending_look = [0.; 2];
+        }
+        self.cursor_shown = shown;
+    }
+
+    /// Whether mouse look stands still: in the game pause and with the cursor shown.
+    pub(super) fn look_held(&self) -> bool {
+        self.game_paused || self.cursor_shown
     }
 
     /// Where between the last two steps the world is shown: in the game pause, at the last.

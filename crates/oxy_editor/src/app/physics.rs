@@ -1335,7 +1335,7 @@ impl Editor {
                     toggle_row(
                         ui,
                         "Só em 1ª pessoa",
-                        "Oculta as peças abaixo apenas em primeira pessoa.",
+                        "Oculta as peças abaixo só em primeira pessoa e na câmera fixada nos olhos, até ela ser movida; desligado, em todos os modos.",
                         &mut rig.hide_first_person_only,
                     );
                     for (id, name) in &targets {

@@ -10,8 +10,8 @@
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
-//!   stopped behaviors, area pairs, activations, hit leases, the game pause and the effect
-//!   loops (kept with the music in `run`, which `change_scene` ends).
+//!   stopped behaviors, area pairs, activations, hit leases, the game pause, the cursor shown
+//!   by logic and the effect loops (kept with the music in `run`, which `change_scene` ends).
 //! - Per object: the entries of per-scene structures keyed by an object, pruned in
 //!   `remove_object` when it goes (the cameras' lazily, at the next presentation), and the
 //!   run's counts of an object made during the run (see `forget_copies`).
@@ -265,6 +265,9 @@ pub struct Runtime {
     pub time: f64,
     /// The game's own pause (see the module docs); a scene starts without it.
     game_paused: bool,
+    /// Mostrar / esconder cursor showed the cursor: the mouse is free and turns no camera,
+    /// while the game runs on. A scene starts with the camera's own capture.
+    cursor_shown: bool,
     source: Project,
     accumulator: f32,
     pending_pressed: BTreeSet<String>,
@@ -337,6 +340,7 @@ impl Runtime {
             quit_requested: false,
             time: 0.0,
             game_paused: false,
+            cursor_shown: false,
             source: project.clone(),
             accumulator: 0.0,
             pending_pressed: BTreeSet::new(),
@@ -482,6 +486,7 @@ impl Runtime {
             ("damage_hits", self.damage_hits.is_empty()),
             ("area_hits", self.area_hits.is_empty()),
             ("game_paused", !self.game_paused),
+            ("cursor_shown", !self.cursor_shown),
             ("effect_loops", self.run.audio.loops.is_empty()),
         ]
         .into_iter()
@@ -518,6 +523,7 @@ impl Runtime {
         self.characters = Default::default();
         self.cameras = Default::default();
         self.game_paused = false;
+        self.cursor_shown = false;
         self.run = RunState::new(&self.source, 0);
     }
     /// A click on an object or on its interface element. An element hidden, by itself or by a
@@ -582,8 +588,9 @@ impl Runtime {
         }
         self.pending_pressed.extend(input.pressed.iter().cloned());
         self.pending_released.extend(input.released.iter().cloned());
-        // In the game pause the camera stands still; the wheel still reaches logic.
-        if !self.game_paused && self.cameras.accepts_look(self.scene(), &self.characters) {
+        // In the game pause and with the cursor shown the camera stands still; the wheel still
+        // reaches logic.
+        if !self.look_held() && self.cameras.accepts_look(self.scene(), &self.characters) {
             for axis in 0..2 {
                 if input.look[axis].is_finite() {
                     self.pending_look[axis] = (f64::from(self.pending_look[axis])
@@ -612,6 +619,10 @@ impl Runtime {
             };
             self.input_timeline
                 .sample(self.time + f64::from(FIXED_DT), &mut frame);
+            // A shown cursor is on the interface: its moves (timed ones included) turn nothing.
+            if self.cursor_shown {
+                frame.look = [0.; 2];
+            }
             crate::metrics::timed(
                 || self.fixed_step(&frame, &mut budget),
                 |c, ns| c.fixed_step_ns += ns,
@@ -1481,6 +1492,8 @@ impl Runtime {
         {
             recording.pauses.push(false);
         }
+        // The camera of the new scene captures the mouse as it does by itself.
+        self.cursor_shown = false;
         // Sounds already requested still play ("play a sound, then restart"): the host takes
         // them after the step. action.scene drops those of scenes left within the step. The
         // music and the volumes go on; the effect loops end with the scene.

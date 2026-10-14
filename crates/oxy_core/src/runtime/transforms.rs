@@ -157,6 +157,31 @@ impl Runtime {
         }
         Ok(())
     }
+    /// Moves and turns `id` so that its origin stands at `position`, turned by `rotation`, in
+    /// the world, as Mover / girar / escalar objeto would; the scale stays. All or nothing.
+    pub(in crate::runtime) fn place_at(
+        &mut self,
+        id: &str,
+        position: Vec3,
+        rotation: Quat,
+    ) -> Result<(), String> {
+        let before = self.entity(id).ok_or("Objeto ausente")?.transform.clone();
+        let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
+        let degrees = Vec3::new(x, y, z).to_array().map(f32::to_degrees);
+        let placed = self
+            .write_transform(id, "rotation", "set", "world", degrees.into(), false)
+            .and_then(|()| {
+                // The pivot, which the write places, lies off the origin by the turned pivot.
+                let entity = self.entity(id).ok_or("Objeto ausente")?;
+                let pivot = Vec3::from(entity.transform.pivot);
+                let offset = self.scene().world_matrix(id)?.transform_vector3(pivot);
+                self.write_transform(id, "position", "set", "world", position + offset, false)
+            });
+        if placed.is_err() {
+            self.entity_mut(id).unwrap().transform = before;
+        }
+        placed
+    }
     /// The name of the playing clip that poses `id` (see `advance_animations`), which would
     /// undo a write to it: the clip of the first owner in scene order when several do.
     fn posing_clip(&self, id: &str) -> Option<String> {

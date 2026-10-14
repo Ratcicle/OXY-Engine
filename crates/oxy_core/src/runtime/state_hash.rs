@@ -202,6 +202,7 @@ impl Runtime {
             query_work: _,
             paused,
             game_paused,
+            cursor_shown,
             quit_requested,
             stopped,
             logs_written,
@@ -241,7 +242,8 @@ impl Runtime {
         digest.add(None, "scene", |s| {
             s.debug(scene_id)
                 .debug(&(paused, stopped))
-                .debug(&(game_paused, quit_requested));
+                .debug(&(game_paused, quit_requested))
+                .debug(cursor_shown);
         });
         digest.add(None, "time", |s| {
             s.debug(time).debug(accumulator).debug(paused_for);

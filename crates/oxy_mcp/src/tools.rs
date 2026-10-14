@@ -95,7 +95,8 @@ with an input action of the project, by ID or name (see oxy_project), or \"$N\" 
 others are refused; {type: movement, at, value: [right, \
 forward]}, each -1 to 1, held until the next movement; {type: look, at, value: [x, y]}, a mouse \
 displacement applied once: each unit turns the camera by its sensitivity (camera control, 0.12 \
-degrees by default), +x turns right and +y looks down unless the camera inverts an axis; {type: \
+degrees by default), +x turns right and +y looks down unless the camera inverts an axis (in \
+the game pause and while game.cursor shows the cursor it turns nothing); {type: \
 click, at, entity}: an object or its interface button, of any scene, by ID, by name (any case, \
 when no other object of the project has it) or \"$N\" from setup; an ID or name no object has \
 is refused before the run (the IDs of copies action.spawn makes are taken); a hidden element \
@@ -231,7 +232,10 @@ pub fn definitions() -> Json {
              pause menu; either pause can hold alone, or both), driven_by? (person, or agent for \
              a test you started with oxy_play, until the person clicks Assumir, or Retomar on a \
              paused test), \
-             mouse_captured? (the game holds the person's mouse), advancing? (the game view is \
+             mouse_captured? (the game holds the person's mouse), cursor_free? (the game leaves \
+             the cursor free, whoever plays: a game.cursor node showed it, the game is in its \
+             own pause, or the active camera does not turn with the mouse), advancing? (the game \
+             view is \
              shown and the test is not paused: game time goes on only then), queued_until? (game \
              time of the last input you sent that still waits), scene? {id, name}, \
              time? (simulated seconds), seed? (of the test's random.number draws, new on each \
@@ -539,7 +543,9 @@ pub fn definitions() -> Json {
                         (the topmost last), [{id, name, kind: Text|Image|Button|Bar, visible, rect: \
                         [x, y, width, height] in pixels of the game view from its top-left corner, \
                         text as shown with bound values, fraction (bars, 0-1), clickable (a visible \
-                        button inside the view)}]."},
+                        button inside the view)}], and cursor_free: whether a person's cursor would \
+                        be free at the end to click them (a game.cursor node showed it, the game \
+                        is in its own pause, or the active camera does not turn with the mouse)."},
                    "width": {"type": "integer", "description":
                        "Game view width in pixels, 16-4096 (default 960): the screenshot and the ui \
                         rectangles."},
@@ -904,7 +910,8 @@ the objects involved or changes scene), the game's own pause (pauses: [{time, pa
 out when none; paused: the state at the end; in the pause the world, waits included, stands \
 still while logic, input actions and interface clicks go on; a game.quit node ends the run, \
 stopped_at reason quit with the object that asked), the game camera at the end {active, mode, \
-position, forward, fov}, the game interface at the end (ui: texts with their values, bars, buttons), the watched \
+position, forward, fov}, the game interface at the end (ui: texts with their values, bars, buttons; \
+cursor_free: whether a person's cursor would be free to click them), the watched \
 objects and the game variables at the end (variables: {name: tagged value, as {\"Number\": 3}}, \
 \"name · key\" for the value of a key; up to 300, the variables' own values before the keys', \
 the rest counted in truncated; left out when the project has none). Each run starts the \
@@ -932,8 +939,8 @@ the editor viewport as the person sees it (during a test, the game with its inte
 collider view when colliders is set. Every other view first runs the game on an in-memory copy \
 for `seconds`, with inputs (and setup, spawn, until, bot, seed and save as in oxy_simulate), then \
 captures: game (the default on files) through the game camera, with the game interface drawn as \
-the player shows it, and lists it as ui like oxy_simulate, at the same rects (ui: false leaves \
-the list out); free through a perspective camera at eye looking at target (3D scenes); top and \
+the player shows it, and lists it as ui like oxy_simulate, at the same rects, with cursor_free \
+(ui: false leaves both out); free through a perspective camera at eye looking at target (3D scenes); top and \
 side through orthographic views framing ids: top straight down with -Z up and +X right, side \
 level along -Z, or along -X when the framed part is deeper (Z) than wide (X), so the long side \
 spans the image. In 2D scenes top and side both show the scene plane. An image painted in the \
@@ -1806,6 +1813,9 @@ impl Tools {
         if !report.ui.is_empty() {
             text["ui"] = serde_json::to_value(&report.ui).map_err(|e| e.to_string())?;
         }
+        if let Some(free) = report.cursor_free {
+            text["cursor_free"] = json!(free);
+        }
         if let Some(replay) = &report.replay {
             text["replay"] = serde_json::to_value(replay).map_err(|e| e.to_string())?;
         }
@@ -2016,6 +2026,14 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(status.contains("game_paused?") && status.contains("paused? (the test"));
+        // Whether a person could click the interface: a cursor logic shows, the pause, a camera.
+        assert!(status.contains("cursor_free? (the game leaves the cursor free"));
+        let simulate = schema("oxy_simulate");
+        let listed = simulate["ui"]["description"].as_str().unwrap();
+        assert!(listed.contains("and cursor_free"), "{listed}");
+        assert!(SIMULATE_DESCRIPTION.contains("cursor_free: whether a person's cursor"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("with cursor_free"));
+        assert!(INPUTS.contains("while game.cursor shows the cursor it turns nothing"));
     }
 
     #[test]
@@ -2925,6 +2943,8 @@ mod tests {
         .unwrap();
         assert_eq!(report["stopped_at"]["reason"], "paused", "{report}");
         assert_eq!(report["paused"], true);
+        // The menu can take clicks: the cursor is free.
+        assert_eq!(report["cursor_free"], true);
         assert_eq!(report["pauses"], json!([{"time": 0.2167, "paused": true}]));
         let shown = report["ui"]
             .as_array()

@@ -514,7 +514,7 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
         "input.axes" => (
             "Lê os eixos do passo atual: Movimento é o Vetor2 (direita, frente), de comprimento até 1, das teclas de movimento do personagem 3D escolhido; Olhar é o deslocamento do mouse neste passo, em unidades do dispositivo e não em graus (X para a direita, Y para baixo); Roda é o giro da roda do mouse neste passo, em linhas (positivo para cima).",
             "Ligue Movimento à entrada Direita/frente de Definir intenção para este passo, num personagem com as ações automáticas desligadas.",
-            "Olhar é deslocamento relativo, não velocidade: não o multiplique por dt nem pela escala da interface; a câmera o converte em graus pela sensibilidade. Olhar vale (0, 0) quando a câmera ativa não usa o mouse: sem câmera ativa, na Fixa ou sem Controle de câmera, com olhar assistido ou com o olhar do personagem bloqueado, e na pausa do jogo. Só Movimento usa o objeto, que precisa ser um personagem 3D (vazio: o responsável).",
+            "Olhar é deslocamento relativo, não velocidade: não o multiplique por dt nem pela escala da interface; a câmera o converte em graus pela sensibilidade. Olhar vale (0, 0) quando a câmera ativa não usa o mouse: sem câmera ativa, na Fixa ou sem Controle de câmera, com olhar assistido ou com o olhar do personagem bloqueado, na pausa do jogo e com o cursor à mostra (Mostrar / esconder cursor). Só Movimento usa o objeto, que precisa ser um personagem 3D (vazio: o responsável).",
         ),
         "time.read" => (
             "Fornece a Duração do passo fixo (1/60 s) e o Tempo de jogo desde o começo da partida, ambos em segundos.",
@@ -597,9 +597,9 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
             "O objeto precisa ter Câmera. A câmera mantém o modo e o objeto que acompanha.",
         ),
         "camera.mode" => (
-            "Troca o modo de uma câmera com Controle de câmera, com transição em segundos: Primeira pessoa (nos olhos), Terceira pessoa (atrás, à distância desejada) ou Fixa (na posição e na rotação do próprio objeto câmera, sem seguir nem girar com o mouse, que fica livre).",
-            "Ao abrir um menu durante o jogo, troque para Fixa para soltar o mouse; ao fechar, volte a Primeira pessoa.",
-            "Na Fixa, a vista vai para onde o objeto câmera está: troque o modo e, em seguida, mova o objeto câmera com Mover / girar / escalar objeto. As peças escondidas em primeira pessoa aparecem na Fixa. A tecla de alternar primeira e terceira pessoa do Controle de câmera também sai da Fixa.",
+            "Troca o modo de uma câmera com Controle de câmera, com transição em segundos: Primeira pessoa (nos olhos), Terceira pessoa (atrás, à distância desejada) ou Fixa, parada sem seguir o personagem nem girar com o mouse. Fixa na vista atual para a câmera onde a vista está; Fixa no objeto câmera leva a vista à posição e à rotação do próprio objeto câmera.",
+            "Ao terminar uma partida, troque para Fixa na vista atual e, em seguida, mova o objeto câmera com Mover / girar / escalar objeto: a vista sai de onde estava e vai até o novo ponto pela transição. Para soltar o mouse sem mexer na câmera, use Mostrar / esconder cursor.",
+            "Na Fixa na vista atual, o objeto câmera passa para onde a vista está, e movê-lo depois move a vista; mover o objeto antes de trocar o modo não muda nada, pois a troca o põe de volta na vista. Para levar a vista a um ponto escolhido antes, mova o objeto e use Fixa no objeto câmera. Numa câmera que não é a ativa, ou que já está fixa, as duas Fixas usam o objeto câmera como ele está. Fixa na vista atual a partir da Primeira pessoa, a câmera continua escondendo as peças escondidas em primeira pessoa até o objeto câmera ser movido, para o corpo não tampar a vista; em qualquer modo, ela atravessa o corpo do personagem acompanhado. O mouse fica livre, como com o cursor à mostra. A tecla de alternar primeira e terceira pessoa do Controle de câmera também sai da Fixa.",
         ),
         "camera.target" => (
             "Troca o objeto que uma câmera com Controle de câmera acompanha, normalmente um personagem 3D: a câmera passa a segui-lo, no modo em que está.",
@@ -774,7 +774,8 @@ pub fn movement_choices(
         ("camera.mode", "mode") => &[
             ("first_person", "Primeira pessoa"),
             ("third_person", "Terceira pessoa"),
-            ("fixed", "Fixa"),
+            ("fixed", "Fixa na vista atual"),
+            ("fixed_object", "Fixa no objeto câmera"),
         ],
         ("camera.look_at", "mode") => &[
             ("point", "Olhar para ponto"),

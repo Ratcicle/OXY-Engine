@@ -1,5 +1,5 @@
 //! Operations about the game as a whole rather than one object: its variables, the progress
-//! saved between runs, the scene running, the game's own pause and quitting.
+//! saved between runs, the scene running, the game's own pause, the cursor and quitting.
 use super::*;
 pub(super) fn definitions() -> Vec<OperationDef> {
     use PortType::*;
@@ -78,6 +78,14 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             vec![],
             vec![port("paused", "Pausado", Bool)],
         ),
+        op(
+            "game.cursor",
+            "Mostrar / esconder cursor",
+            "Jogo",
+            true,
+            vec![text("mode", "Ação", "show")],
+            vec![],
+        ),
         // Like Mudar de cena, nothing follows it.
         OperationDef {
             id: "game.quit",
@@ -131,6 +139,11 @@ pub fn game_help(id: &str) -> Option<(&'static str, &'static str, &'static str)>
             "Numa ação de entrada que dispara um efeito, ligue Pausado à Condição de Se / Senão e siga pelo Falso: com o jogo pausado, o efeito não acontece.",
             "Lê só a pausa do jogo, a de Pausar / retomar jogo: na pausa da engine a lógica não executa. Para agir quando a pausa muda, use o evento Ao pausar ou retomar.",
         ),
+        "game.cursor" => (
+            "Mostra o cursor e solta o mouse, ou o esconde e devolve o mouse à câmera, sem pausar o jogo: o mundo, a lógica e as ações de entrada continuam.",
+            "Ao mostrar uma tela de resultado ou um menu que não pausa o jogo, use este nó com a Ação Mostrar para os botões receberem cliques; no Ao clicar do botão que volta a jogar, com a Ação Esconder.",
+            "Com o cursor à mostra, o mouse não gira a câmera, que fica como estava, e o Olhar de Ler eixos de entrada vale (0, 0); os cliques chegam aos botões da interface e aos objetos, e um clique num botão não aciona também a ação de entrada do botão do mouse. O personagem continua andando com as teclas: para pará-lo, use Bloquear / liberar entrada por motivo ou a pausa do jogo. Esconder só prende o mouse quando a câmera ativa gira com ele (Primeira ou Terceira pessoa); na pausa do jogo, o cursor fica livre de qualquer forma. Mudar de cena volta ao padrão: a câmera que gira com o mouse volta a prendê-lo. Esc continua pausando: o menu de pausa do jogo, quando a cena tem um, ou o teste.",
+        ),
         "game.quit" => (
             "Encerra o jogo: o jogo exportado fecha a janela.",
             "Num botão Sair de um menu, ligue Ao clicar a Sair do jogo.",
@@ -150,6 +163,7 @@ pub fn game_choices(
             ("resume", "Retomar"),
             ("toggle", "Alternar"),
         ],
+        ("game.cursor", "mode") => &[("show", "Mostrar"), ("hide", "Esconder")],
         _ => return None,
     })
 }

@@ -167,13 +167,17 @@ impl Runtime {
             "camera.mode" => {
                 let id = target(self, budget)?;
                 let seconds = number(self, "seconds", budget)?;
-                let mode = match node.text("mode") {
-                    "first_person" => CameraMode::FirstPerson,
-                    "third_person" => CameraMode::ThirdPerson,
-                    "fixed" => CameraMode::Fixed,
+                match node.text("mode") {
+                    "first_person" => {
+                        self.set_camera_mode(&id, CameraMode::FirstPerson, seconds)?
+                    }
+                    "third_person" => {
+                        self.set_camera_mode(&id, CameraMode::ThirdPerson, seconds)?
+                    }
+                    "fixed" => self.set_camera_mode(&id, CameraMode::Fixed, seconds)?,
+                    "fixed_object" => self.fix_camera_on_object(&id, seconds)?,
                     _ => return Err("Modo de câmera desconhecido".into()),
-                };
-                self.set_camera_mode(&id, mode, seconds)?;
+                }
             }
             "camera.target" => {
                 let id = target(self, budget)?;

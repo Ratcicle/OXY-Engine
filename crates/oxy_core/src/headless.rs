@@ -754,6 +754,10 @@ pub struct SimulationReport {
     /// The game interface at the end, in drawing order (the topmost last).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ui: Vec<UiState>,
+    /// With `ui`: whether a person's cursor would be free at the end, so that the buttons take
+    /// clicks (see [`Runtime::wants_relative_mouse`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_free: Option<bool>,
     pub watched: Vec<Watched>,
     /// The game variables at the end, by name, or "name · key" for the value of a key: the
     /// first `MAX_ENTRIES` of [`Runtime::variable_values`].
@@ -2584,6 +2588,7 @@ pub fn run(
         bot: None,
         camera: None,
         ui: Vec::new(),
+        cursor_free: None,
         watched: watches
             .iter()
             .map(|(watch, name)| Watched {
@@ -2679,6 +2684,7 @@ pub fn run(
     }
     report.camera = camera(&runtime);
     if request.ui {
+        report.cursor_free = Some(!runtime.wants_relative_mouse());
         report.ui = game_ui::ui_state(
             runtime.project(),
             runtime.scene(),

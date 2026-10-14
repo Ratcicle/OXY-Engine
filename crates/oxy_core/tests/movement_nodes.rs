@@ -1286,3 +1286,70 @@ fn a_write_marked_as_a_jump_drops_the_riders_without_launching_them() {
     assert!(state.grounded, "{state:?}");
     assert_eq!(state.support.as_ref().unwrap().object, lift);
 }
+
+#[test]
+fn fixing_the_camera_from_logic_keeps_the_view_whatever_the_order_of_the_nodes() {
+    let point = [3., 4., 6.];
+    // Each flow and where the view ends: at the eyes (None) or at the point.
+    let cases = [
+        (["fixed", ""], Some(point)),
+        (["", "fixed"], None),
+        (["", "fixed_object"], Some(point)),
+    ];
+    for (flow, expected) in cases {
+        let (mut p, player) = fixture();
+        p.input_bindings.insert("fixar".into(), "F".into());
+        let camera = p.scenes[0]
+            .entities
+            .iter()
+            .find(|e| e.camera.is_some())
+            .unwrap()
+            .id
+            .clone();
+        let input = node("event.input", &[("action", text("fixar"))]);
+        let nodes: Vec<Node> = flow
+            .iter()
+            .map(|mode| match *mode {
+                "" => write(Some(&camera), "position", "set", "world", point),
+                mode => node(
+                    "camera.mode",
+                    &[
+                        ("target", Value::Object(Some(camera.clone()))),
+                        ("mode", text(mode)),
+                        ("seconds", Value::Number(0.)),
+                    ],
+                ),
+            })
+            .collect();
+        let e = p.scenes[0].entity_mut(&player).unwrap();
+        wire(&mut e.graph, &input, "exec", &nodes[0], "exec");
+        wire(&mut e.graph, &nodes[0], "exec", &nodes[1], "exec");
+        e.graph.nodes.push(input);
+        e.graph.nodes.extend(nodes);
+        validate_project(&p).unwrap();
+        let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+        r.set_viewport_aspect(16. / 9.);
+        ticks(&mut r, 30);
+        let eyes = r.game_camera_pose().unwrap();
+        r.advance(FIXED_DT, &pressing("fixar"));
+        ticks(&mut r, 3);
+        assert_eq!(r.camera_mode(&camera), Some(CameraMode::Fixed), "{flow:?}");
+        assert!(!r.wants_relative_mouse());
+        let shown = r.game_camera_pose().unwrap();
+        let at = expected.map_or(eyes.position, Vec3::from);
+        assert!(
+            shown.position.abs_diff_eq(at, 1e-3),
+            "{flow:?}: {:?} / {at:?}",
+            shown.position
+        );
+        // Fixed at the eyes, the body stays hidden; at the point, it shows.
+        assert!(!eyes.hidden.is_empty());
+        let hidden = if expected.is_none() {
+            eyes.hidden.clone()
+        } else {
+            Vec::new()
+        };
+        assert_eq!(shown.hidden, hidden, "{flow:?}");
+        clean(&r);
+    }
+}

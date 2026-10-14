@@ -58,6 +58,9 @@ impl Topic {
             "game.quit" => {
                 "Conecte uma saída de execução à entrada Executar, como o Ao clicar de um botão Sair."
             }
+            "game.cursor" => {
+                "Escolha a Ação (Mostrar ou Esconder) e conecte uma saída de execução à entrada Executar."
+            }
             "attribute.get" | "attribute.set" | "action.damage" => {
                 "Crie o atributo no painel do objeto correto e escreva o mesmo nome no nó. Dano exige um atributo numérico. Forneça o alvo pela porta ou por referência explícita; vazio usa o responsável."
             }

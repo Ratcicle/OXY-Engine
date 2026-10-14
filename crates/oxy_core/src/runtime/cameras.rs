@@ -29,6 +29,9 @@ struct RigState {
     /// How far the platform under the target turned the first person view in the last step,
     /// shown along the step as the body's own turn is.
     carried: f32,
+    /// Where the camera object stood when the view was fixed at the first person eyes: until
+    /// it moves, the view keeps hiding the pieces the first person hid.
+    fixed_at: Option<[f32; 3]>,
 }
 #[derive(Debug)]
 struct Transition {
@@ -204,6 +207,7 @@ impl Cameras {
             shown_distance: None,
             rotation: None,
             carried: 0.,
+            fixed_at: None,
         });
         if state.authored_distance != rig.distance {
             state.distance = rig.distance;
@@ -352,6 +356,36 @@ impl Cameras {
             ..Default::default()
         };
         let settings = rig.cloned().unwrap_or_default();
+        // The camera passes through the body it belongs to in every mode: a fixed view may
+        // stand where the eyes were.
+        if let Some(target) = rig.and_then(|r| r.target.as_ref()) {
+            options.exclude.insert(target.clone());
+            options.exclude.extend(scene.descendants(target));
+        }
+        let hides = match mode {
+            CameraMode::FirstPerson => true,
+            CameraMode::ThirdPerson => !settings.hide_first_person_only,
+            // A view fixed at the eyes keeps hiding what covered them until its object moves.
+            CameraMode::Fixed => {
+                !settings.hide_first_person_only
+                    || self.states.get(&entity.id).and_then(|s| s.fixed_at)
+                        == Some(entity.transform.position)
+            }
+        };
+        let mut hidden = Vec::new();
+        if hides {
+            let mut ids: HashSet<_> = settings.hidden.iter().cloned().collect();
+            for id in &settings.hidden {
+                ids.extend(scene.descendants(id));
+            }
+            hidden.extend(
+                scene
+                    .entities
+                    .iter()
+                    .filter(|e| ids.contains(&e.id))
+                    .map(|e| e.id.clone()),
+            );
+        }
         if mode == CameraMode::Fixed {
             let (position, rotation, _) =
                 crate::physics3d::world_pose(view.world_matrix(&entity.id)?)?;
@@ -359,7 +393,7 @@ impl Cameras {
                 position,
                 rotation,
                 fov: camera.fov,
-                hidden: Vec::new(),
+                hidden,
             };
             anchor = position;
         } else {
@@ -370,8 +404,6 @@ impl Cameras {
                 view.world_matrix(target)
                     .map_err(|_| "Alvo da câmera ausente; última vista preservada.")?,
             )?;
-            options.exclude.insert(target.clone());
-            options.exclude.extend(scene.descendants(target));
             let character = characters.states.get(target);
             let state = self
                 .states
@@ -422,20 +454,6 @@ impl Cameras {
                         * settings.shoulder
                         * state.shoulder_sign;
                 anchor = pivot;
-            }
-            let mut hidden = Vec::new();
-            if mode == CameraMode::FirstPerson || !settings.hide_first_person_only {
-                let mut ids: HashSet<_> = settings.hidden.iter().cloned().collect();
-                for id in &settings.hidden {
-                    ids.extend(scene.descendants(id));
-                }
-                hidden.extend(
-                    scene
-                        .entities
-                        .iter()
-                        .filter(|e| ids.contains(&e.id))
-                        .map(|e| e.id.clone()),
-                );
             }
             desired = GameCameraPose {
                 position,
@@ -775,7 +793,7 @@ impl Runtime {
                 world.sync_scene(self.scene(), false)?;
                 self.characters.world = Some(world);
             }
-            let pending = if self.paused || self.game_paused {
+            let pending = if self.paused || self.look_held() {
                 Vec2::ZERO
             } else {
                 Vec2::from(self.pending_look)
@@ -832,17 +850,55 @@ impl Runtime {
         self.update_presentation(0.);
         Ok(())
     }
+    /// Switches the mode of the camera `id`, with a transition of `seconds`. Fixed keeps the
+    /// view the active camera shows: the camera object goes where the view is, and moving it
+    /// afterwards moves the view. A camera already fixed, or not the active one, stays where
+    /// its object is, as with [`Runtime::fix_camera_on_object`]. Fixed from the first person,
+    /// the view keeps hiding the pieces the first person hides until its object moves.
     pub fn set_camera_mode(
         &mut self,
         id: &str,
         mode: CameraMode,
         seconds: f32,
     ) -> Result<(), String> {
+        self.switch_camera_mode(id, mode, seconds, mode == CameraMode::Fixed)
+    }
+    /// Fixes the camera `id` where its object is, with a transition of `seconds` from the view
+    /// shown.
+    pub fn fix_camera_on_object(&mut self, id: &str, seconds: f32) -> Result<(), String> {
+        self.switch_camera_mode(id, CameraMode::Fixed, seconds, false)
+    }
+    fn switch_camera_mode(
+        &mut self,
+        id: &str,
+        mode: CameraMode,
+        seconds: f32,
+        keep_view: bool,
+    ) -> Result<(), String> {
         if self.entity(id).is_none_or(|e| e.camera_rig.is_none())
             || !seconds.is_finite()
             || seconds < 0.
         {
             return Err("Escolha uma câmera de personagem e uma duração válida.".into());
+        }
+        let before = self.camera_mode(id);
+        let mut eyes = None;
+        if keep_view && self.active_camera() == Some(id) && before != Some(CameraMode::Fixed) {
+            // The view as it shows now, the step's own look included.
+            self.update_presentation(0.);
+            if let Some(pose) = self.cameras.pose.clone() {
+                self.place_at(id, pose.position, pose.rotation)
+                    .map_err(|error| format!("Fixa na vista atual não moveu a câmera: {error}"))?;
+                if before == Some(CameraMode::FirstPerson) {
+                    eyes = self.entity(id).map(|e| e.transform.position);
+                }
+            }
+        }
+        if mode == CameraMode::Fixed
+            && before != Some(CameraMode::Fixed)
+            && let Some(state) = self.cameras.states.get_mut(id)
+        {
+            state.fixed_at = eyes;
         }
         let rig = self.entity_mut(id).unwrap().camera_rig.as_mut().unwrap();
         rig.mode = mode;

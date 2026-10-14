@@ -702,9 +702,9 @@ impl Runtime {
         Ok(())
     }
     /// Whether the host should grab the cursor: a camera that turns with the mouse, outside the
-    /// game pause, whose menu needs a free cursor.
+    /// game pause, whose menu needs a free cursor, and unless logic showed the cursor.
     pub fn wants_relative_mouse(&self) -> bool {
-        !self.game_paused && self.cameras.relative(self.scene())
+        !self.look_held() && self.cameras.relative(self.scene())
     }
     /// Presentation-only pose. Unconsumed look is displayed immediately, without
     /// changing collision positions or consuming the same delta a second time.
@@ -724,7 +724,7 @@ impl Runtime {
         let forward = rotation * -Vec3::Z;
         let initial = CharacterState::new(position, (-forward.x).atan2(-forward.z));
         let state = self.characters.states.get(target).unwrap_or(&initial);
-        let pending = if state.look_blocks.is_empty() && !self.game_paused {
+        let pending = if state.look_blocks.is_empty() && !self.look_held() {
             Vec2::from(self.pending_look)
                 + self
                     .input_timeline

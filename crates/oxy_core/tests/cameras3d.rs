@@ -583,3 +583,139 @@ fn high_mouse_values_and_camera_settings_fail_safely_without_nonfinite_pose() {
         Some(&before)
     );
 }
+/// Whether two rotations turn the same way, whatever the sign of the quaternions.
+fn same_turn(a: Quat, b: Quat) -> bool {
+    a.angle_between(b) < 1e-3
+}
+#[test]
+fn fixed_keeps_the_view_shown_and_what_the_first_person_hid() {
+    let mut p = fixture(CameraMode::FirstPerson);
+    let mut head = Entity::new("Cabeça", Some(Primitive::Sphere));
+    head.id = "head".into();
+    head.parent = Some(BODY.into());
+    head.transform.position = [0., 1.6, 0.];
+    // The camera object hangs from a turned group, far from the eyes.
+    let mut mount = Entity::new("Suporte", None);
+    mount.id = "mount".into();
+    mount.transform.position = [2., 1., -3.];
+    mount.transform.rotation = [0., 90f32.to_radians(), 0.];
+    p.scenes[0].entities.extend([head, mount]);
+    let camera = p.scenes[0].entity_mut(CAMERA).unwrap();
+    camera.parent = Some("mount".into());
+    camera.transform.position = [5., 4., 5.];
+    camera
+        .camera_rig
+        .as_mut()
+        .unwrap()
+        .hidden
+        .push("head".into());
+    let original = serde_json::to_value(&p).unwrap();
+    let mut r = runtime(&p);
+    let turning = InputFrame {
+        look: [-300., 120.],
+        ..Default::default()
+    };
+    r.advance(FIXED_DT, &turning);
+    let eyes = pose(&r);
+    assert_eq!(eyes.hidden, ["head"]);
+    r.set_camera_mode(CAMERA, CameraMode::Fixed, 0.4).unwrap();
+    assert_eq!(r.camera_mode(CAMERA), Some(CameraMode::Fixed));
+    assert!(!r.wants_relative_mouse());
+    for _ in 0..40 {
+        r.advance(FIXED_DT, &turning);
+        let shown = pose(&r);
+        assert!(
+            shown.position.abs_diff_eq(eyes.position, 1e-4),
+            "{:?} / {:?}",
+            shown.position,
+            eyes.position
+        );
+        assert!(same_turn(shown.rotation, eyes.rotation));
+        assert_eq!(shown.hidden, ["head"], "the head would cover the view");
+    }
+    // Inside the body, the camera passes through it: no warning.
+    assert!(r.logs.is_empty(), "{:?}", r.logs);
+    // The camera object stands where the view is, under its group, and moving it moves the view.
+    let (at, turn, _) = world_pose(r.scene().world_matrix(CAMERA).unwrap()).unwrap();
+    assert!(at.abs_diff_eq(eyes.position, 1e-4) && same_turn(turn, eyes.rotation));
+    assert!(same_turn(r.camera_orientation().unwrap(), eyes.rotation));
+    r.scene_mut().entity_mut(CAMERA).unwrap().transform.position[1] += 1.;
+    tick(&mut r, 1);
+    let moved = eyes.position + Vec3::Y;
+    assert!(pose(&r).position.abs_diff_eq(moved, 1e-3));
+    // Away from the eyes, the body shows.
+    assert!(pose(&r).hidden.is_empty());
+    // Fixing a fixed camera, or fixing it on its object, leaves the object where it is.
+    r.set_camera_mode(CAMERA, CameraMode::Fixed, 0.).unwrap();
+    tick(&mut r, 1);
+    assert!(pose(&r).position.abs_diff_eq(moved, 1e-3));
+    r.set_camera_mode(CAMERA, CameraMode::FirstPerson, 0.)
+        .unwrap();
+    tick(&mut r, 1);
+    assert!(pose(&r).position.abs_diff_eq(eyes.position, 1e-3));
+    assert!(same_turn(pose(&r).rotation, eyes.rotation));
+    r.fix_camera_on_object(CAMERA, 0.).unwrap();
+    tick(&mut r, 1);
+    assert!(pose(&r).position.abs_diff_eq(moved, 1e-3));
+    assert!(pose(&r).hidden.is_empty());
+    // Fixed from the third person, the view shows what the third person shows.
+    r.set_camera_mode(CAMERA, CameraMode::ThirdPerson, 0.)
+        .unwrap();
+    tick(&mut r, 30);
+    let behind = pose(&r);
+    assert!(behind.hidden.is_empty());
+    r.set_camera_mode(CAMERA, CameraMode::Fixed, 0.).unwrap();
+    tick(&mut r, 5);
+    assert!(pose(&r).position.abs_diff_eq(behind.position, 1e-4));
+    assert!(pose(&r).hidden.is_empty());
+    assert!(r.logs.is_empty(), "{:?}", r.logs);
+    r.stop();
+    assert_eq!(original, serde_json::to_value(&p).unwrap());
+}
+#[test]
+fn an_inactive_camera_fixes_on_its_object_and_a_rig_hiding_in_every_mode_hides_when_fixed() {
+    let mut p = fixture(CameraMode::FirstPerson);
+    let mut head = Entity::new("Cabeça", Some(Primitive::Sphere));
+    head.id = "head".into();
+    head.parent = Some(BODY.into());
+    p.scenes[0].entities.push(head);
+    let rig = p.scenes[0]
+        .entity_mut(CAMERA)
+        .unwrap()
+        .camera_rig
+        .as_mut()
+        .unwrap();
+    rig.hidden.push("head".into());
+    rig.hide_first_person_only = false;
+    let mut other = Entity::new("Outra", None);
+    other.id = "other".into();
+    other.camera = Some(Camera {
+        active: false,
+        ..Default::default()
+    });
+    other.camera_rig = Some(CameraRig {
+        target: Some(BODY.into()),
+        ..Default::default()
+    });
+    other.transform.position = [5., 4., 5.];
+    p.scenes[0].entities.push(other);
+    let mut r = runtime(&p);
+    r.set_camera_mode("other", CameraMode::Fixed, 0.).unwrap();
+    assert_eq!(
+        r.scene().entity("other").unwrap().transform.position,
+        [5., 4., 5.]
+    );
+    r.activate_camera("other", 0.).unwrap();
+    tick(&mut r, 1);
+    assert!(pose(&r).position.abs_diff_eq(Vec3::new(5., 4., 5.), 1e-4));
+    // Hiding in every mode hides in the fixed view too, wherever it is.
+    r.activate_camera(CAMERA, 0.).unwrap();
+    r.set_camera_mode(CAMERA, CameraMode::ThirdPerson, 0.)
+        .unwrap();
+    tick(&mut r, 1);
+    assert_eq!(pose(&r).hidden, ["head"]);
+    r.set_camera_mode(CAMERA, CameraMode::Fixed, 0.).unwrap();
+    tick(&mut r, 1);
+    assert_eq!(pose(&r).hidden, ["head"]);
+    assert!(r.logs.is_empty(), "{:?}", r.logs);
+}

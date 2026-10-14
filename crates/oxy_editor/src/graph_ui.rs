@@ -2358,6 +2358,7 @@ mod tests {
             ("camera.mode", "mode"),
             ("event.pause", "when"),
             ("game.pause", "mode"),
+            ("game.cursor", "mode"),
             ("transform.write", "channel"),
             ("transform.write", "mode"),
             ("transform.write", "space"),

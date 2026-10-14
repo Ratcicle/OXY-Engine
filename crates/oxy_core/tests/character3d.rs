@@ -1845,6 +1845,97 @@ fn the_game_pause_holds_the_camera_frees_the_cursor_and_keeps_a_toggled_crouch()
 }
 
 #[test]
+fn the_cursor_node_frees_the_mouse_and_turns_no_camera_while_the_game_runs() {
+    use oxy_core::graph::{Edge, Node};
+    use oxy_core::input_timeline::{InputChange, TimedInput};
+    let mut project = fixture();
+    let body = project.scenes[0].entity_mut(BODY).unwrap();
+    for (action, mode) in [("mostrar", "show"), ("esconder", "hide")] {
+        let mut input = Node::new("event.input", [0.; 2]);
+        input
+            .params
+            .insert("action".into(), Value::Text(action.into()));
+        let mut cursor = Node::new("game.cursor", [0.; 2]);
+        cursor
+            .params
+            .insert("mode".into(), Value::Text(mode.into()));
+        body.graph.edges.push(Edge {
+            from_node: input.id.clone(),
+            from_port: "exec".into(),
+            to_node: cursor.id.clone(),
+            to_port: "exec".into(),
+        });
+        body.graph.nodes.extend([input, cursor]);
+    }
+    let press = |action: &str| InputFrame {
+        pressed: [action.into()].into(),
+        ..Default::default()
+    };
+    let mut rt = runtime(&project);
+    settle(&mut rt);
+    assert!(rt.wants_relative_mouse() && !rt.cursor_shown());
+    rt.advance(FIXED_DT, &press("mostrar"));
+    assert!(
+        rt.cursor_shown() && !rt.wants_relative_mouse(),
+        "the mouse goes free"
+    );
+    assert!(!rt.game_paused());
+    // The state says so.
+    let mut twin = runtime(&project);
+    let before = twin.state_digest();
+    twin.set_cursor_shown(true);
+    let difference = before.first_difference(&twin.state_digest());
+    assert_eq!(difference.map(|d| d.part).as_deref(), Some("scene"));
+    // The world goes on and the character walks, but the mouse turns nothing, timed look too.
+    let orientation = rt.camera_orientation().unwrap();
+    let start = rt.character_state(BODY).unwrap().position;
+    rt.queue_timed_input(TimedInput {
+        at: rt.time + 0.05,
+        change: InputChange::Look([300., 40.]),
+    })
+    .unwrap();
+    let walking = InputFrame {
+        held: ["mover_frente".into()].into(),
+        look: [500., 120.],
+        ..Default::default()
+    };
+    for _ in 0..30 {
+        rt.advance(FIXED_DT, &walking);
+        assert!(
+            rt.camera_orientation()
+                .unwrap()
+                .abs_diff_eq(orientation, 1e-6)
+        );
+    }
+    assert!(rt.character_state(BODY).unwrap().position.distance(start) > 1.);
+    // Hidden, the mouse is the camera's again.
+    rt.advance(FIXED_DT, &press("esconder"));
+    assert!(!rt.cursor_shown() && rt.wants_relative_mouse());
+    rt.advance(
+        FIXED_DT,
+        &InputFrame {
+            look: [300., 0.],
+            ..Default::default()
+        },
+    );
+    assert!(
+        !rt.camera_orientation()
+            .unwrap()
+            .abs_diff_eq(orientation, 1e-3)
+    );
+    // Shown before the game pause, it stays free after it.
+    rt.advance(FIXED_DT, &press("mostrar"));
+    assert!(rt.set_game_paused(true));
+    assert!(!rt.wants_relative_mouse());
+    assert!(rt.set_game_paused(false));
+    assert!(!rt.wants_relative_mouse());
+    // A new scene starts with the camera's own capture.
+    rt.change_scene(&project.start_scene).unwrap();
+    assert!(!rt.cursor_shown() && rt.wants_relative_mouse());
+    assert!(rt.logs.is_empty(), "{:?}", rt.logs);
+}
+
+#[test]
 fn an_animated_platform_and_its_passenger_freeze_in_the_game_pause() {
     use oxy_core::{
         animation::{Clip, Interpolation, Keyframe},

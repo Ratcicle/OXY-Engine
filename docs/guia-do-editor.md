@@ -73,7 +73,8 @@ Há duas pausas, que podem valer juntas. A **pausa do teste** (no jogo exportado
 - Numa cena sem menu de pausa, Esc pausa o teste e, no jogo exportado, abre a janela **Jogo pausado**, como antes.
 - A perda de foco sempre pausa o teste e, no jogo exportado, abre a janela **Jogo pausado**, mesmo por cima do menu do jogo. **Retomar** volta ao estado em que o jogo estava, inclusive pausado por ele mesmo. A exceção é o teste que um agente de IA joga (veja **Agentes de IA**), que continua com o editor em segundo plano.
 - **Sair do jogo** fecha a janela do jogo exportado; no teste, encerra o teste como **Parar** e escreve uma linha no Console.
-- Com o mouse livre, um clique num botão da interface do jogo é só do botão: não aciona também uma ação de entrada ligada ao botão do mouse, nem quando retoma o jogo. No teste, cliques fora da área do jogo também não chegam ao jogo.
+- Com o mouse livre, um clique num botão da interface do jogo é só do botão: não aciona também uma ação de entrada ligada ao botão do mouse, nem quando retoma o jogo ou esconde o cursor. No teste, cliques fora da área do jogo também não chegam ao jogo.
+- Para soltar o mouse sem pausar, como numa tela de resultado ou num menu que deixa o jogo rodando, use o nó **Mostrar / esconder cursor** (categoria Jogo): com o cursor à mostra, o mouse fica livre e visível, não gira a câmera, e os botões da interface recebem cliques, no teste e no jogo exportado; **Esconder** devolve o mouse à câmera. Mudar de cena volta ao padrão: a câmera que gira com o mouse volta a prendê-lo. A câmera **Fixa na vista atual** (nó **Trocar modo da câmera**) também solta o mouse, parando a câmera onde a vista está; **Fixa no objeto câmera** leva a vista ao objeto câmera. Fixada na vista atual a partir da primeira pessoa, a câmera continua escondendo as peças que a primeira pessoa esconde até o objeto câmera ser movido, para o corpo não tampar a vista.
 
 ## Exportar o jogo
 

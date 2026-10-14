@@ -322,6 +322,8 @@ impl Editor {
             "mouse_captured": self.play.capture
                 && self.showing_game()
                 && runtime.wants_relative_mouse(),
+            // What the game asks, whoever plays: a person's cursor would be free.
+            "cursor_free": !runtime.wants_relative_mouse(),
             // Game time goes on only while the game view is drawn.
             "advancing": self.showing_game() && !runtime.paused,
             "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},

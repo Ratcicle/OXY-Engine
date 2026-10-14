@@ -394,8 +394,9 @@ fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
         for _ in 0..3 {
             rt.advance(FIXED_DT, &held);
         }
-        // One step in the game pause, which input logic still runs in.
+        // One step in the game pause, which input logic still runs in, with the cursor shown.
         assert!(rt.set_game_paused(true));
+        rt.set_cursor_shown(true);
         rt.advance(FIXED_DT, &held);
         rt.queue_timed_input(TimedInput {
             at: rt.time + 10.,
@@ -427,6 +428,7 @@ fn change_scene_keeps_the_run_state_and_clears_every_per_scene_structure() {
                 "damage_hits",
                 "area_hits",
                 "game_paused",
+                "cursor_shown",
             ]
         );
         rt
