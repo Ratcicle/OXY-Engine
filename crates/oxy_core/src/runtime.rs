@@ -435,7 +435,8 @@ impl Runtime {
             self.waiting.len(),
         ]
     }
-    /// The run state as text, for the lifetime contract test (tests/runtime_lifetimes.rs).
+    /// The run state as text, for the lifetime contract test
+    /// (tests/integration/runtime_lifetimes.rs).
     #[doc(hidden)]
     pub fn run_state_debug(&self) -> String {
         format!("{:?}", self.run)

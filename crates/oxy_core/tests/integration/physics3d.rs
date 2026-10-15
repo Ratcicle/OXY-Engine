@@ -555,46 +555,58 @@ fn a_capsule_deep_in_a_turned_floor_gets_out_through_the_top() {
 
 #[test]
 fn standing_near_the_edges_and_corners_of_a_turned_floor_keeps_the_margin() {
-    let config = CapsuleMotion::default();
-    let gravity = Vec3::new(0., -22. / 3600., 0.);
-    for kind in ["box", "hull", "plane"] {
-        for size in [6f32, 20.] {
-            for degrees in [0f32, 13.5, 30., 45., 77.] {
-                let world = turned_floor(kind, size, degrees);
-                let turn = Quat::from_rotation_y(degrees.to_radians());
-                let half = size * 0.5;
-                // Toward three edges and into a corner, a tenth of a millimetre at a time,
-                // where the floor ends within the capsule's reach.
-                for (toward, corner) in [
-                    (Vec3::X, false),
-                    (Vec3::Z, false),
-                    (-Vec3::Z, false),
-                    (-Vec3::X - Vec3::Z, true),
-                ] {
-                    for step in 0..=4000 {
-                        let edge = 0.25 + step as f32 * 1e-4;
-                        let local = if corner {
-                            toward * (half - edge)
-                        } else {
-                            toward * (half - edge) + Vec3::new(toward.z, 0., toward.x) * 0.37
-                        };
-                        let spot = turn * local;
-                        let gap = [0.0099, 0.0101][step % 2];
-                        let case = format!("{kind} {size} m, {degrees}°, at {spot}, gap {gap}");
-                        let feet = spot.with_y(gap);
-                        let r = world
-                            .move_capsule(feet, gravity, 1. / 60., config, &QueryOptions::default())
-                            .unwrap();
-                        let end = feet + r.delta;
-                        assert!(
-                            end.y >= gap.min(config.margin) - 2e-4,
-                            "{case}: {end} {r:?}"
-                        );
-                        assert!(end.with_y(0.).distance(spot) < 1e-4, "{case}: {end} {r:?}");
-                        assert!(r.grounded, "{case}: {r:?}");
-                    }
+    // Thirty floors, nearly half a million moves: each floor is swept on its own thread.
+    std::thread::scope(|threads| {
+        for kind in ["box", "hull", "plane"] {
+            for size in [6f32, 20.] {
+                for degrees in [0f32, 13.5, 30., 45., 77.] {
+                    threads.spawn(move || edges_keep_the_margin(kind, size, degrees));
                 }
             }
+        }
+    });
+}
+
+fn edges_keep_the_margin(kind: &str, size: f32, degrees: f32) {
+    let config = CapsuleMotion::default();
+    let gravity = Vec3::new(0., -22. / 3600., 0.);
+    let world = turned_floor(kind, size, degrees);
+    let turn = Quat::from_rotation_y(degrees.to_radians());
+    let half = size * 0.5;
+    // Toward three edges and into a corner, a tenth of a millimetre at a time,
+    // where the floor ends within the capsule's reach.
+    for (toward, corner) in [
+        (Vec3::X, false),
+        (Vec3::Z, false),
+        (-Vec3::Z, false),
+        (-Vec3::X - Vec3::Z, true),
+    ] {
+        for step in 0..=4000 {
+            let edge = 0.25 + step as f32 * 1e-4;
+            let local = if corner {
+                toward * (half - edge)
+            } else {
+                toward * (half - edge) + Vec3::new(toward.z, 0., toward.x) * 0.37
+            };
+            let spot = turn * local;
+            let gap = [0.0099, 0.0101][step % 2];
+            let case = || format!("{kind} {size} m, {degrees}°, at {spot}, gap {gap}");
+            let feet = spot.with_y(gap);
+            let r = world
+                .move_capsule(feet, gravity, 1. / 60., config, &QueryOptions::default())
+                .unwrap();
+            let end = feet + r.delta;
+            assert!(
+                end.y >= gap.min(config.margin) - 2e-4,
+                "{}: {end} {r:?}",
+                case()
+            );
+            assert!(
+                end.with_y(0.).distance(spot) < 1e-4,
+                "{}: {end} {r:?}",
+                case()
+            );
+            assert!(r.grounded, "{}: {r:?}", case());
         }
     }
 }

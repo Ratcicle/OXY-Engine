@@ -1,6 +1,6 @@
-#[path = "../examples/support/movement.rs"]
+#[path = "../../examples/support/movement.rs"]
 mod movement;
-#[path = "../examples/support/replay.rs"]
+#[path = "../../examples/support/replay.rs"]
 mod replay;
 #[test]
 fn parkour_camera_teleport_and_platform_replay_preserve_fixed_states_and_events() {

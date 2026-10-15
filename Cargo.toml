@@ -29,6 +29,8 @@ oxy_audio = { path = "crates/oxy_audio" }
 
 [profile.dev]
 opt-level = 1
+# Panics and backtraces keep file:line; the full debug info made each test binary hundreds of MB.
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 2

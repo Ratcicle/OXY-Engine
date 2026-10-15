@@ -1310,26 +1310,33 @@ fn assert_on_top(rt: &Runtime, top: f32, case: &str) {
 
 #[test]
 fn a_character_stands_over_the_middle_of_a_turned_floor() {
-    for kind in ["box", "hull", "plane"] {
-        for size in [6., 20., 100.] {
-            for degrees in ANGLES {
-                for feet in spots(degrees, 0.02) {
-                    let case = format!("{kind} {size} m, {degrees}°, at {feet}");
-                    let project = turned_floor(kind, size, degrees, feet);
-                    let mut rt = runtime(&project);
-                    rt.advance(FIXED_DT, &InputFrame::default());
-                    for step in 0..120 {
-                        rt.advance(FIXED_DT, &InputFrame::default());
-                        let case = format!("{case}, step {step}");
-                        assert_on_top(&rt, 0., &case);
-                        let state = rt.character_state(BODY).unwrap();
-                        assert_eq!(state.support.as_ref().unwrap().object, FLOOR, "{case}");
-                        assert!(
-                            state.position.with_y(0.).distance(feet.with_y(0.)) < 1e-3,
-                            "{case}: {state:?}"
-                        );
-                    }
-                }
+    // 180 runs of two seconds: each kind and size of floor runs on its own thread.
+    std::thread::scope(|threads| {
+        for kind in ["box", "hull", "plane"] {
+            for size in [6., 20., 100.] {
+                threads.spawn(move || stands_over_the_middle(kind, size));
+            }
+        }
+    });
+}
+
+fn stands_over_the_middle(kind: &str, size: f32) {
+    for degrees in ANGLES {
+        for feet in spots(degrees, 0.02) {
+            let case = format!("{kind} {size} m, {degrees}°, at {feet}");
+            let project = turned_floor(kind, size, degrees, feet);
+            let mut rt = runtime(&project);
+            rt.advance(FIXED_DT, &InputFrame::default());
+            for step in 0..120 {
+                rt.advance(FIXED_DT, &InputFrame::default());
+                let case = format!("{case}, step {step}");
+                assert_on_top(&rt, 0., &case);
+                let state = rt.character_state(BODY).unwrap();
+                assert_eq!(state.support.as_ref().unwrap().object, FLOOR, "{case}");
+                assert!(
+                    state.position.with_y(0.).distance(feet.with_y(0.)) < 1e-3,
+                    "{case}: {state:?}"
+                );
             }
         }
     }
