@@ -1,10 +1,10 @@
 //! Native overlay widgets shared unchanged between the editor's game tab and player.
 use egui::{
-    Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
-    Vec2,
+    Align, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle,
+    TextureOptions, Vec2, text::LayoutJob,
 };
 use oxy_core::{
-    document::{Id, Project, Scene, UiElement, UiKind},
+    document::{Id, Project, Scene, UiElement, UiKind, UiTextAlign},
     game_ui,
 };
 use std::{
@@ -197,16 +197,11 @@ impl GameUi {
                 }
                 self.textures.get(id)
             });
+            let font = game_ui::font_size(element, rect.height(), texture.is_some())
+                .map(FontId::proportional)
+                .unwrap_or_default();
             match element.kind {
-                UiKind::Text => {
-                    painter.text(
-                        rect.left_center(),
-                        Align2::LEFT_CENTER,
-                        text,
-                        FontId::proportional((rect.height() * 0.5).clamp(12., 32.)),
-                        color,
-                    );
-                }
+                UiKind::Text => aligned_text(&painter, rect, element.text_align, text, font, color),
                 UiKind::Image => {
                     if let Some(texture) = texture {
                         painter.image(
@@ -270,17 +265,11 @@ impl GameUi {
                             Pos2::new(rect.center().x, rect.max.y - 8.),
                             Align2::CENTER_BOTTOM,
                             text,
-                            FontId::proportional(15.),
+                            font,
                             color,
                         );
                     } else {
-                        painter.text(
-                            rect.center(),
-                            Align2::CENTER_CENTER,
-                            text,
-                            FontId::proportional(16.),
-                            color,
-                        );
+                        painter.text(rect.center(), Align2::CENTER_CENTER, text, font, color);
                     }
                     if response.clicked() {
                         clicks.push(entity.id.clone());
@@ -307,7 +296,7 @@ impl GameUi {
                         rect.center(),
                         Align2::CENTER_CENTER,
                         text,
-                        FontId::proportional((rect.height() * 0.55).clamp(11., 22.)),
+                        font,
                         Color32::WHITE,
                     );
                 }
@@ -315,6 +304,28 @@ impl GameUi {
         }
         clicks
     }
+}
+
+/// `text` across `rect` as `align` asks, each line on its own, the whole block centred on the
+/// rectangle's height.
+fn aligned_text(
+    painter: &egui::Painter,
+    rect: Rect,
+    align: UiTextAlign,
+    text: String,
+    font: FontId,
+    color: Color32,
+) {
+    let (halign, x) = match align {
+        UiTextAlign::Left => (Align::LEFT, rect.left()),
+        UiTextAlign::Center => (Align::Center, rect.center().x),
+        UiTextAlign::Right => (Align::RIGHT, rect.right()),
+    };
+    let mut job = LayoutJob::simple(text, font, color, f32::INFINITY);
+    job.halign = halign;
+    let galley = painter.layout_job(job);
+    let top = rect.center().y - galley.size().y / 2.;
+    painter.galley(Pos2::new(x, top), galley, color);
 }
 
 /// `oxy_core::game_ui::element_rect` on an egui rectangle.
@@ -580,6 +591,121 @@ mod tests {
                 };
                 assert!(on_border(a) && on_border(b));
             }
+        }
+    }
+
+    /// The texts `draw` paints for `elements` in a 640×480 view: each with its rows in the view
+    /// (logical rects, one per line) and its font size.
+    fn painted_texts(elements: Vec<UiElement>) -> Vec<(Vec<Rect>, f32)> {
+        use oxy_core::document::Entity;
+        let mut project = Project::new("Textos");
+        for element in elements {
+            let mut entity = Entity::new("Texto", None);
+            entity.ui = Some(element);
+            project.scenes[0].entities.push(entity);
+        }
+        painted(&project, false)
+            .into_iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley
+                        .rows
+                        .iter()
+                        .map(|row| row.rect().translate(text.pos.to_vec2()))
+                        .collect(),
+                    text.galley.job.sections[0].format.font_id.size,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn texts_sit_left_centred_or_right_at_their_own_size() {
+        use oxy_core::document::{UiAnchor, UiTextAlign};
+        let title = |text_align, text_size| UiElement {
+            anchor: UiAnchor::Center,
+            position: [0., -110.],
+            size: [520., 56.],
+            text: "Chegada!".into(),
+            text_align,
+            text_size,
+            ..Default::default()
+        };
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(640., 480.));
+        let rect = element_rect(&title(UiTextAlign::Left, None), viewport);
+        let near = |a: f32, b: f32| (a - b).abs() <= 1.;
+        let drawn = painted_texts(vec![
+            title(UiTextAlign::Left, None),
+            title(UiTextAlign::Center, Some(48.)),
+            title(UiTextAlign::Right, Some(48.)),
+            title(UiTextAlign::Center, None),
+        ]);
+        let [left, center, right, small] = drawn.as_slice() else {
+            panic!("{} texts", drawn.len());
+        };
+        // Automatic, as before: half of the 56 px height, from the left edge.
+        assert_eq!(left.1, 28.);
+        assert!(near(left.0[0].left(), rect.left()), "{left:?}");
+        assert_eq!((center.1, right.1, small.1), (48., 48., 28.));
+        assert!(near(center.0[0].center().x, rect.center().x), "{center:?}");
+        assert!(near(small.0[0].center().x, rect.center().x), "{small:?}");
+        assert!(near(right.0[0].right(), rect.right()), "{right:?}");
+        // Every size stays centred on the rectangle's height.
+        for (rows, _) in &drawn {
+            assert!(near(rows[0].center().y, rect.center().y), "{rows:?}");
+        }
+        assert!(center.0[0].width() > small.0[0].width() * 1.5);
+
+        // Each line of a longer text sits on its own; the block stays centred on the height.
+        let lines = |text_align| UiElement {
+            text: "Seu tempo 00:55.80\nRecorde".into(),
+            ..title(text_align, Some(20.))
+        };
+        let drawn = painted_texts(vec![lines(UiTextAlign::Center), lines(UiTextAlign::Right)]);
+        let [(center, _), (right, _)] = drawn.as_slice() else {
+            panic!("{} texts", drawn.len());
+        };
+        assert_eq!((center.len(), right.len()), (2, 2));
+        assert!(center[0].width() > center[1].width() + 20.);
+        for row in center {
+            assert!(near(row.center().x, rect.center().x), "{center:?}");
+        }
+        for row in right {
+            assert!(near(row.right(), rect.right()), "{right:?}");
+        }
+        assert!(near(
+            (center[0].top() + center[1].bottom()) / 2.,
+            rect.center().y
+        ));
+    }
+
+    #[test]
+    fn a_fixed_size_holds_on_button_labels_and_bars_keep_theirs() {
+        use oxy_core::document::UiTextAlign;
+        let element = |kind, text_size| UiElement {
+            kind,
+            size: [240., 42.],
+            text: "Jogar de novo".into(),
+            // Only texts take the alignment: a button keeps its label centred.
+            text_align: UiTextAlign::Right,
+            text_size,
+            ..Default::default()
+        };
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(640., 480.));
+        let rect = element_rect(&element(UiKind::Button, None), viewport);
+        let drawn = painted_texts(vec![
+            element(UiKind::Button, None),
+            element(UiKind::Button, Some(30.)),
+            element(UiKind::Bar, Some(30.)),
+        ]);
+        let sizes: Vec<_> = drawn.iter().map(|(_, size)| *size).collect();
+        assert_eq!(sizes, [16., 30., 22.]);
+        for (rows, _) in &drawn[..2] {
+            assert!(
+                (rows[0].center().x - rect.center().x).abs() <= 1.,
+                "{rows:?}"
+            );
         }
     }
 

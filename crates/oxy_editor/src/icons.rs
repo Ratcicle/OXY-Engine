@@ -84,6 +84,10 @@ pub enum Icon {
     Console,
     // The test an agent plays.
     Agent,
+    // Where a text of the game interface sits.
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
@@ -1004,6 +1008,21 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 Stroke::new(1.3, color),
             ));
             line(at(0.5, 0.66), at(0.74, 0.66));
+        }
+        Icon::AlignLeft | Icon::AlignCenter | Icon::AlignRight => {
+            // Four lines on a 14-unit grid; the short ones lean to the side the text sits.
+            let unit = |x: f32, y: f32| at(x / 14., y / 14.);
+            let start = match icon {
+                Icon::AlignLeft => 2.,
+                Icon::AlignCenter => 4.,
+                _ => 6.,
+            };
+            for y in [3., 9.] {
+                line(unit(2., y), unit(12., y));
+            }
+            for y in [6., 12.] {
+                line(unit(start, y), unit(start + 6., y));
+            }
         }
         Icon::Agent => {
             // A robot head on a 14-unit grid: the face, an antenna and two eyes.

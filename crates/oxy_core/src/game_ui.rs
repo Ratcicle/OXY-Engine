@@ -114,6 +114,27 @@ pub fn display_text(
     }
 }
 
+/// The font size, in pixels of the view, of the text drawn on `element` when it is `height`
+/// tall: `text_size` on texts and button labels; without it (automatic), half the height from
+/// 12 to 32 on texts and 16 on buttons (15 under their `image`). Bars take 0.55 of the height,
+/// from 11 to 22. None on images, which draw no text.
+pub fn font_size(element: &UiElement, height: f32, image: bool) -> Option<f32> {
+    let automatic = match element.kind {
+        UiKind::Text => (height * 0.5).clamp(12., 32.),
+        UiKind::Button if image => 15.,
+        UiKind::Button => 16.,
+        UiKind::Bar => return Some((height * 0.55).clamp(11., 22.)),
+        UiKind::Image => return None,
+    };
+    let (min, max) = (*UiElement::TEXT_SIZES.start(), *UiElement::TEXT_SIZES.end());
+    Some(
+        element
+            .text_size
+            .filter(|size| size.is_finite())
+            .map_or(automatic, |size| size.clamp(min, max)),
+    )
+}
+
 /// How full a bar is, 0 to 1: the bound number over `max_value`.
 pub fn bar_fraction(element: &UiElement, value: Option<&Value>) -> f64 {
     let current = value.and_then(Value::number).unwrap_or(0.);
@@ -149,6 +170,12 @@ pub struct UiState {
     /// Text drawn, with the bound value; absent on images.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Font size of that text in pixels of the view (see `font_size`); absent on images.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_size: Option<f64>,
+    /// Where the text sits across the rectangle; only on Text elements.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_align: Option<UiTextAlign>,
     /// How full a bar is, 0 to 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fraction: Option<f64>,
@@ -185,6 +212,9 @@ pub fn ui_state(project: &Project, scene: &Scene, size: [f32; 2]) -> Vec<UiState
                     .map(|v| short(f64::from(v))),
                 text: (element.kind != UiKind::Image)
                     .then(|| shown_text(element, value, scene, &project.surfaces)),
+                text_size: font_size(element, rect.height(), element.texture.is_some())
+                    .map(|size| short(f64::from(size))),
+                text_align: (element.kind == UiKind::Text).then_some(element.text_align),
                 fraction: (element.kind == UiKind::Bar)
                     .then(|| short(bar_fraction(element, value))),
                 clickable: element.kind == UiKind::Button && visible && rect.overlaps(&viewport),
@@ -370,5 +400,91 @@ mod tests {
                 .get("fraction")
                 .is_none()
         );
+        // Each text says how big it is drawn; only texts say where it sits.
+        assert_eq!(timer.text_size, Some(18.));
+        assert_eq!(timer.text_align, Some(UiTextAlign::Left));
+        assert_eq!(start.text_size, Some(16.));
+        assert_eq!((bar.text_size, bar.text_align), (Some(19.8), None));
+        let logo = serde_json::to_value(get("Logo")).unwrap();
+        assert!(logo.get("text_size").is_none() && logo.get("text_align").is_none());
+        let json = serde_json::to_value(timer).unwrap();
+        assert_eq!(
+            (&json["text_size"], &json["text_align"]),
+            (&serde_json::json!(18.0), &serde_json::json!("Left"))
+        );
+    }
+
+    #[test]
+    fn a_fixed_text_size_holds_on_texts_and_button_labels_within_its_limits() {
+        let element = |kind, text_size| UiElement {
+            kind,
+            text_size,
+            ..Default::default()
+        };
+        // Automatic: half the height from 12 to 32 on texts, 16 on buttons (15 with an image).
+        for (height, size) in [(10., 12.), (36., 18.), (56., 28.), (200., 32.)] {
+            assert_eq!(
+                font_size(&element(UiKind::Text, None), height, false),
+                Some(size)
+            );
+        }
+        assert_eq!(
+            font_size(&element(UiKind::Button, None), 80., false),
+            Some(16.)
+        );
+        assert_eq!(
+            font_size(&element(UiKind::Button, None), 80., true),
+            Some(15.)
+        );
+        // Fixed: whatever the height, on texts and on button labels, image or not.
+        for height in [10., 56., 400.] {
+            assert_eq!(
+                font_size(&element(UiKind::Text, Some(48.)), height, false),
+                Some(48.)
+            );
+            assert_eq!(
+                font_size(&element(UiKind::Button, Some(24.)), height, true),
+                Some(24.)
+            );
+        }
+        // Bars and images keep their own rule.
+        assert_eq!(
+            font_size(&element(UiKind::Bar, Some(48.)), 100., false),
+            Some(22.)
+        );
+        assert_eq!(
+            font_size(&element(UiKind::Image, Some(48.)), 28., false),
+            None
+        );
+        // A document that skipped validation still draws within the limits.
+        assert_eq!(
+            font_size(&element(UiKind::Text, Some(500.)), 36., false),
+            Some(96.)
+        );
+        assert_eq!(
+            font_size(&element(UiKind::Text, Some(2.)), 36., false),
+            Some(10.)
+        );
+        assert_eq!(
+            font_size(&element(UiKind::Text, Some(f32::NAN)), 36., false),
+            Some(18.)
+        );
+
+        let mut project = Project::new("Resultado");
+        let mut title = Entity::new("Título", None);
+        title.ui = Some(UiElement {
+            anchor: UiAnchor::Center,
+            position: [0., -110.],
+            size: [520., 56.],
+            text: "Chegada!".into(),
+            text_align: UiTextAlign::Center,
+            text_size: Some(48.),
+            ..Default::default()
+        });
+        project.scenes[0].entities.push(title);
+        let state = ui_state(&project, &project.scenes[0], [1280., 720.]);
+        assert_eq!(state[0].text_size, Some(48.));
+        assert_eq!(state[0].text_align, Some(UiTextAlign::Center));
+        assert_eq!(state[0].rect, [380., 222., 520., 56.]);
     }
 }

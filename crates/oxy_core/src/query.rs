@@ -1274,7 +1274,10 @@ pub fn catalog() -> Json {
             "2d": ["Rectangle", "Circle", "Sprite"],
             "3d": ["Cube", "Sphere", "Cylinder", "Plane", "Pyramid", "Cone", "Tube"],
         },
-        "ui_elements": ["Text", "Image", "Button", "Bar"],
+        "ui_elements": {
+            "kinds": ["Text", "Image", "Button", "Bar"],
+            "fields": "An interface element is the object's ui, which update_entity patches: kind; anchor (TopLeft, TopRight, BottomLeft, BottomRight or Center), position [x, y] (the offset from that corner) and size [width, height], in pixels of the game view; text, where {value} or {valor} shows the bound attribute; color [r, g, b, a] from 0 to 1 (an Image without texture is a panel in it); texture (an image asset ID); binding_object (left out, the object itself) and binding_attribute; max_value (a Bar's full value). text_align (Left, the default, Center or Right) places each line of a Text across its width. text_size is the font size in pixels, 10 to 96, of a Text or a Button label; left out (null in a patch) it is automatic: half the height from 12 to 32 on a Text, 16 on a Button (15 on one with an image). Both stay out of the document while left at the default.",
+        },
         "presets": presets(),
         "movement_profiles": movement_profiles(),
         "surface_presets": ["common", "ice", "mud", "conveyor"],

@@ -133,6 +133,74 @@ fn update_entity_patches_fields_but_never_the_id() {
 }
 
 #[test]
+fn update_entity_sets_and_clears_the_alignment_and_size_of_an_interface_text() {
+    let (mut project, scene) = project(SceneKind::TwoD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "create_entity", "name": "Título",
+            "kind": {"type": "ui", "element": "Text"}})),
+    )
+    .unwrap();
+    let id = created[0].created[0].clone();
+    let ui = |project: &Project| {
+        let element = project
+            .scene(&scene)
+            .unwrap()
+            .entity(&id)
+            .unwrap()
+            .ui
+            .clone();
+        let element = element.unwrap();
+        (element.text_align, element.text_size)
+    };
+    assert_eq!(ui(&project), (UiTextAlign::Left, None));
+    let patch = |patch: serde_json::Value| {
+        batch(json!({"op": "update_entity", "entity": id, "patch": {"ui": patch}}))
+    };
+    command::apply(
+        &mut project,
+        &scene,
+        &patch(json!({"text_align": "Center", "text_size": 48})),
+    )
+    .unwrap();
+    assert_eq!(ui(&project), (UiTextAlign::Center, Some(48.)));
+    // The read gives them as stored, the form the patch takes.
+    let read = query::entity(&project, &scene, &id).unwrap();
+    let element = &read["ui"];
+    assert_eq!(
+        (&element["text_align"], &element["text_size"]),
+        (&json!("Center"), &json!(48.0)),
+        "{read}"
+    );
+    // Outside 10 to 96 px nothing changes; null goes back to automatic.
+    let before = project.clone();
+    let error = command::apply(&mut project, &scene, &patch(json!({"text_size": 120})))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Tamanho do texto de Título deve ficar entre 10 e 96 px; recebeu 120"),
+        "{error}"
+    );
+    assert_eq!(project, before);
+    command::apply(
+        &mut project,
+        &scene,
+        &patch(json!({"text_size": null, "text_align": "Right"})),
+    )
+    .unwrap();
+    assert_eq!(ui(&project), (UiTextAlign::Right, None));
+    assert!(
+        command::apply(
+            &mut project,
+            &scene,
+            &patch(json!({"text_align": "Justify"}))
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn components_follow_the_editor_dependency_rules() {
     let (mut project, scene) = project(SceneKind::ThreeD);
     let commands = batch(json!([

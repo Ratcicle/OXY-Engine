@@ -107,6 +107,61 @@ impl NativeQa {
                 fired == 1,
                 "Um clique no jogo com o mouse preso deveria Disparar uma vez",
             ),
+            "pause_title_set" | "pause_title_undone" => {
+                // The menu's title, centred at 48 px in the Interface do jogo card; undone, it
+                // keeps the 28 px the px mode started from.
+                let title = self
+                    .editor
+                    .scene()
+                    .entities
+                    .iter()
+                    .find(|e| e.name == "Título")
+                    .and_then(|e| e.ui.clone())
+                    .ok_or("Título sem elemento de interface")?;
+                let size = if label == "pause_title_set" { 48. } else { 28. };
+                ensure(
+                    title.text_align == oxy_core::document::UiTextAlign::Center
+                        && title.text_size == Some(size)
+                        && visible("Alinhamento")
+                        && visible("Tamanho do texto"),
+                    &format!(
+                        "o Título deveria ficar no centro, com {size} px (alinhamento {:?}, \
+                         tamanho {:?})",
+                        title.text_align, title.text_size
+                    ),
+                )?;
+                // The card keeps to the panel: a wider row would push the view to the left.
+                let (before, now) = (self.ux_viewport, self.surface.native_viewport);
+                ensure(
+                    before
+                        .zip(now)
+                        .is_some_and(|(before, now)| (before.right() - now.right()).abs() < 0.5),
+                    &format!("as Propriedades alargaram com o Título (vista {before:?} → {now:?})"),
+                )
+            }
+            "pause_title_centered" => {
+                let view = self
+                    .surface
+                    .native_viewport
+                    .ok_or("Imagem do jogo ausente")?;
+                let text = self
+                    .surface
+                    .texts
+                    .iter()
+                    .find(|t| t.text == "Pausado" && view.contains(t.rect.center()))
+                    .ok_or("Título ausente no menu do jogo")?;
+                // Left-aligned in its 104 px box, the 48 px title would sit some 38 px right of
+                // the centre; at the automatic 28 px its letters are under 30 px tall. The rect
+                // bounds the letters, whose side bearings differ by a pixel or two.
+                ensure(
+                    (text.rect.center().x - view.center().x).abs() < 4. && text.rect.height() > 30.,
+                    &format!(
+                        "o Título deveria aparecer no centro da vista, com 48 px ({:?} na vista \
+                         {:?})",
+                        text.rect, view
+                    ),
+                )
+            }
             "pause_quit_stopped" => {
                 ensure(
                     runtime.is_none() && !capture,
@@ -156,6 +211,32 @@ fn native_game_pause_workflow() {
         Box::new(move |cc| {
             let mut qa = NativeQa::new(cc, path, artifacts, shared);
             qa.actions = VecDeque::from([
+                // The title of the menu, centred at 48 px through the Properties card, whose
+                // width the view keeps.
+                Action::Wait(4),
+                Action::Check("ux_viewport"),
+                Action::SelectEntity("Título"),
+                Action::Wait(2),
+                Action::Click("Expandir Interface do jogo"),
+                Action::Wait(2),
+                Action::Click("Centralizar"),
+                Action::Wait(2),
+                Action::Click("px"),
+                Action::Wait(2),
+                Action::Click("Tamanho do texto em px"),
+                Action::Click("Tamanho do texto em px"),
+                Action::Key(Key::A, true),
+                Action::Text("48"),
+                Action::Key(Key::Enter, false),
+                Action::Wait(4),
+                Action::Check("pause_title_set"),
+                Action::Screenshot("editor-title-properties.png"),
+                Action::Key(Key::Z, true),
+                Action::Wait(3),
+                Action::Check("pause_title_undone"),
+                Action::Key(Key::Y, true),
+                Action::Wait(3),
+                Action::Check("pause_title_set"),
                 Action::Check("play_baseline"),
                 Action::Click("Jogar"),
                 Action::Wait(12),
@@ -163,6 +244,7 @@ fn native_game_pause_workflow() {
                 Action::Key(Key::Escape, false),
                 Action::Wait(4),
                 Action::Check("pause_game_menu"),
+                Action::Check("pause_title_centered"),
                 Action::Screenshot("editor-game-menu.png"),
                 Action::Click("Pausar"),
                 Action::Check("pause_test_over_menu"),
@@ -199,5 +281,5 @@ fn native_game_pause_workflow() {
     std::fs::write(output.join("native-pause.txt"), &text).unwrap();
     println!("{text}");
     assert!(report.done && report.error.is_none(), "{text}");
-    assert_eq!(report.screenshots.len(), 3, "{text}");
+    assert_eq!(report.screenshots.len(), 4, "{text}");
 }

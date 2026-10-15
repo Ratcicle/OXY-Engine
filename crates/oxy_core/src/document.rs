@@ -232,6 +232,19 @@ pub enum UiAnchor {
     BottomRight,
     Center,
 }
+/// Where the lines of a Text element sit across its width.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UiTextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+impl UiTextAlign {
+    pub fn is_left(&self) -> bool {
+        *self == Self::Left
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiElement {
     pub kind: UiKind,
@@ -244,6 +257,16 @@ pub struct UiElement {
     pub binding_object: Option<Id>,
     pub binding_attribute: String,
     pub max_value: f64,
+    /// Text elements only. Left out of the document while it is the default, as is `text_size`.
+    #[serde(default, skip_serializing_if = "UiTextAlign::is_left")]
+    pub text_align: UiTextAlign,
+    /// Font size of a text or a button label in pixels of the game view, within `TEXT_SIZES`;
+    /// None sizes it automatically (`game_ui::font_size`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_size: Option<f32>,
+}
+impl UiElement {
+    pub const TEXT_SIZES: std::ops::RangeInclusive<f32> = 10.0..=96.0;
 }
 impl Default for UiElement {
     fn default() -> Self {
@@ -258,6 +281,8 @@ impl Default for UiElement {
             binding_object: None,
             binding_attribute: String::new(),
             max_value: 100.,
+            text_align: UiTextAlign::Left,
+            text_size: None,
         }
     }
 }
@@ -1163,6 +1188,16 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
             {
                 return Err(format!("Valores de interface inválidos: {}", e.name));
             }
+            if let Some(size) = ui.text_size
+                && !UiElement::TEXT_SIZES.contains(&size)
+            {
+                return Err(format!(
+                    "Tamanho do texto de {} deve ficar entre {} e {} px; recebeu {size}",
+                    e.name,
+                    UiElement::TEXT_SIZES.start(),
+                    UiElement::TEXT_SIZES.end()
+                ));
+            }
         }
         if let Some(c) = &e.collider
             && (!c.size.iter().all(|v| v.is_finite() && *v > 0.)
@@ -1412,6 +1447,49 @@ mod tests {
             let mut edge = p.clone();
             edge.game.window = window;
             validate_project(&edge).unwrap();
+        }
+    }
+    #[test]
+    fn ui_text_alignment_and_size_are_optional_and_limited() {
+        let mut p = Project::new("Interface");
+        let mut title = Entity::new("Título", None);
+        title.ui = Some(UiElement::default());
+        p.scenes[0].entities.push(title);
+        // Left and automatic stay out of the document, so files saved before them read and
+        // save to the same bytes.
+        let saved = serde_json::to_string(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        let ui = json["scenes"][0]["entities"][0]["ui"].as_object().unwrap();
+        assert!(!ui.contains_key("text_align") && !ui.contains_key("text_size"));
+        let loaded: Project = serde_json::from_str(&saved).unwrap();
+        let element = loaded.scenes[0].entities[0].ui.as_ref().unwrap();
+        assert_eq!(
+            (element.text_align, element.text_size),
+            (UiTextAlign::Left, None)
+        );
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), saved);
+
+        let ui = p.scenes[0].entities[0].ui.as_mut().unwrap();
+        ui.text_align = UiTextAlign::Center;
+        ui.text_size = Some(48.);
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        let ui = &json["scenes"][0]["entities"][0]["ui"];
+        assert_eq!(ui["text_align"], "Center");
+        assert_eq!(ui["text_size"], 48.0);
+        assert_eq!(serde_json::from_value::<Project>(json).unwrap(), p);
+
+        for size in [UiElement::TEXT_SIZES.start(), UiElement::TEXT_SIZES.end()] {
+            p.scenes[0].entities[0].ui.as_mut().unwrap().text_size = Some(*size);
+            validate_project(&p).unwrap();
+        }
+        for size in [9.5, 96.5, f32::INFINITY, f32::NAN] {
+            p.scenes[0].entities[0].ui.as_mut().unwrap().text_size = Some(size);
+            let error = validate_project(&p).unwrap_err();
+            assert!(
+                error.starts_with("Tamanho do texto de Título deve ficar entre 10 e 96 px"),
+                "{error}"
+            );
         }
     }
     #[test]

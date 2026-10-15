@@ -171,7 +171,8 @@ its name too ({\"Object\": \"<id>\", \"name\": \"Resultado\"}), and edges are te
 and convex/triangle collision geometry come as counts. graph=full and geometry=full give them as \
 stored, IDs only, the form update_entity patches.";
 const CATALOG_DESCRIPTION: &str = "Catalog of logic nodes, components, shapes, interface \
-elements, presets [{id, description, creates, params}] (creates lists the pieces in the order \
+elements (ui_elements: the kinds and the fields of an object's ui, text_align and text_size \
+among them), presets [{id, description, creates, params}] (creates lists the pieces in the order \
 create_entity answers them; params are the preset's options), movement_profiles [{id, label, \
 values}] (what apply_movement_profile writes), surface presets, the keys input actions can use \
 (input_keys) and the value format. By default the nodes are brief (operation, label, category, \
@@ -542,10 +543,12 @@ pub fn definitions() -> Json {
                        "Reports the game interface at the end (default true): ui, in drawing order \
                         (the topmost last), [{id, name, kind: Text|Image|Button|Bar, visible, rect: \
                         [x, y, width, height] in pixels of the game view from its top-left corner, \
-                        text as shown with bound values, fraction (bars, 0-1), clickable (a visible \
-                        button inside the view)}], and cursor_free: whether a person's cursor would \
-                        be free at the end to click them (a game.cursor node showed it, the game \
-                        is in its own pause, or the active camera does not turn with the mouse)."},
+                        text as shown with bound values, text_size (its font size in pixels; not \
+                        on images), text_align (texts: Left|Center|Right), fraction (bars, 0-1), \
+                        clickable (a visible button inside the view)}], and cursor_free: whether a \
+                        person's cursor would be free at the end to click them (a game.cursor node \
+                        showed it, the game is in its own pause, or the active camera does not turn \
+                        with the mouse)."},
                    "width": {"type": "integer", "description":
                        "Game view width in pixels, 16-4096 (default 960): the screenshot and the ui \
                         rectangles."},
@@ -766,8 +769,10 @@ box for Cube, Plane and with children, sphere for a round Sphere, convex for a S
 dimensions or scale stretch and for Cylinder, Cone and Pyramid, mesh for Tube and editable \
 meshes. 3D characters (their body is the collider) are refused
 - update_entity {entity, patch}: JSON merge patch over the object's document form (oxy_entity \
-with graph and geometry full) for fields without a dedicated command; the rotation_degrees reads \
-add to keyframes is refused (keyframes keep radians; set_clip takes degrees)
+with graph and geometry full) for fields without a dedicated command, such as an interface \
+element's ui (oxy_catalog ui_elements lists its fields: {\"ui\": {\"text_align\": \"Center\", \
+\"text_size\": 48}}; text_size null goes back to automatic); the rotation_degrees reads add to \
+keyframes is refused (keyframes keep radians; set_clip takes degrees)
 - add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
 set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
 to_node, to_port}. Nodes added without position (best left out) are laid out when the batch \
@@ -1930,6 +1935,12 @@ mod tests {
         }
         let image = simulate["screenshot"]["description"].as_str().unwrap();
         assert!(image.contains("with the game interface drawn"), "{image}");
+        let listed = simulate["ui"]["description"].as_str().unwrap();
+        assert!(
+            listed.contains("text_size (its font size in pixels; not on images)")
+                && listed.contains("text_align (texts: Left|Center|Right)"),
+            "{listed}"
+        );
         assert!(SIMULATE_DESCRIPTION.contains("view at the end, with the game interface drawn"));
         // The seed is a JSON integer both tools take alike, up to the largest one kept exactly.
         assert_eq!(shot["seed"], simulate["seed"]);
@@ -2126,6 +2137,10 @@ mod tests {
                 && CATALOG_DESCRIPTION.contains("degrees")
         );
         assert!(APPLY_DESCRIPTION.contains("graph and geometry full"));
+        // The fields of an interface element: in the catalog, patched with update_entity.
+        assert!(CATALOG_DESCRIPTION.contains("ui_elements: the kinds and the fields"));
+        assert!(APPLY_DESCRIPTION.contains("oxy_catalog ui_elements lists its fields"));
+        assert!(APPLY_DESCRIPTION.contains("text_size null goes back to automatic"));
     }
 
     #[test]
@@ -3443,6 +3458,8 @@ mod tests {
             text: "Tempo: {value}".into(),
             anchor: UiAnchor::BottomRight,
             binding_attribute: "tempo".into(),
+            text_align: oxy_core::document::UiTextAlign::Right,
+            text_size: Some(24.),
             ..Default::default()
         });
         project.scenes[0].entities.push(timer);
@@ -3460,6 +3477,8 @@ mod tests {
         let default = report(json!({})).unwrap();
         assert_eq!(default["ui"][0]["text"], "Tempo: 3");
         assert_eq!(default["ui"][0]["rect"], json!([756.0, 480.0, 180.0, 36.0]));
+        assert_eq!(default["ui"][0]["text_size"], 24.0);
+        assert_eq!(default["ui"][0]["text_align"], "Right");
         let small = report(json!({"width": 640, "height": 360})).unwrap();
         assert_eq!(small["ui"][0]["rect"], json!([436.0, 300.0, 180.0, 36.0]));
         assert!(report(json!({"ui": false})).unwrap().get("ui").is_none());

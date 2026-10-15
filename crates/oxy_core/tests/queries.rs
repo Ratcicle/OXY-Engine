@@ -781,6 +781,16 @@ fn the_catalog_is_brief_by_default_and_full_for_the_nodes_asked_for() {
         brief.to_string().len() * 2 < query::catalog().to_string().len(),
         "brief is far shorter"
     );
+    // The interface elements, with the fields update_entity patches in an object's ui.
+    let ui = &brief["ui_elements"];
+    assert_eq!(ui["kinds"], json!(["Text", "Image", "Button", "Bar"]));
+    let fields = ui["fields"].as_str().unwrap();
+    assert!(
+        fields.contains("text_align (Left, the default, Center or Right)")
+            && fields.contains("text_size is the font size in pixels, 10 to 96")
+            && fields.contains("null in a patch"),
+        "{fields}"
+    );
     // When data is read, which the descriptions of single nodes cannot say.
     let format = brief["value_format"].as_str().unwrap();
     assert!(

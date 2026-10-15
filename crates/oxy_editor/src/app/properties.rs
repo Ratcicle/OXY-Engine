@@ -694,8 +694,10 @@ impl Editor {
                 None,
                 None,
                 |ui| {
+                    use crate::widgets::property_row_with;
                     let element = entity.ui.as_mut().unwrap();
-                    property_row(ui, "Tipo", "", |ui| {
+                    let column = ui_label_column(ui);
+                    property_row_with(ui, column, "Tipo", "", |ui| {
                         egui::ComboBox::from_id_salt("ui_kind")
                             .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(crate::labels::ui_kind(element.kind))
@@ -711,7 +713,7 @@ impl Editor {
                                 }
                             });
                     });
-                    property_row(ui, "Âncora", "", |ui| {
+                    property_row_with(ui, column, "Âncora", "", |ui| {
                         egui::ComboBox::from_id_salt("ui_anchor")
                             .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(crate::labels::anchor(element.anchor))
@@ -731,22 +733,31 @@ impl Editor {
                                 }
                             });
                     });
-                    property_row(ui, "Deslocamento", "Em pontos, a partir da âncora.", |ui| {
-                        for value in &mut element.position {
-                            ui.add(egui::DragValue::new(value));
-                        }
-                    });
-                    property_row(ui, "Tamanho", "", |ui| {
+                    property_row_with(
+                        ui,
+                        column,
+                        "Deslocamento",
+                        "Em pontos, a partir da âncora.",
+                        |ui| {
+                            for value in &mut element.position {
+                                ui.add(egui::DragValue::new(value));
+                            }
+                        },
+                    );
+                    property_row_with(ui, column, "Tamanho", "", |ui| {
                         for value in &mut element.size {
                             ui.add(egui::DragValue::new(value).range(1.0..=4000.));
                         }
                     });
+                    ui_text_rows(ui, column, element);
                     ui.label("Texto ({valor} mostra o vínculo)");
                     ui.add(
                         egui::TextEdit::multiline(&mut element.text)
                             .desired_width(ui.available_width()),
                     );
-                    property_row(ui, "Cor", "", |ui| color_editor(ui, &mut element.color));
+                    property_row_with(ui, column, "Cor", "", |ui| {
+                        color_editor(ui, &mut element.color)
+                    });
                     ui.label("Objeto que possui o atributo").on_hover_text(
                     "A interface lê o valor deste objeto, por exemplo Vida do personagem. Sem escolha, usa o próprio objeto.",
                 );
@@ -775,7 +786,7 @@ impl Editor {
                     } else {
                         ""
                     };
-                    property_row(ui, "Imagem", hint, |ui| {
+                    property_row_with(ui, column, "Imagem", hint, |ui| {
                         egui::ComboBox::from_id_salt("ui_image")
                             .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(label)
@@ -899,6 +910,102 @@ impl Editor {
     }
 }
 
+/// Label column of the Interface do jogo card: wide enough for Tamanho do texto while the card
+/// keeps room for its rows of two numbers; narrower, the usual column, and the longer label
+/// takes its own line.
+fn ui_label_column(ui: &egui::Ui) -> f32 {
+    let wide =
+        crate::widgets::label_column(ui, &["Deslocamento", "Alinhamento", "Tamanho do texto"]);
+    let numbers = 2. * (ui.spacing().interact_size.x + ui.spacing().item_spacing.x);
+    if ui.available_width() >= wide + numbers {
+        wide
+    } else {
+        crate::theme::LABEL_COLUMN
+    }
+}
+
+/// Alinhamento (texts) and Tamanho do texto (texts and button labels) of the Interface do jogo
+/// card, within its width: where the px field does not fit beside the choice, it goes under it.
+fn ui_text_rows(ui: &mut egui::Ui, column: f32, element: &mut UiElement) {
+    use crate::{icons::Icon, widgets};
+    if element.kind == UiKind::Text {
+        let aligns = [
+            (
+                UiTextAlign::Left,
+                Icon::AlignLeft,
+                "Alinhar à esquerda",
+                "Alinhar à esquerda",
+            ),
+            (
+                UiTextAlign::Center,
+                Icon::AlignCenter,
+                "Centralizar",
+                "Centralizar",
+            ),
+            (
+                UiTextAlign::Right,
+                Icon::AlignRight,
+                "Alinhar à direita",
+                "Alinhar à direita",
+            ),
+        ];
+        let width = widgets::segmented_icons_width(ui, &aligns.map(|(_, _, l, _)| l), false);
+        widgets::property_row_fit(ui, column, "Alinhamento", "", width, |ui| {
+            widgets::segmented_icons(ui, &mut element.text_align, &aligns, false);
+        });
+    }
+    if !matches!(element.kind, UiKind::Text | UiKind::Button) {
+        return;
+    }
+    // Switching to px starts from the size drawn now.
+    let drawn =
+        oxy_core::game_ui::font_size(element, element.size[1].max(1.), element.texture.is_some())
+            .unwrap_or(16.);
+    let modes = [(false, "Automático"), (true, "px")];
+    let mut fixed = element.text_size.is_some();
+    let number = ui.spacing().interact_size.x;
+    let mut placed = false;
+    let width = widgets::segmented_width(ui, &modes.map(|(_, label)| label));
+    let beside = widgets::property_row_fit(ui, column, "Tamanho do texto", "", width, |ui| {
+        if widgets::segmented(ui, &mut fixed, &modes) {
+            element.text_size = fixed.then_some(drawn.round());
+        }
+        if ui.available_width() >= number
+            && let Some(size) = &mut element.text_size
+        {
+            text_size_field(ui, size);
+            placed = true;
+        }
+    });
+    if !placed && let Some(size) = &mut element.text_size {
+        if beside {
+            widgets::property_row_with(ui, column, "", "", |ui| text_size_field(ui, size));
+        } else {
+            text_size_field(ui, size);
+        }
+    }
+    let hint = match (element.text_size, element.kind) {
+        (Some(_), UiKind::Text) => {
+            "De 10 a 96 px, na escala da janela do jogo. Vale também para botões.".into()
+        }
+        (Some(_), _) => "De 10 a 96 px, na escala da janela do jogo.".into(),
+        (None, UiKind::Text) => "Automático: metade da altura do elemento, de 12 a 32 px.".into(),
+        (None, _) => format!("Automático: {drawn} px, o padrão dos botões."),
+    };
+    widgets::hint(ui, &hint);
+}
+
+/// The px field of Tamanho do texto; whole pixels read "48" at any interface scale.
+fn text_size_field(ui: &mut egui::Ui, size: &mut f32) {
+    let field = ui.add(
+        egui::DragValue::new(size)
+            .range(UiElement::TEXT_SIZES)
+            .speed(1.)
+            .custom_formatter(|value, _| egui::emath::format_with_decimals_in_range(value, 0..=1)),
+    );
+    crate::icons::register_qa(ui, "Tamanho do texto em px", field.rect);
+}
+
 /// End of a project path, from its folder: the part that tells projects apart.
 fn short_project_path(path: &Path) -> String {
     let file = path.file_name().unwrap_or_default().to_string_lossy();
@@ -915,6 +1022,76 @@ fn short_project_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_rows_keep_to_the_width_of_the_card() {
+        use egui::{Pos2, Rect, Shape, vec2};
+        use oxy_core::document::{UiElement, UiTextAlign};
+        fn find(shape: &Shape, label: &str) -> Option<Rect> {
+            match shape {
+                Shape::Text(text) if text.galley.text() == label => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, label)),
+                _ => None,
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let mut element = UiElement {
+            size: [520., 56.],
+            text_align: UiTextAlign::Center,
+            text_size: Some(48.),
+            ..Default::default()
+        };
+        // The rows laid out `width` points wide: the width they take and where the label, the
+        // px choice and the px field are drawn.
+        let mut rows = |width: f32| {
+            let mut used = 0.;
+            let mut output = None;
+            for _ in 0..2 {
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800., 600.))),
+                    ..Default::default()
+                };
+                output = Some(ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.allocate_ui(vec2(width, 500.), |ui| {
+                            let column = super::ui_label_column(ui);
+                            super::ui_text_rows(ui, column, &mut element);
+                            used = ui.min_rect().width();
+                        });
+                    });
+                }));
+            }
+            let output = output.unwrap();
+            let at = |label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| find(&shape.shape, label))
+                    .unwrap_or_else(|| panic!("{label} not drawn {width} points wide"))
+            };
+            (used, at("Tamanho do texto"), at("px"), at("48"))
+        };
+        let same_line = |a: Rect, b: Rect| (a.center().y - b.center().y).abs() < 4.;
+        // Wide, as in the prototype: one row, past the label column.
+        let (used, label, choice, field) = rows(360.);
+        assert!(used <= 360.5, "{used}");
+        assert!(same_line(label, choice) && same_line(label, field));
+        // The default panel: the px field goes under the choice, in the field column.
+        let (used, label, choice, field) = rows(260.);
+        assert!(used <= 260.5, "{used}");
+        assert!(
+            same_line(label, choice) && field.top() > label.bottom(),
+            "{field:?}"
+        );
+        assert!(field.left() > label.right(), "{field:?}");
+        // Narrow: the label over the choice and the field.
+        let (used, label, choice, field) = rows(170.);
+        assert!(used <= 170.5, "{used}");
+        assert!(choice.top() > label.bottom() && same_line(choice, field));
+    }
+
     #[test]
     fn project_path_shows_only_its_folder_and_file() {
         let path = std::path::Path::new("C:/Users/nome/Documents/Jogo/project.oxy.json");
