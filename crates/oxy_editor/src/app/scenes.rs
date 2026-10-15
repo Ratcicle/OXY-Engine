@@ -291,7 +291,7 @@ impl Editor {
                 }
                 match dialog {
                     SceneDialog::Create { name, kind } => {
-                        let scene = Scene::new(name.trim(), kind);
+                        let scene = editing::new_scene(name.trim(), kind);
                         let id = scene.id.clone();
                         self.state.project.scenes.push(scene);
                         self.set_scene(id);

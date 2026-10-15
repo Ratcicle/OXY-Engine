@@ -123,6 +123,8 @@ impl Editor {
             });
         });
         ui.add_space(8.);
+        self.open_scene_properties(ui);
+        ui.add_space(8.);
         egui::Frame::new()
             .stroke(egui::Stroke::new(1., theme::BORDER))
             .corner_radius(6)
@@ -147,6 +149,30 @@ impl Editor {
                     );
                 });
             });
+    }
+    /// The scene being edited: its name and kind, and what it shows behind its objects.
+    fn open_scene_properties(&mut self, ui: &mut egui::Ui) {
+        use crate::widgets;
+        let scene = self.scene();
+        let (kind, current) = (scene.kind, scene.background);
+        let title = format!("{} · {}", scene.name, scenes::kind_label(kind));
+        let mut chosen = None;
+        widgets::open_card(ui, "open_scene_properties", "Cena aberta", |ui| {
+            widgets::property_row(ui, "Cena", "", |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(title).size(12.5)).truncate());
+            });
+            chosen = background_rows(ui, kind, current);
+            widgets::hint(
+                ui,
+                "O que aparece atrás de tudo nesta cena: no editor, no teste, no jogo exportado \
+                 e nas capturas. Cada cena tem o seu.",
+            );
+        });
+        if let Some(background) = chosen
+            && background != current
+        {
+            self.scene_mut().background = background;
+        }
     }
     fn multiple_properties(&mut self, ui: &mut egui::Ui) {
         use crate::icons::{self, Icon};
@@ -910,6 +936,82 @@ impl Editor {
     }
 }
 
+/// Fundo of the Cena aberta card, within its width: Céu da OXY (3D scenes only) or Cor and, for
+/// a color, the color, picked as the image shows it (sRGB) with no ready-made swatches, and
+/// Padrão, the background of a new scene of `kind`. Answers the background chosen, if any.
+fn background_rows(
+    ui: &mut egui::Ui,
+    kind: SceneKind,
+    current: Option<Background>,
+) -> Option<Option<Background>> {
+    use crate::{theme, widgets};
+    let mut chosen = None;
+    let sky = current == Some(Background::Sky);
+    widgets::combo_row(
+        ui,
+        "Fundo",
+        "O que a cena mostra atrás dos objetos.",
+        "open_scene_background",
+        if sky { "Céu da OXY" } else { "Cor" },
+        |ui| {
+            if ui
+                .add_enabled(
+                    kind == SceneKind::ThreeD,
+                    egui::Button::selectable(sky, "Céu da OXY"),
+                )
+                .on_disabled_hover_text("O Céu da OXY é só para cenas 3D.")
+                .clicked()
+            {
+                chosen = Some(Some(Background::Sky));
+            }
+            // From the sky, the color starts at its horizon.
+            if ui.selectable_label(!sky, "Cor").clicked() && sky {
+                chosen = Some(Some(Background::Color(oxy_render::sky::HORIZON)));
+            }
+        },
+    );
+    if sky {
+        return chosen;
+    }
+    let color = match current {
+        Some(Background::Color(color)) => color,
+        _ => Background::DARK,
+    };
+    widgets::property_row(ui, "Cor", "", |ui| {
+        let mut srgb =
+            [color[0], color[1], color[2]].map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
+        if ui.color_edit_button_srgb(&mut srgb).changed() {
+            let [r, g, b] = srgb.map(|c| f32::from(c) / 255.);
+            chosen = Some(Some(Background::Color([r, g, b, 1.])));
+        }
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!("#{:02X}{:02X}{:02X}", srgb[0], srgb[1], srgb[2]))
+                    .monospace()
+                    .size(11.5)
+                    .color(theme::TEXT_MUTED),
+            )
+            .truncate(),
+        );
+    });
+    let default = Background::default_for(kind);
+    widgets::property_row(ui, "", "", |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let reset = ui
+                .add_enabled(current != default, egui::Button::new("Padrão"))
+                .on_hover_text(if kind == SceneKind::ThreeD {
+                    "Volta ao Céu da OXY, o fundo das cenas 3D novas."
+                } else {
+                    "Volta ao fundo escuro das cenas 2D."
+                });
+            if reset.clicked() {
+                chosen = Some(default);
+            }
+        });
+    });
+    chosen
+}
+
 /// Label column of the Interface do jogo card: wide enough for Tamanho do texto while the card
 /// keeps room for its rows of two numbers; narrower, the usual column, and the longer label
 /// takes its own line.
@@ -1090,6 +1192,151 @@ mod tests {
         let (used, label, choice, field) = rows(170.);
         assert!(used <= 170.5, "{used}");
         assert!(choice.top() > label.bottom() && same_line(choice, field));
+    }
+
+    #[test]
+    fn background_rows_keep_to_the_width_of_the_card() {
+        use egui::{Pos2, Rect, Shape, vec2};
+        use oxy_core::document::{Background, SceneKind};
+        fn drawn(shape: &Shape, label: &str) -> bool {
+            match shape {
+                Shape::Text(text) => text.galley.text() == label,
+                Shape::Vec(shapes) => shapes.iter().any(|shape| drawn(shape, label)),
+                _ => false,
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        for (kind, background, hex) in [
+            (SceneKind::ThreeD, Some(Background::Sky), None),
+            (SceneKind::ThreeD, None, Some("#111112")),
+            (
+                SceneKind::TwoD,
+                Some(Background::Color([0.25, 0.5, 0.75, 1.])),
+                Some("#4080BF"),
+            ),
+        ] {
+            for width in [360., 260., 170.] {
+                let mut used = 0.;
+                let mut output = None;
+                for _ in 0..2 {
+                    let input = egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800., 600.))),
+                        ..Default::default()
+                    };
+                    output = Some(ctx.run(input, |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            ui.allocate_ui(vec2(width, 500.), |ui| {
+                                assert_eq!(super::background_rows(ui, kind, background), None);
+                                used = ui.min_rect().width();
+                            });
+                        });
+                    }));
+                }
+                let shapes = output.unwrap().shapes;
+                let shows = |label: &str| shapes.iter().any(|s| drawn(&s.shape, label));
+                assert!(
+                    used <= width + 0.5,
+                    "{kind:?} {background:?}: {used} > {width}"
+                );
+                assert!(shows("Fundo"));
+                // The sky is the default of a 3D scene: no color and nothing to reset.
+                assert_eq!(shows("Padrão"), hex.is_some(), "{kind:?} {background:?}");
+                if let Some(hex) = hex
+                    && width >= 260.
+                {
+                    assert!(shows(hex), "{hex} at {width}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn background_rows_answer_the_background_clicked() {
+        use egui::{Pos2, Rect, Shape, vec2};
+        use oxy_core::document::{Background, SceneKind};
+        // Every place `label` is drawn, top first.
+        fn drawn(output: &egui::FullOutput, label: &str) -> Vec<Pos2> {
+            fn find(shape: &Shape, label: &str, found: &mut Vec<Pos2>) {
+                match shape {
+                    Shape::Text(text) if text.galley.text() == label => {
+                        found.push(text.pos + text.galley.size() * 0.5)
+                    }
+                    Shape::Vec(shapes) => shapes.iter().for_each(|s| find(s, label, found)),
+                    _ => {}
+                }
+            }
+            let mut found = Vec::new();
+            for shape in &output.shapes {
+                find(&shape.shape, label, &mut found);
+            }
+            found.sort_by(|a, b| a.y.total_cmp(&b.y));
+            found
+        }
+        let frame = |ctx: &egui::Context, kind, current, events| {
+            let mut chosen = None;
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800., 600.))),
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.allocate_ui(vec2(260., 500.), |ui| {
+                        chosen = super::background_rows(ui, kind, current);
+                    });
+                });
+            });
+            (output, chosen)
+        };
+        // A press and a release on `at`: what the rows answered on either.
+        let click = |ctx: &egui::Context, kind, current, at: Pos2| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let events = vec![egui::Event::PointerMoved(at), button(true)];
+            let (_, pressed) = frame(ctx, kind, current, events);
+            let (_, released) = frame(ctx, kind, current, vec![button(false)]);
+            pressed.or(released)
+        };
+        let color = Some(Background::Color([0.25, 0.5, 0.75, 1.]));
+        // Padrão: the sky in a 3D scene, none (the dark color) in a 2D one.
+        for (kind, expected) in [
+            (SceneKind::ThreeD, Some(Background::Sky)),
+            (SceneKind::TwoD, None),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply(&ctx);
+            let (output, _) = frame(&ctx, kind, color, vec![]);
+            let reset = drawn(&output, "Padrão")[0];
+            assert_eq!(click(&ctx, kind, color, reset), Some(expected), "{kind:?}");
+        }
+        // From the sky, Cor starts at its horizon.
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let sky = Some(Background::Sky);
+        let (output, _) = frame(&ctx, SceneKind::ThreeD, sky, vec![]);
+        let combo = drawn(&output, "Céu da OXY")[0];
+        assert_eq!(click(&ctx, SceneKind::ThreeD, sky, combo), None);
+        let (output, _) = frame(&ctx, SceneKind::ThreeD, sky, vec![]);
+        let item = drawn(&output, "Cor")[0];
+        assert_eq!(
+            click(&ctx, SceneKind::ThreeD, sky, item),
+            Some(Some(Background::Color(oxy_render::sky::HORIZON)))
+        );
+        // In 2D the sky is offered but cannot be chosen.
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let (output, _) = frame(&ctx, SceneKind::TwoD, color, vec![]);
+        assert!(drawn(&output, "Céu da OXY").is_empty());
+        let combo = drawn(&output, "Cor")[0];
+        assert_eq!(click(&ctx, SceneKind::TwoD, color, combo), None);
+        let (output, _) = frame(&ctx, SceneKind::TwoD, color, vec![]);
+        let item = drawn(&output, "Céu da OXY")[0];
+        assert_eq!(click(&ctx, SceneKind::TwoD, color, item), None);
     }
 
     #[test]

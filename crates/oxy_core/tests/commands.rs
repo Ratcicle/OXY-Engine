@@ -261,6 +261,128 @@ fn scenes_can_be_created_renamed_started_and_deleted() {
 }
 
 #[test]
+fn new_scenes_take_their_kinds_background_and_commands_change_it_in_the_history() {
+    // New projects and scenes: the sky in 3D, none (the dark color) in 2D.
+    let (mut project, first) = project(SceneKind::ThreeD);
+    assert_eq!(project.scenes[0].background, Some(Background::Sky));
+    let flat = editing::blank_project("Plano", SceneKind::TwoD).unwrap();
+    assert_eq!(flat.scenes[0].background, None);
+    assert_eq!(
+        flat.scenes[0].shown_background(),
+        Background::Color(Background::DARK)
+    );
+    let created = command::apply(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Mapa", "kind": "2d"},
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "duplicate_scene", "scene": "$1"},
+        ])),
+    )
+    .unwrap();
+    let [map, level, copy] = [0, 1, 2].map(|i| created[i].created[0].clone());
+    assert_eq!(project.scene(&map).unwrap().background, None);
+    assert_eq!(
+        project.scene(&level).unwrap().background,
+        Some(Background::Sky)
+    );
+    assert_eq!(
+        project.scene(&copy).unwrap().background,
+        Some(Background::Sky)
+    );
+
+    // A color, the default of each kind, and a batch that is undone as one step.
+    let before = project.clone();
+    let mut history = CommandHistory::new();
+    let mut images = TextureCache::default();
+    history.begin("Agente: fundos", &project, &images);
+    command::apply(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "set_scene_background", "background": {"color": [0.2, 0.4, 0.6, 1.0]}},
+            {"op": "set_scene_background", "scene": "mapa", "background": {"color": [1, 1, 1, 1]}},
+        ])),
+    )
+    .unwrap();
+    history.commit(&project, &mut images).unwrap();
+    assert_eq!(
+        project.scene(&first).unwrap().background,
+        Some(Background::Color([0.2, 0.4, 0.6, 1.]))
+    );
+    assert_eq!(
+        project.scene(&map).unwrap().background,
+        Some(Background::Color([1.; 4]))
+    );
+    let changed = project.clone();
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, before);
+    history.redo(&mut project, &mut images).unwrap();
+    assert_eq!(project, changed);
+    command::apply(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "set_scene_background", "background": "default"},
+            {"op": "set_scene_background", "scene": "Mapa", "background": "default"},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(
+        project.scene(&first).unwrap().background,
+        Some(Background::Sky)
+    );
+    assert_eq!(project.scene(&map).unwrap().background, None);
+
+    // Refused, and nothing changes: the sky in 2D, colors out of range or see-through, and
+    // misspelled forms.
+    let unchanged = project.clone();
+    for (commands, expected) in [
+        (
+            json!({"op": "set_scene_background", "scene": "Mapa", "background": "sky"}),
+            "Mapa: o Céu da OXY é só para cenas 3D",
+        ),
+        (
+            json!({"op": "set_scene_background", "background": {"color": [2, 0, 0, 1]}}),
+            "de 0 a 1",
+        ),
+        (
+            json!({"op": "set_scene_background", "background": {"color": [0, 0, 0, 0]}}),
+            "opaca",
+        ),
+    ] {
+        let error = command::apply(&mut project, &first, &batch(commands))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(project, unchanged);
+    }
+    for (commands, expected) in [
+        (
+            json!({"op": "set_scene_background", "background": "Sky"}),
+            "escreva `sky`",
+        ),
+        (
+            json!({"op": "set_scene_background", "background": {"color": [0, 0, 0]}}),
+            "tamanho errado: 3 itens, esperava uma lista de 4 itens",
+        ),
+    ] {
+        let error = command::parse(&commands).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+
+    // Reads give it as the command takes it.
+    let summary = query::project_summary(&project);
+    assert_eq!(summary["scenes"][0]["background"], "sky");
+    let tree = query::scene_tree(&project, &map, &Default::default()).unwrap();
+    assert_eq!(
+        serde_json::from_value::<command::BackgroundSpec>(tree["background"].clone()).unwrap(),
+        command::BackgroundSpec::Color(Background::DARK)
+    );
+}
+
+#[test]
 fn game_settings_are_set_by_command_and_listed_in_the_summary() {
     let (mut project, scene) = project(SceneKind::ThreeD);
     let summary = query::project_summary(&project);

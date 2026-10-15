@@ -12,7 +12,7 @@ pub fn blank_project(name: &str, kind: SceneKind) -> Result<Project, String> {
         return Err("Informe um nome para o projeto.".into());
     }
     let mut project = Project::new(name.trim());
-    let scene = Scene::new(
+    let scene = new_scene(
         if kind == SceneKind::TwoD {
             "Cena 2D"
         } else {
@@ -24,6 +24,14 @@ pub fn blank_project(name: &str, kind: SceneKind) -> Result<Project, String> {
     project.scenes = vec![scene];
     project.input_bindings.clear();
     Ok(project)
+}
+
+/// A scene as people and agents create it: empty, with the background of its kind
+/// ([`Background::default_for`]), the sky for a 3D scene.
+pub fn new_scene(name: &str, kind: SceneKind) -> Scene {
+    let mut scene = Scene::new(name, kind);
+    scene.background = Background::default_for(kind);
+    scene
 }
 
 pub fn duplicate_scene(project: &mut Project, id: &str) -> Result<Id, String> {

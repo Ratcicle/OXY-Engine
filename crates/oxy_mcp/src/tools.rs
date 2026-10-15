@@ -268,7 +268,8 @@ pub fn definitions() -> Json {
         ),
         tool(
             "oxy_project",
-            "Summary of a project: scenes (ID, name, 2D/3D, object count), assets [{id, name, \
+            "Summary of a project: scenes (ID, name, 2D/3D, object count, background: \"sky\" \
+             or {color: [r, g, b, a]}, as set_scene_background takes it), assets [{id, name, \
              kind: Texture|Audio|Model, path (images and sounds, relative to the project \
              folder), used_by}], input actions [{id, name, key, shares_key_with?, used_by}] \
              (shares_key_with: the other actions [{id, name}] on the same key, which the game \
@@ -291,9 +292,10 @@ pub fn definitions() -> Json {
         ),
         tool(
             "oxy_scene",
-            "Object tree of a scene: ID, name, kind, local position, shape, components, logic \
-             node count and children. fields adds world positions, sizes and boxes; root, depth, \
-             offset and limit read a big scene part by part.",
+            "Object tree of a scene, with the scene's kind and background (\"sky\" or {color: \
+             [r, g, b, a]}): each object's ID, name, kind, local position, shape, components, \
+             logic node count and children. fields adds world positions, sizes and boxes; root, \
+             depth, offset and limit read a big scene part by part.",
             json!({"project": project, "scene": scene,
                    "fields": {"type": "array", "items": {"type": "string", "enum": [
                        "world_position", "rotation", "scale", "dimensions", "visual_bounds",
@@ -701,6 +703,13 @@ text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 de bônus\"
 Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
+- set_scene_background {background: \"sky\"|{color: [r, g, b, a]}|\"default\"}: what `scene` \
+shows behind its objects, in the editor, the game and screenshots. sky is Céu da OXY, the \
+engine's stylized day sky (3D scenes only; orthographic views, such as top and side \
+screenshots, show its horizon color); color is RGB from 0 to 1 as the image shows it, opaque (a \
+is 1); default is what a new scene of its kind gets: the sky in 3D, the dark color in 2D. New 3D \
+scenes (create_scene, oxy_new_project) start with the sky; scenes made before backgrounds \
+existed keep the dark color
 - set_game_settings {title?, window?: [width, height], fullscreen?: bool}: how the exported \
 game opens (oxy_project game); fields left out stay. title (up to 80 characters, one line) names \
 its window, folder and executable; empty, the project's name. window is the window's inside at \
@@ -2602,11 +2611,17 @@ mod tests {
                    "scene": "s"}),
             json!({"op": "fit_collider", "entity": "e", "children": true, "margin": 0.1,
                    "scene": "s"}),
+            json!({"op": "set_scene_background", "background": "sky", "scene": "s"}),
+            json!({"op": "set_scene_background", "background": {"color": [0.2, 0.4, 0.6, 1]},
+                   "scene": "s"}),
+            json!({"op": "set_scene_background", "background": "default", "scene": "s"}),
         ] {
             command::parse(&command).unwrap();
         }
         assert!(APPLY_DESCRIPTION.contains("\"$$N\""));
         for text in [
+            "set_scene_background",
+            "Céu da OXY",
             "create_input_action",
             "delete_surface",
             "create_variable",
@@ -4532,11 +4547,16 @@ mod tests {
             );
             assert_eq!(answer["name"], "Corrida");
             assert_eq!(answer["schema_version"], SCHEMA_VERSION);
+            // A new 3D scene shows the sky; a 2D one, the dark color.
+            let background = match scene_kind {
+                SceneKind::ThreeD => json!("sky"),
+                SceneKind::TwoD => json!({"color": [0.068, 0.068, 0.072, 1.0]}),
+            };
             assert_eq!(
                 answer["scenes"],
                 json!([{"id": answer["start_scene"],
                         "name": format!("Cena {}", kind.to_uppercase()),
-                        "kind": kind, "objects": 0}])
+                        "kind": kind, "objects": 0, "background": background}])
             );
             // oxy_project answers the same summary, oxy_validate takes it and the editor opens
             // it as it is.
@@ -4874,5 +4894,82 @@ mod tests {
                 .unwrap()
                 .contains("by its ID or name")
         );
+    }
+
+    #[test]
+    fn files_scene_backgrounds_are_set_by_command_and_read_with_the_scene() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-background-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Céus", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        assert_eq!(call("oxy_scene", json!({})).unwrap()["background"], "sky");
+        // Without scene, the tool's scene; a new 2D scene keeps the dark color.
+        call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "set_scene_background", "background": {"color": [0.2, 0.4, 0.6, 1.0]}},
+                {"op": "create_scene", "name": "Mapa", "kind": "2d"},
+                {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            ]}),
+        )
+        .unwrap();
+        let summary = call("oxy_project", json!({})).unwrap();
+        let backgrounds: Vec<&Json> = summary["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| &s["background"])
+            .collect();
+        assert_eq!(
+            backgrounds,
+            [
+                &json!({"color": [0.2, 0.4, 0.6, 1.0]}),
+                &json!({"color": [0.068, 0.068, 0.072, 1.0]}),
+                &json!("sky"),
+            ]
+        );
+        let saved = persistence::load_project(&file).unwrap();
+        assert_eq!(saved.scenes[1].background, None, "2D: none in the file");
+        // The sky is refused in 2D, with the scene named, and nothing changes.
+        let error = call(
+            "oxy_apply",
+            json!({"scene": "Mapa", "commands": [
+                {"op": "set_scene_background", "background": "default"},
+                {"op": "set_scene_background", "background": "sky"},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Comando 1 (set_scene_background, o 2º do lote)")
+                && error.contains("Mapa: o Céu da OXY é só para cenas 3D"),
+            "{error}"
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "set_scene_background",
+                                 "background": {"color": [0.2, 0.4, 0.6, 0.5]}}]}),
+        )
+        .unwrap_err();
+        assert!(error.contains("opaca"), "{error}");
+        assert_eq!(persistence::load_project(&file).unwrap(), saved);
+        // default gives a 3D scene the sky back.
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "set_scene_background", "background": "default"}]}),
+        )
+        .unwrap();
+        assert_eq!(call("oxy_scene", json!({})).unwrap()["background"], "sky");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

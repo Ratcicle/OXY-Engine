@@ -23,6 +23,14 @@ fn kind_name(kind: SceneKind) -> &'static str {
     }
 }
 
+/// What a scene shows behind its objects, as set_scene_background takes it: "sky" or
+/// {"color": [r, g, b, a]}, the dark color for a scene without a background of its own.
+fn background(scene: &Scene) -> Json {
+    json!(crate::command::BackgroundSpec::shown(
+        scene.shown_background()
+    ))
+}
+
 /// Components present on an object, by their command names.
 pub fn components(e: &Entity) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = ComponentKind::ALL
@@ -209,6 +217,7 @@ pub fn project_summary(project: &Project) -> Json {
             "name": s.name,
             "kind": kind_name(s.kind),
             "objects": s.entities.len(),
+            "background": background(s),
         })).collect::<Vec<_>>(),
         "assets": project.assets.iter().map(|a| {
             let mut asset = json!({
@@ -436,6 +445,7 @@ pub fn scene_tree(project: &Project, scene: &str, query: &TreeQuery) -> Result<J
         "id": scene.id,
         "name": scene.name,
         "kind": kind_name(scene.kind),
+        "background": background(scene),
         "objects": listed.into_iter().map(|e| tree.node(e)).collect::<Vec<_>>(),
     });
     if let Some(root) = root {

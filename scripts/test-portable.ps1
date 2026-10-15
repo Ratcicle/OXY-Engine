@@ -31,7 +31,9 @@ if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).Pr
     if (!(Test-Path -LiteralPath (Join-Path $package 'oxy-mcp.exe') -PathType Leaf)) { throw 'Arquivo da 0.5.0 ausente: oxy-mcp.exe' }
 }
 if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).ProductVersion) -ge [version]'0.6.0') {
-    if (!(Test-Path -LiteralPath (Join-Path $package 'licenses/cpal-0.18.2.txt') -PathType Leaf)) { throw 'Arquivo da 0.6.0 ausente: licenses/cpal-0.18.2.txt' }
+    foreach ($file in @('licenses/cpal-0.18.2.txt','licenses/kenney-skyboxes-cc0.txt')) {
+        if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo da 0.6.0 ausente: $file" }
+    }
 }
 if (Get-ChildItem -LiteralPath $package -Filter '*.cmd') { throw 'O pacote portátil não deve depender de launchers .cmd.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName)

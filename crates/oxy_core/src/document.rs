@@ -353,21 +353,67 @@ impl Entity {
         }
     }
 }
+/// What a scene shows behind its objects, in the editor, the game and captures.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Background {
+    /// Céu da OXY, the engine's sky: a panorama around the camera (3D scenes only).
+    Sky,
+    /// RGBA from 0 to 1, as the image shows it. Backgrounds are opaque: alpha is 1.
+    Color([f32; 4]),
+}
+impl Background {
+    /// The dark color of a scene without a background of its own: 2D scenes by default and
+    /// scenes made before backgrounds existed.
+    pub const DARK: [f32; 4] = [0.068, 0.068, 0.072, 1.];
+    /// What a new scene of `kind` gets: the sky in 3D; in 2D none, which shows [`Self::DARK`].
+    pub fn default_for(kind: SceneKind) -> Option<Self> {
+        (kind == SceneKind::ThreeD).then_some(Self::Sky)
+    }
+    fn check(&self, scene: &Scene) -> Result<(), String> {
+        match self {
+            Self::Sky if scene.kind == SceneKind::TwoD => Err(format!(
+                "{}: o Céu da OXY é só para cenas 3D; dê uma cor ao fundo desta cena 2D",
+                scene.name
+            )),
+            Self::Color(color) if !color.iter().all(|c| (0.0..=1.0).contains(c)) => Err(format!(
+                "{}: a cor de fundo precisa de valores de 0 a 1",
+                scene.name
+            )),
+            Self::Color(color) if color[3] != 1. => Err(format!(
+                "{}: a cor de fundo é opaca; use alfa 1",
+                scene.name
+            )),
+            _ => Ok(()),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
     pub id: Id,
     pub name: String,
     pub kind: SceneKind,
+    /// Left out of the document while the scene has none, so scenes made before backgrounds
+    /// existed keep their file and their dark color ([`Background::DARK`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Background>,
     pub entities: Vec<Entity>,
 }
 impl Scene {
+    /// An empty scene without a background of its own; scenes that people and agents create
+    /// come from [`crate::editing::new_scene`], which gives a 3D scene the sky.
     pub fn new(name: impl Into<String>, kind: SceneKind) -> Self {
         Self {
             id: new_id(),
             name: name.into(),
             kind,
+            background: None,
             entities: Vec::new(),
         }
+    }
+    /// What the scene shows behind its objects: its background or the dark color.
+    pub fn shown_background(&self) -> Background {
+        self.background
+            .unwrap_or(Background::Color(Background::DARK))
     }
     pub fn entity(&self, id: &str) -> Option<&Entity> {
         crate::metrics::count(|c| c.entity_queries += 1);
@@ -1069,6 +1115,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
                 id: asset.id.clone(),
                 name: asset.name.clone(),
                 kind: SceneKind::ThreeD,
+                background: None,
                 entities: model.clone(),
             };
             validate_scene(&scene, &assets)?;
@@ -1082,6 +1129,9 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     let ids: HashSet<_> = scene.entities.iter().map(|e| e.id.as_str()).collect();
     if ids.len() != scene.entities.len() {
         return Err(format!("IDs duplicados em {}", scene.name));
+    }
+    if let Some(background) = &scene.background {
+        background.check(scene)?;
     }
     let owned_ids: HashSet<_> = ids.iter().map(|id| (*id).to_owned()).collect();
     for e in &scene.entities {
@@ -1491,6 +1541,68 @@ mod tests {
                 "{error}"
             );
         }
+    }
+    #[test]
+    fn scene_background_is_optional_round_trips_and_is_checked() {
+        let mut p = Project::new("Fundo");
+        p.scenes.push(Scene::new("Pista", SceneKind::ThreeD));
+        // Without one the document is as before: the shipped examples read and save to the
+        // same bytes, and the scenes keep the dark color.
+        let saved = serde_json::to_string(&p).unwrap();
+        assert!(!saved.contains("background"), "{saved}");
+        let loaded: Project = serde_json::from_str(&saved).unwrap();
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), saved);
+        assert_eq!(
+            loaded.scenes[1].shown_background(),
+            Background::Color(Background::DARK)
+        );
+        // A checkout may turn the file's line endings into CRLF; the rest is compared as is.
+        let example = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/parkour/project.oxy.json"),
+        )
+        .unwrap()
+        .replace("\r\n", "\n");
+        let parkour: Project = serde_json::from_str(&example).unwrap();
+        assert!(parkour.scenes.iter().all(|s| s.background.is_none()));
+        assert_eq!(serde_json::to_string_pretty(&parkour).unwrap(), example);
+
+        p.scenes[0].background = Some(Background::Color([0.25, 0.5, 0.75, 1.]));
+        p.scenes[1].background = Some(Background::Sky);
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            json["scenes"][0]["background"],
+            serde_json::json!({"Color": [0.25, 0.5, 0.75, 1.0]})
+        );
+        assert_eq!(json["scenes"][1]["background"], "Sky");
+        assert_eq!(serde_json::from_value::<Project>(json).unwrap(), p);
+
+        assert_eq!(
+            Background::default_for(SceneKind::ThreeD),
+            Some(Background::Sky)
+        );
+        assert_eq!(Background::default_for(SceneKind::TwoD), None);
+        let refused = |background: Background| {
+            let mut broken = p.clone();
+            broken.scenes[0].background = Some(background);
+            validate_project(&broken).unwrap_err()
+        };
+        let error = refused(Background::Sky);
+        assert!(
+            error.starts_with("Cena 2D: o Céu da OXY é só para cenas 3D"),
+            "{error}"
+        );
+        for color in [
+            [1.2, 0., 0., 1.],
+            [-0.1, 0., 0., 1.],
+            [f32::NAN, 0., 0., 1.],
+        ] {
+            let error = refused(Background::Color(color));
+            assert!(error.contains("de 0 a 1"), "{error}");
+        }
+        let error = refused(Background::Color([0., 0., 0., 0.5]));
+        assert!(error.contains("opaca"), "{error}");
     }
     #[test]
     fn cycles_are_rejected_and_world_is_preserved() {

@@ -11,6 +11,7 @@ pub mod labels;
 pub mod mesh;
 pub mod mesh_selection;
 pub mod offscreen;
+pub mod sky;
 pub mod theme;
 pub use camera::CameraState;
 pub use game_ui::GameUi;
@@ -24,7 +25,7 @@ use egui_wgpu::wgpu;
 use glam::{Mat4, Vec2, Vec3};
 #[cfg(test)]
 use oxy_core::document::Primitive;
-use oxy_core::document::{Entity, Id, Project, Scene, SceneKind};
+use oxy_core::document::{Background, Entity, Id, Project, Scene, SceneKind};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -140,6 +141,9 @@ pub struct Renderer {
     /// Draws the game interface and the collider view on captures; created by the first one
     /// that asks for them.
     capture_painter: Option<offscreen::CapturePainter>,
+    /// The sky, made by the first frame that shows it; Err when it could not be made, which
+    /// was reported then.
+    sky: Option<Result<sky::SkyPass, ()>>,
 }
 
 impl Renderer {
@@ -242,6 +246,7 @@ impl Renderer {
             debug_colliders: false,
             physics_debug: Default::default(),
             capture_painter: None,
+            sky: None,
         }
     }
 
@@ -579,6 +584,7 @@ impl Renderer {
             }
         }
         self.stats.draw_calls += draws.len() as u64;
+        let (clear, sky) = self.background(rs, scene, camera, size);
         let mut encoder = rs
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -590,12 +596,7 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.068,
-                        g: 0.068,
-                        b: 0.072,
-                        a: 1.,
-                    }),
+                    load: wgpu::LoadOp::Clear(clear),
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -613,6 +614,9 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            if sky && let Some(Ok(sky)) = &self.sky {
+                sky.draw(&mut pass);
+            }
             pass.set_bind_group(0, &self.uniform_group, &[]);
             pass.set_bind_group(1, &self.white.bind_group, &[]);
             if !grid.is_empty() {
@@ -648,6 +652,41 @@ impl Renderer {
         rs.queue.submit([encoder.finish()]);
         self.last_draws = draws;
         self.target.id
+    }
+    /// What the frame shows behind the scene: the color the target is cleared to, and whether
+    /// the sky is drawn over it. The sky needs a perspective camera; through an orthographic
+    /// one it is its horizon color ([`sky::HORIZON`]). Backgrounds are opaque.
+    fn background(
+        &mut self,
+        rs: &RenderState,
+        scene: &Scene,
+        camera: &CameraState,
+        size: [u32; 2],
+    ) -> (wgpu::Color, bool) {
+        let (color, drawn) = match scene.shown_background() {
+            Background::Color(color) => (color, false),
+            Background::Sky => match sky::directions(camera, size) {
+                Some(directions) => {
+                    if self.sky.is_none() {
+                        let made = sky::SkyPass::new(rs, &self.texture_layout);
+                        self.sky = Some(made.map_err(|error| self.errors.push(error)));
+                    }
+                    match &mut self.sky {
+                        Some(Ok(pass)) => {
+                            if pass.aim(rs, directions) {
+                                self.stats.uniform_uploads += 1;
+                            }
+                            self.stats.draw_calls += 1;
+                            (sky::HORIZON, true)
+                        }
+                        _ => (sky::HORIZON, false),
+                    }
+                }
+                None => (sky::HORIZON, false),
+            },
+        };
+        let [r, g, b, _] = color.map(f64::from);
+        (wgpu::Color { r, g, b, a: 1. }, drawn)
     }
     /// Complete the debug_colliders path after the viewport image/game UI is drawn.
     /// Stroke widths are logical screen points, independent of zoom and scene depth.

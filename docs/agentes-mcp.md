@@ -57,12 +57,12 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | --- | --- |
 | `oxy_status` | A versão e a identidade do servidor, os editores abertos com agentes permitidos, projeto, cena ativa, alterações não salvas, desfazer/refazer, se há um teste do jogo rodando e quem joga, e se o agente pode salvar |
 | `oxy_new_project` | Cria um projeto novo, como o **Novo projeto** do editor, numa pasta nova ou vazia que você indicar; sempre nos arquivos, sem passar pelo editor |
-| `oxy_project` | Cenas, recursos (com o arquivo e quem usa cada um), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas, variáveis do jogo (com o valor inicial e quem usa cada uma), nomes dos grupos de colisão e como o jogo exportado abre (título, janela e tela cheia) |
-| `oxy_scene` | Árvore de objetos da cena, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
+| `oxy_project` | Cenas (com o fundo de cada uma), recursos (com o arquivo e quem usa cada um), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas, variáveis do jogo (com o valor inicial e quem usa cada uma), nomes dos grupos de colisão e como o jogo exportado abre (título, janela e tela cheia) |
+| `oxy_scene` | Árvore de objetos da cena e o fundo dela, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
 | `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida com os nomes do que os nós usam, os componentes que ainda podem receber e quem aponta para o objeto |
 | `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
 | `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets (o que cada um cria e as opções), perfis de movimento (com os valores) e as teclas que as ações de entrada aceitam |
-| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, organização da lógica, ações de entrada, superfícies físicas, variáveis do jogo, jogo exportado, modelos, cópias entre cenas, animações, perfis de movimento…) |
+| `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, organização da lógica, ações de entrada, superfícies físicas, variáveis do jogo, fundo das cenas, jogo exportado, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_import` | Importa imagens PNG e sons WAV como recursos do projeto, um arquivo ou vários de uma vez, e, se pedido, já aplica a imagem num objeto |
 | `oxy_export` | Exporta o jogo como o **Exportar jogo** do editor, para a pasta que você indicar, e confere o jogo exportado |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria ou o que nele pararia com erro |
@@ -85,6 +85,7 @@ Os clientes MCP cortam respostas longas, e cada caractere ocupa o contexto do ag
 - **Cenas pelo nome:** o `scene` de todas as ferramentas (`oxy_scene`, `oxy_entity`, `oxy_apply`, `oxy_import`, `oxy_select`, `oxy_simulate`, `oxy_screenshot`, `oxy_play`) aceita o ID ou o nome da cena, sem diferenciar maiúsculas, como o `oxy_project` a mostra em `scenes`. Um nome que duas cenas têm é recusado, e uma cena que o projeto não tem também, com o que o parâmetro recebeu e a lista das cenas: `scene recebeu "Fase 9", que não é o ID nem o nome de uma cena do projeto. Cenas: [{"id":"…","name":"Menu"}, …]`. Antes, só o ID valia, e o erro era `Cena Menu não existe`.
 
 **Árvore da cena** (`oxy_scene`):
+- A resposta traz o tipo da cena (`kind`) e o fundo dela (`background`), na forma que o `set_scene_background` recebe: `"sky"` (o Céu da OXY) ou `{"color": [r, g, b, a]}`. Uma cena sem fundo próprio, como as feitas antes de a cena ter fundo, mostra a cor escura em que ela aparece, `{"color": [0.068, 0.068, 0.072, 1.0]}`.
 - `fields` acrescenta a cada objeto:
   - `world_position`: onde a posição do objeto (o pivô) fica no mundo. É o que conta para medir distâncias entre peças de grupos diferentes;
   - `rotation` (local, em graus, como o `set_transform` recebe), `scale` (local) e `dimensions` (da forma);
@@ -124,6 +125,7 @@ Sem opções, o catálogo traz também:
 - `movement_profiles`: os perfis Direto, Ágil com embalo e Saltos encadeados, com `id` (`direct`, `parkour` ou `chained`), `label` e `values`, os 14 valores que o perfil escreve no personagem. Ágil com embalo se chamava Parkour; só o nome mudou, e o `id` continua `parkour`, nos comandos, no nó `character.profile` e nos projetos já salvos.
 
 **Projeto** (`oxy_project`):
+- `scenes`: cada cena com `id`, `name`, `kind` (`2d` ou `3d`), `objects` (quantos objetos tem) e `background`, o fundo, como no `oxy_scene`.
 - `input_actions`: cada ação de entrada com `id`, `name`, `key` e `used_by`, os objetos que a usam (`{entity, name, role}`, em que `role` é o componente, como `character` ou `controller2d`, ou a operação do nó, como `event.input`). Quando outra ação usa a mesma tecla, `shares_key_with` lista essas ações (`{id, name}`): no jogo, a tecla dispara todas.
 - `surfaces`: cada superfície física com os valores dela (`friction`, `traction`, `speed_multiplier`, `conveyor`, `conveyor_space`) e `used_by`, como nas ações (`role` `collider3d`, `character`, a operação do nó ou `attribute <nome>`).
 - `variables`: cada variável do jogo com `id`, `name`, `type` (`Number`, `Text`, `Bool`, `Vector2` ou `Vector3`), `value` (o valor inicial, com o tipo, como `{"Number": 0}`), `persistent` (marcada para ser salva entre partidas) e `used_by`, como nas ações (`role` `variable.get` ou `variable.set`).
@@ -173,6 +175,12 @@ Sem opções, o catálogo traz também:
 - Os outros valores simples são recusados com uma mensagem em português que diz o parâmetro e a forma esperada, como `O parâmetro target do nó action.damage precisa de um valor marcado com o tipo, como {"Object":"abc"}; recebeu "abc"`. Um texto nunca vira objeto ou superfície sozinho, e um tipo com a inicial minúscula (`{"number": 3}`) também é recusado, com o aviso de que o nome do tipo começa com maiúscula.
 - Os atributos não têm tipo no catálogo: o `set_attribute` só aceita valores com o tipo, e um valor simples é recusado da mesma forma (`O atributo vida precisa de um valor marcado com o tipo, como {"Number":3}; recebeu 3`).
 - Antes, todos esses casos davam o erro do leitor de JSON, em inglês, sem dizer o parâmetro.
+
+**Fundo da cena.** `set_scene_background {scene?, background}` muda o que a cena mostra atrás dos objetos, na vista do editor, no teste, no jogo exportado e nas capturas. Sem `scene`, vale a cena da ferramenta, como nos comandos de objetos. O editor o desfaz como os outros, e no editor o mesmo fundo fica no bloco **Cena aberta** das Propriedades, sem nada selecionado.
+- `"sky"` é o **Céu da OXY**, o céu de dia estilizado que vem com a engine (o céu de dia do pacote Skyboxes da Kenney, CC0): um panorama em volta da câmera, que gira com o olhar e não sai do lugar quando a câmera anda. Só vale em cenas 3D; numa cena 2D é recusado. As vistas ortográficas olham numa direção só e mostram a cor do horizonte do céu: as capturas de cima e de lado (`view` `top` e `side` do `oxy_screenshot`).
+- `{"color": [r, g, b, a]}` é uma cor, de 0 a 1, como a imagem a mostra (a mesma conta do seletor de cor do editor e do código `#RRGGBB`). O fundo é opaco: `a` precisa ser 1, e uma cor fora de 0 a 1 é recusada.
+- `"default"` volta ao fundo de uma cena nova do mesmo tipo: o céu numa cena 3D, a cor escura numa cena 2D.
+- As cenas 3D novas (do `create_scene`, do `oxy_new_project` e do editor) começam com o céu, e as 2D com a cor escura. Uma cena feita antes de a cena ter fundo continua escura, e o arquivo dela não muda até alguém escolher um fundo; os exemplos e as receitas do guia continuam assim.
 
 **Jogo exportado.** `set_game_settings {title?, window?, fullscreen?}` diz como o jogo exportado abre; o que não vier fica como está. É um comando do projeto, sem `scene`, e o editor o desfaz como os outros.
 - `title` é o nome do jogo: o título da janela e o nome da pasta e do executável exportados (sem os caracteres que o Windows não aceita em nomes de arquivo). Tem até 80 caracteres, numa linha só; vazio, vale o nome do projeto, e renomear o projeto renomeia o jogo.
@@ -292,6 +300,7 @@ Os comandos de ações de entrada, de superfícies, de variáveis e o `set_game_
 - Os nós sem `position` ganham lugar organizado no fim do lote, em vez de uma fileira só, e há o `arrange_logic`.
 - `"$N@<ID>"` e `"$N.M@<ID>"` chegam às cópias no mesmo lote; um texto assim passou a ser marcador (para o texto em si, `"$$N@<ID>"`).
 - Há o `set_game_settings`, que diz como o jogo exportado abre (título, janela e tela cheia), e o `oxy_project` traz isso em `game`.
+- Há o `set_scene_background`, que dá a uma cena o Céu da OXY ou uma cor de fundo; as cenas 3D novas começam com o céu, e o `oxy_project` e o `oxy_scene` trazem o fundo em `background` (veja **Fundo da cena**).
 - Há variáveis do jogo (`create_variable`, `update_variable` e `delete_variable`), os nós `variable.get` e `variable.set` e os de progresso salvo, `save.write`, `save.clear` e `save.state`.
 - O `action.scene` ganhou a entrada `scene` e há os nós `scene.current`, na categoria nova **Jogo**, e `value.scene` (**Referência de cena**), em **Dados**. Não há migração: a entrada não é salva no nó, só a conexão. O aviso de nós copiados que ainda abrem ou nomeiam a cena de onde vieram deixa de fora os que têm essa entrada ligada e sugere ligá-la, e esses nós também não impedem o `delete_scene`.
 - Há a pausa do jogo e o sair: os nós `game.pause`, `game.read` e `game.quit`, em **Jogo**, e o evento `event.pause`, em **Eventos** (veja **Pausa do jogo e sair**). Há também o `game.cursor`, que solta o mouse sem pausar. O `time.read` e as esperas passaram a contar o tempo do jogo, que para na pausa do jogo; sem pausa, ele é igual ao de antes.
@@ -392,7 +401,7 @@ O mesmo pedido ao `oxy_simulate` dá o mesmo jogo: os passos têm duração fixa
 
 Para começar um jogo do zero, o agente cria o projeto como o **Projeto → Novo projeto** do editor seguido do primeiro **Salvar**, mas só quando você pede, na pasta que você indicar.
 
-- **Pedido:** `folder`, o caminho completo da pasta do projeto num disco deste computador (`C:\...`); `name`, o nome do projeto; e `scene: {kind, name}`, a primeira cena, onde o jogo começa. `kind` é `"2d"` ou `"3d"`; `name` é opcional e, sem ele, a cena se chama **Cena 2D** ou **Cena 3D**, como no editor. Cenas dos dois tipos podem vir depois, com o `create_scene` do `oxy_apply`.
+- **Pedido:** `folder`, o caminho completo da pasta do projeto num disco deste computador (`C:\...`); `name`, o nome do projeto; e `scene: {kind, name}`, a primeira cena, onde o jogo começa. `kind` é `"2d"` ou `"3d"`; `name` é opcional e, sem ele, a cena se chama **Cena 2D** ou **Cena 3D**, como no editor. Cenas dos dois tipos podem vir depois, com o `create_scene` do `oxy_apply`. Uma primeira cena 3D começa com o Céu da OXY de fundo, e uma 2D com a cor escura, como no editor (veja **Fundo da cena**).
 - **O que é escrito:** só o `project.oxy.json`, no formato 5, igual ao que o editor grava para o mesmo nome e o mesmo tipo de cena (só os IDs mudam). A pasta é criada, com as pastas acima dela que faltarem; a pasta `assets` aparece na primeira importação, como no editor.
 - **Recusados, antes de escrever qualquer coisa:** caminhos relativos, de rede ou de dispositivo, a raiz de um disco, uma pasta dentro da pasta da OXY Engine (ou que a contenha), uma pasta que já tem um projeto (`project.oxy.json`) ou qualquer outro arquivo, um arquivo e um caminho que termina em `project.oxy.json` (o pedido nomeia a pasta, não o arquivo).
 - **Sempre nos arquivos:** mesmo com o editor aberto e os agentes permitidos, o projeto é criado só nos arquivos, e o editor não muda. Para trabalhar ao vivo, abra o projeto no editor (**Projeto → Abrir projeto…**); até lá, o agente passa a pasta em `project` nas outras ferramentas e edita os arquivos.

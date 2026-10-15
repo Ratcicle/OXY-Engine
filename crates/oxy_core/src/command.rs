@@ -82,6 +82,27 @@ pub enum EntityKind {
     },
 }
 
+/// A scene's background in [`Command::SetSceneBackground`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundSpec {
+    /// Céu da OXY, the engine's sky (3D scenes only).
+    Sky,
+    /// RGBA from 0 to 1, as the image shows it; opaque, so alpha is 1.
+    Color([f32; 4]),
+    /// What a new scene of its kind gets: the sky in 3D, the dark color in 2D.
+    Default,
+}
+impl BackgroundSpec {
+    /// How reads show `background`, the background a scene shows ([`Scene::shown_background`]).
+    pub fn shown(background: Background) -> Self {
+        match background {
+            Background::Sky => Self::Sky,
+            Background::Color(color) => Self::Color(color),
+        }
+    }
+}
+
 /// A keyframe of [`Command::SetClip`]. The channels left out are the target's rest transform,
 /// and the target's pivot is kept.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,6 +289,12 @@ pub enum Command {
     },
     DeleteScene {
         scene: Id,
+    },
+    /// What the scene shows behind its objects, in the editor, the game and captures.
+    SetSceneBackground {
+        #[serde(default)]
+        scene: Option<Id>,
+        background: BackgroundSpec,
     },
     CreateEntity {
         #[serde(default)]
@@ -607,6 +634,7 @@ impl Command {
             Self::RenameScene { .. } => "Renomear cena",
             Self::DuplicateScene { .. } => "Duplicar cena",
             Self::DeleteScene { .. } => "Excluir cena",
+            Self::SetSceneBackground { .. } => "Mudar fundo da cena",
             Self::CreateEntity { .. } => "Criar objeto",
             Self::DeleteEntities { .. } => "Excluir objetos",
             Self::DuplicateEntities { .. } => "Duplicar objetos",
@@ -1733,7 +1761,7 @@ fn apply_one(
             if name.trim().is_empty() {
                 return Err("Informe um nome para a cena".into());
             }
-            let scene = Scene::new(name.trim(), (*kind).into());
+            let scene = editing::new_scene(name.trim(), (*kind).into());
             let id = scene.id.clone();
             project.scenes.push(scene);
             Ok(vec![id])
@@ -1755,6 +1783,17 @@ fn apply_one(
         C::DeleteScene { scene } => {
             let id = scene_id(project, &Some(scene.clone()), default)?;
             editing::delete_scene(project, &id)?;
+            Ok(vec![])
+        }
+        C::SetSceneBackground { scene, background } => {
+            let id = scene_id(project, scene, default)?;
+            let scene = scene_mut(project, &id);
+            // Validation refuses the sky in a 2D scene and colors out of range.
+            scene.background = match *background {
+                BackgroundSpec::Sky => Some(Background::Sky),
+                BackgroundSpec::Color(color) => Some(Background::Color(color)),
+                BackgroundSpec::Default => Background::default_for(scene.kind),
+            };
             Ok(vec![])
         }
         C::CreateEntity {

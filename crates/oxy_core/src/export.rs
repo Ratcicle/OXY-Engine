@@ -42,7 +42,7 @@ const MAX_FILE_CHARS: usize = 64;
 
 /// The licenses an exported game carries in its licenses folder: OXY's own and every
 /// third-party text the engine ships, embedded so the editor needs no folder next to it.
-pub const LICENSES: [(&str, &str); 6] = [
+pub const LICENSES: [(&str, &str); 7] = [
     ("OXY-Engine-MIT.txt", include_str!("../../../LICENSE")),
     ("LEIA-ME.txt", include_str!("../../../licenses/LEIA-ME.txt")),
     (
@@ -52,6 +52,10 @@ pub const LICENSES: [(&str, &str); 6] = [
     (
         "ibm-plex-ofl-1.1.txt",
         include_str!("../../../licenses/ibm-plex-ofl-1.1.txt"),
+    ),
+    (
+        "kenney-skyboxes-cc0.txt",
+        include_str!("../../../licenses/kenney-skyboxes-cc0.txt"),
     ),
     (
         "parry-0.30.2.txt",
