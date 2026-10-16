@@ -237,6 +237,7 @@ impl Runtime {
             save,
             paused_for,
             audio,
+            failures_logged,
         } = run;
         let mut digest = StateDigest::default();
         digest.add(None, "scene", |s| {
@@ -257,8 +258,10 @@ impl Runtime {
                 .debug(step_input);
         });
         digest.add(None, "tasks", |s| {
-            // Lines and nodes run so far, which the host's taking leaves as they are.
-            s.debug(&(logs_written, traces_written, ready.len()));
+            // Lines and nodes run so far, which the host's taking leaves as they are, and the
+            // failures already told, which no later line repeats.
+            s.debug(&(logs_written, traces_written, ready.len()))
+                .debug(failures_logged);
             for task in ready.iter().chain(waiting) {
                 let Task {
                     due,

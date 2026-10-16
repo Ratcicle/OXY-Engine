@@ -55,6 +55,8 @@ pub use state_hash::{StateDifference, StateDigest, StatePart};
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
 pub const MAX_NODE_WORK: usize = 1024;
+/// The longest Esperar sem bloquear waits, in seconds: a day.
+pub const MAX_WAIT: f64 = 86_400.;
 /// Save requests a host may leave queued before they are folded (see `request_save`).
 const MAX_SAVE_REQUESTS: usize = 64;
 
@@ -201,6 +203,8 @@ pub(crate) struct RunState {
     paused_for: f64,
     /// The music, the effect loops and the volumes, which the hosts play.
     audio: crate::audio::AudioState,
+    /// The (owner, node) actions whose failure no one read and the log already told.
+    failures_logged: BTreeSet<(Id, Id)>,
 }
 impl RunState {
     /// A run's start: the draws from `seed`, every variable at its declared value.
@@ -1167,17 +1171,24 @@ impl Runtime {
                     .input_value(&graph, node, "seconds", &context, budget, 0)?
                     .number()
                     .ok_or("Espera precisa de segundos numéricos")?;
-                if !delay.is_finite() || !(0.0..=86400.0).contains(&delay) {
-                    return Err("Espera deve estar entre 0 e 86400 segundos".into());
+                if !delay.is_finite() || !(0.0..=MAX_WAIT).contains(&delay) {
+                    return Err(format!("Espera deve estar entre 0 e {MAX_WAIT} segundos"));
                 }
                 delay = delay.max(f64::from(FIXED_DT));
             }
-            "debug.message" => self.log(format!(
-                "[{} / {}] {}",
-                task.owner,
-                node.id,
-                node.text("message")
-            )),
+            "debug.message" => {
+                let mut message = node.text("message").to_owned();
+                if graph.input(&node.id, "value").is_some() {
+                    let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
+                    let value = self.logged_value(&value);
+                    message = if message.is_empty() {
+                        value
+                    } else {
+                        format!("{message}: {value}")
+                    };
+                }
+                self.log(format!("[{} / {}] {message}", task.owner, node.id));
+            }
             "attribute.set" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
@@ -1394,8 +1405,67 @@ impl Runtime {
                 }
             }
         }
+        self.report_unread_failure(&graph, &task.owner, node, &context);
         self.outputs(&graph, node, &ports, context, delay);
         Ok(())
+    }
+    /// A value as Mensagem de diagnóstico writes it: numbers in full, texts as they are,
+    /// objects and surfaces by name.
+    fn logged_value(&self, value: &Value) -> String {
+        let numbers = |values: &[f32]| {
+            let numbers: Vec<String> = values.iter().map(|v| (v + 0.).to_string()).collect();
+            format!("({})", numbers.join("; "))
+        };
+        match value {
+            Value::Number(number) => (number + 0.).to_string(),
+            Value::Text(text) => text.clone(),
+            Value::Bool(true) => "verdadeiro".into(),
+            Value::Bool(false) => "falso".into(),
+            Value::Object(Some(id)) => self
+                .entity(id)
+                .map_or_else(|| "objeto ausente".into(), |e| e.name.clone()),
+            Value::Object(None) => "nenhum objeto".into(),
+            Value::Vector2(v) => numbers(v),
+            Value::Vector3(v) => numbers(v),
+            Value::Surface(Some(id)) => self
+                .project
+                .surfaces
+                .iter()
+                .find(|s| s.id == *id)
+                .map_or_else(|| "superfície ausente".into(), |s| s.name.clone()),
+            Value::Surface(None) => "nenhuma superfície".into(),
+        }
+    }
+    /// An action that answers its failure in Sucesso and Motivo de recusa (Teleportar com
+    /// segurança, the queries) failed and its graph reads neither: nothing would show it, so
+    /// the log says it once per node in the run, naming the object, the node and the reason.
+    fn report_unread_failure(
+        &mut self,
+        graph: &PreparedGraph,
+        owner: &str,
+        node: &Node,
+        context: &Context,
+    ) {
+        let output = |port: &str| context.outputs.get(&(node.id.clone(), port.to_owned()));
+        if output("success") != Some(&Value::Bool(false))
+            || ["success", "error"]
+                .iter()
+                .any(|port| graph.outputs(&node.id, port).next().is_some())
+            || !self
+                .run
+                .failures_logged
+                .insert((owner.to_owned(), node.id.clone()))
+        {
+            return;
+        }
+        let reason = match output("error") {
+            Some(Value::Text(reason)) if !reason.is_empty() => reason.clone(),
+            _ => "sem motivo informado".into(),
+        };
+        let object = self.entity(owner).map_or(owner, |e| e.name.as_str());
+        let label = crate::graph::definition(&node.operation).map_or("", |def| def.label);
+        let line = format!("{object} · {label} falhou: {reason}");
+        self.log(line);
     }
     pub fn remove_object(&mut self, id: &str) {
         self.physics_dirty = true;
@@ -1447,6 +1517,7 @@ impl Runtime {
         };
         self.run.rolls.retain(|(owner, _), _| keep(owner));
         self.run.spawns.retain(|(owner, _), _| keep(owner));
+        self.run.failures_logged.retain(|(owner, _)| keep(owner));
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();

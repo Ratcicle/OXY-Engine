@@ -533,6 +533,149 @@ fn headless_simulation_reports_logs_actions_and_watched_objects() {
 }
 
 #[test]
+fn number_ranges_are_refused_by_node_warned_in_older_projects_and_listed_in_the_catalog() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let before = project.clone();
+    for (operation, key, value, range) in [
+        ("character.teleport", "search", 3., "de 0 a 2"),
+        ("action.sound", "volume", 1.5, "de 0 a 1"),
+        ("control.wait", "seconds", -1., "de 0 a 86400"),
+        ("camera.activate", "seconds", -0.5, "de 0 em diante"),
+        ("query.ray", "mask", 4294967296., "de 0 a 4294967295"),
+        ("random.seed", "seed", -1., "de 0 a 9007199254740991"),
+    ] {
+        let commands = batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": operation, "params": {key: value}},
+        ]));
+        let error = command::apply(&mut project, &scene, &commands).unwrap_err();
+        let label = graph::definition(operation).unwrap().label;
+        assert_eq!(error.index, 1);
+        for part in [label, range, &format!("recebeu {value}")] {
+            assert!(error.message.contains(part), "{part}: {error}");
+        }
+        assert_eq!(project, before);
+    }
+    // set_node_params checks them too; the limits themselves pass.
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Zona de queda"},
+            {"op": "add_node", "entity": "$0", "operation": "character.teleport",
+             "params": {"search": 2}},
+            {"op": "add_node", "entity": "$0", "operation": "action.sound",
+             "params": {"volume": 0}},
+            {"op": "add_node", "entity": "$0", "operation": "control.wait"},
+            {"op": "add_node", "entity": "$0", "operation": "value.number",
+             "params": {"value": 1}},
+            {"op": "add_node", "entity": "$0", "operation": "control.wait",
+             "links": [["$4", "value", "seconds"]]},
+            {"op": "add_node", "entity": "$0", "operation": "query.ray"},
+        ])),
+    )
+    .unwrap();
+    let entity = created[0].created[0].clone();
+    let [teleport, sound, wait, _, wired, ray] =
+        [1, 2, 3, 4, 5, 6].map(|i| created[i].created[0].clone());
+    let set = |node: &str, key: &str, value: f64| {
+        batch(
+            json!({"op": "set_node_params", "entity": entity, "node": node,
+                     "params": {key: value}}),
+        )
+    };
+    let error = command::apply(&mut project, &scene, &set(&teleport, "search", 2.5)).unwrap_err();
+    assert!(
+        error.message.contains("Teleportar com segurança"),
+        "{error}"
+    );
+    command::apply(&mut project, &scene, &set(&teleport, "search", 0.)).unwrap();
+    // A project saved before the ranges keeps its values: it loads and saves, and validation
+    // says, by name, what the game does with each. A value whose port is wired is not read.
+    let logic = &mut project
+        .scene_mut(&scene)
+        .unwrap()
+        .entity_mut(&entity)
+        .unwrap()
+        .graph;
+    for (node, key, value) in [
+        (&teleport, "search", 3.),
+        (&sound, "volume", 2.),
+        (&wait, "seconds", 90000.),
+        (&wired, "seconds", 99999.),
+        (&ray, "distance", -1.),
+    ] {
+        logic
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == *node)
+            .unwrap()
+            .params
+            .insert(key.into(), Value::Number(value));
+    }
+    validate_project(&project).unwrap();
+    let validation = query::validation(&project);
+    assert_eq!(validation["valid"], true);
+    let warnings: Vec<&str> = validation["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    for expected in [
+        "Zona de queda → Teleportar com segurança: o parâmetro search \
+         (Busca local máxima (m; 0 recusa ocupado)) vale 3, fora da faixa de 0 a 2; no jogo, \
+         o nó recusa: a saída Sucesso fica falsa, com o motivo em Motivo de recusa",
+        "Zona de queda → Consultar raio: o parâmetro distance (Distância (m)) vale -1, fora da \
+         faixa de 0 em diante; no jogo, o nó recusa: a saída Consulta válida fica falsa, com o \
+         motivo em Motivo de recusa",
+        "Zona de queda → Reproduzir WAV: o parâmetro volume (Volume (0 a 1)) vale 2, fora da \
+         faixa de 0 a 1; no jogo, vale o limite mais próximo",
+        "Zona de queda → Esperar sem bloquear: o parâmetro seconds (Segundos) vale 90000, fora \
+         da faixa de 0 a 86400; no jogo, o nó para com erro",
+    ] {
+        assert!(
+            warnings.iter().any(|w| w.ends_with(expected)),
+            "{expected}: {warnings:?}"
+        );
+    }
+    assert!(
+        !warnings.iter().any(|w| w.contains("99999")),
+        "{warnings:?}"
+    );
+    for node in [&teleport, &sound, &wait, &wired, &ray] {
+        assert!(
+            !warnings.iter().any(|w| w.contains(node.as_str())),
+            "{warnings:?}"
+        );
+    }
+    let catalog = query::catalog();
+    let param = |operation: &str, key: &str| {
+        catalog["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["operation"] == operation)
+            .unwrap()["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == key)
+            .unwrap()
+            .clone()
+    };
+    let search = param("character.teleport", "search");
+    assert_eq!(
+        (search["min"].clone(), search["max"].clone()),
+        (json!(0.), json!(2.))
+    );
+    let seconds = param("camera.activate", "seconds");
+    assert_eq!(seconds["min"], json!(0.));
+    assert!(seconds.get("max").is_none());
+    assert!(param("character.teleport", "yaw").get("min").is_none());
+}
+
+#[test]
 fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
     let (mut project, scene) = project(SceneKind::ThreeD);
     let before = project.clone();

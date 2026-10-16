@@ -189,7 +189,9 @@ description) and categories \
 lists their categories; then ask for the nodes you will use with operations or category to get \
 their ports with types and parameters with defaults (only those nodes come back). A parameter \
 with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
-any other. ref says what a parameter names: scene, audio, clip, object, attribute, \
+any other. A number parameter the game limits gives min and max (no max: no upper limit): \
+add_node and set_node_params refuse a number outside them, naming the node and the range. ref \
+says what a parameter names: scene, audio, clip, object, attribute, \
 input_action, surface, marker or variable (a game variable; oxy_project lists them) (an ID, or \
 for attribute and marker a name; a scene, an input_action or a variable also by its name, which \
 add_node and set_node_params store as the ID). Each node's description is its own: what it \
@@ -433,10 +435,13 @@ pub fn definitions() -> Json {
             "Validates the whole project with the same rules used when saving: {valid, error?, \
              warnings?}. warnings lists what saves but the game would ignore or stop on: logic \
              nodes naming an input action the project lacks, keys the game does not read, \
-             parameters outside their choices (empty included), action.component nodes \
-             whose target parameter names an object lacking the part they switch and \
-             variable.set nodes whose value parameter is not of the variable's type (both \
-             stop with an error in the game).",
+             parameters outside their choices (empty included), number parameters outside \
+             their range (min and max in oxy_catalog, which a project saved before the ranges \
+             may hold; each warning says whether the node refuses the value in the game or \
+             takes the nearest limit; none when the input port of the same id is wired, which \
+             the game reads instead), action.component nodes whose target parameter names an \
+             object lacking the part they switch and variable.set nodes whose value parameter \
+             is not of the variable's type (both stop with an error in the game).",
             json!({"project": project}),
             json!([])
         ),
@@ -816,7 +821,8 @@ number for a Number parameter, a text for Text, true/false for Bool (\"mode\": \
 parameter with an input port of the same id of type any (attribute.set value, condition.compare \
 a and b) takes any type: its default is only where it starts, and a plain number, text or \
 true/false keeps that type. Other plain values are refused with the tagged form expected. A \
-parameter with choices in oxy_catalog takes only those values. An input action parameter (ref \
+parameter with choices in oxy_catalog takes only those values, and one with min and max only \
+numbers within them. An input action parameter (ref \
 input_action) takes the action's ID or name and stores the ID, which the game reads.
 - create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
 key}; delete_input_action {action}, refused while used (oxy_project lists used_by). action is \
@@ -918,8 +924,11 @@ a project (project.oxy.json) or any other file, a file, and a path ending in pro
 const CONSOLE_DESCRIPTION: &str = "Live only: the editor's console, read-only, for when the \
 person says something did not work: {lines: [{seq, origin, text, warning?, object? {id, name}, \
 node?, operation?}], last_seq, session, omitted?, reset?}. origin is editor, agente (your edits \
-and their errors), jogo (logs of the person's play test: debug.message texts and node errors, \
-with the object and node they come from) or logica (logic actions the test ran, as the Console \
+and their errors), jogo (logs of the person's play test: debug.message texts, with the value \
+wired to its value input, and node errors, with the object and node they come from, and, once \
+per node in a run, \"<object> · <node label> falhou: <reason>\" for an action whose failure \
+no node reads, as character.teleport with success and error unwired) or logica (logic actions \
+the test ran, as the Console \
 lists them, with the object, node and operation). warning marks messages the editor also showed \
 as notices. Lines stay after the test stops (the last 1000; logic keeps its last 300 apart, so \
 per-step logic does not push the rest out). seq grows while the editor stays open: pass the \
@@ -930,7 +939,10 @@ counts older lines left out by limit. oxy_status says whether a test is running.
 
 const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
 the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
-when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
+when a scene restarts), logs with object and node names (debug.message writes the value wired to \
+its value input after the text; an action whose failure no node reads, as character.teleport \
+with success and error unwired, logs \"<object> · <node label> falhou: <reason>\" once per node \
+in the run), a summary of the logic actions that ran, \
 sounds [{time, text: the audio's name, kind?, started?, channel, volume?, effective_volume, \
 fade?}] (no kind: played once by action.sound, always on the effects channel; loop, stop and \
 volume: what logic changed in what plays, only when it changed; a loop has started: true when \
@@ -2688,6 +2700,12 @@ mod tests {
         assert!(
             CATALOG_DESCRIPTION.contains("choices") && CATALOG_DESCRIPTION.contains("input_keys")
         );
+        assert!(CATALOG_DESCRIPTION.contains("gives min and max"));
+        assert!(APPLY_DESCRIPTION.contains("one with min and max only numbers within them"));
+        for description in [SIMULATE_DESCRIPTION, CONSOLE_DESCRIPTION] {
+            assert!(description.contains("falhou: <reason>"), "{description}");
+            assert!(description.contains("value input"), "{description}");
+        }
         // Names are kept apart only by create and rename, so the description says so.
         assert!(APPLY_DESCRIPTION.contains("name two actions share comes back in warnings"));
         assert!(!APPLY_DESCRIPTION.contains("names are unique"));
@@ -2708,6 +2726,7 @@ mod tests {
                 "{description}"
             );
         }
+        assert!(validate.contains("outside their range"), "{validate}");
     }
 
     #[test]
@@ -2808,6 +2827,83 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&json!("Space"))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ranges_show_in_the_catalog_and_failures_and_values_reach_the_logs() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-ranges-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Faixas", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let catalog = call("oxy_catalog", json!({"operations": ["character.teleport"]})).unwrap();
+        let search = catalog["nodes"][0]["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "search")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (search["min"].clone(), search["max"].clone()),
+            (json!(0.), json!(2.))
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Zona"},
+                {"op": "add_node", "entity": "$0", "operation": "character.teleport",
+                 "params": {"search": 3}},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Teleportar com segurança aceita números de 0 a 2; recebeu 3"),
+            "{error}"
+        );
+        // A ray with no direction fails in the game; nothing reads Consulta válida or Motivo.
+        call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Sonda"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "query.ray",
+                 "params": {"direction": {"Vector3": [0.0, 0.0, 0.0]}},
+                 "links": [["$1", "exec", "exec"]]},
+                {"op": "add_node", "entity": "$0", "operation": "value.number",
+                 "params": {"value": 3}},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Valor"},
+                 "links": [["$2", "exec", "exec"], ["$3", "value", "value"]]},
+            ]}),
+        )
+        .unwrap();
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        let logs: Vec<&str> = report["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            logs,
+            [
+                "Sonda · Consultar raio falhou: Direção da consulta não pode ser zero.",
+                "Valor: 3"
+            ]
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

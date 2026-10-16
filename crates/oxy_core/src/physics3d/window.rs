@@ -17,7 +17,7 @@ use rapier3d::parry::{
         ClosestPoints, Contact, DefaultQueryDispatcher, NonlinearRigidMotion, QueryDispatcher,
         ShapeCastHit, ShapeCastStatus, Unsupported, details,
     },
-    shape::{Cuboid, SupportMap},
+    shape::{Capsule, Cuboid, SupportMap},
 };
 
 /// Clip planes stay this far, plus the query's own margin, from anywhere the other shape can
@@ -305,6 +305,40 @@ fn unit(v: Vector) -> Vector {
     if length > 0. { v / length } else { v }
 }
 
+/// Two capsules whose axes overlap side by side, as two characters standing in one another:
+/// their Minkowski difference is round around the origin, Parry's EPA gives up there and the
+/// pair reads as apart, so a teleport or a recovery took the space for free. Their contact is
+/// the one of the axes' closest points, grown by the radii; axes that cross or run along each
+/// other part across the first axis.
+fn capsule_contact(pos12: &Pose, c1: &Capsule, c2: &Capsule, prediction: Real) -> Option<Contact> {
+    let axis2 = c2.segment.transformed(pos12);
+    let (at1, at2) = details::closest_points_segment_segment_with_locations_nD(
+        (&c1.segment.a, &c1.segment.b),
+        (&axis2.a, &axis2.b),
+    );
+    let (p1, p2) = (c1.segment.point_at(&at1), axis2.point_at(&at2));
+    let length = (p2 - p1).length();
+    let dist = length - c1.radius - c2.radius;
+    if dist > prediction {
+        return None;
+    }
+    let normal1 = if length > 1e-6 {
+        (p2 - p1) / length
+    } else {
+        c1.segment
+            .direction()
+            .map_or(Vector::X, |axis| axis.any_orthonormal_vector())
+    };
+    let point2 = pos12.inverse_transform_point(p2 - normal1 * c2.radius);
+    Some(Contact::new(
+        p1 + normal1 * c1.radius,
+        point2,
+        normal1,
+        pos12.rotation.inverse() * -normal1,
+        dist,
+    ))
+}
+
 /// The pose of `g2`'s cut in `g1`'s cut, from the centres of the cuts in their shapes.
 fn between(pos12: &Pose, at1: Vector, at2: Vector) -> Pose {
     Pose::from_parts(
@@ -335,6 +369,9 @@ impl QueryDispatcher for Windowed {
         // A ball has an exact contact of its own.
         if g1.as_ball().is_some() || g2.as_ball().is_some() {
             return DefaultQueryDispatcher.contact(pos12, g1, g2, prediction);
+        }
+        if let (Some(c1), Some(c2)) = (g1.as_capsule(), g2.as_capsule()) {
+            return Ok(capsule_contact(pos12, c1, c2, prediction));
         }
         if let Some(c1) = g1.as_composite_shape() {
             return Ok(details::contact_composite_shape_shape(

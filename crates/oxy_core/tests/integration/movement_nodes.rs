@@ -242,6 +242,127 @@ fn teleport_node_cancels_old_sensor_exit_but_keeps_its_own_continuation() {
     assert!(r.logs[0].contains("teleporte concluído"));
 }
 
+/// A character from the fixture, and a "Zona de queda" whose step logic teleports it into the
+/// floor (occupied, no search) through `teleports` nodes; the first `read` of them give Sucesso
+/// to a branch, the others are read by no one.
+fn failing_teleports(teleports: usize, read: usize) -> (Project, Id, Vec<Node>) {
+    let (mut p, id) = fixture();
+    let mut zone = Entity::new("Zona de queda", None);
+    let step = node("event.step", &[]);
+    let mut nodes = vec![step.clone()];
+    let mut previous = step.clone();
+    let mut created = Vec::new();
+    for i in 0..teleports {
+        let teleport = node(
+            "character.teleport",
+            &[
+                ("target", Value::Object(Some(id.clone()))),
+                ("position", Value::Vector3([0., -0.5, 0.])),
+            ],
+        );
+        wire(&mut zone.graph, &previous, "exec", &teleport, "exec");
+        if i < read {
+            let branch = node("condition.branch", &[]);
+            wire(&mut zone.graph, &teleport, "success", &branch, "condition");
+            nodes.push(branch);
+        }
+        nodes.push(teleport.clone());
+        created.push(teleport.clone());
+        previous = teleport;
+    }
+    zone.graph.nodes = nodes;
+    p.scenes[0].entities.push(zone);
+    validate_project(&p).unwrap();
+    (p, id, created)
+}
+
+#[test]
+fn an_unread_failure_is_logged_once_per_node_by_name() {
+    let (p, id, _) = failing_teleports(2, 0);
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    ticks(&mut r, 20);
+    let line = "Zona de queda · Teleportar com segurança falhou: Destino ocupado; personagem \
+                mantido na posição anterior.";
+    // Two nodes, one line each, however often they fail.
+    assert_eq!(r.logs, [line, line]);
+    assert!(r.character_state(&id).unwrap().position.y > 0.);
+    // Read by a branch, a failure is the logic's to handle: nothing is logged.
+    let (p, _, _) = failing_teleports(1, 1);
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    ticks(&mut r, 5);
+    clean(&r);
+    // The same run and seed log the same lines in the same steps, and a restarted scene
+    // does not tell them again.
+    let (p, _, _) = failing_teleports(1, 0);
+    let run = |restart: bool| {
+        let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+        ticks(&mut r, 3);
+        if restart {
+            r.change_scene(&p.start_scene).unwrap();
+        }
+        ticks(&mut r, 3);
+        (r.logs.clone(), r.state_hash())
+    };
+    assert_eq!(run(false), run(false));
+    assert_eq!(run(true).0, [line]);
+}
+
+#[test]
+fn a_diagnostic_message_writes_the_value_it_is_given() {
+    let (p, id, teleports) = failing_teleports(1, 0);
+    let mut p = p;
+    let zone = p.scenes[0]
+        .entities
+        .iter_mut()
+        .find(|e| e.name == "Zona de queda")
+        .unwrap();
+    let reason = node(
+        "debug.message",
+        &[("message", Value::Text("Motivo".into()))],
+    );
+    let place = node("debug.message", &[("message", Value::Text(String::new()))]);
+    let who = node("debug.message", &[("message", Value::Text("Quem".into()))]);
+    let alone = node("debug.message", &[]);
+    let at = node(
+        "value.vector3",
+        &[("value", Value::Vector3([1.5, -0., 2.]))],
+    );
+    let character = node(
+        "value.object",
+        &[("value", Value::Object(Some(id.clone())))],
+    );
+    let teleport = &teleports[0];
+    wire(&mut zone.graph, teleport, "exec", &reason, "exec");
+    wire(&mut zone.graph, teleport, "error", &reason, "value");
+    wire(&mut zone.graph, &reason, "exec", &place, "exec");
+    wire(&mut zone.graph, &at, "value", &place, "value");
+    wire(&mut zone.graph, &place, "exec", &who, "exec");
+    wire(&mut zone.graph, &character, "value", &who, "value");
+    wire(&mut zone.graph, &who, "exec", &alone, "exec");
+    zone.graph
+        .nodes
+        .extend([reason, place, who, alone, at, character]);
+    validate_project(&p).unwrap();
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    ticks(&mut r, 1);
+    let name = &p.scenes[0].entity(&id).unwrap().name;
+    let texts: Vec<&str> = r
+        .logs
+        .iter()
+        .map(|line| line.split_once("] ").unwrap().1)
+        .collect();
+    // Wired to Motivo de recusa, the failure is read: no line of its own.
+    assert_eq!(
+        texts,
+        [
+            "Motivo: Destino ocupado; personagem mantido na posição anterior.",
+            "(1.5; 0; 2)",
+            &format!("Quem: {name}"),
+            "Ação executada",
+        ]
+    );
+}
+
 #[test]
 fn physical_query_node_matches_native_and_space_has_real_contact() {
     let (mut p, id) = fixture();

@@ -201,6 +201,120 @@ pub struct ParamDef {
     pub id: &'static str,
     pub label: &'static str,
     pub default: Value,
+    /// The numbers the game takes, for a number parameter whose runtime has limits.
+    pub range: Option<NumberRange>,
+}
+impl ParamDef {
+    /// The game refuses numbers outside `min..=max` (no `max`: no upper limit).
+    fn within(mut self, min: f64, max: impl Into<Option<f64>>) -> Self {
+        self.range = Some(NumberRange {
+            min,
+            max: max.into(),
+            clamped: false,
+        });
+        self
+    }
+    /// The game takes numbers outside `min..=max` as the nearest limit.
+    fn clamped(mut self, min: f64, max: f64) -> Self {
+        self.range = Some(NumberRange {
+            min,
+            max: Some(max),
+            clamped: true,
+        });
+        self
+    }
+}
+/// The numbers a parameter can hold, limits included. They live in the registry, not in the
+/// project: an older project keeps whatever it holds, which validation then points out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NumberRange {
+    pub min: f64,
+    /// None: no upper limit.
+    pub max: Option<f64>,
+    /// The game takes a number outside as the nearest limit; otherwise the node refuses it.
+    pub clamped: bool,
+}
+impl NumberRange {
+    pub fn contains(&self, value: f64) -> bool {
+        value >= self.min && self.max.is_none_or(|max| value <= max)
+    }
+    /// "de 0 a 2", or "de 0 em diante" without an upper limit.
+    pub fn describe(&self) -> String {
+        match self.max {
+            Some(max) => format!("de {} a {max}", self.min),
+            None => format!("de {} em diante", self.min),
+        }
+    }
+}
+
+/// Checks the numbers of `params` given to a node of `operation` against their ranges, which
+/// agents may not leave: the first one outside, named by the node's label, with its range.
+pub fn check_ranges<'a>(
+    operation: &str,
+    params: impl IntoIterator<Item = (&'a String, &'a Value)>,
+) -> Result<(), String> {
+    let Some(def) = definition(operation) else {
+        return Ok(());
+    };
+    for (key, value) in params {
+        let Some(param) = def.params.iter().find(|p| p.id == key) else {
+            continue;
+        };
+        if let (Some(range), Value::Number(number)) = (param.range, value)
+            && !range.contains(*number)
+        {
+            return Err(format!(
+                "O parâmetro {key} ({}) de {} aceita números {}; recebeu {number}",
+                param.label,
+                def.label,
+                range.describe()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The number parameters of `node` in `graph` holding a value outside their range, in registry
+/// order. One whose input port of the same id is connected is left out: the game reads the port.
+pub fn out_of_range(
+    graph: &Graph,
+    node: &Node,
+) -> impl Iterator<Item = (&'static ParamDef, NumberRange, f64)> {
+    definition(&node.operation)
+        .into_iter()
+        .flat_map(|def| &def.params)
+        .filter(|param| !graph.input_connected(&node.id, param.id))
+        .filter_map(|param| match (param.range, node.params.get(param.id)) {
+            (Some(range), Some(Value::Number(value))) if !range.contains(*value) => {
+                Some((param, range, *value))
+            }
+            _ => None,
+        })
+}
+
+/// What the game does with `value`, outside the `range` of `param` of a node of `operation`.
+pub fn range_problem(operation: &str, param: &ParamDef, range: NumberRange, value: f64) -> String {
+    let label = |port: &str| {
+        definition(operation)
+            .and_then(|def| def.outputs.iter().find(|p| p.id == port))
+            .map(|p| p.label)
+    };
+    let outcome = if range.clamped {
+        "no jogo, vale o limite mais próximo".to_owned()
+    } else if let Some(success) = label("success") {
+        format!(
+            "no jogo, o nó recusa: a saída {success} fica falsa, com o motivo em {}",
+            label("error").unwrap_or("Motivo de recusa")
+        )
+    } else {
+        "no jogo, o nó para com erro".to_owned()
+    };
+    format!(
+        "o parâmetro {} ({}) vale {value}, fora da faixa {}; {outcome}",
+        param.id,
+        param.label,
+        range.describe()
+    )
 }
 #[derive(Clone, Debug)]
 pub struct OperationDef {
@@ -259,7 +373,9 @@ pub fn description(operation: &str) -> &'static str {
         "control.wait" => {
             "Continua após os segundos indicados, em tempo de jogo, sem interromper o jogo ou o editor."
         }
-        "debug.message" => "Exibe uma mensagem no diagnóstico durante a execução.",
+        "debug.message" => {
+            "Exibe uma mensagem no diagnóstico durante a execução e, com a entrada Valor ligada, o valor recebido depois dela (números com todas as casas decimais, objetos e superfícies pelo nome)."
+        }
         // The guide documents every registered operation, movement nodes included.
         _ => crate::guide::topics()
             .iter()
@@ -335,7 +451,12 @@ fn port(id: &'static str, label: &'static str, kind: PortType) -> PortDef {
     PortDef { id, label, kind }
 }
 fn param(id: &'static str, label: &'static str, default: Value) -> ParamDef {
-    ParamDef { id, label, default }
+    ParamDef {
+        id,
+        label,
+        default,
+        range: None,
+    }
 }
 fn text(id: &'static str, label: &'static str, value: &str) -> ParamDef {
     param(id, label, Value::Text(value.into()))
@@ -528,7 +649,7 @@ fn build_registry() -> Vec<OperationDef> {
         params: vec![
             target(),
             text("attribute", "Atributo numérico", "Vida"),
-            number("amount", "Quantidade", 10.0),
+            number("amount", "Quantidade", 10.0).within(0., None),
             param("once", "Uma vez por ativação/alvo", Value::Bool(true)),
         ],
     });
@@ -614,13 +735,14 @@ fn build_registry() -> Vec<OperationDef> {
             inputs
         },
         outputs: exec(),
-        params: vec![number("seconds", "Segundos", 0.5)],
+        params: vec![number("seconds", "Segundos", 0.5).within(0., crate::runtime::MAX_WAIT)],
     });
     result.push(OperationDef {
         id: "debug.message",
         label: "Mensagem de diagnóstico",
         category: "Controle",
-        inputs: exec(),
+        // Valor has no parameter: left unconnected, the message is written alone, as before.
+        inputs: vec![port("exec", "Executar", Exec), port("value", "Valor", Any)],
         outputs: exec(),
         params: vec![text("message", "Mensagem", "Ação executada")],
     });

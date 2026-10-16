@@ -254,7 +254,8 @@ pub(super) fn definitions() -> Vec<OperationDef> {
                     "Olhar mundial: giro/inclinação (°)",
                     Value::Vector2([0.; 2]),
                 ),
-                number("search", "Busca local máxima (m; 0 recusa ocupado)", 0.),
+                number("search", "Busca local máxima (m; 0 recusa ocupado)", 0.)
+                    .within(0., f64::from(crate::character::MAX_TELEPORT_SEARCH)),
             ],
             vec![
                 port("success", "Sucesso", Bool),
@@ -280,7 +281,10 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             "Ativar câmera de jogo",
             "Câmera de jogo",
             true,
-            vec![target(), number("seconds", "Transição (s)", 0.25)],
+            vec![
+                target(),
+                number("seconds", "Transição (s)", 0.25).within(0., None),
+            ],
             vec![],
         ),
         op(
@@ -291,7 +295,7 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             vec![
                 target(),
                 text("mode", "Modo", "third_person"),
-                number("seconds", "Transição (s)", 0.25),
+                number("seconds", "Transição (s)", 0.25).within(0., None),
             ],
             vec![],
         ),
@@ -328,7 +332,7 @@ pub(super) fn definitions() -> Vec<OperationDef> {
                 target(),
                 text("setting", "Ajuste", "fov"),
                 number("value", "Valor", 60.),
-                number("seconds", "Suavização (s)", 0.15),
+                number("seconds", "Suavização (s)", 0.15).within(0., None),
             ],
             vec![],
         ),
@@ -466,13 +470,14 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             vec![
                 v3("origin", "Origem/centro mundial (m)", [0., 1., 0.]),
                 v3("direction", "Direção mundial", [0., 0., -1.]),
-                number("distance", "Distância (m)", 10.),
+                number("distance", "Distância (m)", 10.).within(0., None),
                 number("radius", "Raio (m)", 0.3),
                 number("height", "Altura total da cápsula (m)", 1.8),
                 flag("sensors", "Incluir áreas", false),
                 param("exclude", "Ignorar objeto/hierarquia", Value::Object(None)),
-                number("category", "Pertence aos grupos…", 1.),
-                number("mask", "Consultar grupos…", f64::from(u32::MAX)),
+                number("category", "Pertence aos grupos…", 1.).within(0., f64::from(u32::MAX)),
+                number("mask", "Consultar grupos…", f64::from(u32::MAX))
+                    .within(0., f64::from(u32::MAX)),
             ],
             vec![
                 port("hit", "Atingiu / espaço ocupado", Bool),
@@ -494,7 +499,7 @@ pub(super) fn definitions() -> Vec<OperationDef> {
 /// and its cautions. Units are the engine's: metres, metres per second, degrees and seconds.
 pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static str)> {
     const VECTORS: &str = "Um vetor não tem unidade própria: vale a do que representa (metros numa posição, m/s numa velocidade, graus num olhar). Valores não finitos são recusados.";
-    const QUERIES: &str = "Não move objetos. Até 256 consultas por passo; confira Consulta válida antes de usar o contato. A consulta encontra também o que a forma já toca na Origem: uma que começa dentro do personagem o atinge na distância 0, então escolha-o em Ignorar objeto/hierarquia, que ignora também os filhos dele; uma esfera ou cápsula centrada nos pés já toca o chão. Áreas só contam com Incluir áreas.";
+    const QUERIES: &str = "Não move objetos. Até 256 consultas por passo; confira Consulta válida antes de usar o contato (uma consulta recusada que nenhum nó lê escreve uma linha no log, uma vez por nó na partida). A consulta encontra também o que a forma já toca na Origem: uma que começa dentro do personagem o atinge na distância 0, então escolha-o em Ignorar objeto/hierarquia, que ignora também os filhos dele; uma esfera ou cápsula centrada nos pés já toca o chão. Áreas só contam com Incluir áreas.";
     Some(match id {
         "event.step" => (
             "Executa uma vez por passo fixo da simulação (60 por segundo), antes do movimento, e fornece a Duração do passo (1/60 s) e o Tempo da simulação, o tempo de jogo desde o começo da partida, ambos em segundos.",
@@ -584,7 +589,7 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
         "character.teleport" => (
             "Põe os pés do personagem 3D na Posição mundial, em metros, se houver espaço, com giro do corpo e olhar opcionais, em graus, e fornece Sucesso, o Motivo de recusa e o Destino utilizado, em metros.",
             "Guarde a posição (Vetor3) e o olhar (Vetor2) de um ponto de retorno e use-os ao reiniciar.",
-            "Destino ocupado não altera a posição. Busca local é limitada a 2 m; limpa apoio, pedidos e trajetória anterior.",
+            "Destino ocupado, inclusive por outro personagem cujo corpo colide com o deste pelos grupos de colisão dos dois, não altera a posição. Busca local vai de 0 a 2 m; limpa apoio, pedidos e trajetória anterior. Uma recusa que nenhum nó lê (Sucesso e Motivo de recusa desligados) escreve uma linha no log, uma vez por nó na partida.",
         ),
         "camera.read" => (
             "Fornece a câmera de jogo ativa, o Olhar de controle em graus (Vetor2: giro, 0° para −Z e positivo para a esquerda; inclinação, positiva para cima), a Direção do olhar (Vetor3 mundial de comprimento 1) e o Modo em texto: Primeira pessoa, Terceira pessoa ou Fixa.",

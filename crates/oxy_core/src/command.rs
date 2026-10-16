@@ -1239,6 +1239,18 @@ pub fn warnings(project: &Project) -> Vec<Warning> {
                     message: format!("{}: {error}", place()),
                 });
             }
+            // Ranges live in the registry: an older project keeps what it holds.
+            for (param, range, value) in graph::out_of_range(&e.graph, node) {
+                let label = graph::definition(&node.operation).map_or("", |def| def.label);
+                found.push(Warning {
+                    about: vec![format!("range {} {} {value}", node.id, param.id)],
+                    message: format!(
+                        "{scope} → {} → {label}: {}",
+                        e.name,
+                        graph::range_problem(&node.operation, param, range, value)
+                    ),
+                });
+            }
             // Only a value in the parameter is known here; one from a port is known in the game.
             if node.operation == "variable.set"
                 && !e.graph.input_connected(&node.id, "value")
@@ -2736,6 +2748,7 @@ fn node_params(
         params.insert(key.clone(), value);
     }
     graph::check_choices(def.id, &params)?;
+    graph::check_ranges(def.id, &params)?;
     Ok(params)
 }
 

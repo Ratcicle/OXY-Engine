@@ -143,6 +143,36 @@ fn schema_4_nodes_get_the_registry_parameters_they_lack_and_keep_their_own() {
 }
 
 #[test]
+fn a_diagnostic_message_from_before_its_value_input_reads_and_runs_unchanged() {
+    let mut project = Project::new("Mensagem antiga");
+    let mut logic = Entity::new("Lógica", None);
+    let start = Node::new("event.scene_start", [0.; 2]);
+    let mut message = Node::new("debug.message", [260., 0.]);
+    message
+        .params
+        .insert("message".into(), Value::Text("Olá".into()));
+    logic.graph.edges.push(oxy_core::graph::Edge {
+        from_node: start.id.clone(),
+        from_port: "exec".into(),
+        to_node: message.id.clone(),
+        to_port: "exec".into(),
+    });
+    logic.graph.nodes = vec![start, message];
+    project.scenes[0].entities.push(logic);
+    for schema in [4, 5] {
+        let mut json = serde_json::to_value(&project).unwrap();
+        json["schema_version"] = schema.into();
+        let converted = migration::read(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(converted, project, "schema {schema}");
+        let node = &converted.scenes[0].entities[0].graph.nodes[1];
+        assert_eq!(node.params.keys().collect::<Vec<_>>(), ["message"]);
+        let runtime = oxy_core::runtime::Runtime::new(&converted, &converted.start_scene).unwrap();
+        assert_eq!(runtime.logs.len(), 1, "{:?}", runtime.logs);
+        assert!(runtime.logs[0].ends_with("] Olá"), "{:?}", runtime.logs);
+    }
+}
+
+#[test]
 fn unknown_operations_are_left_for_validation_to_report() {
     let mut project = spikes();
     let mut unknown = Node::new("action.damage", [0.; 2]);

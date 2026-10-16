@@ -116,6 +116,116 @@ fn occupied_teleport_is_atomic_and_local_search_is_bounded() {
             .is_err()
     );
 }
+/// The fixture with a second character, "other", 3 m along X, its body in the groups of
+/// `filter`.
+fn two_characters(filter: CollisionFilter) -> Project {
+    let mut p = fixture();
+    let mut other = Entity::new("Outro", None);
+    other.id = "other".into();
+    other.transform.position = [3., 0.02, 0.];
+    let mut config = CharacterConfig::default();
+    config.body.filter = filter;
+    other.character3d = Some(config);
+    p.scenes[0].entities.push(other);
+    p
+}
+#[test]
+fn a_teleport_never_puts_a_character_inside_another() {
+    let p = two_characters(CollisionFilter::default());
+    let mut r = runtime(&p);
+    let goal = Vec3::new(-4., 0.02, 2.);
+    let start = r.character_state("other").unwrap().position;
+    assert_eq!(
+        r.teleport_character("body", goal, TeleportOptions::default())
+            .unwrap(),
+        goal
+    );
+    // On the first one's spot, or a hair off its axis, where the contact of two capsules
+    // used to be lost and the second one took the space for free.
+    for offset in [Vec3::ZERO, Vec3::new(4e-5, -0.01, 0.)] {
+        let error = r
+            .teleport_character("other", goal + offset, TeleportOptions::default())
+            .unwrap_err();
+        assert!(error.contains("Destino ocupado"), "{error}");
+        assert_eq!(r.character_state("other").unwrap().position, start);
+    }
+    let landed = r
+        .teleport_character(
+            "other",
+            goal,
+            TeleportOptions {
+                search_radius: 1.,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let apart = |a: Vec3, b: Vec3| Vec3::new(a.x - b.x, 0., a.z - b.z).length();
+    assert!(apart(landed, goal) >= 0.6, "{landed:?}");
+    assert!(apart(landed, goal) <= 1.001, "{landed:?}");
+    for _ in 0..30 {
+        r.advance(FIXED_DT, &InputFrame::default());
+    }
+    let (a, b) = (
+        r.character_state("body").unwrap().position,
+        r.character_state("other").unwrap().position,
+    );
+    assert!(apart(a, b) >= 0.6 - 1e-3, "{a:?} {b:?}");
+    assert!(r.logs.is_empty(), "{:?}", r.logs);
+}
+#[test]
+fn a_teleport_counts_only_bodies_the_filters_let_collide() {
+    // The other body's mask leaves out the first body's group: the movement lets them pass
+    // through each other, and so does a teleport, either way.
+    let p = {
+        let mut p = two_characters(CollisionFilter {
+            category: 4,
+            mask: !2,
+            ..Default::default()
+        });
+        let body = p.scenes[0].entity_mut("body").unwrap();
+        body.character3d.as_mut().unwrap().body.filter.category = 2;
+        p
+    };
+    let mut r = runtime(&p);
+    let here = r.character_state("body").unwrap().position;
+    assert_eq!(
+        r.teleport_character("other", here, TeleportOptions::default())
+            .unwrap(),
+        here
+    );
+    let there = Vec3::new(5., 0.02, 0.);
+    r.teleport_character("other", there, TeleportOptions::default())
+        .unwrap();
+    assert_eq!(
+        r.teleport_character("body", there, TeleportOptions::default())
+            .unwrap(),
+        there
+    );
+}
+#[test]
+fn a_teleport_sees_the_body_another_character_took_in_the_same_step() {
+    // No step runs between them: the queries must not keep the other's old, thinner body.
+    let p = two_characters(CollisionFilter::default());
+    let mut r = runtime(&p);
+    let beside = r.character_state("other").unwrap().position + Vec3::X;
+    let mut config = r
+        .scene()
+        .entity("other")
+        .unwrap()
+        .character3d
+        .clone()
+        .unwrap();
+    config.body.standing = CollisionShape::Capsule {
+        height: 2.4,
+        radius: 0.8,
+    };
+    config.crouch_height = 1.6;
+    r.configure_character("other", config, false).unwrap();
+    let error = r
+        .teleport_character("body", beside, TeleportOptions::default())
+        .unwrap_err();
+    assert!(error.contains("Destino ocupado"), "{error}");
+}
 #[test]
 fn teleport_rejects_unsupported_hierarchy_and_clamps_restored_pitch() {
     let mut p = fixture();

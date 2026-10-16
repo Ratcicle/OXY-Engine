@@ -1262,6 +1262,12 @@ pub fn catalog() -> Json {
                     if let Some(reference) = graph::reference(op.id, p) {
                         param["ref"] = json!(reference);
                     }
+                    if let Some(range) = p.range {
+                        param["min"] = json!(range.min);
+                        if let Some(max) = range.max {
+                            param["max"] = json!(max);
+                        }
+                    }
                     param
                 }).collect::<Vec<_>>(),
             })

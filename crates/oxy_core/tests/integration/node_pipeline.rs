@@ -80,7 +80,20 @@ fn every_registered_operation_keeps_the_registry_contract() {
             .validate(&HashSet::new())
             .unwrap_or_else(|error| panic!("{id}: {error}"));
         graph::check_choices(id, &node.params).unwrap_or_else(|error| panic!("{id}: {error}"));
+        graph::check_ranges(id, &node.params).unwrap_or_else(|error| panic!("{id}: {error}"));
         for param in &def.params {
+            if let Some(range) = param.range {
+                assert!(
+                    matches!(param.default, Value::Number(_)),
+                    "{id}.{}: faixa num parâmetro que não é número",
+                    param.id
+                );
+                assert!(
+                    range.max.is_none_or(|max| range.min < max),
+                    "{id}.{}: faixa vazia",
+                    param.id
+                );
+            }
             if let Some(options) = graph::choices(id, param.id) {
                 assert!(
                     matches!(&param.default, Value::Text(value)

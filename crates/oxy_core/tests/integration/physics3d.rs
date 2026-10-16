@@ -610,3 +610,56 @@ fn edges_keep_the_margin(kind: &str, size: f32, degrees: f32) {
         }
     }
 }
+
+#[test]
+fn capsules_standing_in_one_another_overlap_whatever_their_axes() {
+    // Parry's EPA lost two capsules on (nearly) the same axis, and the space read as free.
+    let capsule = CollisionShape::Capsule {
+        height: 1.8,
+        radius: 0.3,
+    };
+    let base = Vec3::new(0., 1.41, -76.);
+    let mut world = PhysicsWorld::new();
+    world
+        .upsert(
+            "other",
+            &Collider3d {
+                shape: capsule.clone(),
+                ..Default::default()
+            },
+            base,
+            Quat::IDENTITY,
+            Vec3::ONE,
+        )
+        .unwrap();
+    world.flush();
+    let at = |offset: Vec3| {
+        world
+            .penetration_contacts(&capsule, base + offset, &QueryOptions::default())
+            .unwrap()
+    };
+    for offset in [
+        Vec3::ZERO,
+        Vec3::new(4e-5, -0.0101, 0.),
+        Vec3::Y,
+        Vec3::new(0.2, 0.5, -0.1),
+    ] {
+        let contacts = at(offset);
+        assert_eq!(contacts.len(), 1, "{offset}");
+        let side = Vec3::new(offset.x, 0., offset.z).length();
+        assert!(
+            (contacts[0].distance - (side - 0.6)).abs() < 1e-3,
+            "{offset}: {contacts:?}"
+        );
+        assert!(contacts[0].normal.y.abs() < 1e-3, "{offset}: {contacts:?}");
+        assert!(
+            (contacts[0].normal.length() - 1.).abs() < 1e-4,
+            "{offset}: {contacts:?}"
+        );
+    }
+    // One on top of the other: their caps overlap a centimetre, then touch.
+    assert!(at(Vec3::Y * 1.79)[0].distance < -0.009);
+    // Touching side by side or stacked is free space.
+    assert!(at(Vec3::X * 0.6).is_empty());
+    assert!(at(Vec3::Y * 1.8).is_empty());
+}

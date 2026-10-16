@@ -471,8 +471,8 @@ mod tests {
     #[test]
     fn sizes_follow_ports_and_body_rows() {
         let message = node_extent(definition("debug.message"));
-        // Executar/Continuar, plus the message parameter, which has no port.
-        assert_eq!(message, [200., 30. + 6. + 2. * 22. + 8.]);
+        // Executar/Continuar and Valor, plus the message parameter, which has no port.
+        assert_eq!(message, [200., 30. + 6. + 3. * 22. + 8.]);
         assert_eq!(node_extent(None), [200., 30. + 6. + 22. + 8.]);
     }
 

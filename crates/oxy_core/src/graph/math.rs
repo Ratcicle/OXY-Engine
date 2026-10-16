@@ -83,7 +83,7 @@ pub(super) fn actions() -> Vec<OperationDef> {
             "Definir semente aleatória",
             "Ações",
             true,
-            vec![number("seed", "Semente", 0.)],
+            vec![number("seed", "Semente", 0.).within(0., crate::random::MAX_SEED as f64)],
             vec![],
         ),
     ]

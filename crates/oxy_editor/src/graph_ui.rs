@@ -2073,6 +2073,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn number_fields_with_a_range_drag_only_within_it() {
+        let project = Project::new("Faixas");
+        let context = ParameterContext {
+            objects: &[],
+            project: &project,
+            scene: &project.scenes[0],
+            owner: None,
+            target_connected: false,
+            any_type: false,
+        };
+        let ctx = themed();
+        let mut node = Node::new("character.teleport", [0.0; 2]);
+        let param = registry()
+            .iter()
+            .find(|op| op.id == "character.teleport")
+            .unwrap()
+            .params
+            .iter()
+            .find(|param| param.id == "search")
+            .unwrap();
+        // An older project's value outside the range shows as it is, unchanged.
+        node.params.insert("search".into(), Value::Number(3.));
+        let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
+        assert_eq!(node.params["search"], Value::Number(3.));
+        let field = text_center(&output, "3.0");
+        let pressed = |pos: Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        node.params.insert("search".into(), Value::Number(0.));
+        let far = field + Vec2::new(300.0, 0.0);
+        for events in [
+            vec![egui::Event::PointerMoved(field), pressed(field, true)],
+            vec![egui::Event::PointerMoved(field + Vec2::new(150.0, 0.0))],
+            vec![egui::Event::PointerMoved(far)],
+            vec![pressed(far, false)],
+        ] {
+            parameter_frame(&ctx, &mut node, param, &context, events);
+        }
+        assert_eq!(node.params["search"], Value::Number(2.));
+    }
+
     /// Every parameter that names a scene, an audio, a clip, an input action or a game
     /// variable, by the core's reference(), is picked by name and never typed, and the node
     /// body shows that name.

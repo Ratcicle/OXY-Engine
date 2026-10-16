@@ -504,6 +504,8 @@ pub enum CameraLookAt {
     Point(Vec3),
     Object(Id),
 }
+/// The farthest a teleport looks for free space around an occupied destination, in metres.
+pub const MAX_TELEPORT_SEARCH: f32 = 2.;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TeleportOptions {
     pub keep_velocity: bool,
@@ -511,7 +513,7 @@ pub struct TeleportOptions {
     pub yaw: Option<f32>,
     /// Optional world yaw/pitch in radians, restoring the player's view.
     pub look: Option<[f32; 2]>,
-    /// Zero rejects occupied destinations. Maximum supported local search: 2 m.
+    /// Zero rejects occupied destinations; at most [`MAX_TELEPORT_SEARCH`].
     pub search_radius: f32,
 }
 

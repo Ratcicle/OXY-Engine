@@ -1,6 +1,9 @@
 //! Atomic, bounded relocation shared by graphs and native callers.
 use super::*;
 impl Runtime {
+    /// The world the queries of logic see, every character's body where it stands. The
+    /// movement step keeps it so, syncing each body as soon as it moves, and so does a
+    /// teleport; what else moves bodies or changes their shapes marks it dirty.
     pub(in crate::runtime) fn refresh_character_queries(&mut self) -> Result<(), String> {
         if self.scene().kind != SceneKind::ThreeD {
             return Err("Esta consulta exige cena 3D.".into());
@@ -83,11 +86,12 @@ impl Runtime {
                 .look
                 .is_some_and(|v| v.iter().any(|v| !v.is_finite()))
             || !options.search_radius.is_finite()
-            || !(0. ..=2.).contains(&options.search_radius)
+            || !(0. ..=MAX_TELEPORT_SEARCH).contains(&options.search_radius)
         {
-            return Err(
-                "Destino/orientação inválidos; busca local deve estar entre 0 e 2 m.".into(),
-            );
+            return Err(format!(
+                "Destino/orientação inválidos; busca local deve estar entre 0 e \
+                 {MAX_TELEPORT_SEARCH} m."
+            ));
         }
         self.ensure_character_state(id)?;
         self.refresh_character_queries()?;
@@ -337,6 +341,8 @@ impl Runtime {
                 );
             }
             self.characters.states.get_mut(id).unwrap().height = body.height;
+            // The queries of the rest of this step see the new body, not the old one.
+            self.physics_dirty = true;
         }
         self.entity_mut(id).unwrap().character3d = Some(config);
         Ok(())

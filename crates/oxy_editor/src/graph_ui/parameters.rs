@@ -570,13 +570,25 @@ pub(super) fn parameter_editor(
                 );
             }
         }
-        value_editor(
-            ui,
-            &mut value,
-            context.objects,
-            &context.project.surfaces,
-            salt,
-        );
+        match (param.range, &mut value) {
+            // Dragging and typing stay within what the game takes; a value an older project
+            // holds outside shows as it is until edited.
+            (Some(range), Value::Number(number)) => {
+                ui.add(
+                    egui::DragValue::new(number)
+                        .speed(0.1)
+                        .range(range.min..=range.max.unwrap_or(f64::INFINITY))
+                        .clamp_existing_to_range(false),
+                );
+            }
+            _ => value_editor(
+                ui,
+                &mut value,
+                context.objects,
+                &context.project.surfaces,
+                salt,
+            ),
+        }
     }
     node.params.insert(param.id.into(), value);
 }

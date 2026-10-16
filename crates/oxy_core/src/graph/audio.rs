@@ -18,8 +18,8 @@ pub(super) fn definitions() -> Vec<OperationDef> {
     use PortType::*;
     let exec = || port("exec", "Executar", Exec);
     let next = || vec![port("exec", "Continuar", Exec)];
-    let volume = || number("volume", "Volume", 1.);
-    let fade = || number("fade", "Transição (s)", 0.);
+    let volume = || number("volume", "Volume", 1.).clamped(0., 1.);
+    let fade = || number("fade", "Transição (s)", 0.).within(0., crate::audio::MAX_FADE);
     vec![
         // Moved from Ações unchanged, its output's label included.
         OperationDef {
@@ -30,7 +30,7 @@ pub(super) fn definitions() -> Vec<OperationDef> {
             outputs: vec![exec()],
             params: vec![
                 text("asset", "Áudio", ""),
-                number("volume", "Volume (0 a 1)", 1.),
+                number("volume", "Volume (0 a 1)", 1.).clamped(0., 1.),
             ],
         },
         // A connected Volume replaces the parameter, as a menu bar or a variable gives it.
