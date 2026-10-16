@@ -1546,8 +1546,8 @@ mod tests {
     fn scene_background_is_optional_round_trips_and_is_checked() {
         let mut p = Project::new("Fundo");
         p.scenes.push(Scene::new("Pista", SceneKind::ThreeD));
-        // Without one the document is as before: the shipped examples read and save to the
-        // same bytes, and the scenes keep the dark color.
+        // Without one the document is as before and the scenes keep the dark color; the
+        // shipped parkour, which uses the sky, reads and saves to the same bytes.
         let saved = serde_json::to_string(&p).unwrap();
         assert!(!saved.contains("background"), "{saved}");
         let loaded: Project = serde_json::from_str(&saved).unwrap();
@@ -1564,7 +1564,12 @@ mod tests {
         .unwrap()
         .replace("\r\n", "\n");
         let parkour: Project = serde_json::from_str(&example).unwrap();
-        assert!(parkour.scenes.iter().all(|s| s.background.is_none()));
+        assert!(
+            parkour
+                .scenes
+                .iter()
+                .all(|s| s.background == Some(Background::Sky))
+        );
         assert_eq!(serde_json::to_string_pretty(&parkour).unwrap(), example);
 
         p.scenes[0].background = Some(Background::Color([0.25, 0.5, 0.75, 1.]));
