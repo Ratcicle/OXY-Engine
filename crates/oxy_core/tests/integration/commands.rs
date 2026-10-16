@@ -2512,7 +2512,10 @@ fn a_scene_reference_holds_its_scene_like_a_scene_change_and_the_catalog_lists_i
     assert_eq!(node["inputs"], json!([]));
     assert_eq!(
         node["outputs"],
-        json!([{"id": "value", "label": "Cena", "type": "text"}])
+        json!([
+            {"id": "value", "label": "Cena", "type": "text"},
+            {"id": "name", "label": "Nome", "type": "text"},
+        ])
     );
     assert_eq!(
         node["params"],
@@ -3041,4 +3044,217 @@ fn update_entity_refuses_the_degrees_reads_add_to_keyframes() {
     )
     .unwrap();
     assert_eq!(project, before);
+}
+
+#[test]
+fn connect_takes_many_links_and_add_node_wires_its_inputs_as_it_is_added() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Painel"},
+            {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$0", "operation": "value.number",
+             "params": {"value": 2.0}},
+            // Wired as it is added: the start runs it, the number gives its seconds.
+            {"op": "add_node", "entity": "$0", "operation": "control.wait",
+             "links": [["$1", "exec", "exec"], ["$2", "value", "seconds"]]},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "params": {"message": "Pronto"}},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "params": {"message": "Começou"}},
+            {"op": "connect", "entity": "$0", "links": [
+                ["$3", "exec", "$4", "exec"], ["$1", "exec", "$5", "exec"]]},
+        ])),
+    )
+    .unwrap();
+    let painel = applied[0].created[0].clone();
+    let ids: Vec<String> = applied[1..6].iter().map(|a| a.created[0].clone()).collect();
+    let [start, number, wait, ready, began] = [0, 1, 2, 3, 4].map(|i| ids[i].as_str());
+    // The links create nothing of their own.
+    assert!(applied[6].created.is_empty());
+    let mut edges: Vec<_> = project.scenes[0]
+        .entity(&painel)
+        .unwrap()
+        .graph
+        .edges
+        .iter()
+        .map(|e| {
+            [
+                e.from_node.as_str(),
+                e.from_port.as_str(),
+                e.to_node.as_str(),
+                e.to_port.as_str(),
+            ]
+        })
+        .collect();
+    edges.sort();
+    let mut expected = vec![
+        [start, "exec", wait, "exec"],
+        [number, "value", wait, "seconds"],
+        [wait, "exec", ready, "exec"],
+        [start, "exec", began, "exec"],
+    ];
+    expected.sort();
+    assert_eq!(edges, expected);
+    validate_project(&project).unwrap();
+    // The game runs the logic so wired.
+    let report = oxy_core::headless::simulate(
+        &project,
+        &serde_json::from_value(json!({"seconds": 2.5})).unwrap(),
+    )
+    .unwrap();
+    let logs: Vec<(&str, f64)> = report
+        .logs
+        .iter()
+        .map(|l| (l.text.as_str(), (l.time * 10.).round() / 10.))
+        .collect();
+    assert_eq!(logs, [("Começou", 0.), ("Pronto", 2.)]);
+
+    // One refused link refuses its command and the batch, by its place in links and with the
+    // nodes by name.
+    let before = project.clone();
+    let mut refused = |commands: serde_json::Value| {
+        let error = command::apply(&mut project, &scene, &batch(commands)).unwrap_err();
+        assert_eq!(project, before, "a refused batch changes nothing");
+        error.to_string()
+    };
+    for (commands, expected) in [
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [began, "exec", ready, "exec"], [start, "valor", ready, "exec"]]}]),
+            "Comando 0 (connect, o 1º do lote): Ligação 1 de links (a 2ª): O nó Ao iniciar \
+             cena (event.scene_start) não tem a saída valor; saídas: exec",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [number, "value", ready, "mensagem"]]}]),
+            "Ligação 0 de links (a 1ª): O nó Mensagem de diagnóstico (debug.message) não tem \
+             a entrada mensagem; entradas: exec",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [began, "exec", ready, "exec"], [began, "exec", ready, "exec"]]}]),
+            "Ligação 1 de links (a 2ª): Essas portas já estão ligadas",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [number, "value", wait, "seconds"]]}]),
+            "Ligação 0 de links (a 1ª): Essas portas já estão ligadas",
+        ),
+        (
+            json!([
+                {"op": "add_node", "entity": painel, "operation": "value.number"},
+                {"op": "connect", "entity": painel, "from_node": "$0", "from_port": "value",
+                 "to_node": wait, "to_port": "seconds"}]),
+            "Comando 1 (connect, o 2º do lote): A entrada seconds de Esperar sem bloquear \
+             (control.wait) já possui uma conexão de dados; desligue-a antes (disconnect)",
+        ),
+        (
+            json!([{"op": "add_node", "entity": painel, "operation": "debug.message",
+                    "links": [[ready, "exec", "exec"], [start, "exec", "seconds"]]}]),
+            "Comando 0 (add_node, o 1º do lote): Ligação 1 de links (a 2ª): O nó Mensagem de \
+             diagnóstico (debug.message) não tem a entrada seconds; entradas: exec",
+        ),
+        (
+            json!([
+                {"op": "add_node", "entity": painel, "operation": "value.text"},
+                {"op": "add_node", "entity": painel, "operation": "control.wait",
+                 "links": [["$0", "value", "seconds"]]}]),
+            "Conexão incompatível: Texto → Número (a saída value de Texto (value.text) na \
+             entrada seconds de Esperar sem bloquear (control.wait))",
+        ),
+        (
+            json!([
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Outro"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": painel, "operation": "debug.message",
+                 "links": [["$1", "exec", "exec"]]}]),
+            "Ligação 0 de links (a 1ª): O nó Ao iniciar cena (event.scene_start) é da lógica \
+             de Outro, não da de Painel",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                ["nenhum", "exec", ready, "exec"]]}]),
+            "Ligação 0 de links (a 1ª): Painel não tem o nó nenhum na lógica",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "from_node": ready,
+                    "links": [[ready, "exec", start, "exec"]]}]),
+            "Use links ou from_node, from_port, to_node e to_port, não os dois",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "from_node": ready, "from_port": "exec"}]),
+            "Informe from_node, from_port, to_node e to_port, ou links",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": []}]),
+            "Informe from_node, from_port, to_node e to_port, ou links",
+        ),
+        // A cycle through the links is the graph's own refusal.
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [ready, "exec", wait, "exec"]]}]),
+            "Ligação 0 de links (a 1ª): A ligação de Mensagem de diagnóstico (debug.message) \
+             para Esperar sem bloquear (control.wait) fecharia um ciclo",
+        ),
+    ] {
+        let error = refused(commands);
+        assert!(error.contains(expected), "{error}");
+    }
+    // A link is four texts, and an add_node link three.
+    for commands in [
+        json!({"op": "connect", "entity": painel, "links": [[ready, "exec", start]]}),
+        json!({"op": "add_node", "entity": painel, "operation": "debug.message",
+               "links": [[ready, "exec", start, "exec"]]}),
+    ] {
+        let error = command::parse(&commands).unwrap_err();
+        assert!(error.contains("não reconhecido"), "{error}");
+    }
+    // Placeholders reach the links, which write back in the form they read.
+    let read = batch(json!({"op": "connect", "entity": "x", "links": [["a", "b", "c", "d"]]}));
+    assert_eq!(
+        serde_json::to_value(&read[0]).unwrap(),
+        json!({"op": "connect", "scene": null, "entity": "x", "links": [["a", "b", "c", "d"]]})
+    );
+}
+
+#[test]
+fn a_scene_reference_gives_the_name_that_keys_a_record_per_scene() {
+    let (mut project, menu) = project(SceneKind::TwoD);
+    command::apply(
+        &mut project,
+        &menu,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_variable", "name": "Recorde", "value": 0},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Menu"},
+            {"op": "add_node", "entity": "$2", "operation": "event.scene_start"},
+            // Picked by name, the scene gives its name to the key: nothing typed by hand.
+            {"op": "add_node", "entity": "$2", "operation": "value.scene",
+             "params": {"scene": "Fase 2"}},
+            {"op": "add_node", "entity": "$2", "operation": "variable.set",
+             "params": {"variable": "Recorde", "value": 41.5},
+             "links": [["$3", "exec", "exec"], ["$4", "name", "key"]]},
+        ])),
+    )
+    .unwrap();
+    let report = oxy_core::headless::simulate(
+        &project,
+        &serde_json::from_value(json!({"seconds": 0.1})).unwrap(),
+    )
+    .unwrap();
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+    assert_eq!(report.variables["Recorde · Fase 2"], Value::Number(41.5));
+    // The catalog lists the name beside the ID.
+    let node =
+        query::catalog_query(&json!({"operations": ["value.scene"]})).unwrap()["nodes"][0].clone();
+    assert_eq!(
+        node["outputs"],
+        json!([
+            {"id": "value", "label": "Cena", "type": "text"},
+            {"id": "name", "label": "Nome", "type": "text"},
+        ])
+    );
 }

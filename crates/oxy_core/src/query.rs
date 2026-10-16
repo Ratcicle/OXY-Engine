@@ -1325,10 +1325,12 @@ fn presets() -> Json {
         (
             "platform",
             MovementPreset::Platform,
-            "Plataforma móvel (não é um personagem): um bloco sólido de 3 × 0,4 × 3 m que vai e volta sem parar a partir de onde é posto, levando junto o que estiver em cima. O percurso é uma animação comum, editável com set_clip; set_transform move a plataforma com o percurso.",
+            "Plataforma móvel (não é um personagem): um bloco sólido de 3 × 0,4 × 3 m que vai e volta a partir de onde é posto, sem parar ou parando nas pontas, e pode girar, levando junto o que estiver em cima. O percurso é uma animação comum, editável com set_clip; set_transform move a plataforma com o percurso.",
             json!({
-                "travel": {"default": [4., 0., 0.], "description": "Quanto a plataforma anda a partir de onde é posta, em metros, antes de voltar."},
-                "period": {"default": 4., "description": "Segundos da ida e da volta."},
+                "travel": {"default": [4., 0., 0.], "description": "Quanto a plataforma anda a partir de onde é posta, em metros, antes de voltar. [0, 0, 0] com spin faz uma plataforma que só gira (a animação se chama Giro)."},
+                "period": {"default": 4., "description": "Segundos da ida e da volta, com as paradas."},
+                "pause_at_ends": {"default": 0., "description": "Segundos que a plataforma fica parada em cada ponta (posição e giro), dentro do período: menos que metade dele. Ela sai andando no começo da cena, para na ponta de lá e, na volta, no lugar onde foi posta; os quadros-chave das pontas seguram a pose (hold)."},
+                "spin": {"default": [0., 0., 0.], "description": "Graus que a plataforma gira em X, Y e Z por período, enquanto anda, levando junto e girando quem está em cima: [0, 360, 0] dá uma volta em Y a cada período, [0, -180, 0] meia volta para o outro lado. Cada ida e cada volta ganham um quadro-chave a cada 90° no máximo (somando os eixos), porque entre dois quadros-chave o giro vai pelo caminho mais curto. Para recomeçar sem salto, a animação dura os períodos que o giro leva para voltar ao começo, com voltas inteiras em todos os eixos: 1 com 360° por período, 2 com 180°, 4 com 90°, 8 com 45°. Um giro que precisaria de mais de 8 períodos, ou que passa de 3600° por período somando os eixos, é recusado."},
             }),
         ),
     ]

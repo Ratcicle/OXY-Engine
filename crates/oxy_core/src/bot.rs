@@ -2,10 +2,11 @@
 //! step it gives the character's movement the direction toward the point it heads for and
 //! presses the character's own input actions (jump, sprint, crouch), as a person at the
 //! controls would, so the game's bindings and logic run as in play. It walks straight at each
-//! point: where it stops coming nearer it gives up and says so, instead of solving the level.
+//! point: where it stops coming nearer it gives up and says why, instead of solving the level.
+//! The character may be in any scene: the bot takes over once that scene runs.
 use crate::{
     character::{CharacterConfig, CharacterState, axis_toward},
-    document::{Id, Scene, SceneKind},
+    document::{Id, Project, Scene, SceneKind},
     runtime::{FIXED_DT, InputFrame, Runtime},
 };
 use glam::{Vec2, Vec3};
@@ -17,18 +18,29 @@ use std::collections::BTreeSet;
 pub const MAX_POINTS: usize = 300;
 /// How much nearer to its point the bot must come within `stuck_after`, in metres.
 pub const PROGRESS: f32 = 0.1;
+/// Seconds of game time without support after which a character the bot gives up on fell.
+pub const FALL_AFTER: f64 = 1.;
+/// How far below where it last stood a character the bot gives up on fell, in metres.
+pub const FALL_DROP: f32 = 1.;
+/// How fast a character may move across the way to the next point, in m/s, as the bot leaves
+/// a jump point: faster, it turns toward that point on the ground first, for at most
+/// [`ALIGN_SECONDS`] of game time, and jumps then.
+pub const ALIGN_SPEED: f32 = 1.;
+pub const ALIGN_SECONDS: f64 = 0.25;
 
 /// A path for one character, as a request gives it.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Bot {
-    /// The 3D character it plays.
+    /// The 3D character it plays, of any scene.
     pub entity: Id,
     pub path: Vec<Waypoint>,
     /// How near a point counts as reached across the ground, in metres.
     #[serde(default = "default_radius")]
     pub radius: f32,
-    /// Simulated second it takes over, as an input's `at`.
+    /// Seconds after the character's scene starts that it takes over, as an input's `at`: from
+    /// the latest start of that scene before it took over (the run's start for the start
+    /// scene, unless the game leaves and reopens it first).
     #[serde(default)]
     pub start: f64,
     /// Seconds of game time without coming [`PROGRESS`] nearer to its point before it gives up.
@@ -50,8 +62,8 @@ pub struct Waypoint {
     /// A world point; with `object`, an offset from that object, in world axes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<[f32; 3]>,
-    /// An object of the scene whose world position (its pivot) the point follows as it moves,
-    /// as a moving platform's.
+    /// An object of the character's scene whose world position (its pivot) the point follows
+    /// as it moves, as a moving platform's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<Id>,
     /// Presses the jump action once on leaving the point, which is then the take-off spot.
@@ -132,9 +144,10 @@ fn world_position(scene: &Scene, id: &str) -> Option<Vec3> {
 }
 
 impl Bot {
-    /// Refuses what the bot cannot play in `scene`, the scene the run starts in, with the IDs
-    /// already resolved.
-    pub fn check(&self, scene: &Scene) -> Result<(), String> {
+    /// Refuses what the bot cannot play in `project`, the copy the run starts from, with the
+    /// IDs already resolved: a character no scene has, or one the bot cannot drive, and points
+    /// following objects its scene lacks.
+    pub fn check(&self, project: &Project) -> Result<(), String> {
         if self.path.is_empty() {
             return Err("bot: informe ao menos um ponto em path".into());
         }
@@ -150,15 +163,17 @@ impl Bot {
         if !self.stuck_after.is_finite() || self.stuck_after <= 0. {
             return Err("bot: stuck_after precisa ser um número maior que 0".into());
         }
+        let (scene, entity) = project
+            .scenes
+            .iter()
+            .find_map(|s| Some((s, s.entity(&self.entity)?)))
+            .ok_or_else(|| format!("bot: nenhuma cena do projeto tem o objeto {}", self.entity))?;
         if scene.kind != SceneKind::ThreeD {
             return Err(format!(
                 "bot: a cena {} é 2D; o bot só joga com personagens 3D",
                 scene.name
             ));
         }
-        let entity = scene
-            .entity(&self.entity)
-            .ok_or_else(|| format!("bot: o objeto {} não está na cena inicial", self.entity))?;
         let Some(config) = &entity.character3d else {
             return Err(format!(
                 "bot: {} não tem Personagem 3D (character3d)",
@@ -194,7 +209,15 @@ impl Bot {
             if let Some(id) = &point.object
                 && scene.entity(id).is_none()
             {
-                return refused(format!("o objeto {id} não está na cena inicial"));
+                let elsewhere = project.scenes.iter().find_map(|s| Some((s, s.entity(id)?)));
+                return refused(match elsewhere {
+                    Some((other, object)) => format!(
+                        "{} está na cena {}, e o ponto segue um objeto da cena do personagem \
+                         ({})",
+                        object.name, other.name, scene.name
+                    ),
+                    None => format!("nenhuma cena do projeto tem o objeto {id}"),
+                });
             }
         }
         Ok(())
@@ -207,17 +230,38 @@ pub enum BotEvent {
     /// The character reached point `index` (counted from 0), standing at `position`.
     Reached { index: usize, position: Vec3 },
     /// It came no [`PROGRESS`] nearer to point `index` for `stuck_after` seconds: the bot let
-    /// go there, the character at `position`, `distance` metres from the point.
+    /// go there, the character at `position`, `distance` metres from the point, for `reason`.
+    /// `last_support` is the object the character last stood on.
     Stuck {
         index: usize,
         position: Vec3,
         distance: f32,
+        reason: StuckReason,
+        last_support: Option<Id>,
     },
+}
+
+/// Why a bot gave up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StuckReason {
+    /// The character, in the air, went without support for [`FALL_AFTER`] seconds or more, or
+    /// is more than [`FALL_DROP`] below where it last stood.
+    Fell,
+    /// It came no nearer otherwise, as standing against a wall.
+    Blocked,
+    /// The character, or the object its point follows, was not in the running scene.
+    Absent,
 }
 
 /// Where a bot is along its path.
 #[derive(Clone, Debug)]
 pub struct BotState {
+    /// When (run time) the character's scene last started, until the bot takes over; None
+    /// while another scene runs.
+    scene_start: Option<f64>,
+    /// When (run time) it took over: `start` after that latest start. None until then.
+    started: Option<f64>,
     /// The point it heads for.
     next: usize,
     /// When (game time) it reached `next`, while it waits there.
@@ -226,6 +270,10 @@ pub struct BotState {
     nearest: Option<(f32, f64)>,
     /// Where the character last was, and how far from `next`.
     last: (Vec3, f32),
+    /// The object the character last stood on and the height of its feet there, and when (game
+    /// time) it last stood on something, or the bot took over.
+    support: Option<(Id, f32)>,
+    supported_at: f64,
     /// The actions it holds down, and those of them only tapped for the last step.
     held: BTreeSet<String>,
     tapped: BTreeSet<String>,
@@ -236,8 +284,51 @@ pub struct BotState {
     stuck: bool,
 }
 impl BotState {
-    /// A bot about to play, its character where `runtime` has it.
+    /// A bot about to play, in the scene `runtime` starts with.
     pub fn new(runtime: &Runtime, bot: &Bot) -> Self {
+        let mut state = Self {
+            scene_start: None,
+            started: None,
+            next: 0,
+            arrived: None,
+            nearest: None,
+            last: (Vec3::ZERO, 0.),
+            support: None,
+            supported_at: 0.,
+            held: BTreeSet::new(),
+            tapped: BTreeSet::new(),
+            crouch_tap: None,
+            done: false,
+            stuck: false,
+        };
+        state.scene_started(runtime, bot);
+        state
+    }
+    /// The running scene started, by a change or a reload: until the bot takes over, its
+    /// `start` counts from the latest start of the character's scene.
+    pub fn scene_started(&mut self, runtime: &Runtime, bot: &Bot) {
+        if self.started.is_none() {
+            self.scene_start = runtime
+                .scene()
+                .entity(&bot.entity)
+                .is_some()
+                .then_some(runtime.time);
+        }
+    }
+    /// It went through the whole path: it reached the last point, waited and jumped there.
+    pub fn done(&self) -> bool {
+        self.done
+    }
+    /// It let go of the character, done or stuck.
+    pub fn finished(&self) -> bool {
+        self.done || self.stuck
+    }
+    /// When (run time) it took over; None while it waits for its character's scene or `start`.
+    pub fn started_at(&self) -> Option<f64> {
+        self.started
+    }
+    /// Starts driving the character where `runtime` has it, `at` (run time).
+    fn take_over(&mut self, runtime: &Runtime, bot: &Bot, at: f64) {
         let scene = runtime.scene();
         let position = runtime
             .character_state(&bot.entity)
@@ -249,25 +340,12 @@ impl BotState {
             .first()
             .and_then(|point| point.position(scene))
             .map_or(0., |point| point.distance(position));
-        Self {
-            next: 0,
-            arrived: None,
-            nearest: None,
-            last: (position, distance),
-            held: BTreeSet::new(),
-            tapped: BTreeSet::new(),
-            crouch_tap: None,
-            done: false,
-            stuck: false,
-        }
+        self.started = Some(at);
+        self.last = (position, distance);
+        self.supported_at = runtime.game_time();
     }
-    /// It went through the whole path: it reached the last point, waited and jumped there.
-    pub fn done(&self) -> bool {
-        self.done
-    }
-    /// It let go of the character, done or stuck.
-    pub fn finished(&self) -> bool {
-        self.done || self.stuck
+    fn last_support(&self) -> Option<Id> {
+        self.support.as_ref().map(|(id, _)| id.clone())
     }
     /// A step without the character, or the point's object, in the running scene: no progress,
     /// so after `stuck_after` the bot gives up where it last saw them.
@@ -281,14 +359,44 @@ impl BotState {
             index: self.next,
             position: self.last.0,
             distance: self.last.1,
+            reason: StuckReason::Absent,
+            last_support: self.last_support(),
         })
+    }
+    /// Gives up on the character at `position`, `distance` metres from its point: it fell when
+    /// in the air long enough or low enough, else something blocks it.
+    fn give_up(
+        &mut self,
+        character: &CharacterState,
+        position: Vec3,
+        distance: f32,
+        now: f64,
+    ) -> BotEvent {
+        let fell = !character.grounded
+            && (now - self.supported_at >= FALL_AFTER
+                || self
+                    .support
+                    .as_ref()
+                    .is_some_and(|(_, feet)| position.y < feet - FALL_DROP));
+        self.stuck = true;
+        BotEvent::Stuck {
+            index: self.next,
+            position,
+            distance,
+            reason: if fell {
+                StuckReason::Fell
+            } else {
+                StuckReason::Blocked
+            },
+            last_support: self.last_support(),
+        }
     }
 }
 
 /// Plays `bot` in the step `runtime` is about to take: the movement toward its point goes into
 /// `frame` in place of the movement inputs and the character's direction actions, and so do
-/// the actions it presses. Before `start` and once done or stuck it leaves `frame` alone, but
-/// for letting go of what it held.
+/// the actions it presses. Before it takes over (`start` after its character's scene starts)
+/// and once done or stuck it leaves `frame` alone, but for letting go of what it held.
 pub fn steer(
     runtime: &Runtime,
     bot: &Bot,
@@ -298,8 +406,13 @@ pub fn steer(
     let mut hold = BTreeSet::new();
     let mut tap = BTreeSet::new();
     // The same rule as timed inputs: it plays the step that ends at or after `start`.
-    let started = bot.start <= runtime.time + f64::from(FIXED_DT);
-    let event = if started && !state.finished() {
+    if state.started.is_none()
+        && let Some(at) = state.scene_start.map(|begun| begun + bot.start)
+        && at <= runtime.time + f64::from(FIXED_DT)
+    {
+        state.take_over(runtime, bot, at);
+    }
+    let event = if state.started.is_some() && !state.finished() {
         drive(runtime, bot, state, frame, &mut hold, &mut tap)
     } else {
         None
@@ -333,6 +446,12 @@ fn drive(
         return state.idle(bot, now);
     };
     let position = character.position;
+    if character.grounded {
+        state.supported_at = now;
+        if let Some(support) = &character.support {
+            state.support = Some((support.object.clone(), position.y));
+        }
+    }
     let Some(mut target) = bot.path[state.next].position(scene) else {
         steer_axis(frame, config, Vec2::ZERO);
         return state.idle(bot, now);
@@ -359,6 +478,16 @@ fn drive(
         }
         // Leaves the point: takes off from it and heads for the next one in the same step.
         if point.jump {
+            // Running across the way, it first turns toward the next point on the ground, for
+            // a short while, so the jump goes that way.
+            if now - arrived - f64::from(point.wait) < ALIGN_SECONDS
+                && let Some(way) = across_the_way(bot, state, scene, character)
+            {
+                state.last = (position, offset.length());
+                actions(config, character, point, state, hold, tap);
+                steer_axis(frame, config, axis_toward(way, yaw));
+                return event;
+            }
             tap.insert(config.actions.jump.clone());
         }
         state.next += 1;
@@ -382,12 +511,7 @@ fn drive(
     if distance <= nearest.0 - PROGRESS {
         *nearest = (distance, now);
     } else if now - nearest.1 >= f64::from(bot.stuck_after) {
-        state.stuck = true;
-        return Some(BotEvent::Stuck {
-            index: state.next,
-            position,
-            distance,
-        });
+        return Some(state.give_up(character, position, distance, now));
     }
     actions(config, character, point, state, hold, tap);
     let across = Vec3::new(offset.x, 0., offset.z);
@@ -399,6 +523,30 @@ fn drive(
     };
     steer_axis(frame, config, axis);
     event
+}
+
+/// The way across the ground to the point after the one the bot leaves, when the character,
+/// on the ground, moves across that way faster than [`ALIGN_SPEED`]: a jump now would carry it
+/// off the way.
+fn across_the_way(
+    bot: &Bot,
+    state: &BotState,
+    scene: &Scene,
+    character: &CharacterState,
+) -> Option<Vec3> {
+    if !character.grounded {
+        return None;
+    }
+    let next = bot.path.get(state.next + 1)?.position(scene)?;
+    let way = Vec3::new(
+        next.x - character.position.x,
+        0.,
+        next.z - character.position.z,
+    )
+    .try_normalize()?;
+    let velocity = Vec3::new(character.velocity.x, 0., character.velocity.z);
+    let sideways = velocity - way * velocity.dot(way);
+    (sideways.length() > ALIGN_SPEED).then_some(way)
 }
 
 /// The point's sprint and crouch, held as it asks; a crouch that toggles gets one tap per point.
@@ -511,10 +659,14 @@ mod tests {
     #[test]
     fn held_actions_press_once_and_release_unless_the_inputs_hold_them() {
         let mut state = BotState {
+            scene_start: Some(0.),
+            started: Some(0.),
             next: 0,
             arrived: None,
             nearest: None,
             last: (Vec3::ZERO, 0.),
+            support: None,
+            supported_at: 0.,
             held: BTreeSet::new(),
             tapped: BTreeSet::new(),
             crouch_tap: None,

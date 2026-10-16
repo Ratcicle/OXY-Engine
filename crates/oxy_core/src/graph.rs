@@ -229,7 +229,7 @@ pub fn description(operation: &str) -> &'static str {
         "value.bool" => "Fornece um valor verdadeiro ou falso.",
         "value.object" => "Fornece a referência de um objeto da cena.",
         "value.scene" => {
-            "Fornece o identificador da cena escolhida pelo nome, para Mudar de cena e atributos de texto."
+            "Fornece a cena escolhida: Cena, o identificador, para Mudar de cena e atributos de texto, e Nome, o nome dela, para chaves e textos."
         }
         "attribute.get" => "Lê o atributo escolhido do objeto informado.",
         "attribute.set" => "Altera o atributo escolhido do objeto informado.",
@@ -447,13 +447,14 @@ fn build_registry() -> Vec<OperationDef> {
             params: vec![param("value", "Valor", default)],
         });
     }
-    // A scene picked by name in the editor, given as the ID that Mudar de cena takes.
+    // A scene picked by name in the editor, given as the ID that Mudar de cena takes, and its
+    // name for keys and texts.
     result.push(OperationDef {
         id: "value.scene",
         label: "Referência de cena",
         category: "Dados",
         inputs: vec![],
-        outputs: vec![port("value", "Cena", Text)],
+        outputs: vec![port("value", "Cena", Text), port("name", "Nome", Text)],
         params: vec![text("scene", "Cena", "")],
     });
     result.push(OperationDef {

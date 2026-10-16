@@ -37,12 +37,16 @@ impl Runtime {
             },
             // An empty scene is a node left unset; validation refuses a scene the project lacks
             // before the game runs, and the node refuses it as well.
-            "value.scene" => match node.text("scene") {
-                "" => Err("Referência de cena sem cena escolhida: escolha a cena no nó".into()),
-                scene if self.source.scene(scene).is_none() => {
-                    Err("Referência de cena nomeia uma cena que o projeto não tem".into())
+            "value.scene" => match (node.text("scene"), self.source.scene(node.text("scene"))) {
+                ("", _) => {
+                    Err("Referência de cena sem cena escolhida: escolha a cena no nó".into())
                 }
-                scene => Ok(Value::Text(scene.into())),
+                (_, None) => Err("Referência de cena nomeia uma cena que o projeto não tem".into()),
+                (_, Some(scene)) => match output {
+                    "value" => Ok(Value::Text(scene.id.clone())),
+                    "name" => Ok(Value::Text(scene.name.clone())),
+                    _ => Err(format!("Referência de cena não tem a saída {output}")),
+                },
             },
             _ => self.audio_data(graph, node, output, context, budget, depth),
         }

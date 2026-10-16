@@ -73,9 +73,16 @@ pub enum EntityKind {
         /// Platform: how far it goes from its position, in metres (default [4, 0, 0]).
         #[serde(default)]
         travel: Option<[f32; 3]>,
-        /// Platform: seconds for the way there and back (default 4).
+        /// Platform: seconds for the way there and back, the stops included (default 4).
         #[serde(default)]
         period: Option<f32>,
+        /// Platform: seconds it stands still at each end (default 0).
+        #[serde(default)]
+        pause_at_ends: Option<f32>,
+        /// Platform: degrees it turns about X, Y and Z per period while it moves (default
+        /// none).
+        #[serde(default)]
+        spin: Option<[f32; 3]>,
         /// Characters: the camera that follows the player (default create).
         #[serde(default)]
         camera: Option<PresetCamera>,
@@ -484,6 +491,8 @@ pub enum Command {
     },
     /// An input action parameter takes the action's ID or its name, and keeps the ID. Without a
     /// `position`, the node is laid out with the others added so in the batch when it ends.
+    /// `links` wires its inputs as it is added: each `[from_node, from_port, to_port]` links an
+    /// output of a node the object has into the new node's input `to_port`.
     AddNode {
         #[serde(default)]
         scene: Option<Id>,
@@ -493,6 +502,8 @@ pub enum Command {
         position: Option<[f32; 2]>,
         #[serde(default)]
         params: BTreeMap<String, ParamValue>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        links: Vec<[String; 3]>,
     },
     /// Removes a node and its connections.
     RemoveNode {
@@ -508,14 +519,22 @@ pub enum Command {
         node: Id,
         params: BTreeMap<String, ParamValue>,
     },
+    /// One link (`from_node`, `from_port`, `to_node`, `to_port`) or many in `links`, each
+    /// `[from_node, from_port, to_node, to_port]`, all or none.
     Connect {
         #[serde(default)]
         scene: Option<Id>,
         entity: Id,
-        from_node: Id,
-        from_port: String,
-        to_node: Id,
-        to_port: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_node: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_port: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_node: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_port: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        links: Vec<[String; 4]>,
     },
     Disconnect {
         #[serde(default)]
@@ -1716,6 +1735,150 @@ fn finite(values: &[f32], what: &str) -> Result<(), String> {
     }
 }
 
+/// Links `edges` in the logic of `entity` in `scene`, in order; the first one refused fails
+/// them all, by its place in `links` when `numbered`.
+fn link_all(
+    project: &mut Project,
+    scene: &str,
+    entity: &str,
+    edges: &[Edge],
+    numbered: bool,
+) -> Result<(), String> {
+    let place = |index: usize, problem: String| {
+        if numbered {
+            format!("Ligação {index} de links (a {}ª): {problem}", index + 1)
+        } else {
+            problem
+        }
+    };
+    let current = project.scene(scene).unwrap();
+    let objects: HashSet<Id> = current.entities.iter().map(|e| e.id.clone()).collect();
+    let owner = current
+        .entity(entity)
+        .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?;
+    for (index, edge) in edges.iter().enumerate() {
+        for id in [&edge.from_node, &edge.to_node] {
+            if owner.graph.node(id).is_none() {
+                return Err(place(index, missing_node(project, &owner.name, id)));
+            }
+        }
+    }
+    let graph = &mut entity_mut(scene_mut(project, scene), entity)?.graph;
+    for (index, edge) in edges.iter().enumerate() {
+        link_one(graph, edge, &objects).map_err(|problem| place(index, problem))?;
+    }
+    Ok(())
+}
+
+/// Why the logic of the object `owner` lacks the node `id`: it is in another object's logic, or
+/// in none.
+fn missing_node(project: &Project, owner: &str, id: &str) -> String {
+    for e in project.scenes.iter().flat_map(|s| &s.entities) {
+        if let Some(node) = e.graph.node(id) {
+            return format!(
+                "O nó {} é da lógica de {}, não da de {owner}",
+                node_named(node),
+                e.name
+            );
+        }
+    }
+    format!("{owner} não tem o nó {id} na lógica")
+}
+
+/// A node as messages name it: its label, then its operation.
+fn node_named(node: &Node) -> String {
+    let label = graph::definition(&node.operation).map_or("", |def| def.label);
+    format!("{label} ({})", node.operation)
+}
+
+/// Links `edge`, both of whose nodes `graph` has, saying by name what refuses it: a port the
+/// node lacks, a data input already linked, types that do not match; then the graph's own rules
+/// (cycles, limits).
+fn link_one(graph: &mut graph::Graph, edge: &Edge, objects: &HashSet<Id>) -> Result<(), String> {
+    let (Some(from), Some(to)) = (graph.node(&edge.from_node), graph.node(&edge.to_node)) else {
+        return Err("Nó ausente na ligação".into());
+    };
+    let ports = |list: &[graph::PortDef]| {
+        list.iter()
+            .map(|port| port.id)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if let (Some(from_def), Some(to_def)) = (
+        graph::definition(&from.operation),
+        graph::definition(&to.operation),
+    ) {
+        let Some(output) = from_def.outputs.iter().find(|p| p.id == edge.from_port) else {
+            return Err(format!(
+                "O nó {} não tem a saída {}; saídas: {}",
+                node_named(from),
+                edge.from_port,
+                ports(&from_def.outputs)
+            ));
+        };
+        let Some(input) = to_def.inputs.iter().find(|p| p.id == edge.to_port) else {
+            return Err(format!(
+                "O nó {} não tem a entrada {}; entradas: {}",
+                node_named(to),
+                edge.to_port,
+                ports(&to_def.inputs)
+            ));
+        };
+        if graph.edges.contains(edge) {
+            return Err("Essas portas já estão ligadas".into());
+        }
+        if !graph::compatible(output.kind, input.kind) {
+            return Err(format!(
+                "Conexão incompatível: {} → {} (a saída {} de {} na entrada {} de {})",
+                output.kind.label(),
+                input.kind.label(),
+                edge.from_port,
+                node_named(from),
+                edge.to_port,
+                node_named(to)
+            ));
+        }
+        if input.kind != PortType::Exec
+            && graph
+                .edges
+                .iter()
+                .any(|e| e.to_node == edge.to_node && e.to_port == edge.to_port)
+        {
+            return Err(format!(
+                "A entrada {} de {} já possui uma conexão de dados; desligue-a antes \
+                 (disconnect)",
+                edge.to_port,
+                node_named(to)
+            ));
+        }
+    }
+    // A link back to where it starts would close a loop.
+    let mut seen = HashSet::new();
+    let mut ahead = vec![edge.to_node.as_str()];
+    while let Some(id) = ahead.pop() {
+        if id == edge.from_node {
+            return Err(format!(
+                "A ligação de {} para {} fecharia um ciclo, pois {} já leva a {}; use eventos e \
+                 Esperar para retomadas finitas",
+                node_named(from),
+                node_named(to),
+                node_named(to),
+                node_named(from)
+            ));
+        }
+        if seen.insert(id) {
+            ahead.extend(
+                graph
+                    .edges
+                    .iter()
+                    .filter(|e| e.from_node == id)
+                    .map(|e| e.to_node.as_str()),
+            );
+        }
+    }
+    graph.connect(edge, objects)
+}
+
 /// Applies one command to `project`, answering the IDs it created; `checks` takes what the
 /// batch checks once it ends, and `copies` what a copy command copied ([`Applied::copies`]).
 fn apply_one(
@@ -2215,6 +2378,7 @@ fn apply_one(
             operation,
             position,
             params,
+            links,
         } => {
             let id = scene_id(project, scene, default)?;
             let def = graph::registry()
@@ -2242,6 +2406,18 @@ fn apply_one(
             node.params.extend(params);
             let node_id = node.id.clone();
             e.graph.nodes.push(node);
+            if !links.is_empty() {
+                let edges: Vec<Edge> = links
+                    .iter()
+                    .map(|[from_node, from_port, to_port]| Edge {
+                        from_node: from_node.clone(),
+                        from_port: from_port.clone(),
+                        to_node: node_id.clone(),
+                        to_port: to_port.clone(),
+                    })
+                    .collect();
+                link_all(project, &id, entity, &edges, true)?;
+            }
             Ok(vec![node_id])
         }
         C::RemoveNode {
@@ -2298,26 +2474,46 @@ fn apply_one(
             from_port,
             to_node,
             to_port,
+            links,
         } => {
             let id = scene_id(project, scene, default)?;
-            let objects: HashSet<_> = project
-                .scene(&id)
-                .unwrap()
-                .entities
-                .iter()
-                .map(|e| e.id.clone())
-                .collect();
-            let e = entity_mut(scene_mut(project, &id), entity)?;
-            let edge = Edge {
-                from_node: from_node.clone(),
-                from_port: from_port.clone(),
-                to_node: to_node.clone(),
-                to_port: to_port.clone(),
+            let single = [from_node, from_port, to_node, to_port];
+            let edges: Vec<Edge> = if links.is_empty() {
+                let [
+                    Some(from_node),
+                    Some(from_port),
+                    Some(to_node),
+                    Some(to_port),
+                ] = single
+                else {
+                    return Err(
+                        "Informe from_node, from_port, to_node e to_port, ou links: \
+                                [[from_node, from_port, to_node, to_port], …]"
+                            .into(),
+                    );
+                };
+                vec![Edge {
+                    from_node: from_node.clone(),
+                    from_port: from_port.clone(),
+                    to_node: to_node.clone(),
+                    to_port: to_port.clone(),
+                }]
+            } else if single.iter().any(|field| field.is_some()) {
+                return Err(
+                    "Use links ou from_node, from_port, to_node e to_port, não os dois".into(),
+                );
+            } else {
+                links
+                    .iter()
+                    .map(|[from_node, from_port, to_node, to_port]| Edge {
+                        from_node: from_node.clone(),
+                        from_port: from_port.clone(),
+                        to_node: to_node.clone(),
+                        to_port: to_port.clone(),
+                    })
+                    .collect()
             };
-            if e.graph.edges.contains(&edge) {
-                return Err("Essas portas já estão ligadas".into());
-            }
-            e.graph.connect(&edge, &objects)?;
+            link_all(project, &id, entity, &edges, !links.is_empty())?;
             Ok(vec![])
         }
         C::Disconnect {
@@ -2637,11 +2833,20 @@ fn create_entity(
             preset,
             travel,
             period,
+            pause_at_ends,
+            spin,
             camera,
         } => {
             let platform = *preset == Preset::Platform;
-            if !platform && (travel.is_some() || period.is_some()) {
-                return Err("travel e period valem só para o preset platform".into());
+            if !platform
+                && (travel.is_some()
+                    || period.is_some()
+                    || pause_at_ends.is_some()
+                    || spin.is_some())
+            {
+                return Err(
+                    "travel, period, pause_at_ends e spin valem só para o preset platform".into(),
+                );
             }
             if platform && camera.is_some() {
                 return Err("camera vale só para os presets first_person e third_person".into());
@@ -2649,10 +2854,15 @@ fn create_entity(
             if let Some(travel) = travel {
                 finite(travel, "travel")?;
             }
+            if let Some(spin) = spin {
+                finite(spin, "spin")?;
+            }
             let defaults = PresetOptions::default();
             let options = PresetOptions {
                 travel: travel.map_or(defaults.travel, Vec3::from),
                 period: period.unwrap_or(defaults.period),
+                pause_at_ends: pause_at_ends.unwrap_or(defaults.pause_at_ends),
+                spin: spin.map_or(defaults.spin, Vec3::from),
                 camera: camera.unwrap_or_default(),
             };
             let preset = match preset {

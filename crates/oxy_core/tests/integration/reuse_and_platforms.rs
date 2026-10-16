@@ -1059,6 +1059,183 @@ fn presets_take_a_path_a_period_and_a_camera_choice() {
 }
 
 #[test]
+fn a_platform_preset_stops_at_its_ends_and_spins() {
+    use glam::{Quat, Vec3};
+    use oxy_core::{
+        animation::sample_track,
+        runtime::{FIXED_DT, InputFrame, Runtime},
+    };
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = apply(
+        &mut project,
+        &scene,
+        json!([
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+             "travel": [0.0, 0.0, -6.0], "period": 8.0, "pause_at_ends": 1.5},
+             "position": [1.0, 0.5, 0.0]},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+             "travel": [0.0, 0.0, 0.0], "period": 12.0, "spin": [0.0, 360.0, 0.0]},
+             "position": [10.0, 0.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+             "period": 4.0, "pause_at_ends": 0.5, "spin": [0.0, -180.0, 0.0]}},
+        ]),
+    );
+    let ids: Vec<Id> = applied.iter().map(|a| a.created[0].clone()).collect();
+    let clip = |index: usize| entity(&project, &scene, &ids[index]).clips[0].clone();
+    let yaw = |transform: &Transform| transform.rotation[1].to_degrees();
+
+    // Out in 2.5 s, 1.5 s at the far end, back in 2.5 s, 1.5 s where it was put.
+    let stopping = clip(0);
+    assert_eq!(
+        (stopping.name.as_str(), stopping.duration),
+        ("Translação de ida e volta", 8.)
+    );
+    let keys: Vec<_> = stopping.tracks[0]
+        .keyframes
+        .iter()
+        .map(|k| (k.time, k.transform.position[2], k.interpolation))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            (0., 0., Interpolation::Linear),
+            (2.5, -6., Interpolation::Hold),
+            (4., -6., Interpolation::Linear),
+            (6.5, 0., Interpolation::Hold),
+            (8., 0., Interpolation::Linear),
+        ]
+    );
+
+    // A turntable: a keyframe every 90°, the position kept.
+    let turning = clip(1);
+    assert_eq!((turning.name.as_str(), turning.duration), ("Giro", 12.));
+    let track = &turning.tracks[0];
+    let keys: Vec<_> = track
+        .keyframes
+        .iter()
+        .map(|k| (k.time, yaw(&k.transform).round()))
+        .collect();
+    assert_eq!(
+        keys,
+        [(0., 0.), (3., 90.), (6., 180.), (9., 270.), (12., 360.)]
+    );
+    assert!(
+        track
+            .keyframes
+            .iter()
+            .all(|k| k.transform.position == [10., 0., 0.])
+    );
+    // Between keyframes it turns the short way, the same way all along.
+    for (time, degrees) in [(1.5f32, 45f32), (7.5, 225.), (10.5, 315.)] {
+        let pose = sample_track(track, time).unwrap();
+        let wanted = Quat::from_rotation_y(degrees.to_radians());
+        assert!(
+            pose.quaternion().angle_between(wanted) < 1e-3,
+            "{time}: {pose:?}"
+        );
+    }
+
+    // Half a turn per period takes two periods to come back: the clip lasts both, and the
+    // turn stands still at the stops.
+    let half = clip(2);
+    assert_eq!(
+        (half.name.as_str(), half.duration),
+        ("Translação de ida e volta com giro", 8.)
+    );
+    let keys: Vec<_> = half.tracks[0]
+        .keyframes
+        .iter()
+        .map(|k| (k.time, k.transform.position[0], yaw(&k.transform).round()))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            (0., 0., 0.),
+            (1.5, 4., -90.),
+            (2., 4., -90.),
+            (3.5, 0., -180.),
+            (4., 0., -180.),
+            (5.5, 4., -270.),
+            (6., 4., -270.),
+            (7.5, 0., -360.),
+            (8., 0., -360.),
+        ]
+    );
+    // A turn backwards that has not begun reads 0, not -0.
+    assert!(
+        half.tracks[0]
+            .keyframes
+            .iter()
+            .flat_map(|k| k.transform.rotation)
+            .all(|v| v != 0. || v.is_sign_positive()),
+        "{:?}",
+        half.tracks[0].keyframes[0]
+    );
+
+    // The game plays them so.
+    let mut runtime = Runtime::new(&project, &scene).unwrap();
+    for _ in 0..(3. / FIXED_DT).round() as usize {
+        runtime.advance(FIXED_DT, &InputFrame::default());
+    }
+    let at = |id: &str| runtime.scene().entity(id).unwrap().transform.clone();
+    assert!(
+        near(at(&ids[0]).position, [1., 0.5, -6.]),
+        "{:?}",
+        at(&ids[0])
+    );
+    let turned = at(&ids[1]).quaternion();
+    assert!(
+        turned.angle_between(Quat::from_rotation_y(90f32.to_radians())) < 1e-2,
+        "{turned:?}"
+    );
+    assert!(Vec3::from(at(&ids[1]).position).abs_diff_eq(Vec3::new(10., 0., 0.), 1e-4));
+    validate_project(&project).unwrap();
+
+    // Periods to come back with whole turns on every axis, up to 8.
+    use oxy_core::movement_presets::spin_periods;
+    assert_eq!(
+        [
+            [0., 360., 0.],
+            [0., -180., 0.],
+            [90., 45., 0.],
+            [0., 120., 90.],
+            [0., 100., 0.],
+        ]
+        .map(|spin| spin_periods(Vec3::from_array(spin))),
+        [Some(1), Some(2), Some(8), None, None]
+    );
+    for (kind, expected) in [
+        (
+            json!({"type": "preset", "preset": "platform", "period": 4.0, "pause_at_ends": 2.0}),
+            "menor que metade do período (4 s)",
+        ),
+        (
+            json!({"type": "preset", "preset": "platform", "pause_at_ends": -1.0}),
+            "a partir de 0",
+        ),
+        (
+            json!({"type": "preset", "preset": "platform", "spin": [0.0, 100.0, 0.0]}),
+            "voltar ao começo em até 8 períodos",
+        ),
+        (
+            json!({"type": "preset", "preset": "platform", "spin": [0.0, 3960.0, 0.0]}),
+            "passa de 3600° por período",
+        ),
+        (
+            json!({"type": "preset", "preset": "third_person", "spin": [0.0, 90.0, 0.0]}),
+            "travel, period, pause_at_ends e spin valem só para o preset platform",
+        ),
+    ] {
+        let error = refused(
+            &mut project,
+            &scene,
+            json!({"op": "create_entity", "kind": kind}),
+        );
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn movement_profiles_are_applied_by_command_and_described_in_the_catalog() {
     let (mut project, scene) = project(SceneKind::ThreeD);
     let applied = apply(
@@ -1175,6 +1352,16 @@ fn movement_profiles_are_applied_by_command_and_described_in_the_catalog() {
     assert_eq!(
         platform["params"]["travel"]["default"],
         json!([4.0, 0.0, 0.0])
+    );
+    assert_eq!(platform["params"]["pause_at_ends"]["default"], 0.0);
+    assert_eq!(
+        platform["params"]["spin"]["default"],
+        json!([0.0, 0.0, 0.0])
+    );
+    let spin = platform["params"]["spin"]["description"].as_str().unwrap();
+    assert!(
+        spin.contains("a cada 90° no máximo") && spin.contains("caminho mais curto"),
+        "{spin}"
     );
     assert!(preset("third_person")["description"].is_string());
 }

@@ -3,6 +3,7 @@
 //! the copy, the game interface and the game variables at the end.
 use oxy_core::{
     animation::Clip,
+    bot::{ALIGN_SECONDS, StuckReason},
     character::{CameraRig, CharacterConfig},
     command,
     document::*,
@@ -2294,6 +2295,12 @@ fn a_wall_leaves_the_bot_stuck_with_the_point_it_could_not_reach() {
     assert_eq!(played.reached.len(), 1, "{played:?}");
     let stuck = played.stuck.as_ref().unwrap();
     assert_eq!(stuck.index, 1);
+    // Standing on the floor against the wall: blocked, not fallen.
+    assert_eq!(stuck.reason, StuckReason::Blocked);
+    assert_eq!(
+        stuck.last_support.as_ref().map(|s| s.name.as_str()),
+        Some("Chão")
+    );
     // Against the wall, which ends 3.25 m away along the path.
     assert!(
         stuck.position[2] > -3.25 && stuck.position[2] < -2.5,
@@ -2343,7 +2350,7 @@ fn the_bot_refuses_what_it_cannot_play() {
         ),
         (
             json!({"entity": "nada", "path": point}),
-            "não está na cena inicial",
+            "bot: nenhuma cena do projeto tem o objeto nada",
         ),
         (json!({"entity": "$2", "path": point}), "$2"),
         (json!({"entity": BODY, "path": []}), "ao menos um ponto"),
@@ -2353,7 +2360,7 @@ fn the_bot_refuses_what_it_cannot_play() {
         ),
         (
             json!({"entity": BODY, "path": [[0, 0, 0], {"object": "nada"}]}),
-            "ponto 1 do caminho (o 2º): o objeto nada não está na cena inicial",
+            "ponto 1 do caminho (o 2º): nenhuma cena do projeto tem o objeto nada",
         ),
         (
             json!({"entity": BODY, "path": point, "radius": 0}),
@@ -2571,6 +2578,308 @@ fn a_crouch_that_toggles_gets_one_tap_per_point_even_when_logic_keeps_it() {
     assert_eq!(bot(&report).reached.len(), 2, "{:?}", report.bot);
     let taps = report.logs.iter().filter(|l| l.text == "agachou").count();
     assert_eq!(taps, 1, "{:?}", report.logs);
+}
+
+#[test]
+fn a_jump_taken_with_momentum_across_the_way_lands_toward_the_next_point() {
+    let project = course();
+    // Running along +X into the take-off, then jumping toward -Z.
+    let path = json!({"entity": BODY, "path": [
+        {"at": [5, 0, 0], "sprint": true, "jump": true}, [5, 0, -6]]});
+    let report = run(&project, json!({"seconds": 4.0, "bot": path}));
+    let jumped = report
+        .events
+        .iter()
+        .find(|e| e.kind == EventKind::Jump)
+        .unwrap_or_else(|| panic!("{report:?}"))
+        .time;
+    let landed = report
+        .events
+        .iter()
+        .find(|e| e.kind == EventKind::Land && e.time > jumped)
+        .unwrap_or_else(|| panic!("{report:?}"))
+        .time;
+    let report = run(
+        &project,
+        json!({"seconds": 4.0, "bot": path, "samples_at": [jumped, landed],
+               "watch": [{"id": BODY, "fields": ["position"]}]}),
+    );
+    let samples = &report.watched[0].samples;
+    let (took_off, at) = (samples[0].position.unwrap(), samples[1].position.unwrap());
+    // It turned on the ground near the take-off point first; straight from the run it would
+    // land some 6 m away, past x = 9.
+    assert!(across(took_off, [5., 0., 0.]) < 1.5, "{took_off:?}");
+    assert!(across(at, [5., 0., -6.]) < 1.5, "{took_off:?} {at:?}");
+    let played = bot(&report);
+    assert!(
+        played.reached.len() == 2 && played.stuck.is_none(),
+        "{played:?}"
+    );
+    // A short turn: the jump comes soon after reaching the point.
+    let turned = jumped - played.reached[0].time;
+    assert!(turned > 0. && turned <= ALIGN_SECONDS + 0.02, "{turned}");
+}
+
+/// The course behind a menu (the start scene, without a character) that opens it after `wait`
+/// seconds; the course's ID.
+fn menu_before_course(wait: f64) -> (Project, Id) {
+    let mut project = course();
+    project.scenes[0].name = "Pista".into();
+    let course_id = project.scenes[0].id.clone();
+    let mut menu = Scene::new("Menu", SceneKind::TwoD);
+    let mut control = Entity::new("Controle", None);
+    let start = node(&mut control, "event.scene_start", &[]);
+    let pause = node(
+        &mut control,
+        "control.wait",
+        &[("seconds", Value::Number(wait))],
+    );
+    let travel = node(&mut control, "action.scene", &[("scene", text(&course_id))]);
+    link(&mut control, &start, &pause);
+    link(&mut control, &pause, &travel);
+    menu.entities.push(control);
+    project.start_scene = menu.id.clone();
+    project.scenes.push(menu);
+    (project, course_id)
+}
+
+#[test]
+fn a_bot_waits_for_its_characters_scene_and_counts_start_from_it() {
+    // The menu runs longer than the bot's patience: waiting is not being stuck.
+    let (project, course_id) = menu_before_course(2.);
+    let report = run(
+        &project,
+        json!({"seconds": 8.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "start": 0.5,
+                       "path": [{"object": GOAL, "at": [0, -1, -3]}, [3, 0, -3]]}}),
+    );
+    let opened = &report.scene_changes[0];
+    assert!(
+        opened.scene == course_id && near(opened.time, 2.),
+        "{report:?}"
+    );
+    let played = bot(&report);
+    assert_eq!(played.entity.name, "Corredor");
+    assert!(
+        played.stuck.is_none() && played.done_at.is_some(),
+        "{played:?}"
+    );
+    let indices: Vec<usize> = played.reached.iter().map(|p| p.index).collect();
+    assert_eq!(indices, [0, 1], "{played:?}");
+    assert!(across(played.reached[0].position, [0., 0., -3.]) <= 0.6);
+    // It takes over half a second after the course starts.
+    let started = played.started_at.unwrap();
+    assert!((started - opened.time - 0.5).abs() < 1e-3, "{played:?}");
+    let first = played.reached[0].time;
+    assert!(first > started && first < 4.5, "{played:?}");
+    let value = serde_json::to_value(played).unwrap();
+    assert_eq!(value["started_at"], json!(started));
+
+    // A menu that never opens the course within the run: the bot never takes over and says so
+    // by leaving started_at out.
+    let (late, _) = menu_before_course(5.);
+    let report = run(
+        &late,
+        json!({"seconds": 2.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [[0, 0, -3]]}}),
+    );
+    let waiting = bot(&report);
+    assert!(
+        waiting.started_at.is_none()
+            && waiting.reached.is_empty()
+            && waiting.done_at.is_none()
+            && waiting.stuck.is_none(),
+        "{waiting:?}"
+    );
+    assert!(report.stopped_at.is_none(), "{report:?}");
+    let value = serde_json::to_value(waiting).unwrap();
+    assert!(value.get("started_at").is_none(), "{value}");
+
+    // The same path from the start of the run reaches the first point as much sooner as the
+    // menu lasted.
+    let mut alone = project.clone();
+    alone.start_scene = course_id.clone();
+    let direct = run(
+        &alone,
+        json!({"seconds": 8.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "start": 0.5,
+                       "path": [{"object": GOAL, "at": [0, -1, -3]}, [3, 0, -3]]}}),
+    );
+    let sooner = bot(&direct).reached[0].time;
+    assert_eq!(bot(&direct).started_at, Some(0.5));
+    assert!(
+        (first - sooner - opened.time).abs() < 0.05,
+        "{first} {sooner}"
+    );
+
+    // A reload of its scene before it takes over starts the count again.
+    let mut reloaded = alone.clone();
+    reloaded
+        .input_bindings
+        .insert("reiniciar".into(), "R".into());
+    let mut restart = Entity::new("Reinício", None);
+    let pressed = node(
+        &mut restart,
+        "event.input",
+        &[("action", text("reiniciar"))],
+    );
+    let reload = node(&mut restart, "action.scene", &[("scene", text(&course_id))]);
+    link(&mut restart, &pressed, &reload);
+    reloaded
+        .scene_mut(&course_id)
+        .unwrap()
+        .entities
+        .push(restart);
+    let report = run(
+        &reloaded,
+        json!({"seconds": 8.0, "until": {"bot": "any"},
+               "inputs": [{"type": "press", "at": 0.3, "action": "reiniciar"},
+                          {"type": "release", "at": 0.4, "action": "reiniciar"}],
+               "bot": {"entity": BODY, "start": 0.5,
+                       "path": [{"object": GOAL, "at": [0, -1, -3]}, [3, 0, -3]]}}),
+    );
+    let reload = &report.scene_changes[0];
+    assert!(reload.reload && near(reload.time, 0.3), "{report:?}");
+    let later = bot(&report).reached[0].time;
+    assert!(
+        (later - sooner - reload.time).abs() < 0.05,
+        "{later} {sooner}"
+    );
+
+    // An object no scene has is refused; one of another scene, for a point, names both scenes.
+    let error = headless::simulate(
+        &project,
+        &request(json!({"seconds": 1.0, "bot": {"entity": "ninguém", "path": [[0, 0, 0]]}})),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("bot: nenhuma cena do projeto tem o objeto ninguém"),
+        "{error}"
+    );
+    let control = project
+        .scenes
+        .iter()
+        .find(|s| s.name == "Menu")
+        .unwrap()
+        .entities[0]
+        .id
+        .clone();
+    let error = headless::simulate(
+        &project,
+        &request(json!({"seconds": 1.0,
+                        "bot": {"entity": BODY, "path": [{"object": control}]}})),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains(
+            "ponto 0 do caminho (o 1º): Controle está na cena Menu, e o ponto segue um objeto \
+             da cena do personagem (Pista)"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_bot_that_walks_off_the_edge_fell_and_one_whose_scene_closes_is_absent() {
+    let mut project = course();
+    // A floor 6 m wide: the next point is past its edge, over nothing.
+    let floor = &mut project.scenes[0].entities[0];
+    floor.dimensions = [6., 1., 6.];
+    floor.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: floor.dimensions,
+        },
+        ..Default::default()
+    });
+    let floor_id = floor.id.clone();
+    let report = run(
+        &project,
+        json!({"seconds": 8.0, "until": {"bot": "stuck"},
+               "bot": {"entity": BODY, "path": [[0, 0, -2], [0, 0, -12]]}}),
+    );
+    let played = bot(&report);
+    let stuck = played.stuck.as_ref().unwrap();
+    assert_eq!(
+        (stuck.index, stuck.reason),
+        (1, StuckReason::Fell),
+        "{stuck:?}"
+    );
+    let support = stuck.last_support.as_ref().unwrap();
+    assert_eq!(
+        (support.id.as_str(), support.name.as_str()),
+        (floor_id.as_str(), "Chão")
+    );
+    assert!(stuck.position[1] < -1., "{stuck:?}");
+    let detail = &report.stopped_at.as_ref().unwrap().detail;
+    assert_eq!(
+        detail,
+        "Corredor caiu a caminho do ponto 1 do bot; pisou por último em Chão"
+    );
+    let value = serde_json::to_value(stuck).unwrap();
+    assert_eq!(value["reason"], "fell");
+    assert_eq!(value["last_support"]["name"], "Chão");
+
+    // The course closes 1 s in, for a scene without the character: absent.
+    let mut closing = course();
+    let end = Scene::new("Fim", SceneKind::ThreeD);
+    let end_id = end.id.clone();
+    closing.scenes.push(end);
+    let mut control = Entity::new("Controle", None);
+    let start = node(&mut control, "event.scene_start", &[]);
+    let pause = node(
+        &mut control,
+        "control.wait",
+        &[("seconds", Value::Number(1.))],
+    );
+    let travel = node(&mut control, "action.scene", &[("scene", text(&end_id))]);
+    link(&mut control, &start, &pause);
+    link(&mut control, &pause, &travel);
+    closing.scenes[0].entities.push(control);
+    let report = run(
+        &closing,
+        json!({"seconds": 6.0, "until": {"bot": "stuck"},
+               "bot": {"entity": BODY, "path": [[0, 0, -40]]}}),
+    );
+    let stuck = bot(&report).stuck.as_ref().unwrap();
+    assert_eq!(stuck.reason, StuckReason::Absent, "{stuck:?}");
+    // It gives up `stuck_after` seconds after the character left.
+    assert!(near(stuck.time, 2.5), "{stuck:?}");
+    assert_eq!(
+        report.stopped_at.as_ref().unwrap().detail,
+        "Corredor não está na cena atual (Fim); o bot desistiu do ponto 0"
+    );
+}
+
+#[test]
+fn a_bot_names_the_support_that_removed_itself_before_the_fall() {
+    let mut project = course();
+    // The floor crumbles half a second in, with the character on it.
+    let floor = &mut project.scenes[0].entities[0];
+    let floor_id = floor.id.clone();
+    let start = node(floor, "event.scene_start", &[]);
+    let pause = node(floor, "control.wait", &[("seconds", Value::Number(0.5))]);
+    let remove = node(floor, "action.remove", &[]);
+    link(floor, &start, &pause);
+    link(floor, &pause, &remove);
+    let report = run(
+        &project,
+        json!({"seconds": 8.0, "until": {"bot": "stuck"},
+               "bot": {"entity": BODY, "path": [[0, 0, -12]]}}),
+    );
+    let stuck = bot(&report)
+        .stuck
+        .as_ref()
+        .unwrap_or_else(|| panic!("{report:?}"));
+    assert_eq!(stuck.reason, StuckReason::Fell, "{stuck:?}");
+    let support = stuck.last_support.as_ref().unwrap();
+    assert_eq!(
+        (support.id.as_str(), support.name.as_str()),
+        (floor_id.as_str(), "Chão")
+    );
+    assert_eq!(
+        report.stopped_at.as_ref().unwrap().detail,
+        "Corredor caiu a caminho do ponto 0 do bot; pisou por último em Chão"
+    );
 }
 
 #[test]

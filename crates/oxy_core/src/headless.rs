@@ -13,7 +13,7 @@
 //! logic that removes the objects involved in the same step cannot hide them.
 use crate::{
     audio::{AudioChange, AudioSettings, ChangeKind, Channel},
-    bot::{self, Bot, BotEvent, BotState},
+    bot::{self, Bot, BotEvent, BotState, StuckReason},
     character::{CameraMode, CharacterState, MovementEvent, Posture},
     command::{self, Applied, Command},
     document::*,
@@ -431,8 +431,9 @@ pub struct SimulationRequest {
     /// `save` has this shape, so a run can start where another left off.
     #[serde(default, deserialize_with = "plain_or_tagged_values")]
     pub save: Option<BTreeMap<String, Value>>,
-    /// Plays one 3D character of the start scene along a path of points, in place of the
-    /// movement inputs; its IDs may be `"$N"` from setup. The report's `bot` says how it went.
+    /// Plays one 3D character along a path of points, in place of the movement inputs, once
+    /// the character's scene runs (any scene of the project); its IDs may be `"$N"` from setup.
+    /// The report's `bot` says how it went.
     #[serde(default)]
     pub bot: Option<Bot>,
 }
@@ -687,6 +688,10 @@ pub struct PauseEvent {
 pub struct BotReport {
     /// The character it played.
     pub entity: Named,
+    /// When it took over: `start` after the latest start of its character's scene. Absent, it
+    /// never did: that scene never ran, or `start` came after the run ended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<f64>,
     /// The points it reached, in order.
     pub reached: Vec<BotPoint>,
     /// When it left the last point, its wait and jump there done.
@@ -703,13 +708,17 @@ pub struct BotPoint {
     pub time: f64,
     pub position: [f32; 3],
 }
-/// The point the bot came no nearer to, where the character stood and how far from it.
+/// The point the bot came no nearer to, where the character stood and how far from it, why
+/// ([`StuckReason`]) and the object the character last stood on.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct BotStuck {
     pub index: usize,
     pub time: f64,
     pub position: [f32; 3],
     pub distance: f32,
+    pub reason: StuckReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_support: Option<Named>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -2050,11 +2059,23 @@ struct BotRun {
     report: BotReport,
 }
 impl BotRun {
+    /// The scenes a step started, for the bot waiting for its character's.
+    fn scenes(&mut self, runtime: &Runtime, happened: &Happened) {
+        if !happened.scenes.is_empty() {
+            self.state.scene_started(runtime, &self.bot);
+        }
+    }
     /// Plays the coming step and records what happened; how the bot ended, if it did now.
-    fn steer(&mut self, runtime: &Runtime, frame: &mut InputFrame) -> Option<(BotEnd, String)> {
+    /// `lookup` names the objects it reports, removed ones included.
+    fn steer(&mut self, lookup: Lookup, frame: &mut InputFrame) -> Option<(BotEnd, String)> {
+        let runtime = lookup.runtime;
         let time = rounded(runtime.time);
         let name = &self.report.entity.name;
-        match bot::steer(runtime, &self.bot, &mut self.state, frame) {
+        let event = bot::steer(runtime, &self.bot, &mut self.state, frame);
+        if self.report.started_at.is_none() {
+            self.report.started_at = self.state.started_at().map(rounded);
+        }
+        match event {
             Some(BotEvent::Reached { index, position }) => self.report.reached.push(BotPoint {
                 index,
                 time,
@@ -2064,20 +2085,52 @@ impl BotRun {
                 index,
                 position,
                 distance,
+                reason,
+                last_support,
             }) => {
+                let scene = runtime.scene();
+                let last_support = last_support.map(|id| lookup.named(&id));
+                let detail = match reason {
+                    StuckReason::Fell => match &last_support {
+                        Some(support) => format!(
+                            "{name} caiu a caminho do ponto {index} do bot; pisou por último em \
+                             {}",
+                            support.name
+                        ),
+                        None => format!("{name} caiu a caminho do ponto {index} do bot"),
+                    },
+                    StuckReason::Blocked => format!(
+                        "{name} parou de avançar rumo ao ponto {index} do bot, a {distance:.2} m \
+                         dele"
+                    ),
+                    StuckReason::Absent if scene.entity(&self.bot.entity).is_none() => format!(
+                        "{name} não está na cena atual ({}); o bot desistiu do ponto {index}",
+                        scene.name
+                    ),
+                    StuckReason::Absent => {
+                        let object = self
+                            .bot
+                            .path
+                            .get(index)
+                            .and_then(|point| point.object.as_ref())
+                            .and_then(|id| lookup.name(id))
+                            .unwrap_or("um objeto");
+                        format!(
+                            "O ponto {index} do bot segue {object}, que não está na cena atual \
+                             ({})",
+                            scene.name
+                        )
+                    }
+                };
                 self.report.stuck = Some(BotStuck {
                     index,
                     time,
                     position: position.to_array(),
                     distance,
+                    reason,
+                    last_support,
                 });
-                return Some((
-                    BotEnd::Stuck,
-                    format!(
-                        "{name} parou de avançar rumo ao ponto {index} do bot, a {distance:.2} m \
-                         dele"
-                    ),
-                ));
+                return Some((BotEnd::Stuck, detail));
             }
             None => {}
         }
@@ -2440,7 +2493,7 @@ pub fn run(
                     *object = resolve(object, &applied)?;
                 }
             }
-            bot.check(source.scene(&start).expect("checked above"))?;
+            bot.check(source)?;
             Ok::<_, String>(bot)
         })
         .transpose()?;
@@ -2547,11 +2600,13 @@ pub fn run(
         report: BotReport {
             entity: Named {
                 name: source
-                    .scene(&start)
-                    .and_then(|s| s.entity(&bot.entity))
+                    .scenes
+                    .iter()
+                    .find_map(|s| s.entity(&bot.entity))
                     .map_or_else(|| bot.entity.clone(), |e| e.name.clone()),
                 id: bot.entity.clone(),
             },
+            started_at: None,
             reached: Vec::new(),
             done_at: None,
             stuck: None,
@@ -2637,6 +2692,9 @@ pub fn run(
     };
     // What the scene start logic did happens at time 0.
     let started = recorder.collect(&mut runtime);
+    if let Some(bot) = &mut bot {
+        bot.scenes(&runtime, &started);
+    }
     twin.compare(recorder.lookup(&runtime), 0);
     let mut stopped = check(&runtime, &started);
     // Steps run.
@@ -2652,10 +2710,15 @@ pub fn run(
             }
             let mut frame = InputFrame::default();
             timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
-            let ended = bot.as_mut().and_then(|bot| bot.steer(&runtime, &mut frame));
+            let ended = bot
+                .as_mut()
+                .and_then(|bot| bot.steer(recorder.lookup(&runtime), &mut frame));
             runtime.advance(FIXED_DT, &frame);
             twin.advance(&frame);
             let mut happened = recorder.collect(&mut runtime);
+            if let Some(bot) = &mut bot {
+                bot.scenes(&runtime, &happened);
+            }
             happened.bot = ended;
             twin.compare(recorder.lookup(&runtime), step);
             stopped = check(&runtime, &happened);

@@ -101,7 +101,7 @@ impl Topic {
                 "Não precisa de configuração. Ligue Cena à entrada Cena de Mudar de cena, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
             }
             "value.scene" => {
-                "Escolha uma cena do projeto no parâmetro Cena. Ligue a saída Cena à entrada Cena de Mudar de cena ou ao Novo valor de Alterar atributo; sozinho, o nó não inicia um comportamento."
+                "Escolha uma cena do projeto no parâmetro Cena. Ligue a saída Cena à entrada Cena de Mudar de cena ou ao Novo valor de Alterar atributo, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
             }
             "random.number" => {
                 "Conecte uma saída de execução à entrada Executar. Quem lê Valor precisa ser executado depois deste nó, no mesmo fluxo."
@@ -134,7 +134,7 @@ pub fn topics() -> &'static [Topic] {
             "value.text"=>("Fornece um texto constante.","Defina uma mensagem ou conteúdo textual para um atributo.","O texto não procura objetos pelo nome; use referências de objeto."),
             "value.bool"=>("Fornece verdadeiro ou falso.","Use verdadeiro ao registrar que uma chave foi coletada.","Uma condição espera um booleano, não o texto verdadeiro."),
             "value.object"=>("Fornece a referência de um objeto da cena.","Escolha o alvo de um efeito de carta.","Se o objeto for removido durante o teste, a referência deixa de resolver; verifique o diagnóstico."),
-            "value.scene"=>("Fornece o identificador da cena escolhida pelo nome.","Ligue Cena à entrada Cena de Mudar de cena para abrir a cena seguinte, ou ao Novo valor de Alterar atributo para guardá-la num atributo de texto que outra lógica lê.","A saída é o identificador, que não muda ao renomear a cena, e não o nome. Sem cena escolhida, o comportamento que lê o nó é interrompido com erro. A cena escolhida não pode ser excluída enquanto o nó a nomeia, e uma cópia da lógica levada para outra cena continua fornecendo a mesma cena."),
+            "value.scene"=>("Fornece a cena escolhida pelo nome: o identificador, para Mudar de cena, e o nome, para chaves e textos.","Ligue Cena à entrada Cena de Mudar de cena para abrir a cena seguinte, ou ao Novo valor de Alterar atributo para guardá-la num atributo de texto que outra lógica lê. Ligue Nome à Chave de Ler ou Alterar variável do jogo para guardar um valor por cena num menu, sem escrever o nome à mão.","Cena é o identificador, que não muda ao renomear a cena: é o que Mudar de cena espera. Nome é o texto mostrado, que muda ao renomear a cena: use-o em textos e chaves, não como destino. Sem cena escolhida, o comportamento que lê o nó é interrompido com erro. A cena escolhida não pode ser excluída enquanto o nó a nomeia, e uma cópia da lógica levada para outra cena continua fornecendo a mesma cena."),
             "attribute.get"=>("Lê o atributo do objeto informado.","Ligue o visitante de uma área ao alvo e escolha Chave.","Sem alvo conectado ou explícito, lê o responsável. O nome do atributo deve corresponder ao valor que você criou."),
             "attribute.set"=>("Altera um atributo usando o valor fornecido.","Depois de verificar energia suficiente, grave Energia menos Custo.","Nada associa automaticamente Vida à morte. Monte as condições e ações desejadas."),
             "condition.compare"=>("Compara A e B e fornece um booleano.","Energia maior ou igual a Custo permite jogar a carta.","Comparar fornece dados; conecte o resultado à Condição para escolher um fluxo de execução."),

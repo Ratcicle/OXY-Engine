@@ -118,22 +118,31 @@ part}}, part being what differed first (transform, visible, attributes.<name>, d
 character, animation, tasks, random, variables.<name> (a game variable), save…; exists: only one \
 copy has the object; order: both have it, in another scene order). identical: false \
 means the engine did not repeat itself: tell the person, it is not a fault of the logic.";
-const BOT: &str = "Plays one 3D character of the start scene along a path of points, as a \
-person at the controls: each step it gives the movement toward its point (in place of movement \
-inputs and the character's direction actions) and presses the character's own jump, sprint and \
-crouch actions, so logic hears them as in play. The game has one input in this version: the \
-movement reaches every character with automatic input, and characters reading the same jump, \
-sprint or crouch actions get those presses too. entity: ID or \"$N\"; refused in 2D scenes, without character3d and with \
-automatic_input false. A point is [x, y, z] in the world, y at the feet (a floor's top), or \
-{at?, object? (follows that object of the start scene as it moves, as a moving platform; at is \
-then an offset in world axes), jump? (pressed once on leaving the point: put it at the take-off \
-spot), sprint?, crouch? (held on the way there and while waiting), wait? (seconds standing \
-there), radius?}. Reached: within radius across the ground (default 0.6 m) and half the body's \
-height. start (default 0): the second it takes over. It walks straight at each point, never \
-turning the camera or finding a way around walls: when it comes no 0.1 m nearer for \
-stuck_after seconds (default 1.5) it gives up and reports where, instead of solving the level. \
-The report adds bot {entity, reached [{index, time, position}], done_at? (the last point left, \
-its wait and jump done), stuck? {index, time, position, distance}}.";
+const BOT: &str = "Plays one 3D character along a path of points, as a person at the \
+controls: each step it gives the movement toward its point (in place of movement inputs and the \
+character's direction actions) and presses the character's own jump, sprint and crouch actions, \
+so logic hears them as in play. The game has one input in this version: the movement reaches \
+every character with automatic input, and characters reading the same jump, sprint or crouch \
+actions get those presses too. entity: ID or \"$N\", a character of any scene: the bot waits \
+until that scene runs (a menu may open it) and takes over start seconds (default 0, the rule of \
+an input's at) after that scene starts, counted from its latest start before the bot took over \
+(scene_changes times; 0 for the start scene); refused when no scene has it, in 2D scenes, \
+without character3d and with automatic_input false. A point is [x, y, z] in the world, y at the \
+feet (a floor's top), or {at?, object? (follows that object of the character's scene as it \
+moves, as a moving platform; at is then an offset in world axes), jump? (pressed once on leaving \
+the point: put it at the take-off spot; running across the way to the next point faster than 1 \
+m/s, the bot first turns toward it on the ground, up to 0.25 s, so the jump goes that way), \
+sprint?, crouch? (held on the way there and while waiting), wait? (seconds standing there), \
+radius?}. Reached: within radius across the ground (default 0.6 m) and half the body's height. \
+It walks straight at each point, never turning the camera or finding a way around walls: when \
+it comes no 0.1 m nearer for stuck_after seconds (default 1.5) it gives up and reports where \
+and why, instead of solving the level. The report adds bot {entity, started_at? (when it took \
+over; absent: its character's scene never ran, or start came after the end), reached [{index, \
+time, position}], done_at? (the last point left, its wait and jump done), stuck? {index, time, \
+position, distance, reason, last_support? {id, name}}}: reason fell (in the air 1 s or more, or \
+over 1 m below where it last stood), blocked (no progress otherwise, as against a wall) or \
+absent (the character, or a point's object, left the running scene); last_support is the \
+object it last stood on.";
 const SAVE: &str = "The progress earlier runs saved, as a returning player has it (absent: a \
 fresh install): {variable: value}, a persistent game variable by ID or name (\"$N\" from setup \
 too), \"name · key\" for the value of a key, with a plain or tagged value of its type. Unknown \
@@ -719,8 +728,12 @@ screen (default false). In the game Alt+Enter switches between window and full s
 {type: shape, shape: Cube|Sphere|Cylinder|Plane|Pyramid|Cone|Tube (3D) or Rectangle|Circle|Sprite \
 (2D)} | {type: camera} | {type: ui, element: Text|Image|Button|Bar} | {type: preset, preset: \
 first_person|third_person|platform, camera?: create|reuse|none (characters; default create), \
-travel?: [x,y,z] metres and period?: seconds (platform; default [4,0,0] and 4)} (3D only; \
-oxy_catalog presets says what each creates)
+travel?: [x,y,z] metres and period?: seconds (platform; default [4,0,0] and 4), pause_at_ends?: \
+seconds standing still at each end, within the period (less than half of it; default 0), spin?: \
+[x,y,z] degrees turned per period while moving (default none; [0,360,0] turns once about Y per \
+period; travel [0,0,0] only turns), keyframes at most 90° apart since a turn between two \
+keyframes takes the shortest way, the clip lasting the periods (up to 8) the spin needs to come \
+back to where it started} (3D only; oxy_catalog presets says what each creates)
 - delete_entities {ids}; duplicate_entities {ids, offset?: [x,y,z], count?: 1-100}: copy k moves \
 k × offset (default [0.5,0,0]) from the original, relative to its parent, and the answer lists \
 every copy's root, copy after copy (one per root in order); rename_entity {entity, name}; \
@@ -743,7 +756,9 @@ whatever scene it is in, copied or placed anywhere. Next scene: value.scene give
 scene its scene param names (people pick it by name in the editor): connect \
 value.scene.value -> action.scene.scene, or keep the ID in a Text attribute (set_attribute, or \
 value.scene.value -> attribute.set.value in logic) and connect attribute.get.value -> \
-action.scene.scene. An empty text or one that is not a scene ID stops the node with an error. \
+action.scene.scene. value.scene.name is that scene's name, to key records per scene in a menu \
+without typing it (value.scene.name -> variable.set.key). An empty text or one that is not a \
+scene ID stops the node with an error. \
 While the input is connected the parameter is ignored: delete_scene does not refuse over it and \
 empties it
 - set_transform {entity, position?, rotation? (degrees), scale?, move_tracks?}: keyframes that \
@@ -782,10 +797,18 @@ with graph and geometry full) for fields without a dedicated command, such as an
 element's ui (oxy_catalog ui_elements lists its fields: {\"ui\": {\"text_align\": \"Center\", \
 \"text_size\": 48}}; text_size null goes back to automatic); the rotation_degrees reads add to \
 keyframes is refused (keyframes keep radians; set_clip takes degrees)
-- add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
-set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
-to_node, to_port}. Nodes added without position (best left out) are laid out when the batch \
-ends, around the nodes that stay: events in the first column, execution left to right, data \
+- add_node {entity, operation, position?: [x,y], params?, links?: [[from_node, from_port, \
+to_port], …]}: links wires the new node's inputs as it is added, each from an output of a node \
+the object already has (\"$N\" too), as in links: [[\"$3\", \"exec\", \"exec\"], [\"$5\", \
+\"context\", \"target\"]]; remove_node {entity, node}; set_node_params {entity, node, params}; \
+connect {entity, from_node, from_port, to_node, to_port} or {entity, links: [[from_node, \
+from_port, to_node, to_port], …]}, many links in one command; disconnect {entity, from_node, \
+from_port, to_node, to_port}. Links go in order and all or none: a refused one fails the batch, \
+named \"Ligação N de links (a Kª)\" (N from 0) with the nodes by label and operation and the \
+ports the node has. Building a graph in creation order, add each node with links to the nodes \
+before it, and connect links for the rest. Nodes added without position (best left out) are \
+laid out when the batch ends, around the nodes that stay: events in the first column, execution \
+left to right, data \
 left of what it feeds, a band per event, right of the nodes that feed them or below the graph. \
 arrange_logic {entity, nodes?} lays out those nodes (default all); the others stay. Parameter \
 values are tagged like attributes, or plain when oxy_catalog gives the parameter's type: a \
@@ -936,8 +959,8 @@ when there is none), so a run can start where another left off. Inputs use the p
 input actions, by ID or name (see oxy_project). To test \
 one section without editing the project, use setup (commands on the copy, update_variable to \
 start a variable elsewhere), spawn (place the player), bot (a character that walks a path of \
-points, jumping where told, and reports the points reached or where it got stuck) and until \
-(stop when something happens, a variable reaching a value or the bot ending included). Draws \
+points, jumping where told, and reports the points reached or where and why it got stuck) and \
+until (stop when something happens, a variable reaching a value or the bot ending included). Draws \
 repeat: random.number takes them from seed \
 (default 0, echoed in the report; vary it to see other draws), and copies made by action.spawn \
 get the same IDs on every run (not those of the logic setup creates: see seed). state_hash, 16 \
@@ -2028,7 +2051,29 @@ mod tests {
         let bot = simulate["bot"]["description"].as_str().unwrap();
         assert!(bot.contains("in place of movement inputs") && bot.contains("stuck_after"));
         assert!(bot.contains("instead of solving the level") && bot.contains("y at the feet"));
-        assert!(bot.contains("stuck? {index, time, position, distance}"));
+        assert!(bot.contains("stuck? {index, time, position, distance, reason, last_support?"));
+        for text in [
+            "a character of any scene: the bot waits until that scene runs",
+            "counted from its latest start before the bot took over",
+            "reason fell (in the air 1 s or more, or over 1 m below where it last stood)",
+            "blocked (no progress otherwise",
+            "the bot first turns toward it on the ground, up to 0.25 s",
+            "started_at? (when it took over; absent: its character's scene never ran, or start \
+             came after the end)",
+        ] {
+            assert!(bot.contains(text), "{text}");
+        }
+        assert!(!bot.contains("of the start scene"), "{bot}");
+        // The numbers it states are the bot's own.
+        assert_eq!(
+            (
+                oxy_core::bot::FALL_AFTER,
+                oxy_core::bot::FALL_DROP,
+                oxy_core::bot::ALIGN_SPEED,
+                oxy_core::bot::ALIGN_SECONDS
+            ),
+            (1., 1., 1., 0.25)
+        );
         assert_eq!(
             until["properties"]["bot"]["enum"],
             json!(["done", "stuck", "any"])
@@ -2365,7 +2410,10 @@ mod tests {
         assert_eq!(reference["inputs"], json!([]));
         assert_eq!(
             reference["outputs"],
-            json!([{"id": "value", "label": "Cena", "type": "text"}])
+            json!([
+                {"id": "value", "label": "Cena", "type": "text"},
+                {"id": "name", "label": "Nome", "type": "text"},
+            ])
         );
         assert_eq!(reference["params"][0]["id"], "scene");
         assert_eq!(reference["params"][0]["ref"], "scene");
@@ -2373,6 +2421,7 @@ mod tests {
             "value.scene.value -> action.scene.scene",
             "value.scene.value -> attribute.set.value",
             "action.scene and value.scene nodes keep their scene",
+            "value.scene.name -> variable.set.key",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }
@@ -2760,6 +2809,109 @@ mod tests {
                 .unwrap()
                 .contains(&json!("Space"))
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn logic_is_wired_with_links_in_add_node_and_connect() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-links-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ligações", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Painel"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Oi"}, "links": [["$1", "exec", "exec"]]},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Tchau"}},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Fim"}},
+                {"op": "connect", "entity": "$0", "links": [
+                    ["$2", "exec", "$3", "exec"], ["$3", "exec", "$4", "exec"]]},
+            ]}),
+        )
+        .unwrap();
+        let painel = applied["created"]["0"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(applied["created"].get("5").is_none(), "{applied}");
+        let brief = call("oxy_entity", json!({"id": painel})).unwrap();
+        let mut edges: Vec<&str> = brief["graph"]["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e.as_str().unwrap())
+            .collect();
+        edges.sort();
+        assert_eq!(
+            edges,
+            [
+                "debug.message(Oi).exec -> debug.message(Tchau).exec",
+                "debug.message(Tchau).exec -> debug.message(Fim).exec",
+                "event.scene_start.exec -> debug.message(Oi).exec",
+            ]
+        );
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        let logs: Vec<&str> = report["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(logs, ["Oi", "Tchau", "Fim"]);
+        // A refused link leaves the file as it was, saying which link and why.
+        let saved = std::fs::read(&file).unwrap();
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "connect", "entity": painel, "links": [
+                ["$9", "exec", "x", "exec"]]}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("\"$9\" não se refere a um ID criado antes"),
+            "{error}"
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "add_node", "entity": painel, "operation": "debug.message",
+                 "links": [["nenhum", "exec", "exec"]]}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(
+                "Comando 0 (add_node, o 1º do lote): Ligação 0 de links (a 1ª): Painel não tem \
+                 o nó nenhum na lógica"
+            ),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), saved);
+        for text in [
+            "links?: [[from_node, from_port, to_port], …]",
+            "{entity, links: [[from_node, from_port, to_node, to_port], …]}, many links in one \
+             command",
+            "named \"Ligação N de links (a Kª)\"",
+            "pause_at_ends?: seconds standing still at each end",
+            "spin?: [x,y,z] degrees turned per period",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
