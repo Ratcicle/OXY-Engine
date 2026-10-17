@@ -5,6 +5,7 @@
 use crate::{
     authoring::{self, ComponentKind},
     collision::Aabb,
+    command,
     document::*,
     graph::{self, Graph, Node, OperationDef, ParamDef, PortType, Reference},
     input_actions,
@@ -721,6 +722,7 @@ fn entity_view(
         .entity(id)
         .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))?;
     let mut value = serde_json::to_value(e).map_err(|e| e.to_string())?;
+    name_groups(project, &mut value);
     let map = value
         .as_object_mut()
         .ok_or("Objeto sem forma de documento")?;
@@ -819,6 +821,31 @@ fn entity_view(
         place(&mut picked, &path, part);
     }
     Ok(picked)
+}
+
+/// Adds to the collision filters of an object's document form the names of their groups:
+/// category_groups and mask_groups, "all" when every bit is set, as update_entity takes them.
+fn name_groups(project: &Project, value: &mut Json) {
+    for path in command::FILTERS {
+        let Some(filter) = path
+            .iter()
+            .try_fold(&mut *value, |part, key| part.get_mut(*key))
+            .and_then(Json::as_object_mut)
+        else {
+            continue;
+        };
+        for key in ["category", "mask"] {
+            let Some(bits) = filter.get(key).and_then(Json::as_u64) else {
+                continue;
+            };
+            let names = if bits == u64::from(u32::MAX) {
+                json!("all")
+            } else {
+                json!(project.collision_group_names(bits as u32))
+            };
+            filter.insert(format!("{key}_groups"), names);
+        }
+    }
 }
 
 /// Puts `part` at `path` inside `into`, creating the objects on the way; a path inside a part
@@ -1341,7 +1368,11 @@ fn presets() -> Json {
         ),
     ]
     .into_iter()
-    .map(|(id, preset, description, params)| {
+    .map(|(id, preset, description, mut params)| {
+        params["filter"] = json!({
+            "default": {"category": ["Cenário padrão"], "mask": "all"},
+            "description": "O filtro de colisão do corpo do personagem (jogadores) ou do colisor da plataforma: category (os grupos em que ele está) e mask (os grupos que ele encontra), cada um como número (os bits) ou como lista de nomes dos grupos de colisão do oxy_project, \"all\" para todos. O que ficar de fora mantém o padrão.",
+        });
         let mut project = crate::editing::blank_project("Catálogo", SceneKind::ThreeD)
             .expect("project name is not empty");
         let scene = project.start_scene.clone();

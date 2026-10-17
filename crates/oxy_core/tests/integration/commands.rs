@@ -3401,3 +3401,185 @@ fn a_scene_reference_gives_the_name_that_keys_a_record_per_scene() {
         ])
     );
 }
+
+#[test]
+fn an_object_of_another_scene_is_named_with_both_scenes_and_placeholders_carry_their_scene() {
+    let (mut project, start) = project(SceneKind::ThreeD);
+    let start_name = project.scene(&start).unwrap().name.clone();
+    // A command without scene whose entity is a "$N" works where the object was created.
+    let applied = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([
+            {"op": "create_scene", "name": "Pista", "kind": "3d"},
+            {"op": "create_entity", "scene": "Pista", "kind": {"type": "group"},
+             "name": "Controle da corrida"},
+            {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+            {"op": "set_attribute", "entity": "$1", "name": "Etapa", "value": {"Number": 0}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Bandeira",
+             "parent": "$1"},
+        ])),
+    )
+    .unwrap();
+    let course = project.scenes.iter().find(|s| s.name == "Pista").unwrap();
+    let control = course.entity(&applied[1].created[0]).unwrap();
+    assert_eq!(control.graph.nodes.len(), 1);
+    assert_eq!(control.attributes["Etapa"], Value::Number(0.));
+    let flag = course.entity(&applied[4].created[0]).unwrap();
+    assert_eq!(flag.parent.as_deref(), Some(control.id.as_str()));
+    assert!(project.scene(&start).unwrap().entities.is_empty());
+    let control = control.id.clone();
+    // In a later batch, the ID alone uses the batch's scene: the error names it and the
+    // object's own, by name.
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "add_node", "entity": control, "operation": "event.step"}])),
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        error,
+        format!(
+            "Comando 0 (add_node, o 1º do lote): Controle da corrida não existe na cena \
+             {start_name} (a do comando); ele está na cena Pista: passe scene. Nada foi alterado."
+        )
+    );
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "rename_entity", "entity": "nada", "name": "Outro"}])),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains(&format!(
+            "Objeto nada não existe na cena {start_name} (a do comando) nem em outra cena do \
+             projeto"
+        )),
+        "{error}"
+    );
+    // A scene given to the command wins over the placeholder's.
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([
+            {"op": "create_entity", "scene": "Pista", "kind": {"type": "group"}, "name": "Poste"},
+            {"op": "set_visible", "scene": start, "entity": "$0", "visible": false},
+        ])),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Poste não existe na cena") && error.contains("ele está na cena Pista"),
+        "{error}"
+    );
+}
+
+#[test]
+fn collision_filters_take_group_names_in_patches_and_presets_and_reads_name_them() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    project.collision_groups.insert(5, "Inimigos".into());
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Área"},
+            {"op": "add_component", "entity": "$0", "component": "sensor3d"},
+            {"op": "update_entity", "entity": "$0", "patch": {"physics3d": {"filter": {
+                "category": ["áreas"], "mask": ["Personagens", "Inimigos"]}}}},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person",
+             "camera": "none", "filter": {"category": ["Personagens"]}}},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+             "filter": {"mask": "Personagens"}}},
+            {"op": "update_entity", "entity": "$3", "patch": {"character3d": {"body": {
+                "filter": {"mask": ["Cenário padrão", "Personagens"]}}}}},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+             "filter": {"category": 2, "mask": 3}}},
+        ])),
+    )
+    .unwrap();
+    let level = project.scene(&scene).unwrap();
+    let area = level.entity(&applied[0].created[0]).unwrap();
+    let filter = &area.physics3d.as_ref().unwrap().filter;
+    assert_eq!((filter.category, filter.mask), (4, 2 | 32));
+    let player = level.entity(&applied[3].created[0]).unwrap();
+    let body = &player.character3d.as_ref().unwrap().body.filter;
+    assert_eq!((body.category, body.mask), (2, 1 | 2));
+    let platform = level.entity(&applied[4].created[0]).unwrap();
+    let solid = &platform.physics3d.as_ref().unwrap().filter;
+    assert_eq!(
+        (solid.category, solid.mask),
+        (1, 2),
+        "the category left out keeps the default"
+    );
+    // A preset takes bits too.
+    let lift = level.entity(&applied[6].created[0]).unwrap();
+    let solid = &lift.physics3d.as_ref().unwrap().filter;
+    assert_eq!((solid.category, solid.mask), (2, 3));
+    // Bits still work, and "all" is every group.
+    let area_id = area.id.clone();
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!([{"op": "update_entity", "entity": area_id, "patch": {"physics3d": {
+            "filter": {"category": 8, "mask": "all"}}}}]),
+        ),
+    )
+    .unwrap();
+    let read = query::entity(&project, &scene, &area_id).unwrap();
+    let filter = &read["physics3d"]["filter"];
+    assert_eq!(
+        (&filter["category"], &filter["mask"]),
+        (&json!(8), &json!(u32::MAX))
+    );
+    assert_eq!(filter["category_groups"], json!(["Grupo 4"]));
+    assert_eq!(filter["mask_groups"], json!("all"));
+    let player = query::entity(&project, &scene, &applied[3].created[0]).unwrap();
+    assert_eq!(
+        player["character3d"]["body"]["filter"]["mask_groups"],
+        json!(["Cenário padrão", "Personagens"])
+    );
+    // An unknown name is refused with the groups; so are other values.
+    for (filter, expected) in [
+        (
+            json!({"category": ["Personagem"]}),
+            "physics3d.filter.category: o grupo de colisão \"Personagem\" não existe; grupos: \
+             Cenário padrão, Personagens, Áreas, Inimigos",
+        ),
+        (
+            json!({"mask": [1]}),
+            "physics3d.filter.mask: a lista leva nomes de grupos de colisão",
+        ),
+        (json!({"mask": true}), "informe um número (os bits)"),
+        (
+            json!({"category": -1}),
+            "physics3d.filter.category: os bits são um número inteiro de 0 a 4294967295",
+        ),
+    ] {
+        let error = command::apply(
+            &mut project,
+            &scene,
+            &batch(json!([{"op": "update_entity", "entity": area_id,
+                           "patch": {"physics3d": {"filter": filter}}}])),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!([{"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+                       "filter": {"category": ["Nada"]}}}]),
+        ),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("filter.category: o grupo de colisão \"Nada\""),
+        "{error}"
+    );
+}

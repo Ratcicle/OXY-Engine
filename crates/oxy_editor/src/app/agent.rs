@@ -38,7 +38,7 @@ impl PlaySession {
             return Err("O teste está pausado: retome-o (resume) antes de mandar entradas.".into());
         }
         let start = waiting.map_or(runtime.time, |at| at.max(runtime.time));
-        let (timed, directs) = headless::plan_inputs(runtime.project(), inputs, &[], start)?;
+        let (timed, directs) = headless::plan_inputs(runtime.project(), inputs, &[], start, None)?;
         runtime.queue_timed_inputs(timed)?;
         self.agent_clicks.extend(directs);
         Ok(())

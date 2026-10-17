@@ -811,6 +811,42 @@ impl Project {
                 _ => format!("Grupo {}", bit + 1),
             })
     }
+    /// The bit of the collision group named `name` (any case), as `collision_group_label`
+    /// names the 32 groups.
+    pub fn collision_group_bit(&self, name: &str) -> Result<u8, String> {
+        let wanted = name.trim().to_lowercase();
+        let bits: Vec<u8> = (0..32)
+            .filter(|bit| self.collision_group_label(*bit).trim().to_lowercase() == wanted)
+            .collect();
+        match bits.as_slice() {
+            [bit] => Ok(*bit),
+            [] => Err(format!(
+                "o grupo de colisão \"{name}\" não existe; grupos: {} (os sem nome se chamam Grupo \
+                 N, N sendo o bit + 1)",
+                (0..32)
+                    .filter(|bit| *bit < 3 || self.collision_groups.contains_key(bit))
+                    .map(|bit| self.collision_group_label(bit))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            many => Err(format!(
+                "há {} grupos de colisão chamados \"{name}\" (bits {}); renomeie um deles no \
+                 editor ou use o número da máscara",
+                many.len(),
+                many.iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+    /// The names of the collision groups whose bits `mask` sets, in bit order.
+    pub fn collision_group_names(&self, mask: u32) -> Vec<String> {
+        (0..32)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| self.collision_group_label(bit))
+            .collect()
+    }
     pub fn new(name: impl Into<String>) -> Self {
         let scene = Scene::new("Cena 2D", SceneKind::TwoD);
         Self {

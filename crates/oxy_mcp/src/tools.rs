@@ -29,10 +29,56 @@ impl Output {
     /// Compact JSON with rounded floats: MCP clients cut long results, and every character
     /// takes the agent's context.
     fn json(value: Json) -> Self {
-        Self {
-            text: serde_json::to_string(&rounded(value)).unwrap_or_default(),
-            image: None,
+        let mut text = String::new();
+        compact(&rounded(value), &mut text);
+        Self { text, image: None }
+    }
+}
+
+/// `value` as compact JSON text, as serde_json writes it, but for objects whose keys are all
+/// whole numbers, such as created: those go in numeric order ("2" before "10"), not in text
+/// order.
+fn compact(value: &Json, out: &mut String) {
+    match value {
+        Json::Object(map) => {
+            let mut entries: Vec<(&String, &Json)> = map.iter().collect();
+            if entries
+                .iter()
+                .all(|(key, _)| !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit()))
+            {
+                entries.sort_by(|a, b| (a.0.len(), a.0).cmp(&(b.0.len(), b.0)));
+            }
+            out.push('{');
+            for (i, (key, item)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Json::String(key.clone()).to_string());
+                out.push(':');
+                compact(item, out);
+            }
+            out.push('}');
         }
+        Json::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                compact(item, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// `path` with one kind of separator, as Windows writes it: a project or folder given with
+/// forward slashes would otherwise come back mixed once a file is joined to it.
+fn native(path: &Path) -> PathBuf {
+    match path.to_str() {
+        Some(text) if cfg!(windows) => PathBuf::from(text.replace('/', "\\")),
+        _ => path.to_owned(),
     }
 }
 
@@ -102,7 +148,12 @@ when no other object of the project has it) or \"$N\" from setup; an ID or name 
 is refused before the run (the IDs of copies action.spawn makes are taken); a hidden element \
 (itself or a group above it) takes no click, nor does an object that is not in the scene \
 running then, which log lines note (Clique ignorado: X não está na cena atual), and in the game \
-pause only interface elements take clicks; {type: escape, at}: what Esc does in the game, \
+pause only interface elements take clicks; {type: click, at, point: [x, y]}: a click at that \
+pixel of the game view (width × height, from its top-left corner, as ui rects are), which the \
+topmost visible button there takes, as in the game (images and texts take no clicks, so a \
+button under a panel still does; ui covered_by tells what a person sees over a button), and a \
+point on no button is logged (Clique ignorado: nenhum botão visível da interface em (x, y)); \
+world objects only by entity; {type: escape, at}: what Esc does in the game, \
 pausing or resuming it when the scene has a pause menu (an event.pause node), else a log line \
 says it has none. They survive scene changes and reloads; a key held across one stays held.";
 const COLLIDERS: &str = "Draws colliders (green) and sensor areas (yellow) over the image, \
@@ -133,16 +184,36 @@ moves, as a moving platform; at is then an offset in world axes), jump? (pressed
 the point: put it at the take-off spot; running across the way to the next point faster than 1 \
 m/s, the bot first turns toward it on the ground, up to 0.25 s, so the jump goes that way), \
 sprint?, crouch? (held on the way there and while waiting), wait? (seconds standing there), \
-radius?}. Reached: within radius across the ground (default 0.6 m) and half the body's height. \
-It walks straight at each point, never turning the camera or finding a way around walls: when \
-it comes no 0.1 m nearer for stuck_after seconds (default 1.5) it gives up and reports where \
-and why, instead of solving the level. The report adds bot {entity, started_at? (when it took \
-over; absent: its character's scene never ran, or start came after the end), reached [{index, \
-time, position}], done_at? (the last point left, its wait and jump done), stuck? {index, time, \
-position, distance, reason, last_support? {id, name}}}: reason fell (in the air 1 s or more, or \
-over 1 m below where it last stood), blocked (no progress otherwise, as against a wall) or \
-absent (the character, or a point's object, left the running scene); last_support is the \
-object it last stood on.";
+radius?, wait_for? {object, within? (metres, default 1), height? (metres, default the \
+character's step height), timeout? (seconds, default 30)}: before heading for this point the bot \
+stands where it is (at the point before, after its wait and before its jump; at the start for \
+the first point) until object, of the character's scene, is within reach: the top of its 3D \
+collider (else of its shape and the pieces under it) at most within metres across the ground \
+and at most height above or below the point it stands at (as that point is then; the \
+character's feet before the first point) or, when that point follows an object, as a platform \
+it rides, that object's top (measured between the two tops, 0 where they meet). Board a moving \
+platform from a point at the edge it comes to with a point that follows it and waits for it, \
+{object: P, at: [0, half its thickness, 0], wait_for: {object: P}}, and get off with a point on \
+the landing that waits for the landing, {at: [...], wait_for: {object: <landing>}}, which comes \
+within reach once P's top is within 1 m of the landing's, whatever P's size (a lower within \
+for a platform that closes in slowly): no fixed waits that depend on when the bot gets there}. \
+Reached: within radius across the ground (default 0.6 m) and half the body's height. It walks \
+straight at each point, never turning the camera or finding a way around walls: when it comes \
+no 0.1 m nearer for stuck_after seconds (default 1.5) it gives up and reports where and why, \
+instead of solving the level. The report adds bot {entity, started_at? (when it took over; \
+absent: its character's scene never ran, or start came after the end), reached [{index, time, \
+position}], done_at? (the last point left, its wait and jump done; or when it let go of a \
+character logic held on the way to the last point, see reason held), stuck? {index, time, \
+position, distance, reason, last_support? {id, name}}, held_by? (the reasons, as [\"parada\"], \
+that character.block nodes hold the character's movement by when the bot let go: with reason \
+held, or with done_at)}: reason fell (in the air 1 s or more, or over 1 m below where it last \
+stood), held (no progress while logic holds the character's movement with character.block on \
+the movement channel; on the way to the last point, a hold that began after the bot reached the \
+point before (on a path of one point, after it took over) ends the path instead, with done_at \
+and held_by, as logic that holds the character once it gets where the path leads), blocked (no \
+progress otherwise, as against a wall), waiting (a wait_for's object did not come within reach \
+before its timeout) or absent (the character, a point's object or a wait_for's object left the \
+running scene, for stuck_after seconds); last_support is the object it last stood on.";
 const SAVE: &str = "The progress earlier runs saved, as a returning player has it (absent: a \
 fresh install): {variable: value}, a persistent game variable by ID or name (\"$N\" from setup \
 too), \"name · key\" for the value of a key, with a plain or tagged value of its type. Unknown \
@@ -158,7 +229,10 @@ radians plus rotation_degrees, material, attributes, components, logic graph, an
 each keyframe with rotation_degrees too, as set_clip takes it, which update_entity refuses in \
 keyframes, as they keep radians; empty (null) parts are left out) plus world {position, \
 rotation_degrees, scale}, visual_bounds and collider_bounds as oxy_scene describes them, \
-components, can_add_components and referenced_by. world.rotation_degrees is rotation_degrees for \
+components, can_add_components and referenced_by; collision filters (physics3d.filter, \
+character3d.body.filter) add category_groups and mask_groups, the names of the collision groups \
+their bits set (\"all\" for every group), which update_entity also takes in place of the bits. \
+world.rotation_degrees is rotation_degrees for \
 a root object; under parents it is, of the angle triples that give the same rotation, the one \
 nearest to the object's own, in (-180, 180] (a piece turned 120° with its group reads [0, 120, \
 0], not [180, 60, 180]). referenced_by lists what names the object [{scene {id, name}, entity, \
@@ -217,7 +291,11 @@ pub fn definitions() -> Json {
         "path": {"type": "array", "items": {"anyOf": [point, {"type": "object", "properties": {
             "at": point, "object": {"type": "string"}, "jump": {"type": "boolean"},
             "sprint": {"type": "boolean"}, "crouch": {"type": "boolean"},
-            "wait": {"type": "number"}, "radius": {"type": "number"}}}]}},
+            "wait": {"type": "number"}, "radius": {"type": "number"},
+            "wait_for": {"type": "object", "properties": {
+                "object": {"type": "string"}, "within": {"type": "number"},
+                "height": {"type": "number"}, "timeout": {"type": "number"}},
+                "required": ["object"]}}}]}},
         "radius": {"type": "number"}, "start": {"type": "number"},
         "stuck_after": {"type": "number"}},
         "required": ["entity", "path"], "description": BOT});
@@ -549,10 +627,19 @@ pub fn definitions() -> Json {
                             count)."},
                        "bot": {"type": "string", "enum": ["done", "stuck", "any"],
                            "description": "With a bot: stops once it is done with its path, \
-                            stuck, or either."}},
-                       "description": "Stops at the first moment any condition holds; the report \
-                        says which in stopped_at {time, reason, kind (the event's, for event), \
-                        detail (what happened, in words)}. A game.quit node ends the run whatever \
+                            stuck, or either."},
+                       "then_seconds": {"type": "number", "minimum": 0, "description":
+                           "Not a condition: once one holds, the run goes on this many seconds \
+                            more (past seconds too; the whole run at most 600 s), so sounds, \
+                            saves, variables, ui, the watched objects' final state and the \
+                            screenshot show what came after (a result screen settled, a sound \
+                            that follows). stopped_at.time stays when the condition held, and \
+                            stopped_at.ended_at says when the run ended; a game.quit in that \
+                            time ends it sooner, added to stopped_at.detail."}},
+                       "description": "Stops at the first moment any condition holds (or \
+                        then_seconds later); the report says which in stopped_at {time, reason, \
+                        kind (the event's, for event), detail (what happened, in words), \
+                        ended_at? (with then_seconds)}. A game.quit node ends the run whatever \
                         until asks, with reason quit and object {id, name}, the object whose \
                         logic asked."},
                    "ui": {"type": "boolean", "description":
@@ -561,7 +648,11 @@ pub fn definitions() -> Json {
                         [x, y, width, height] in pixels of the game view from its top-left corner, \
                         text as shown with bound values, text_size (its font size in pixels; not \
                         on images), text_align (texts: Left|Center|Right), fraction (bars, 0-1), \
-                        clickable (a visible button inside the view)}], and cursor_free: whether a \
+                        clickable (a visible button inside the view), covered_by? (the name of \
+                        the topmost visible element drawn above this visible one, a higher layer \
+                        or the same layer later in the scene, whose rect holds its center: what \
+                        a person sees there; a click there still reaches the topmost button \
+                        under the point, images and texts taking no clicks)}], and cursor_free: whether a \
                         person's cursor would be free at the end to click them (a game.cursor node \
                         showed it, the game is in its own pause, or the active camera does not turn \
                         with the mouse)."},
@@ -596,7 +687,8 @@ pub fn definitions() -> Json {
                    "spawn": {"type": "object", "description":
                        "As in oxy_simulate: {entity, position, yaw?} on the copy before the run."},
                    "until": {"type": "object", "description":
-                       "As in oxy_simulate: stops the run early; the capture is taken then."},
+                       "As in oxy_simulate: stops the run early, or then_seconds after the \
+                        condition held; the capture is taken then."},
                    "seed": seed,
                    "check_replay": check_replay,
                    "save": save,
@@ -698,8 +790,9 @@ server session first changed it: taken once per session, not on every call, and 
 previous_version; a project from an older OXY is saved in the current format and its original \
 is kept once as project.oxy.json.schema-N.….backup.json). The answer is {created, \
 warnings?}: created maps the index of each command that created something to [{id, name}] \
-(every piece of a preset, its root first; a node's name is its operation; what a later command \
-removed keeps the name it was created with), and warnings lists what the batch left that the \
+(keys in command order, \"2\" before \"10\"; every piece of a preset, its root first; a node's \
+name is its operation; what a later command removed keeps the name it was created with), and \
+warnings lists what the batch left that the \
 game will ignore, stop on or take otherwise than it may seem: a node naming an input action the \
 project lacks, two actions on one key (the game fires both), an action.component whose target \
 parameter names an object lacking the part it switches (the node stops with an error), a \
@@ -713,7 +806,13 @@ Placeholders: in later commands, a whole string \"$N\" is the first ID created b
 node in the second copy), copy_entities, save_model (the copy in the model), place_model (<id> \
 as the model holds it, which reads never show: \"$P@$S@<id>\" when save_model S saved it in \
 the batch) and duplicate_scene; <id> may be \"$K\" or \"$K.M\". \"$$N\" (\"$$N@<id>\") is the \
-text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 de bônus\", stays as it is.
+text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 de bônus\", stays as it is. \
+A command that takes a scene and has none, whose entity (else the first of its ids, else its \
+parent) is a placeholder of an object, uses that object's scene: logic added with entity \
+\"$4\" goes where command 4 created the object, whatever the batch's default scene. An object \
+the command's scene lacks is refused naming that scene and, when another scene has the object, \
+that one: \"Controle não existe na cena Menu (a do comando); ele está na cena Pista: passe \
+scene\".
 Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
@@ -738,7 +837,9 @@ seconds standing still at each end, within the period (less than half of it; def
 [x,y,z] degrees turned per period while moving (default none; [0,360,0] turns once about Y per \
 period; travel [0,0,0] only turns), keyframes at most 90° apart since a turn between two \
 keyframes takes the shortest way, the clip lasting the periods (up to 8) the spin needs to come \
-back to where it started} (3D only; oxy_catalog presets says what each creates)
+back to where it started, filter?: {category?, mask?} (the collision filter of a character's \
+body or of the platform's collider, as update_entity takes them; left out, the default)} (3D \
+only; oxy_catalog presets says what each creates)
 - delete_entities {ids}; duplicate_entities {ids, offset?: [x,y,z], count?: 1-100}: copy k moves \
 k × offset (default [0.5,0,0]) from the original, relative to its parent, and the answer lists \
 every copy's root, copy after copy (one per root in order); rename_entity {entity, name}; \
@@ -801,7 +902,12 @@ meshes. 3D characters (their body is the collider) are refused
 with graph and geometry full) for fields without a dedicated command, such as an interface \
 element's ui (oxy_catalog ui_elements lists its fields: {\"ui\": {\"text_align\": \"Center\", \
 \"text_size\": 48}}; text_size null goes back to automatic); the rotation_degrees reads add to \
-keyframes is refused (keyframes keep radians; set_clip takes degrees)
+keyframes is refused (keyframes keep radians; set_clip takes degrees). The collision filters \
+(physics3d.filter and character3d.body.filter) take category (the groups the collider is in) \
+and mask (the groups it meets) as bits or as a list of the collision group names oxy_project \
+lists, any case, or \"all\": {\"physics3d\": {\"filter\": {\"category\": [\"Áreas\"], \"mask\": \
+[\"Personagens\"]}}} is stored as category 4 and mask 2; an unknown name is refused with the \
+groups. oxy_entity shows category_groups and mask_groups beside the bits
 - add_node {entity, operation, position?: [x,y], params?, links?: [[from_node, from_port, \
 to_port], …]}: links wires the new node's inputs as it is added, each from an output of a node \
 the object already has (\"$N\" too), as in links: [[\"$3\", \"exec\", \"exec\"], [\"$5\", \
@@ -971,8 +1077,9 @@ when there is none), so a run can start where another left off. Inputs use the p
 input actions, by ID or name (see oxy_project). To test \
 one section without editing the project, use setup (commands on the copy, update_variable to \
 start a variable elsewhere), spawn (place the player), bot (a character that walks a path of \
-points, jumping where told, and reports the points reached or where and why it got stuck) and \
-until (stop when something happens, a variable reaching a value or the bot ending included). Draws \
+points, jumping where told and waiting for moving platforms, and reports the points reached or \
+where and why it got stuck) and until (stop when something happens, a variable reaching a value \
+or the bot ending included; then_seconds goes on that long after, to see what follows). Draws \
 repeat: random.number takes them from seed \
 (default 0, echoed in the report; vary it to see other draws), and copies made by action.spawn \
 get the same IDs on every run (not those of the logic setup creates: see seed). state_hash, 16 \
@@ -1012,7 +1119,8 @@ opening Lógica, for one, pauses the test). Play in real time differs from run t
 results that must repeat with oxy_simulate.";
 
 const PLAY_INPUTS: &str = "action input: inputs in oxy_simulate's form (press, release, \
-movement, look, click, escape; actions and clicked objects by ID or name), `at` being seconds of \
+movement, look, click, escape; actions and clicked objects by ID or name; clicks by point are \
+refused, the editor's game view having its panel's size), `at` being seconds of \
 game time from now, or from the last input still waiting (queued_until), so batches queue up in \
 order; a batch with one bad input queues none. Refused while the test is paused. A pause, a scene change or a restart drops the inputs still waiting, and keys \
 and movement held stop.";
@@ -1358,9 +1466,22 @@ impl Tools {
             Json::Null if action == "input" => Err("Informe inputs para action input".into()),
             Json::Null => Ok(()),
             _ if action != "input" => Err("inputs só vale com action input".into()),
-            inputs => serde_json::from_value::<Vec<headless::InputEvent>>(inputs.clone())
-                .map(drop)
-                .map_err(|e| format!("Entradas inválidas: {e}")),
+            inputs => {
+                let inputs = serde_json::from_value::<Vec<headless::InputEvent>>(inputs.clone())
+                    .map_err(|e| format!("Entradas inválidas: {e}"))?;
+                // The editor's game view takes whatever size its panel has.
+                if inputs.iter().any(|input| {
+                    matches!(input, headless::InputEvent::Click { point: Some(_), .. })
+                }) {
+                    return Err(
+                        "click com point só vale no oxy_simulate e no oxy_screenshot, \
+                                que medem a vista do jogo em width × height; no teste ao vivo, \
+                                clique pelo objeto (entity)"
+                            .into(),
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1420,7 +1541,7 @@ impl Tools {
             .filter(|e| e.project_name.is_some())
             .collect();
         if let Some(path) = text_arg(args, "project") {
-            let path = PathBuf::from(path);
+            let path = native(Path::new(&path));
             if let Some(editor) = open.iter().find(|e| {
                 e.project_path
                     .as_deref()
@@ -1602,7 +1723,7 @@ impl Tools {
         // the export's to say, live too.
         let destination = text_arg(args, "destination")
             .ok_or("Informe destination: a pasta onde a pessoa pediu o jogo.")?;
-        let destination = asset_import::local_disk_path(&destination, true)?.to_owned();
+        let destination = native(asset_import::local_disk_path(&destination, true)?);
         let replace = match &args["replace"] {
             Json::Null => false,
             Json::Bool(replace) => *replace,
@@ -1693,9 +1814,12 @@ impl Tools {
                 );
             }
         }
-        let file =
-            persistence::create_project(Path::new(&folder), &project, &self.engine_folders())
-                .map_err(|e| e.to_string())?;
+        let file = persistence::create_project(
+            &native(Path::new(&folder)),
+            &project,
+            &self.engine_folders(),
+        )
+        .map_err(|e| e.to_string())?;
         // As oxy_project reads it.
         let saved = persistence::load_project(&file).map_err(|e| e.to_string())?;
         let mut answer = query::answer(&saved, &saved.start_scene, "summary", &json!({}))?;
@@ -2076,6 +2200,63 @@ mod tests {
             assert!(bot.contains(text), "{text}");
         }
         assert!(!bot.contains("of the start scene"), "{bot}");
+        // A point waits for a moving platform; logic holding the character is not a wall.
+        for text in [
+            "wait_for? {object, within? (metres, default 1), height? (metres, default the \
+             character's step height), timeout? (seconds, default 30)}",
+            "at most height above or below the point it stands at",
+            "when that point follows an object, as a platform it rides, that object's top \
+             (measured between the two tops, 0 where they meet)",
+            "once P's top is within 1 m of the landing's, whatever P's size",
+            "no fixed waits that depend on when the bot gets there",
+            "held_by? (the reasons, as [\"parada\"]",
+            "held (no progress while logic holds the character's movement with character.block",
+            "ends the path instead, with done_at and held_by, as logic that holds the character \
+             once it gets where the path leads",
+            "waiting (a wait_for's object did not come within reach before its timeout)",
+            "absent (the character, a point's object or a wait_for's object left the running \
+             scene, for stuck_after seconds)",
+        ] {
+            assert!(bot.contains(text), "{text}");
+        }
+        // Engine texts stay generic: no race words.
+        assert!(!bot.contains("finish") && !bot.contains("chegada"), "{bot}");
+        let point = &simulate["bot"]["properties"]["path"]["items"]["anyOf"][1]["properties"];
+        assert_eq!(point["wait_for"]["required"], json!(["object"]));
+        assert_eq!(
+            (
+                oxy_core::bot::WAIT_WITHIN,
+                oxy_core::bot::WAIT_TIMEOUT,
+                oxy_core::character::CharacterConfig::default().step_height
+            ),
+            (1., 30., 0.25)
+        );
+        // Going on after a condition, and clicks where a person would click.
+        let then = until["properties"]["then_seconds"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(then.contains("stopped_at.ended_at") && then.contains("past seconds too"));
+        assert!(
+            until["description"]
+                .as_str()
+                .unwrap()
+                .contains("ended_at? (with then_seconds)")
+        );
+        assert!(
+            shot["until"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("then_seconds")
+        );
+        assert!(INPUTS.contains("{type: click, at, point: [x, y]}"));
+        assert!(INPUTS.contains("topmost visible button there takes"));
+        assert!(PLAY_INPUTS.contains("clicks by point are refused"));
+        assert!(
+            simulate["ui"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("covered_by? (the name of the topmost visible element drawn above")
+        );
         // The numbers it states are the bot's own.
         assert_eq!(
             (
@@ -2151,6 +2332,16 @@ mod tests {
             output.text.contains("\"negative_zero\":0.0"),
             "{}",
             output.text
+        );
+        // Keys that are all whole numbers, as created's, go in numeric order; others as before.
+        let output = Output::json(json!({
+            "created": {"10": [1], "2": [], "0": {"b": 1, "a": 0.30000001192092896}},
+            "b": "x\"y",
+            "a": [{"11": 1, "9": 2}, {"9": 1, "x": 2}],
+        }));
+        assert_eq!(
+            output.text,
+            r#"{"a":[{"9":2,"11":1},{"9":1,"x":2}],"b":"x\"y","created":{"0":{"a":0.3,"b":1},"2":[],"10":[1]}}"#
         );
     }
 
@@ -4406,6 +4597,11 @@ mod tests {
                 json!({"action": "start", "inputs": [{"type": "escape", "at": 0}]}),
                 "só vale com action input",
             ),
+            // The editor's game view has its panel's size: clicks go by object there.
+            (
+                json!({"action": "input", "inputs": [{"type": "click", "at": 0, "point": [5, 5]}]}),
+                "no teste ao vivo, clique pelo objeto (entity)",
+            ),
         ] {
             let mut args = args;
             args["project"] = json!("Z:/nao/existe");
@@ -5219,5 +5415,107 @@ mod tests {
         .unwrap();
         assert_eq!(call("oxy_scene", json!({})).unwrap()["background"], "sky");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_answer_created_in_command_order_with_one_separator_and_scenes_by_placeholder() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-orders-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ordem", SceneKind::ThreeD).unwrap();
+        let start_name = project.scenes[0].name.clone();
+        persistence::save_project(&file, &project).unwrap();
+        // The folder as agents often write it, with forward slashes.
+        let project_arg = dir.display().to_string().replace('\\', "/");
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<String, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools.call(tool, &args).map(|output| output.text)
+        };
+        let mut commands = vec![
+            json!({"op": "create_scene", "name": "Pista", "kind": "3d"}),
+            json!({"op": "create_entity", "scene": "Pista", "kind": {"type": "group"},
+                   "name": "Controle"}),
+            // No scene: the placeholder's object is in the Pista.
+            json!({"op": "add_node", "entity": "$1", "operation": "event.scene_start"}),
+            json!({"op": "create_entity", "scene": "Pista", "kind": {"type": "shape",
+                   "shape": "Cube"}, "name": "Área"}),
+            json!({"op": "add_component", "entity": "$3", "component": "sensor3d"}),
+            json!({"op": "update_entity", "entity": "$3", "patch": {"physics3d": {"filter": {
+                   "category": ["Áreas"], "mask": ["Personagens"]}}}}),
+        ];
+        for n in 0..6 {
+            commands.push(json!({"op": "create_entity", "scene": "Pista",
+                                 "kind": {"type": "group"}, "name": format!("Grupo {n}")}));
+        }
+        let text = call("oxy_apply", json!({"commands": commands})).unwrap();
+        // created keeps the commands' order: "6" … "9" before "10" and "11".
+        let keys: Vec<usize> = ["\"1\":", "\"2\":", "\"9\":", "\"10\":", "\"11\":"]
+            .iter()
+            .map(|key| text.find(key).unwrap_or_else(|| panic!("{key}: {text}")))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "{text}");
+        let answer: Json = serde_json::from_str(&text).unwrap();
+        // One kind of separator in the paths, whatever the argument used.
+        for key in ["saved", "previous_version"] {
+            let path = answer[key].as_str().unwrap();
+            if cfg!(windows) {
+                assert!(!path.contains('/'), "{key}: {path}");
+            }
+            assert!(Path::new(path).exists(), "{key}: {path}");
+        }
+        let area = answer["created"]["3"][0]["id"].as_str().unwrap().to_owned();
+        let control = answer["created"]["1"][0]["id"].as_str().unwrap().to_owned();
+        let read: Json = serde_json::from_str(
+            &call(
+                "oxy_entity",
+                json!({"scene": "Pista", "id": area, "fields": ["physics3d.filter"]}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let filter = &read["physics3d"]["filter"];
+        assert_eq!(
+            (&filter["category"], &filter["mask"]),
+            (&json!(4), &json!(2))
+        );
+        assert_eq!(
+            (&filter["category_groups"], &filter["mask_groups"]),
+            (&json!(["Áreas"]), &json!(["Personagens"]))
+        );
+        let brief: Json = serde_json::from_str(
+            &call("oxy_entity", json!({"scene": "Pista", "id": control})).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(brief["graph"]["nodes"].as_object().unwrap().len(), 1);
+        // Later, without scene, the ID alone uses the start scene, and the error says so.
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "add_node", "entity": control, "operation": "event.step"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "Controle não existe na cena {start_name} (a do comando); ele está na cena Pista: \
+                 passe scene"
+            )),
+            "{error}"
+        );
+        assert!(!error.contains(&control), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+        for text in [
+            "keys in command order, \"2\" before \"10\"",
+            "is a placeholder of an object, uses that object's scene",
+            "(a do comando); ele está na cena Pista: passe scene",
+            "as bits or as a list of the collision group names oxy_project lists",
+            "oxy_entity shows category_groups and mask_groups beside the bits",
+            "filter?: {category?, mask?}",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(ENTITY_DESCRIPTION.contains("add category_groups and mask_groups"));
     }
 }

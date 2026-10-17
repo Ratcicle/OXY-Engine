@@ -31,6 +31,17 @@ impl ScreenRect {
             && self.min[1] < other.max[1]
             && other.min[1] < self.max[1]
     }
+    /// The point is inside or on the edge, as the game's pointer tests it.
+    pub fn contains(&self, point: [f32; 2]) -> bool {
+        (self.min[0]..=self.max[0]).contains(&point[0])
+            && (self.min[1]..=self.max[1]).contains(&point[1])
+    }
+    pub fn center(&self) -> [f32; 2] {
+        [
+            (self.min[0] + self.max[0]) * 0.5,
+            (self.min[1] + self.max[1]) * 0.5,
+        ]
+    }
 }
 
 /// Where `element` sits inside `viewport`: its offset is measured from the anchored corner,
@@ -52,6 +63,36 @@ pub fn element_rect(element: &UiElement, viewport: ScreenRect) -> ScreenRect {
         min,
         max: [min[0] + size[0], min[1] + size[1]],
     }
+}
+
+/// The interface elements of `scene` a person sees, in drawing order (the topmost last): by
+/// layer, equal layers in scene order.
+fn drawn<'a>(scene: &'a Scene, view: &SceneView) -> Vec<(&'a Entity, &'a UiElement)> {
+    let mut elements: Vec<_> = scene
+        .entities
+        .iter()
+        .filter(|entity| view.visible(entity))
+        .filter_map(|entity| entity.ui.as_ref().map(|element| (entity, element)))
+        .collect();
+    elements.sort_by_key(|(entity, _)| entity.layer);
+    elements
+}
+
+/// The button a click at `point` of `viewport` reaches, as the game takes it: the topmost
+/// visible button under the point. Images and texts take no clicks, so a button under one of
+/// them still does.
+pub fn button_at(scene: &Scene, viewport: ScreenRect, point: [f32; 2]) -> Option<Id> {
+    if !viewport.contains(point) {
+        return None;
+    }
+    let view = SceneView::new(scene);
+    drawn(scene, &view)
+        .into_iter()
+        .rev()
+        .find(|(_, element)| {
+            element.kind == UiKind::Button && element_rect(element, viewport).contains(point)
+        })
+        .map(|(entity, _)| entity.id.clone())
 }
 
 /// The attribute an element shows: `binding_attribute` of its bound object, or of itself.
@@ -181,6 +222,11 @@ pub struct UiState {
     pub fraction: Option<f64>,
     /// A visible button at least partly inside the view: a person could click it.
     pub clickable: bool,
+    /// The name of the topmost visible element drawn above this visible one (a higher layer, or
+    /// the same layer later in the scene) whose rectangle holds its center: what a person sees
+    /// there. A click there reaches the topmost button under it ([`button_at`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub covered_by: Option<String>,
 }
 
 /// Every interface element of `scene` laid out in a view of `size` pixels, in drawing order
@@ -197,12 +243,27 @@ pub fn ui_state(project: &Project, scene: &Scene, size: [f32; 2]) -> Vec<UiState
     elements.sort_by_key(|(entity, _)| entity.layer);
     // Hundredths of a pixel and of a bar keep reports short.
     let short = |value: f64| (value * 100.).round() / 100.;
+    let shown: Vec<(usize, ScreenRect)> = elements
+        .iter()
+        .enumerate()
+        .filter(|(_, pair)| view.visible(pair.0))
+        .map(|(order, pair)| (order, element_rect(pair.1, viewport)))
+        .collect();
     elements
-        .into_iter()
-        .map(|(entity, element)| {
+        .iter()
+        .enumerate()
+        .map(|(order, &(entity, element))| {
             let rect = element_rect(element, viewport);
             let value = bound_value(&view, entity, element);
             let visible = view.visible(entity);
+            let center = rect.center();
+            let covered_by = shown
+                .iter()
+                .rev()
+                .take_while(|(above, _)| *above > order)
+                .find(|(_, above)| above.contains(center))
+                .filter(|_| visible)
+                .map(|(above, _)| elements[*above].0.name.clone());
             UiState {
                 id: entity.id.clone(),
                 name: entity.name.clone(),
@@ -218,6 +279,7 @@ pub fn ui_state(project: &Project, scene: &Scene, size: [f32; 2]) -> Vec<UiState
                 fraction: (element.kind == UiKind::Bar)
                     .then(|| short(bar_fraction(element, value))),
                 clickable: element.kind == UiKind::Button && visible && rect.overlaps(&viewport),
+                covered_by,
             }
         })
         .collect()

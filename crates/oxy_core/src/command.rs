@@ -86,7 +86,22 @@ pub enum EntityKind {
         /// Characters: the camera that follows the player (default create).
         #[serde(default)]
         camera: Option<PresetCamera>,
+        /// The collision filter of the character's body or of the platform's collider.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<FilterSpec>,
     },
+}
+
+/// The group part of a collision filter, as a preset takes it: category (the groups it is in)
+/// and mask (those it meets), each bits or collision group names, as update_entity takes them
+/// in a filter; what is left out keeps the default.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilterSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<Json>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<Json>,
 }
 
 /// A scene's background in [`Command::SetSceneBackground`].
@@ -785,7 +800,7 @@ pub fn apply(
             &mut raised,
             &mut copies,
         )
-        .map_err(fail)?;
+        .map_err(|message| fail(placed(&draft, &command, default_scene, message)))?;
         match &command {
             Command::AddNode {
                 scene,
@@ -1706,8 +1721,43 @@ fn resolve_placeholders(
         Ok(())
     }
     let mut value = serde_json::to_value(command).map_err(|e| e.to_string())?;
+    // A command that takes a scene and has none takes the scene of the object a placeholder
+    // gives as its entity (else the first of its ids, else its parent, but for copy_entities,
+    // whose parent is in the scene it copies to), created or copied earlier in the batch,
+    // wherever it is.
+    let keys: &[&str] = if matches!(command, Command::CopyEntities { .. }) {
+        &["ids"]
+    } else {
+        &["entity", "ids", "parent"]
+    };
+    let carried = value
+        .get("scene")
+        .is_some_and(Json::is_null)
+        .then(|| {
+            keys.iter().find_map(|key| {
+                let text = match &value[*key] {
+                    Json::String(text) => text.as_str(),
+                    Json::Array(items) => items.first()?.as_str()?,
+                    _ => return None,
+                };
+                match Placeholder::parse(text)? {
+                    Placeholder::Escaped(_) => None,
+                    placeholder => placeholder.resolve(applied),
+                }
+            })
+        })
+        .flatten();
     let mut changed = false;
     walk(&mut value, applied, project, &mut changed)?;
+    if let Some(scene) = carried.and_then(|id| {
+        project
+            .scenes
+            .iter()
+            .find(|scene| scene.entity(&id).is_some())
+    }) {
+        value["scene"] = json!(scene.id);
+        changed = true;
+    }
     if !changed {
         return Ok(command.clone());
     }
@@ -1726,16 +1776,58 @@ fn scene_mut<'a>(project: &'a mut Project, id: &str) -> &'a mut Scene {
     project.scene_mut(id).expect("scene checked by scene_id")
 }
 fn entity_mut<'a>(scene: &'a mut Scene, id: &str) -> Result<&'a mut Entity, String> {
-    scene
-        .entity_mut(id)
-        .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))
+    scene.entity_mut(id).ok_or_else(|| absent(id))
+}
+/// The error of a command whose object `id` its scene lacks; [`apply`] tells which scene that
+/// was and where the object is ([`absent_object`] reads it back).
+fn absent(id: &str) -> String {
+    format!("Objeto {id} não existe nesta cena")
+}
+fn absent_object(message: &str) -> Option<&str> {
+    message
+        .strip_prefix("Objeto ")?
+        .strip_suffix(" não existe nesta cena")
+}
+/// `message`, the error of `command` in `project`, naming the scene the command used when it is
+/// about an object that scene lacks, and the scene that has it, if one does.
+fn placed(project: &Project, command: &Command, default: &str, message: String) -> String {
+    let Some(id) = absent_object(&message) else {
+        return message;
+    };
+    let asked = serde_json::to_value(command)
+        .ok()
+        .and_then(|value| value["scene"].as_str().map(str::to_owned));
+    let Some(scene) = project
+        .find_scene(asked.as_deref().unwrap_or(default), "scene")
+        .ok()
+    else {
+        return message;
+    };
+    match project
+        .scenes
+        .iter()
+        .find_map(|other| Some((other, other.entity(id)?)))
+    {
+        // Looked for in another scene than the command's own, as copy_entities' parent.
+        Some((other, e)) if other.id == scene.id => {
+            format!("{} não existe na cena em que o comando o procura", e.name)
+        }
+        Some((other, e)) => format!(
+            "{} não existe na cena {} (a do comando); ele está na cena {}: passe scene",
+            e.name, scene.name, other.name
+        ),
+        None => format!(
+            "Objeto {id} não existe na cena {} (a do comando) nem em outra cena do projeto",
+            scene.name
+        ),
+    }
 }
 fn check_entities(scene: &Scene, ids: &[Id]) -> Result<(), String> {
     if ids.is_empty() {
         return Err("Informe ao menos um objeto".into());
     }
     match ids.iter().find(|id| scene.entity(id).is_none()) {
-        Some(id) => Err(format!("Objeto {id} não existe nesta cena")),
+        Some(id) => Err(absent(id)),
         None => Ok(()),
     }
 }
@@ -1765,9 +1857,7 @@ fn link_all(
     };
     let current = project.scene(scene).unwrap();
     let objects: HashSet<Id> = current.entities.iter().map(|e| e.id.clone()).collect();
-    let owner = current
-        .entity(entity)
-        .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?;
+    let owner = current.entity(entity).ok_or_else(|| absent(entity))?;
     for (index, edge) in edges.iter().enumerate() {
         for id in [&edge.from_node, &edge.to_node] {
             if owner.graph.node(id).is_none() {
@@ -2190,7 +2280,7 @@ fn apply_one(
                 .scene(&id)
                 .unwrap()
                 .entity(entity)
-                .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?;
+                .ok_or_else(|| absent(entity))?;
             let index = find_clip(owner, clip)?;
             let found = &owner.clips[index];
             let uses = clip_uses(project, &found.id);
@@ -2278,7 +2368,7 @@ fn apply_one(
                 .unwrap()
                 .entity(entity)
                 .cloned()
-                .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?;
+                .ok_or_else(|| absent(entity))?;
             authoring::add(kind, project, &mut next, *component)?;
             *entity_mut(scene_mut(project, &id), entity)? = next;
             Ok(vec![])
@@ -2331,11 +2421,12 @@ fn apply_one(
             patch,
         } => {
             let id = scene_id(project, scene, default)?;
+            let patch = filter_bits(project, patch)?;
             let scene = scene_mut(project, &id);
             let fitted = box_fit(scene, entity);
             let e = entity_mut(scene, entity)?;
             let mut value = serde_json::to_value(&*e).map_err(|e| e.to_string())?;
-            merge_patch(&mut value, patch);
+            merge_patch(&mut value, &patch);
             if value.get("id").and_then(Json::as_str) != Some(entity.as_str()) {
                 return Err("O patch não pode mudar o ID do objeto".into());
             }
@@ -2460,7 +2551,7 @@ fn apply_one(
                 .scene(&id)
                 .unwrap()
                 .entity(entity)
-                .ok_or_else(|| format!("Objeto {entity} não existe nesta cena"))?
+                .ok_or_else(|| absent(entity))?
                 .graph
                 .nodes
                 .iter()
@@ -2849,6 +2940,7 @@ fn create_entity(
             pause_at_ends,
             spin,
             camera,
+            filter,
         } => {
             let platform = *preset == Preset::Platform;
             if !platform
@@ -2883,6 +2975,21 @@ fn create_entity(
                 Preset::ThirdPerson => MovementPreset::ThirdPerson,
                 Preset::Platform => MovementPreset::Platform,
             };
+            let bits = |value: &Option<Json>, key: &str| {
+                value
+                    .as_ref()
+                    .map(|value| {
+                        group_bits(project, value).map_err(|error| format!("filter.{key}: {error}"))
+                    })
+                    .transpose()
+            };
+            let (category, mask) = match filter {
+                Some(filter) => (
+                    bits(&filter.category, "category")?,
+                    bits(&filter.mask, "mask")?,
+                ),
+                None => (None, None),
+            };
             let at = position.unwrap_or([0., 0.02, 0.]);
             let before = scene_mut(project, scene).entities.len();
             let id =
@@ -2892,6 +2999,15 @@ fn create_entity(
                 e.name = name.into();
             }
             e.parent = parent.cloned();
+            let filter = match (&mut e.character3d, &mut e.physics3d) {
+                (Some(character), _) => Some(&mut character.body.filter),
+                (None, Some(collider)) => Some(&mut collider.filter),
+                (None, None) => None,
+            };
+            if let Some(filter) = filter {
+                filter.category = category.unwrap_or(filter.category);
+                filter.mask = mask.unwrap_or(filter.mask);
+            }
             // Every piece of the assembly, its root first.
             let mut created: Vec<Id> = scene_mut(project, scene).entities[before..]
                 .iter()
@@ -3292,9 +3408,7 @@ fn set_clip(
     replaced: Option<&str>,
     spec: ClipSpec,
 ) -> Result<Vec<Id>, String> {
-    let entity = scene
-        .entity(owner)
-        .ok_or_else(|| format!("Objeto {owner} não existe nesta cena"))?;
+    let entity = scene.entity(owner).ok_or_else(|| absent(owner))?;
     let name = spec.name.trim();
     if name.is_empty() {
         return Err("Informe um nome para a animação".into());
@@ -3464,4 +3578,70 @@ fn merge_patch(target: &mut Json, patch: &Json) {
         }
         other => *target = other.clone(),
     }
+}
+
+/// The collision filters' paths in an object's document form: its 3D collider's and its 3D
+/// character body's.
+pub(crate) const FILTERS: [&[&str]; 2] =
+    [&["physics3d", "filter"], &["character3d", "body", "filter"]];
+
+/// `patch` with the category and mask of its collision filters given as group names turned
+/// into the bits they stand for, and bits checked.
+fn filter_bits(project: &Project, patch: &Json) -> Result<Json, String> {
+    let mut patch = patch.clone();
+    for path in FILTERS {
+        let Some(filter) = path
+            .iter()
+            .try_fold(&mut patch, |part, key| part.get_mut(*key))
+        else {
+            continue;
+        };
+        for key in ["category", "mask"] {
+            if let Some(value) = filter.get_mut(key)
+                && !value.is_null()
+            {
+                *value = json!(
+                    group_bits(project, value)
+                        .map_err(|error| format!("{}.{key}: {error}", path.join(".")))?
+                );
+            }
+        }
+    }
+    Ok(patch)
+}
+
+/// The bits a filter's category or mask gives: the bits themselves, a list of collision group
+/// names (or one name), as oxy_project lists them, or "all" for every group.
+pub(crate) fn group_bits(project: &Project, value: &Json) -> Result<u32, String> {
+    let names: Vec<&str> = match value {
+        Json::Number(bits) => {
+            return bits
+                .as_u64()
+                .and_then(|bits| u32::try_from(bits).ok())
+                .ok_or_else(|| {
+                    format!(
+                        "os bits são um número inteiro de 0 a {} (recebeu {bits})",
+                        u32::MAX
+                    )
+                });
+        }
+        Json::String(all) if all.trim().eq_ignore_ascii_case("all") => return Ok(u32::MAX),
+        Json::String(name) => vec![name],
+        Json::Array(items) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .ok_or("a lista leva nomes de grupos de colisão (texto)")
+            })
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(
+                "informe um número (os bits), uma lista de nomes de grupos de colisão ou \"all\""
+                    .into(),
+            );
+        }
+    };
+    names.into_iter().try_fold(0, |bits, name| {
+        Ok(bits | 1 << project.collision_group_bit(name)?)
+    })
 }

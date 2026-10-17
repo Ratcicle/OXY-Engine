@@ -700,10 +700,17 @@ fn geometry_is_counted_unless_asked_in_full() {
     .unwrap();
     let stored = project.scene(&scene).unwrap().entity(&id).unwrap();
     assert_eq!(full["mesh"], serde_json::to_value(&stored.mesh).unwrap());
+    // As stored, but for the names of the collision groups the filter adds.
+    let mut collider = full["physics3d"].clone();
+    let filter = collider["filter"].as_object_mut().unwrap();
     assert_eq!(
-        full["physics3d"],
-        serde_json::to_value(&stored.physics3d).unwrap()
+        (
+            filter.remove("category_groups"),
+            filter.remove("mask_groups")
+        ),
+        (Some(json!(["Cenário padrão"])), Some(json!("all")))
     );
+    assert_eq!(collider, serde_json::to_value(&stored.physics3d).unwrap());
 }
 
 #[test]

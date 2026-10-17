@@ -346,23 +346,11 @@ const MISSING_IMAGE_OUTLINE: Color32 = Color32::from_rgba_premultiplied(190, 190
 /// The game button under `pointer`, the topmost as `draw` lays them out: a mouse press there
 /// belongs to the button, not to the actions bound to the mouse button.
 pub fn button_at(scene: &Scene, viewport: Rect, pointer: Pos2) -> Option<Id> {
-    if !viewport.contains(pointer) {
-        return None;
-    }
-    let view = oxy_core::scene_view::SceneView::new(scene);
-    scene
-        .entities
-        .iter()
-        .filter(|entity| {
-            entity
-                .ui
-                .as_ref()
-                .is_some_and(|element| element.kind == UiKind::Button)
-                && view.visible(entity)
-        })
-        .filter(|entity| element_rect(entity.ui.as_ref().unwrap(), viewport).contains(pointer))
-        .max_by_key(|entity| entity.layer)
-        .map(|entity| entity.id.clone())
+    let viewport = game_ui::ScreenRect {
+        min: viewport.min.into(),
+        max: viewport.max.into(),
+    };
+    game_ui::button_at(scene, viewport, pointer.into())
 }
 
 /// Editor selection for the overlay, using the very same anchors and layer ordering as drawing.

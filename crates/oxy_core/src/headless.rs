@@ -71,10 +71,15 @@ pub enum InputEvent {
     },
     /// Clicks an object or its interface button, by its ID or name. A hidden element takes no
     /// click, nor does a world object in the game pause, as in the game, nor an object that is
-    /// not in the running scene (a log line says so).
+    /// not in the running scene (a log line says so). Or clicks the game view at `point`, x and
+    /// y in its pixels from the top-left corner: the topmost visible button there takes it, as
+    /// in the game (see [`game_ui::button_at`]).
     Click {
         at: f64,
-        entity: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entity: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        point: Option<[f32; 2]>,
     },
     /// What Esc does in the game: pauses or resumes it when the scene has a pause menu (logic
     /// listening to Ao pausar ou retomar); otherwise a log line says there is none.
@@ -228,6 +233,11 @@ pub struct Until {
     /// The request's bot is done with its path, stuck, or either.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot: Option<BotEnd>,
+    /// Not a condition: once one holds, the run goes on this many seconds more (past `seconds`
+    /// too, the whole run within [`MAX_SECONDS`]) before it ends, so the report and a capture
+    /// show what came after; `stopped_at` still says when the condition held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub then_seconds: Option<f64>,
 }
 /// How a bot ends: at the end of its path or stuck; `Any` stands for either in `until`.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -628,6 +638,10 @@ pub struct StoppedAt {
     pub object: Option<Named>,
     /// What happened, in words.
     pub detail: String,
+    /// With `then_seconds`: when the run ended, that long after `time`, or sooner when Sair do
+    /// jogo ended it (which `detail` then adds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<f64>,
 }
 /// Two copies of the game run side by side on the same inputs, compared after every step.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -694,12 +708,18 @@ pub struct BotReport {
     pub started_at: Option<f64>,
     /// The points it reached, in order.
     pub reached: Vec<BotPoint>,
-    /// When it left the last point, its wait and jump there done.
+    /// When it left the last point, its wait and jump there done; or when it let go of a
+    /// character that logic held on the way to the last point (see `held_by`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_at: Option<f64>,
     /// Where it gave up.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stuck: Option<BotStuck>,
+    /// The reasons logic held the character's movement by (Bloquear / liberar entrada) when the
+    /// bot let go: with `stuck` reason held, or with `done_at` when the hold began on the way
+    /// to the last point.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub held_by: Vec<String>,
 }
 /// A point the bot reached: its index in the path, from 0, and where the character stood.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -1484,6 +1504,9 @@ struct Sampler {
     plan: SamplePlan,
     /// The steps the run lasts unless `until` or Sair do jogo stops it.
     steps: usize,
+    /// The step the run now ends at, whose state is taken apart: `steps`, or later once a
+    /// condition with `then_seconds` held.
+    end: usize,
     taken: VecDeque<Taken>,
     /// Samples of `sample_every` dropped to keep the most recent.
     dropped: usize,
@@ -1520,6 +1543,7 @@ impl Sampler {
         Self {
             plan,
             steps,
+            end: steps,
             taken: VecDeque::new(),
             dropped: 0,
             spread,
@@ -1529,7 +1553,7 @@ impl Sampler {
     /// Samples the state after `step` when the plan asks for it; the last step's is the final
     /// state, taken apart.
     fn take(&mut self, step: usize, sample: impl FnOnce() -> Vec<Sample>) {
-        if step >= self.steps {
+        if step >= self.end {
             return;
         }
         let steps = self.steps;
@@ -1588,8 +1612,9 @@ impl Sampler {
     /// ending them, and how many `sample_every` dropped.
     fn finish(self, last: usize, end: Vec<Sample>) -> (Vec<Vec<Sample>>, usize) {
         let picked: Vec<Vec<Sample>> = match (self.spread, &self.plan) {
-            // Stopped early: the samples spread over the time the run lasted.
-            (Some((_, kept)), SamplePlan::Even { count, .. }) if last < self.steps => {
+            // Stopped early, or later with then_seconds: the samples spread over the time the
+            // run lasted.
+            (Some((_, kept)), SamplePlan::Even { count, .. }) if last != self.steps => {
                 let mut picks = BTreeSet::new();
                 for k in 1..*count {
                     let due = (k * last + count / 2) / count;
@@ -1753,6 +1778,8 @@ struct Stop {
     /// The audio's ID and name.
     sound: Option<(Id, String)>,
     bot: Option<BotEnd>,
+    /// Steps the run goes on once a condition held.
+    then: Option<usize>,
 }
 impl Stop {
     fn new(
@@ -1923,6 +1950,15 @@ impl Stop {
         if until.bot.is_some() && bot.is_none() {
             return Err("until: bot só vale com um bot no pedido (informe bot)".into());
         }
+        // NaN is outside any range.
+        if until
+            .then_seconds
+            .is_some_and(|then| !(0. ..=MAX_SECONDS).contains(&then))
+        {
+            return Err(format!(
+                "until: then_seconds precisa ser um número de segundos de 0 a {MAX_SECONDS}"
+            ));
+        }
         if scene.is_none()
             && until.log_contains.is_none()
             && attribute.is_none()
@@ -1945,6 +1981,9 @@ impl Stop {
             paused: until.paused,
             sound,
             bot: until.bot,
+            then: until
+                .then_seconds
+                .map(|then| (then / f64::from(FIXED_DT)).round() as usize),
         })
     }
 
@@ -1956,6 +1995,7 @@ impl Stop {
             kind: None,
             object: None,
             detail,
+            ended_at: None,
         };
         if let Some(target) = &self.scene
             && let Some(scene) = happened
@@ -2087,6 +2127,7 @@ impl BotRun {
                 distance,
                 reason,
                 last_support,
+                held_by,
             }) => {
                 let scene = runtime.scene();
                 let last_support = last_support.map(|id| lookup.named(&id));
@@ -2099,27 +2140,58 @@ impl BotRun {
                         ),
                         None => format!("{name} caiu a caminho do ponto {index} do bot"),
                     },
+                    StuckReason::Held => format!(
+                        "A lógica travou o movimento de {name} (motivos: {}) a caminho do ponto \
+                         {index} do bot, a {distance:.2} m dele",
+                        held_by.join(", ")
+                    ),
                     StuckReason::Blocked => format!(
                         "{name} parou de avançar rumo ao ponto {index} do bot, a {distance:.2} m \
                          dele"
                     ),
+                    StuckReason::Waiting => {
+                        let wait = self.bot.path.get(index).and_then(|p| p.wait_for.as_ref());
+                        let object = wait
+                            .and_then(|wait| lookup.name(&wait.object))
+                            .unwrap_or("o objeto");
+                        format!(
+                            "{name} esperou {} s por {object}, que não ficou ao alcance (wait_for \
+                             do ponto {index} do bot)",
+                            wait.map_or(0., |wait| wait.timeout)
+                        )
+                    }
                     StuckReason::Absent if scene.entity(&self.bot.entity).is_none() => format!(
                         "{name} não está na cena atual ({}); o bot desistiu do ponto {index}",
                         scene.name
                     ),
                     StuckReason::Absent => {
-                        let object = self
-                            .bot
-                            .path
-                            .get(index)
-                            .and_then(|point| point.object.as_ref())
-                            .and_then(|id| lookup.name(id))
-                            .unwrap_or("um objeto");
-                        format!(
-                            "O ponto {index} do bot segue {object}, que não está na cena atual \
-                             ({})",
-                            scene.name
-                        )
+                        let point = self.bot.path.get(index);
+                        let follows = point.and_then(|point| point.object.as_ref());
+                        // The point's object is there: the one its wait_for waits for is not.
+                        let waits = point
+                            .and_then(|point| point.wait_for.as_ref())
+                            .map(|wait| &wait.object)
+                            .filter(|id| {
+                                scene.entity(id).is_none()
+                                    && follows.is_none_or(|id| scene.entity(id).is_some())
+                            });
+                        let called = |id: Option<&Id>| {
+                            id.and_then(|id| lookup.name(id)).unwrap_or("um objeto")
+                        };
+                        match waits {
+                            Some(id) => format!(
+                                "O wait_for do ponto {index} do bot espera {}, que não está na \
+                                 cena atual ({})",
+                                called(Some(id)),
+                                scene.name
+                            ),
+                            None => format!(
+                                "O ponto {index} do bot segue {}, que não está na cena atual \
+                                 ({})",
+                                called(follows),
+                                scene.name
+                            ),
+                        }
                     }
                 };
                 self.report.stuck = Some(BotStuck {
@@ -2130,7 +2202,19 @@ impl BotRun {
                     reason,
                     last_support,
                 });
+                self.report.held_by = held_by;
                 return Some((BotEnd::Stuck, detail));
+            }
+            Some(BotEvent::Released { held_by }) => {
+                let detail = format!(
+                    "A lógica travou o movimento de {name} (motivos: {}) a caminho do último \
+                     ponto do bot ({}); o caminho conta como feito",
+                    held_by.join(", "),
+                    self.bot.path.len() - 1
+                );
+                self.report.done_at = Some(time);
+                self.report.held_by = held_by;
+                return Some((BotEnd::Done, detail));
             }
             None => {}
         }
@@ -2174,12 +2258,28 @@ fn event_detail(event: &GameEvent) -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Direct {
     Click(Id),
+    /// A click at `point` of a game view of `view` pixels: the topmost visible button there
+    /// takes it.
+    ClickAt {
+        point: [f32; 2],
+        view: [f32; 2],
+    },
     Escape,
 }
 impl Direct {
     pub fn apply(&self, runtime: &mut Runtime) {
         match self {
             Self::Click(entity) => runtime.click(entity),
+            Self::ClickAt { point, view } => {
+                let viewport = game_ui::ScreenRect::from_size(view[0], view[1]);
+                match game_ui::button_at(runtime.scene(), viewport, *point) {
+                    Some(button) => runtime.click(&button),
+                    None => runtime.log(format!(
+                        "Clique ignorado: nenhum botão visível da interface em ({}, {}).",
+                        point[0], point[1]
+                    )),
+                }
+            }
             Self::Escape if runtime.has_pause_menu() => runtime.toggle_game_pause(),
             Self::Escape => runtime.log(
                 "Esc: a cena não tem menu de pausa (nenhum objeto usa Ao pausar ou retomar); no \
@@ -2230,17 +2330,46 @@ fn clicked(project: &Project, text: &str) -> Result<Id, String> {
 /// movement and look as timed inputs in time order, for an [`InputTimeline`] or
 /// [`Runtime::queue_timed_inputs`], and clicks and Esc, which the host gives the game once its
 /// time comes ([`Direct::apply`]). Actions are found by ID or name, and `"$N"` in `applied`.
+/// Clicks at a point take the game view of `view` pixels; without one they are refused.
 pub fn plan_inputs(
     project: &Project,
     inputs: &[InputEvent],
     applied: &[Applied],
     start: f64,
+    view: Option<[f32; 2]>,
 ) -> Result<PlannedInputs, String> {
     let mut events = inputs.to_vec();
     for event in &mut events {
         match event {
-            InputEvent::Click { entity, .. } => {
+            InputEvent::Click {
+                entity: Some(entity),
+                point: None,
+                ..
+            } => {
                 *entity = clicked(project, &resolve(entity, applied)?)?;
+            }
+            InputEvent::Click {
+                entity: None,
+                point: Some(point),
+                ..
+            } => {
+                if point.iter().any(|v| !v.is_finite()) {
+                    return Err("click: point precisa de dois números finitos, [x, y]".into());
+                }
+                if view.is_none() {
+                    return Err(
+                        "click: point só vale onde a vista do jogo tem tamanho conhecido \
+                                (oxy_simulate e oxy_screenshot, com width × height); aqui, \
+                                clique pelo objeto (entity)"
+                            .into(),
+                    );
+                }
+            }
+            InputEvent::Click { .. } => {
+                return Err(
+                    "click: informe entity (o objeto) ou point ([x, y] na vista do jogo), um só"
+                        .into(),
+                );
             }
             // A name the project does not have would be pressed in vain.
             InputEvent::Press { action, .. } | InputEvent::Release { action, .. } => {
@@ -2270,8 +2399,14 @@ pub fn plan_inputs(
             InputEvent::Release { at, action } => (at, InputChange::Release(action)),
             InputEvent::Movement { at, value } => (at, InputChange::Movement(value)),
             InputEvent::Look { at, value } => (at, InputChange::Look(value)),
-            InputEvent::Click { at, entity } => {
-                directs.push((start + at, Direct::Click(entity)));
+            InputEvent::Click { at, entity, point } => {
+                let direct = match (entity, point, view) {
+                    (Some(entity), _, _) => Direct::Click(entity),
+                    (None, Some(point), Some(view)) => Direct::ClickAt { point, view },
+                    // Refused above.
+                    _ => continue,
+                };
+                directs.push((start + at, direct));
                 continue;
             }
             InputEvent::Escape { at } => {
@@ -2492,12 +2627,16 @@ pub fn run(
                 if let Some(object) = &mut point.object {
                     *object = resolve(object, &applied)?;
                 }
+                if let Some(wait) = &mut point.wait_for {
+                    wait.object = resolve(&wait.object, &applied)?;
+                }
             }
             bot.check(source)?;
             Ok::<_, String>(bot)
         })
         .transpose()?;
-    let (timed, directs) = plan_inputs(source, &request.inputs, &applied, 0.)?;
+    let view = view_size.map(|side| side as f32);
+    let (timed, directs) = plan_inputs(source, &request.inputs, &applied, 0., Some(view))?;
     let mut timeline = InputTimeline::default();
     timeline.push_all(timed, 0.)?;
     let watches: Vec<(WatchPlan, String)> = request
@@ -2610,6 +2749,7 @@ pub fn run(
             reached: Vec::new(),
             done_at: None,
             stuck: None,
+            held_by: Vec::new(),
         },
         bot,
     });
@@ -2673,60 +2813,104 @@ pub fn run(
     };
     let mut directs = directs.into_iter().peekable();
     // Sair do jogo ends the run whatever `until` asks.
-    let check = |runtime: &Runtime, happened: &Happened| {
-        if runtime.quit_requested {
+    let quit = |runtime: &Runtime, happened: &Happened| {
+        runtime.quit_requested.then(|| {
             let node = graph::definition("game.quit").map_or("Sair do jogo", |def| def.label);
             let asked = happened
                 .quit
                 .as_ref()
                 .map_or("O jogo", |object| object.name.as_str());
-            return Some(StoppedAt {
+            StoppedAt {
                 time: rounded(runtime.time),
                 reason: "quit",
                 kind: None,
                 object: happened.quit.clone(),
                 detail: format!("{asked} pediu para sair do jogo (nó {node})"),
-            });
-        }
-        stop.as_ref().and_then(|s| s.check(runtime, happened))
+                ended_at: None,
+            }
+        })
     };
+    let most = (MAX_SECONDS / f64::from(FIXED_DT)).round() as usize;
+    // Whether the run ends after `step` (0: the start): Sair do jogo, or an until condition,
+    // `then` steps later when it asks for them. The run lasts `end` steps until then.
+    let settle = |runtime: &Runtime,
+                  happened: &Happened,
+                  step: usize,
+                  stopped: &mut Option<StoppedAt>,
+                  end: &mut usize| {
+        if let Some(held) = stopped {
+            // Going on after the condition: only Sair do jogo ends it sooner.
+            if let Some(quit) = quit(runtime, happened) {
+                held.detail = format!("{}; depois, {}", held.detail, quit.detail);
+                return true;
+            }
+            return step >= *end;
+        }
+        let found = quit(runtime, happened)
+            .or_else(|| stop.as_ref().and_then(|s| s.check(runtime, happened)));
+        let Some(found) = found else {
+            return step >= *end;
+        };
+        let then = stop
+            .as_ref()
+            .and_then(|s| s.then)
+            .filter(|_| found.reason != "quit");
+        *stopped = Some(found);
+        match then {
+            Some(then) => {
+                *end = (step + then).min(most);
+                step >= *end
+            }
+            None => true,
+        }
+    };
+    let mut stopped = None;
+    let mut end = steps;
     // What the scene start logic did happens at time 0.
     let started = recorder.collect(&mut runtime);
     if let Some(bot) = &mut bot {
         bot.scenes(&runtime, &started);
     }
     twin.compare(recorder.lookup(&runtime), 0);
-    let mut stopped = check(&runtime, &started);
+    let mut ended = settle(&runtime, &started, 0, &mut stopped, &mut end);
+    sampler.end = end;
     // Steps run.
     let mut last = 0;
-    if stopped.is_none() {
+    if !ended {
         take(&mut sampler, 0, &runtime, &recorder);
-        for step in 1..=steps {
-            last = step;
-            while directs.peek().is_some_and(|(at, _)| *at <= runtime.time) {
-                let (_, direct) = directs.next().unwrap();
-                direct.apply(&mut runtime);
-                twin.direct(&direct);
-            }
-            let mut frame = InputFrame::default();
-            timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
-            let ended = bot
-                .as_mut()
-                .and_then(|bot| bot.steer(recorder.lookup(&runtime), &mut frame));
-            runtime.advance(FIXED_DT, &frame);
-            twin.advance(&frame);
-            let mut happened = recorder.collect(&mut runtime);
-            if let Some(bot) = &mut bot {
-                bot.scenes(&runtime, &happened);
-            }
-            happened.bot = ended;
-            twin.compare(recorder.lookup(&runtime), step);
-            stopped = check(&runtime, &happened);
-            if stopped.is_some() {
-                break;
-            }
+    }
+    while !ended {
+        let step = last + 1;
+        last = step;
+        while directs.peek().is_some_and(|(at, _)| *at <= runtime.time) {
+            let (_, direct) = directs.next().unwrap();
+            direct.apply(&mut runtime);
+            twin.direct(&direct);
+        }
+        let mut frame = InputFrame::default();
+        timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
+        let bot_ended = bot
+            .as_mut()
+            .and_then(|bot| bot.steer(recorder.lookup(&runtime), &mut frame));
+        runtime.advance(FIXED_DT, &frame);
+        twin.advance(&frame);
+        let mut happened = recorder.collect(&mut runtime);
+        if let Some(bot) = &mut bot {
+            bot.scenes(&runtime, &happened);
+        }
+        happened.bot = bot_ended;
+        twin.compare(recorder.lookup(&runtime), step);
+        ended = settle(&runtime, &happened, step, &mut stopped, &mut end);
+        sampler.end = end;
+        if !ended {
             take(&mut sampler, step, &runtime, &recorder);
         }
+    }
+    if let Some(stopped) = &mut stopped
+        && stop.as_ref().is_some_and(|s| s.then.is_some())
+        && stopped.reason != "quit"
+    {
+        stopped.ended_at = Some(rounded(runtime.time));
     }
     report.stopped_at = stopped;
     report.bot = bot.map(|bot| bot.report);
@@ -2850,7 +3034,7 @@ mod tests {
             {"type": "movement", "at": 0.5, "value": [0.0, 1.0]},
         ]))
         .unwrap();
-        let (timed, directs) = plan_inputs(&project, &inputs, &[], 10.).unwrap();
+        let (timed, directs) = plan_inputs(&project, &inputs, &[], 10., None).unwrap();
         let timed: Vec<_> = timed
             .iter()
             .map(|input| (input.at, format!("{:?}", input.change)))
@@ -2866,23 +3050,50 @@ mod tests {
         );
         assert_eq!(
             directs,
-            [(10., Direct::Escape), (10.25, Direct::Click(door))]
+            [(10., Direct::Escape), (10.25, Direct::Click(door.clone()))]
         );
         let unknown: Vec<InputEvent> = serde_json::from_value(
             serde_json::json!([{"type": "press", "at": 0.0, "action": "voar"}]),
         )
         .unwrap();
-        let error = plan_inputs(&project, &unknown, &[], 0.).unwrap_err();
+        let error = plan_inputs(&project, &unknown, &[], 0., None).unwrap_err();
         assert!(error.contains("\"voar\" não existe"), "{error}");
         let early: Vec<InputEvent> =
             serde_json::from_value(serde_json::json!([{"type": "escape", "at": -1.0}])).unwrap();
-        assert!(plan_inputs(&project, &early, &[], 5.).is_err());
+        assert!(plan_inputs(&project, &early, &[], 5., None).is_err());
         let huge: Vec<InputEvent> = serde_json::from_value(
             serde_json::json!([{"type": "look", "at": 0.0, "value": [1e39, 0.0]}]),
         )
         .unwrap();
-        let error = plan_inputs(&project, &huge, &[], 0.).unwrap_err();
+        let error = plan_inputs(&project, &huge, &[], 0., None).unwrap_err();
         assert!(error.contains("números finitos"), "{error}");
+        // A click at a point needs the game view's size; an object or a point, one of them.
+        let at: Vec<InputEvent> = serde_json::from_value(
+            serde_json::json!([{"type": "click", "at": 1.0, "point": [560, 490]}]),
+        )
+        .unwrap();
+        let (_, directs) = plan_inputs(&project, &at, &[], 0., Some([1280., 720.])).unwrap();
+        assert_eq!(
+            directs,
+            [(
+                1.,
+                Direct::ClickAt {
+                    point: [560., 490.],
+                    view: [1280., 720.]
+                }
+            )]
+        );
+        let error = plan_inputs(&project, &at, &[], 0., None).unwrap_err();
+        assert!(error.contains("clique pelo objeto (entity)"), "{error}");
+        for click in [
+            serde_json::json!({"type": "click", "at": 0.0}),
+            serde_json::json!({"type": "click", "at": 0.0, "entity": door, "point": [1, 2]}),
+        ] {
+            let inputs: Vec<InputEvent> =
+                serde_json::from_value(serde_json::json!([click])).unwrap();
+            let error = plan_inputs(&project, &inputs, &[], 0., Some([960., 540.])).unwrap_err();
+            assert!(error.contains("entity (o objeto) ou point"), "{error}");
+        }
     }
 
     #[test]

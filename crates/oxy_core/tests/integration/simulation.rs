@@ -2882,6 +2882,381 @@ fn a_bot_names_the_support_that_removed_itself_before_the_fall() {
     );
 }
 
+/// A line across the course at `z` whose logic holds the runner's movement by `reason` as it
+/// enters (Bloquear / liberar entrada), as a finish line does.
+fn hold_line(project: &mut Project, z: f32, reason: &str) {
+    let mut line = Entity::new("Linha", None);
+    line.transform.position = [0., 1., z];
+    line.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [10., 2., 0.5],
+        },
+        sensor: true,
+        ..Default::default()
+    });
+    let entered = node(&mut line, "event.area_enter", &[]);
+    let hold = node(
+        &mut line,
+        "character.block",
+        &[
+            ("target", Value::Object(Some(BODY.into()))),
+            ("reason", text(reason)),
+        ],
+    );
+    link(&mut line, &entered, &hold);
+    project.scenes[0].entities.push(line);
+}
+
+#[test]
+fn logic_that_holds_the_runner_is_told_apart_from_a_wall() {
+    // A finish line before the last point: the game took over at the end of the path, which
+    // counts as done, with the reasons.
+    let mut project = course();
+    hold_line(&mut project, -7., "chegada");
+    let report = run(
+        &project,
+        json!({"seconds": 8.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [[0, 0, -3], [0, 0, -12]]}}),
+    );
+    let played = bot(&report);
+    assert_eq!(played.reached.len(), 1, "{played:?}");
+    assert!(played.stuck.is_none(), "{played:?}");
+    assert_eq!(played.held_by, ["chegada"]);
+    let crossed = report
+        .events
+        .iter()
+        .find(|e| {
+            e.kind == EventKind::AreaEnter && e.other.as_ref().is_some_and(|o| o.name == "Linha")
+        })
+        .unwrap_or_else(|| panic!("{:?}", report.events))
+        .time;
+    // It let go once the hold kept it from coming nearer for stuck_after (1.5 s).
+    let done = played.done_at.unwrap();
+    assert!(
+        done - crossed > 1.4 && done - crossed < 2.5,
+        "{crossed} {done}"
+    );
+    let stopped = report.stopped_at.as_ref().unwrap();
+    assert!(stopped.reason == "bot" && near(stopped.time, done));
+    assert_eq!(
+        stopped.detail,
+        "A lógica travou o movimento de Corredor (motivos: chegada) a caminho do último ponto do \
+         bot (1); o caminho conta como feito"
+    );
+    let value = serde_json::to_value(played).unwrap();
+    assert_eq!(value["held_by"], json!(["chegada"]));
+
+    // Held on the way to a point that is not the last: stuck, held, not blocked.
+    let report = run(
+        &project,
+        json!({"seconds": 8.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [[0, 0, -12], [0, 0, -14]]}}),
+    );
+    let played = bot(&report);
+    let stuck = played.stuck.as_ref().unwrap();
+    assert_eq!(
+        (stuck.index, stuck.reason, played.done_at),
+        (0, StuckReason::Held, None),
+        "{played:?}"
+    );
+    assert_eq!(played.held_by, ["chegada"]);
+    assert!(
+        report.stopped_at.as_ref().unwrap().detail.starts_with(
+            "A lógica travou o movimento de Corredor (motivos: chegada) a caminho do ponto 0 do \
+             bot, a "
+        ),
+        "{:?}",
+        report.stopped_at
+    );
+
+    // A hold already on when the bot takes over, as a countdown: the bot never moved, so even
+    // on the way to its only point it is held, not done.
+    let mut counted = course();
+    let body = counted.scenes[0].entity_mut(BODY).unwrap();
+    let begun = node(body, "event.scene_start", &[]);
+    let hold = node(body, "character.block", &[("reason", text("contagem"))]);
+    link(body, &begun, &hold);
+    let report = run(
+        &counted,
+        json!({"seconds": 4.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [[0, 0, -5]]}}),
+    );
+    let played = bot(&report);
+    let stuck = played.stuck.as_ref().unwrap();
+    assert_eq!(
+        (stuck.reason, played.done_at.is_none()),
+        (StuckReason::Held, true),
+        "{played:?}"
+    );
+    assert_eq!(played.held_by, ["contagem"]);
+    assert!(stuck.time > 1.4 && stuck.time < 2., "{stuck:?}");
+    // Without any hold the same wall-free path is done, and held_by stays out of the report.
+    let free = run(
+        &course(),
+        json!({"seconds": 4.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [[0, 0, -5]]}}),
+    );
+    assert!(bot(&free).done_at.is_some());
+    let value = serde_json::to_value(bot(&free)).unwrap();
+    assert!(value.get("held_by").is_none(), "{value}");
+}
+
+/// Two docks 10 m apart over nothing, the near one where the runner stands (z from 5 to -5) and
+/// the far one from z -15 to -25, both topped at 0, and a ferry between them: a platform preset
+/// of 3 × 0.4 × 3 m flush with each dock at its ends, 8 s a round trip, standing 1.5 s at each
+/// end (at the far one from 2.5 s, at the near one from 6.5 s). The ferry's and the far dock's
+/// IDs.
+fn ferry_crossing() -> (Project, Id, Id) {
+    let mut project = course();
+    let scene = &mut project.scenes[0];
+    let near_dock = &mut scene.entities[0];
+    near_dock.name = "Cais".into();
+    near_dock.dimensions = [6., 1., 10.];
+    near_dock.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: near_dock.dimensions,
+        },
+        ..Default::default()
+    });
+    let mut far_dock = Entity::new("Cais de lá", Some(Primitive::Cube));
+    far_dock.dimensions = [6., 1., 10.];
+    far_dock.transform.position = [0., -0.5, -20.];
+    far_dock.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: far_dock.dimensions,
+        },
+        ..Default::default()
+    });
+    let far_id = far_dock.id.clone();
+    scene.entities.push(far_dock);
+    let start = project.start_scene.clone();
+    let ferry = json!([{"op": "create_entity", "name": "Balsa", "position": [0, -0.2, -6.5],
+        "kind": {"type": "preset", "preset": "platform", "travel": [0, 0, -7], "period": 8,
+                 "pause_at_ends": 1.5}}]);
+    let applied = command::apply(&mut project, &start, &command::parse(&ferry).unwrap()).unwrap();
+    (project, applied[0].created[0].clone(), far_id)
+}
+
+#[test]
+fn a_bot_boards_a_ferry_whenever_it_gets_there_and_gets_off_at_the_far_dock() {
+    let (project, ferry, far_dock) = ferry_crossing();
+    // The same path, with no wait timed to the ferry, from three moments: the bot reaches the
+    // dock long before the ferry is back, or while it stands there. As the guide gives it: it
+    // rides at the ferry's middle, and the far dock comes within reach of the ferry's top.
+    let path = json!([
+        [0, 0, -4.2],
+        {"object": ferry, "at": [0, 0.2, 0], "wait_for": {"object": ferry}},
+        {"at": [0, 0, -17], "wait_for": {"object": far_dock}},
+    ]);
+    for start in [0., 2., 6.] {
+        let report = run(
+            &project,
+            json!({"seconds": 30.0, "until": {"bot": "any"},
+                   "bot": {"entity": BODY, "start": start, "path": path}}),
+        );
+        let played = bot(&report);
+        let indices: Vec<usize> = played.reached.iter().map(|p| p.index).collect();
+        assert_eq!(indices, [0, 1, 2], "start {start}: {played:?}");
+        assert!(
+            played.stuck.is_none() && played.done_at.is_some(),
+            "start {start}: {played:?}"
+        );
+        // It boarded while the ferry stood at the near dock (6.5 s to 8 s of each 8 s), however
+        // long it waited for it.
+        let boarded = played.reached[1].time % 8.;
+        assert!(
+            (6.4..8.6).contains(&boarded) || boarded < 0.6,
+            "start {start}: boarded at {} ({boarded})",
+            played.reached[1].time
+        );
+        let off = &played.reached[2];
+        assert!(
+            off.position[1].abs() < 0.1 && off.position[2] < -15.5,
+            "{off:?}"
+        );
+        // It never stepped into the water.
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|e| e.kind == EventKind::Leave && e.object.id == BODY),
+            "start {start}: {:?}",
+            report.events
+        );
+    }
+}
+
+/// A floor topped at 0 (z from 5 to -5), a deck 3 m up beyond it (z from -8 to -14) and a lift
+/// flush with both between them: a platform preset going 3 m up and back in 6 s, standing 1.5 s
+/// at each end (at the top from 1.5 s, at the bottom from 4.5 s). The lift's and the deck's IDs.
+fn lift_to_deck() -> (Project, Id, Id) {
+    let (mut project, _, _) = ferry_crossing();
+    let scene = &mut project.scenes[0];
+    scene
+        .entities
+        .retain(|e| e.name != "Balsa" && e.name != "Cais de lá");
+    let mut deck = Entity::new("Mirante", Some(Primitive::Cube));
+    deck.dimensions = [6., 1., 6.];
+    deck.transform.position = [0., 2.5, -11.];
+    deck.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: deck.dimensions,
+        },
+        ..Default::default()
+    });
+    let deck_id = deck.id.clone();
+    scene.entities.push(deck);
+    let start = project.start_scene.clone();
+    let lift = json!([{"op": "create_entity", "name": "Elevador", "position": [0, -0.2, -6.5],
+        "kind": {"type": "preset", "preset": "platform", "travel": [0, 3, 0], "period": 6,
+                 "pause_at_ends": 1.5}}]);
+    let applied = command::apply(&mut project, &start, &command::parse(&lift).unwrap()).unwrap();
+    (project, applied[0].created[0].clone(), deck_id)
+}
+
+#[test]
+fn a_bot_rides_a_lift_up_waiting_for_it_below_and_for_the_deck_above() {
+    let (project, lift, deck) = lift_to_deck();
+    let path = json!([
+        [0, 0, -4.7],
+        {"object": lift, "at": [0, 0.2, 0], "wait_for": {"object": lift}},
+        {"at": [0, 3, -12], "wait_for": {"object": deck}},
+    ]);
+    for start in [0., 4.8] {
+        let report = run(
+            &project,
+            json!({"seconds": 20.0, "until": {"bot": "any"},
+                   "bot": {"entity": BODY, "start": start, "path": path}}),
+        );
+        let played = bot(&report);
+        assert!(
+            played.stuck.is_none() && played.done_at.is_some(),
+            "start {start}: {played:?}"
+        );
+        // Boarded at the bottom, got off at the top.
+        let boarded = &played.reached[1];
+        assert!(boarded.position[1].abs() < 0.3, "{boarded:?}");
+        let up = &played.reached[2];
+        assert!((up.position[1] - 3.).abs() < 0.1, "{up:?}");
+    }
+}
+
+#[test]
+fn a_wait_for_that_never_comes_true_gives_up_waiting_and_bad_ones_are_refused() {
+    let (project, ferry, far_dock) = ferry_crossing();
+    // The far dock never comes within reach of the near one.
+    let report = run(
+        &project,
+        json!({"seconds": 10.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [
+                   [0, 0, -2],
+                   {"at": [0, 0, -4], "wait_for": {"object": far_dock, "timeout": 2}}]}}),
+    );
+    let played = bot(&report);
+    let stuck = played.stuck.as_ref().unwrap();
+    assert_eq!((stuck.index, stuck.reason), (1, StuckReason::Waiting));
+    // It stood at the point before for the timeout.
+    assert!(across(stuck.position, [0., 0., -2.]) <= 0.7, "{stuck:?}");
+    assert!(
+        (stuck.time - played.reached[0].time - 2.).abs() < 0.1,
+        "{played:?}"
+    );
+    assert_eq!(
+        report.stopped_at.as_ref().unwrap().detail,
+        "Corredor esperou 2 s por Cais de lá, que não ficou ao alcance (wait_for do ponto 1 do \
+         bot)"
+    );
+    // A wait_for on the first point holds the bot where it takes over.
+    let report = run(
+        &project,
+        json!({"seconds": 6.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [
+                   {"at": [0, 0, -3], "wait_for": {"object": far_dock, "timeout": 1}}]}}),
+    );
+    let played = bot(&report);
+    let stuck = played.stuck.as_ref().unwrap();
+    assert!(
+        played.reached.is_empty() && stuck.reason == StuckReason::Waiting,
+        "{played:?}"
+    );
+    assert!(stuck.position[2].abs() < 0.1, "{stuck:?}");
+    // An object that logic removes while the bot waits for it: absent, after stuck_after.
+    let mut removed = project.clone();
+    let mut buoy = Entity::new("Boia", None);
+    buoy.transform.position = [30., 0., -2.];
+    let begun = node(&mut buoy, "event.scene_start", &[]);
+    let wait = node(&mut buoy, "control.wait", &[("seconds", Value::Number(2.))]);
+    let remove = node(&mut buoy, "action.remove", &[]);
+    link(&mut buoy, &begun, &wait);
+    link(&mut buoy, &wait, &remove);
+    let buoy_id = buoy.id.clone();
+    removed.scenes[0].entities.push(buoy);
+    let report = run(
+        &removed,
+        json!({"seconds": 10.0, "until": {"bot": "any"},
+               "bot": {"entity": BODY, "path": [
+                   [0, 0, -2],
+                   {"at": [0, 0, -4], "wait_for": {"object": buoy_id}}]}}),
+    );
+    let stuck = bot(&report).stuck.as_ref().unwrap();
+    assert_eq!((stuck.index, stuck.reason), (1, StuckReason::Absent));
+    // Removed at 2 s, while the bot stood at the point before.
+    assert!(
+        bot(&report).reached[0].time < 2. && (stuck.time - 3.5).abs() < 0.1,
+        "{report:?}"
+    );
+    assert_eq!(
+        report.stopped_at.as_ref().unwrap().detail,
+        format!(
+            "O wait_for do ponto 1 do bot espera Boia, que não está na cena atual ({})",
+            removed.scenes[0].name
+        )
+    );
+    let refused = |bot: serde_json::Value| {
+        headless::simulate(&project, &request(json!({"seconds": 1.0, "bot": bot}))).unwrap_err()
+    };
+    for (wait, expected) in [
+        (
+            json!({"object": "nada"}),
+            "ponto 1 do caminho (o 2º): nenhuma cena do projeto tem o objeto nada",
+        ),
+        (
+            json!({"object": ferry, "within": -1}),
+            "wait_for.within precisa ser um número a partir de 0",
+        ),
+        (
+            json!({"object": ferry, "height": -0.5}),
+            "wait_for.height precisa ser",
+        ),
+        (
+            json!({"object": ferry, "timeout": 0}),
+            "wait_for.timeout precisa ser um número maior que 0",
+        ),
+    ] {
+        let error = refused(json!({"entity": BODY,
+            "path": [[0, 0, 0], {"at": [0, 0, -2], "wait_for": wait}]}));
+        assert!(error.contains(expected), "{error}");
+    }
+    let mut elsewhere = project.clone();
+    let mut other = Scene::new("Outra", SceneKind::ThreeD);
+    let marker = Entity::new("Boia", None);
+    let marker_id = marker.id.clone();
+    other.entities.push(marker);
+    elsewhere.scenes.push(other);
+    let error = headless::simulate(
+        &elsewhere,
+        &request(json!({"seconds": 1.0, "bot": {"entity": BODY,
+            "path": [{"at": [0, 0, -2], "wait_for": {"object": marker_id}}]}})),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains(
+            "Boia está na cena Outra, e o wait_for espera um objeto da cena do personagem"
+        ),
+        "{error}"
+    );
+}
+
 #[test]
 fn area_events_survive_a_scene_change_in_the_same_step() {
     let mut project = Project::new("Portal");
@@ -4127,4 +4502,185 @@ fn clicks_and_scenes_go_by_name_and_a_click_elsewhere_says_so() {
         &project,
         json!({"seconds": 0.2, "inputs": [{"type": "click", "at": 0.1, "entity": resume}]}),
     );
+}
+
+/// Logic that logs "um" at 1 s, "dois" at 1.5 s and quits the game at 2 s.
+fn countdown_to_quit() -> Project {
+    let mut project = Project::new("Depois");
+    let mut clock = Entity::new("Relógio", None);
+    let start = node(&mut clock, "event.scene_start", &[]);
+    let mut previous = start;
+    for (seconds, message) in [(1., Some("um")), (0.5, Some("dois")), (0.5, None)] {
+        let wait = node(
+            &mut clock,
+            "control.wait",
+            &[("seconds", Value::Number(seconds))],
+        );
+        link(&mut clock, &previous, &wait);
+        let then = match message {
+            Some(message) => node(&mut clock, "debug.message", &[("message", text(message))]),
+            None => node(&mut clock, "game.quit", &[]),
+        };
+        link(&mut clock, &wait, &then);
+        previous = then;
+    }
+    project.scenes[0].entities.push(clock);
+    project
+}
+
+#[test]
+fn then_seconds_goes_on_after_the_condition_and_says_when_it_held() {
+    let project = countdown_to_quit();
+    let texts = |report: &SimulationReport| -> Vec<String> {
+        report.logs.iter().map(|l| l.text.clone()).collect()
+    };
+    let report = run(
+        &project,
+        json!({"seconds": 1.2, "samples": 5, "watch": [],
+               "until": {"log_contains": "um", "then_seconds": 0.6}}),
+    );
+    let stopped = report.stopped_at.as_ref().unwrap();
+    // When the condition held, and when the run ended: past `seconds`, for what came after.
+    assert_eq!(
+        (stopped.reason, stopped.detail.as_str()),
+        ("log_contains", "um")
+    );
+    assert!(near(stopped.time, 1.), "{stopped:?}");
+    assert!(near(stopped.ended_at.unwrap(), 1.6), "{stopped:?}");
+    assert_eq!(texts(&report), ["um", "dois"]);
+    // Without then_seconds the same run stops at the condition, with no ended_at.
+    let plain = run(
+        &project,
+        json!({"seconds": 1.2, "until": {"log_contains": "um"}}),
+    );
+    assert_eq!(texts(&plain), ["um"]);
+    let stopped = plain.stopped_at.as_ref().unwrap();
+    assert!(stopped.ended_at.is_none());
+    assert!(
+        serde_json::to_value(stopped)
+            .unwrap()
+            .get("ended_at")
+            .is_none()
+    );
+    // Sair do jogo in that time ends the run sooner; stopped_at keeps the condition and says so.
+    let report = run(
+        &project,
+        json!({"seconds": 1.2, "until": {"log_contains": "um", "then_seconds": 5}}),
+    );
+    let stopped = report.stopped_at.as_ref().unwrap();
+    assert_eq!(stopped.reason, "log_contains");
+    assert!(
+        near(stopped.time, 1.) && near(stopped.ended_at.unwrap(), 2.),
+        "{stopped:?}"
+    );
+    assert_eq!(
+        stopped.detail,
+        "um; depois, Relógio pediu para sair do jogo (nó Sair do jogo)"
+    );
+    // A condition that never holds: the run lasts `seconds`, as without then_seconds.
+    let report = run(
+        &project,
+        json!({"seconds": 0.5, "until": {"log_contains": "nunca", "then_seconds": 3}}),
+    );
+    assert!(report.stopped_at.is_none(), "{:?}", report.stopped_at);
+    // Samples spread over the whole run, the time after the condition included.
+    let mut watched = project.clone();
+    let marker = Entity::new("Marco", None);
+    let marker_id = marker.id.clone();
+    watched.scenes[0].entities.push(marker);
+    let report = run(
+        &watched,
+        json!({"seconds": 1.2, "samples": 4, "watch": [marker_id],
+               "until": {"log_contains": "um", "then_seconds": 0.6}}),
+    );
+    let times = sample_times(&report);
+    assert_eq!(times.len(), 4, "{times:?}");
+    assert!(near(*times.last().unwrap(), 1.6), "{times:?}");
+    assert!(near(times[0], 0.4), "{times:?}");
+    let refused = |until: serde_json::Value| {
+        headless::simulate(&project, &request(json!({"seconds": 1.0, "until": until}))).unwrap_err()
+    };
+    let error = refused(json!({"log_contains": "um", "then_seconds": -1}));
+    assert!(error.contains("then_seconds precisa ser"), "{error}");
+    let error = refused(json!({"then_seconds": 1}));
+    assert!(error.contains("informe ao menos uma condição"), "{error}");
+}
+
+/// A button at `rect` ([x, y, width, height] from the view's top-left corner) on `layer`
+/// that logs its name when clicked.
+fn logged_button(name: &str, rect: [f32; 4], layer: i32) -> Entity {
+    let mut button = Entity::new(name, None);
+    button.layer = layer;
+    button.ui = Some(UiElement {
+        kind: UiKind::Button,
+        text: name.into(),
+        position: [rect[0], rect[1]],
+        size: [rect[2], rect[3]],
+        ..Default::default()
+    });
+    let clicked = node(&mut button, "event.click", &[]);
+    let said = node(&mut button, "debug.message", &[("message", text(name))]);
+    link(&mut button, &clicked, &said);
+    button
+}
+
+#[test]
+fn a_click_at_a_point_reaches_the_topmost_button_and_ui_says_what_covers_a_button() {
+    let mut project = Project::new("Resultado");
+    // "Sair do jogo", above "Jogar de novo", covers its center; a panel covers "Menu"'s.
+    let again = logged_button("Jogar de novo", [420., 466., 210., 48.], 11);
+    let quit = logged_button("Sair do jogo", [510., 456., 260., 48.], 21);
+    let menu = logged_button("Menu", [100., 100., 200., 48.], 11);
+    let mut panel = Entity::new("Painel", None);
+    panel.layer = 30;
+    panel.ui = Some(UiElement {
+        kind: UiKind::Image,
+        position: [50., 50.],
+        size: [400., 200.],
+        ..Default::default()
+    });
+    let mut hidden = logged_button("Escondido", [700., 100., 100., 48.], 40);
+    hidden.visible = false;
+    project.scenes[0]
+        .entities
+        .extend([again, quit, menu, panel, hidden]);
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "view_size": [1280, 720], "inputs": [
+            {"type": "click", "at": 0.1, "point": [525, 490]},
+            {"type": "click", "at": 0.2, "point": [440, 480]},
+            {"type": "click", "at": 0.3, "point": [200, 124]},
+            {"type": "click", "at": 0.4, "point": [750, 120]},
+            {"type": "click", "at": 0.5, "point": [5000, 5]}]}),
+    );
+    let texts: Vec<&str> = report.logs.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            // Where both are, the one above takes the click, as in the game.
+            "Sair do jogo",
+            // Where only the one below is, it does.
+            "Jogar de novo",
+            // A panel above takes no clicks: the button under it does.
+            "Menu",
+            "Clique ignorado: nenhum botão visível da interface em (750, 120).",
+            "Clique ignorado: nenhum botão visível da interface em (5000, 5).",
+        ]
+    );
+    let ui = |name: &str| report.ui.iter().find(|u| u.name == name).unwrap();
+    assert_eq!(
+        ui("Jogar de novo").covered_by.as_deref(),
+        Some("Sair do jogo")
+    );
+    assert_eq!(ui("Menu").covered_by.as_deref(), Some("Painel"));
+    assert_eq!(ui("Sair do jogo").covered_by, None);
+    assert_eq!(ui("Escondido").covered_by, None);
+    let value = serde_json::to_value(ui("Sair do jogo")).unwrap();
+    assert!(value.get("covered_by").is_none(), "{value}");
+    // An object by name still clicks the button below, whatever covers it.
+    let report = run(
+        &project,
+        json!({"seconds": 0.5, "inputs": [{"type": "click", "at": 0.1, "entity": "Jogar de novo"}]}),
+    );
+    assert_eq!(report.logs[0].text, "Jogar de novo");
 }
