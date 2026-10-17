@@ -891,7 +891,10 @@ fn models_are_saved_and_placed_in_any_level() {
     );
     assert_eq!(
         error,
-        format!("Já existe um modelo chamado \"Torre\" ({model}); escolha outro nome com name")
+        format!(
+            "Já existe um modelo chamado \"Torre\" ({model}); escolha outro nome com name, ou \
+             troque o conteúdo desse modelo com replace"
+        )
     );
     // Every way of saving keeps the names apart: the editor saves under the object's name,
     // with a number when a model has it.

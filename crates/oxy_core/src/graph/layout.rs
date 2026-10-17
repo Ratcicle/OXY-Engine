@@ -1,6 +1,6 @@
 //! Node sizes as the editor draws them, and a layout that keeps logic built without positions,
 //! such as an agent's, readable.
-use super::{Graph, OperationDef, ParamDef, PortType, definition};
+use super::{Graph, Node, OperationDef, ParamDef, PortType, definition};
 use crate::document::Id;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
@@ -15,6 +15,10 @@ pub const COLUMN_STEP: f32 = 260.;
 pub const ROW_GAP: f32 = 24.;
 /// Between the bands of [`arrange`], and between a graph and what goes below it.
 pub const BAND_GAP: f32 = 80.;
+/// A wire that climbs or drops more than this between its ends, in graph units (over half a
+/// screen of the editor at 100% zoom), runs across the logic around it ([`long_wires`]). Wires run
+/// left to right, so a long horizontal one still reads along the flow.
+pub const LONG_WIRE: f32 = 600.;
 
 /// Parameters without an input port of the same name: rows of the node body.
 pub fn summary_params(op: &OperationDef) -> impl Iterator<Item = &ParamDef> {
@@ -51,6 +55,279 @@ pub fn arrange(graph: &mut Graph, movable: &HashSet<Id>) {
     for (index, position) in positions(graph, movable) {
         graph.nodes[index].position = position;
     }
+}
+
+/// Gives each lane of `graph` its own copy of the movable data nodes that feed several lanes, so
+/// that no wire runs from one lane to another, and answers the copies' IDs in order. A lane is
+/// what one event runs, the nodes its execution reaches (a node two events reach is the first
+/// one's, in graph order); execution no event reaches makes one more lane. Only data that reads
+/// nothing but other such data is copied, with what feeds it ([`pure_data`]: constants,
+/// attribute.get, variable.get, scene.current, math on them…); data that reads an event or an
+/// action, such as the object that entered an area, stays in that lane. A copy takes the
+/// original's parameters and position, and the original keeps the first lane. The game reads
+/// both alike, so the logic does what it did. Each copy's ID comes from `owner` (the object),
+/// the original and its lane's event: the same graph gives the same IDs.
+pub fn split_shared_data(graph: &mut Graph, movable: &HashSet<Id>, owner: &str) -> Vec<Id> {
+    let Lanes {
+        links,
+        events,
+        lane,
+        pure,
+        needed,
+        splits,
+    } = lanes(graph, movable);
+    let mut taken: HashSet<Id> = graph.nodes.iter().map(|node| node.id.clone()).collect();
+    let mut copies: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut created = Vec::new();
+    for i in (0..splits.len()).filter(|i| splits[*i]) {
+        for &l in needed[i].iter().skip(1) {
+            let event = events.get(l).map_or("", |e| graph.nodes[*e].id.as_str());
+            let original = &graph.nodes[i];
+            let mut salt = 0u64;
+            let id = loop {
+                let extra = salt.to_le_bytes();
+                let mut parts = vec![
+                    b"oxy.split".as_slice(),
+                    owner.as_bytes(),
+                    original.id.as_bytes(),
+                    event.as_bytes(),
+                ];
+                if salt > 0 {
+                    parts.push(&extra);
+                }
+                let id = crate::random::derived_id(&parts);
+                if taken.insert(id.clone()) {
+                    break id;
+                }
+                salt += 1;
+            };
+            let copy = Node {
+                id: id.clone(),
+                ..original.clone()
+            };
+            copies.insert((i, l), graph.nodes.len());
+            graph.nodes.push(copy);
+            created.push(id);
+        }
+    }
+    if created.is_empty() {
+        return created;
+    }
+    // Each connection from a split node goes from the copy of its consumer's lane; a split
+    // consumer takes one connection per copy.
+    let id_of = |graph: &Graph, i: usize, l: Option<usize>| {
+        let at = l.and_then(|l| copies.get(&(i, l))).copied().unwrap_or(i);
+        graph.nodes[at].id.clone()
+    };
+    let mut edges = Vec::with_capacity(graph.edges.len());
+    for (edge, link) in graph.edges.iter().zip(&links) {
+        let Some((from, to)) = *link else {
+            edges.push(edge.clone());
+            continue;
+        };
+        if splits[to] {
+            for &l in &needed[to] {
+                edges.push(super::Edge {
+                    from_node: id_of(graph, from, Some(l)),
+                    to_node: id_of(graph, to, Some(l)),
+                    ..edge.clone()
+                });
+            }
+        } else {
+            let home = if pure[to] {
+                needed[to].first().copied()
+            } else {
+                lane[to]
+            };
+            edges.push(super::Edge {
+                from_node: id_of(graph, from, home),
+                ..edge.clone()
+            });
+        }
+    }
+    graph.edges = edges;
+    created
+}
+
+/// The lanes of [`split_shared_data`] and what it copies, by node index.
+struct Lanes {
+    /// Each connection by the indices of its ends, None for one to a node that is not there.
+    links: Vec<Option<(usize, usize)>>,
+    /// The events, in graph order: lane k is what `events[k]` runs.
+    events: Vec<usize>,
+    /// The lane of each node that runs; None for data.
+    lane: Vec<Option<usize>>,
+    /// Whether each node only gives data ([`pure_data`]).
+    pure: Vec<bool>,
+    /// The lanes each data node serves.
+    needed: Vec<BTreeSet<usize>>,
+    /// Whether each node gets a copy per lane it serves, but the first.
+    splits: Vec<bool>,
+}
+
+/// What [`split_shared_data`] finds in `graph`, copying only `movable` nodes.
+fn lanes(graph: &Graph, movable: &HashSet<Id>) -> Lanes {
+    let count = graph.nodes.len();
+    let index: HashMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.id.as_str(), i))
+        .collect();
+    let defs: Vec<Option<&OperationDef>> = graph
+        .nodes
+        .iter()
+        .map(|node| definition(&node.operation))
+        .collect();
+    let pure: Vec<bool> = defs.iter().map(|def| pure_data(*def)).collect();
+    let links: Vec<Option<(usize, usize)>> = graph
+        .edges
+        .iter()
+        .map(|edge| {
+            Some((
+                *index.get(edge.from_node.as_str())?,
+                *index.get(edge.to_node.as_str())?,
+            ))
+        })
+        .collect();
+    let mut inputs: Vec<Vec<usize>> = vec![Vec::new(); count];
+    let mut outputs: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for &(from, to) in links.iter().flatten() {
+        inputs[to].push(from);
+        outputs[from].push(to);
+    }
+
+    // Lanes of the nodes that run: what each event's execution reaches, then the rest.
+    let events: Vec<usize> = (0..count).filter(|i| is_event(defs[*i])).collect();
+    let mut lane: Vec<Option<usize>> = vec![None; count];
+    for (k, &event) in events.iter().enumerate() {
+        let mut queue = VecDeque::from([event]);
+        while let Some(i) = queue.pop_front() {
+            if lane[i].is_some() {
+                continue;
+            }
+            lane[i] = Some(k);
+            for (edge, link) in graph.edges.iter().zip(&links) {
+                if let Some((from, to)) = *link
+                    && from == i
+                    && defs[i].is_some_and(|def| {
+                        def.outputs
+                            .iter()
+                            .any(|port| port.id == edge.from_port && port.kind == PortType::Exec)
+                    })
+                {
+                    queue.push_back(to);
+                }
+            }
+        }
+    }
+    let rest = events.len();
+    for i in 0..count {
+        if !pure[i] && lane[i].is_none() {
+            lane[i] = Some(rest);
+        }
+    }
+
+    // Data that reads only data: data fed by a node that runs is tied to it.
+    let mut free = pure.clone();
+    loop {
+        let tied: Vec<usize> = links
+            .iter()
+            .flatten()
+            .filter(|(from, to)| free[*to] && !free[*from])
+            .map(|(_, to)| *to)
+            .collect();
+        if tied.is_empty() {
+            break;
+        }
+        for to in tied {
+            free[to] = false;
+        }
+    }
+
+    // The lanes each data node serves, its consumers first. A node that splits serves each of
+    // its copies' lanes; one that does not, the lane where it stays (its first).
+    let mut needed: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); count];
+    let mut splits = vec![false; count];
+    let mut waiting: Vec<usize> = (0..count)
+        .map(|i| outputs[i].iter().filter(|c| pure[**c]).count())
+        .collect();
+    let mut ready: Vec<usize> = (0..count)
+        .filter(|i| pure[*i] && waiting[*i] == 0)
+        .collect();
+    // In a cycle, which validation refuses, the nodes are never ready and stay as they are.
+    while let Some(i) = ready.pop() {
+        let mut serves = BTreeSet::new();
+        for &c in &outputs[i] {
+            if !pure[c] {
+                serves.extend(lane[c]);
+            } else if splits[c] {
+                serves.extend(needed[c].iter().copied());
+            } else {
+                serves.extend(needed[c].first().copied());
+            }
+        }
+        splits[i] = free[i] && serves.len() > 1 && movable.contains(&graph.nodes[i].id);
+        needed[i] = serves;
+        for &p in &inputs[i] {
+            if pure[p] {
+                waiting[p] -= 1;
+                if waiting[p] == 0 {
+                    ready.push(p);
+                }
+            }
+        }
+    }
+    Lanes {
+        links,
+        events,
+        lane,
+        pure,
+        needed,
+        splits,
+    }
+}
+
+/// The movable data nodes of `graph` that [`split_shared_data`] would copy: those that feed
+/// several lanes, with the data that feeds them.
+pub fn shared_data(graph: &Graph, movable: &HashSet<Id>) -> HashSet<Id> {
+    let found = lanes(graph, movable);
+    graph
+        .nodes
+        .iter()
+        .zip(&found.splits)
+        .filter(|(_, splits)| **splits)
+        .map(|(node, _)| node.id.clone())
+        .collect()
+}
+
+/// The connections of `graph` whose ends, where the editor draws the ports, are more than
+/// [`LONG_WIRE`] apart up or down: each by its index in `graph.edges`, with that height, the
+/// tallest first.
+pub fn long_wires(graph: &Graph) -> Vec<(usize, f32)> {
+    // The height of the center of a port's row, inputs and outputs counted apart.
+    let port = |id: &str, name: &str, output: bool| -> Option<f32> {
+        let node = graph.node(id)?;
+        let def = definition(&node.operation);
+        let ports = def.map(|def| if output { &def.outputs } else { &def.inputs });
+        let row = ports
+            .and_then(|ports| ports.iter().position(|port| port.id == name))
+            .unwrap_or(0);
+        Some(node.position[1] + HEADER_HEIGHT + BODY_TOP + (row as f32 + 0.5) * ROW_HEIGHT)
+    };
+    let mut found: Vec<(usize, f32)> = graph
+        .edges
+        .iter()
+        .enumerate()
+        .filter_map(|(i, edge)| {
+            let from = port(&edge.from_node, &edge.from_port, true)?;
+            let to = port(&edge.to_node, &edge.to_port, false)?;
+            let height = (from - to).abs();
+            (height > LONG_WIRE).then_some((i, height))
+        })
+        .collect();
+    found.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    found
 }
 
 /// Where [`arrange`] puts each movable node, by its index in the graph.
@@ -184,6 +461,14 @@ fn is_event(def: Option<&OperationDef>) -> bool {
     has_exec(def, false) && !has_exec(def, true)
 }
 
+/// Whether a node of `def` only gives data: a known operation without execution ports. The game
+/// reads such a node each time a node that runs uses its output, without keeping the value or
+/// changing anything (data reads take the game read-only), so two copies of it, each wired like
+/// the original, read the same values as the original read twice.
+pub fn pure_data(def: Option<&OperationDef>) -> bool {
+    def.is_some() && !has_exec(def, true) && !has_exec(def, false)
+}
+
 /// [min x, min y, max x, max y] of a node at `position`.
 fn rect(position: [f32; 2], size: [f32; 2]) -> [f32; 4] {
     [
@@ -286,9 +571,8 @@ fn block(
         col.insert(i, rank);
     }
     for &i in order.iter().rev() {
-        let data_only = defs[i].is_some() && !has_exec(defs[i], true) && !has_exec(defs[i], false);
         if let Some(first) = succs_of(i).iter().map(|s| col[s]).min()
-            && data_only
+            && pure_data(defs[i])
         {
             col.insert(i, first.saturating_sub(1));
         }
@@ -611,5 +895,155 @@ mod tests {
         assert_eq!(at(&g, &blocker), [COLUMN_STEP, 10.]);
         assert_eq!(at(&g, &first)[0], COLUMN_STEP);
         assert_apart(&g);
+    }
+
+    /// Who feeds each input: (node, port) → node.
+    fn feeders(graph: &Graph) -> HashMap<(String, String), String> {
+        graph
+            .edges
+            .iter()
+            .map(|e| ((e.to_node.clone(), e.to_port.clone()), e.from_node.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn only_data_without_execution_ports_counts_as_pure() {
+        for operation in [
+            "value.number",
+            "value.scene",
+            "attribute.get",
+            "variable.get",
+            "scene.current",
+            "math.binary",
+            "condition.compare",
+            "time.read",
+        ] {
+            assert!(pure_data(definition(operation)), "{operation}");
+        }
+        for operation in [
+            "event.scene_start",
+            "attribute.set",
+            "random.number",
+            "action.spawn",
+            "debug.message",
+        ] {
+            assert!(!pure_data(definition(operation)), "{operation}");
+        }
+        assert!(!pure_data(None), "an unknown operation is not");
+    }
+
+    #[test]
+    fn shared_data_gets_a_copy_per_lane_with_what_feeds_it() {
+        // Two events read the same sum of an attribute and a number; a third reads only the
+        // attribute; an area event's object feeds a read that both first lanes use.
+        let mut g = Graph::default();
+        let start = node(&mut g, "event.scene_start");
+        let click = node(&mut g, "event.click");
+        let area = node(&mut g, "event.area_enter");
+        let read = node(&mut g, "attribute.get");
+        let number = node(&mut g, "value.number");
+        let sum = node(&mut g, "math.binary");
+        let first = node(&mut g, "debug.message");
+        let second = node(&mut g, "debug.message");
+        let third = node(&mut g, "debug.message");
+        let entered = node(&mut g, "attribute.get");
+        let fourth = node(&mut g, "attribute.set");
+        let fifth = node(&mut g, "attribute.set");
+        let alone = node(&mut g, "value.text");
+        link(&mut g, &read, "value", &sum, "a");
+        link(&mut g, &number, "value", &sum, "b");
+        link(&mut g, &start, "exec", &first, "exec");
+        link(&mut g, &sum, "value", &first, "value");
+        link(&mut g, &click, "exec", &second, "exec");
+        link(&mut g, &sum, "value", &second, "value");
+        link(&mut g, &area, "exec", &third, "exec");
+        link(&mut g, &read, "value", &third, "value");
+        link(&mut g, &area, "context", &entered, "target");
+        link(&mut g, &first, "exec", &fourth, "exec");
+        link(&mut g, &entered, "value", &fourth, "value");
+        link(&mut g, &second, "exec", &fifth, "exec");
+        link(&mut g, &entered, "value", &fifth, "value");
+        g.validate(&HashSet::new()).unwrap();
+        let before = g.clone();
+        let every = all(&g);
+        let shared: HashSet<Id> = [&read, &number, &sum].into_iter().cloned().collect();
+        assert_eq!(shared_data(&g, &every), shared);
+        let copies = split_shared_data(&mut g, &every, "dono");
+        // The sum and both its inputs for the click's lane, the read for the area's.
+        assert_eq!(copies.len(), 4, "{copies:?}");
+        g.validate(&HashSet::new()).unwrap();
+        let fed = feeders(&g);
+        let by = |to: &str, port: &str| fed[&(to.to_owned(), port.to_owned())].clone();
+        assert_eq!(
+            by(&first, "value"),
+            sum,
+            "the first lane keeps the original"
+        );
+        let other_sum = by(&second, "value");
+        assert_ne!(other_sum, sum);
+        assert!(copies.contains(&other_sum));
+        assert_eq!(by(&sum, "a"), read);
+        assert_eq!(by(&sum, "b"), number);
+        let (other_read, other_number) = (by(&other_sum, "a"), by(&other_sum, "b"));
+        assert!(copies.contains(&other_read) && copies.contains(&other_number));
+        let area_read = by(&third, "value");
+        assert!(copies.contains(&area_read) && area_read != other_read);
+        // Data fed by an event stays in its lane; data used once stays alone.
+        assert_eq!(by(&fourth, "value"), entered);
+        assert_eq!(by(&fifth, "value"), entered);
+        assert_eq!(g.nodes.len(), before.nodes.len() + 4);
+        let copy = g.node(&other_sum).unwrap();
+        let original = g.node(&sum).unwrap();
+        assert_eq!(
+            (&copy.operation, &copy.params, copy.position),
+            (&original.operation, &original.params, original.position)
+        );
+        assert!(!feeders(&g).values().any(|from| *from == alone));
+        // No data node feeds two lanes any more, so nothing is left to copy.
+        let now = all(&g);
+        assert!(split_shared_data(&mut g, &now, "dono").is_empty());
+        // The same graph gives the same IDs; another object, others.
+        let mut same = before.clone();
+        assert_eq!(split_shared_data(&mut same, &every, "dono"), copies);
+        let mut other = before.clone();
+        let theirs = split_shared_data(&mut other, &every, "outro");
+        assert!(theirs.iter().all(|id| !copies.contains(id)));
+        // Only movable nodes are copied: the read stays shared, its consumers get theirs.
+        let mut kept = before.clone();
+        let movable: HashSet<Id> = [&sum, &number].into_iter().cloned().collect();
+        let copies = split_shared_data(&mut kept, &movable, "dono");
+        assert_eq!(copies.len(), 2);
+        let fed = feeders(&kept);
+        let other_sum = fed[&(second.clone(), "value".to_owned())].clone();
+        assert_eq!(fed[&(other_sum.clone(), "a".to_owned())], read);
+        assert_eq!(fed[&(third.clone(), "value".to_owned())], read);
+        kept.validate(&HashSet::new()).unwrap();
+    }
+
+    #[test]
+    fn long_wires_climb_or_drop_between_the_ports_the_editor_draws() {
+        let mut g = Graph::default();
+        let start = node(&mut g, "event.scene_start");
+        let near = node(&mut g, "debug.message");
+        let far = node(&mut g, "debug.message");
+        let value = node(&mut g, "value.text");
+        link(&mut g, &start, "exec", &near, "exec");
+        link(&mut g, &near, "exec", &far, "exec");
+        link(&mut g, &value, "value", &far, "value");
+        g.nodes[1].position = [COLUMN_STEP, 0.];
+        g.nodes[2].position = [COLUMN_STEP * 2., 1200.];
+        // Both execution ports sit on the first row: the wire drops 1200. The value's port is
+        // on the first row and the message's Valor on the second: it climbs 1200 - 22.
+        g.nodes[3].position = [COLUMN_STEP * 20., 2400.];
+        let wires = long_wires(&g);
+        assert_eq!(wires.len(), 2, "{wires:?}");
+        assert_eq!(wires[0], (1, 1200.));
+        assert_eq!(wires[1], (2, 1200. - ROW_HEIGHT));
+        // A long wire along the flow reads on one row.
+        g.nodes[3].position = [-COLUMN_STEP * 20., 1200.];
+        assert_eq!(long_wires(&g).len(), 1);
+        let every = all(&g);
+        arrange(&mut g, &every);
+        assert!(long_wires(&g).is_empty());
     }
 }

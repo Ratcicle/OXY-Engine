@@ -76,7 +76,13 @@ pub fn entity_kind(e: &Entity) -> &'static str {
 /// "catalog") with the tool's arguments. `scene` is the scene the request defaults to.
 pub fn answer(project: &Project, scene: &str, request: &str, args: &Json) -> Result<Json, String> {
     match request {
-        "summary" => Ok(project_summary(project)),
+        "summary" => match ProjectQuery::parse(args)? {
+            ProjectQuery {
+                model: Some(model),
+                page,
+            } => model_parts(project, &model, page),
+            _ => Ok(project_summary(project)),
+        },
         "scene_tree" => scene_tree(project, scene, &TreeQuery::parse(args)?),
         "entity" => entities(project, scene, &EntityQuery::parse(args)?),
         "find" => {
@@ -230,6 +236,13 @@ pub fn project_summary(project: &Project) -> Json {
             if !a.path.is_empty() {
                 asset["path"] = json!(a.path);
             }
+            if let Some(pieces) = &a.model {
+                asset["part_count"] = json!(pieces.len());
+                // The root a placement gets, by the name place_model gives it.
+                if let [root] = model_roots(pieces).as_slice() {
+                    asset["root"] = json!({"id": root.id, "name": root.name});
+                }
+            }
             uses_json(&mut asset, crate::editing::asset_uses(project, &a.id));
             asset
         }).collect::<Vec<_>>(),
@@ -243,6 +256,74 @@ pub fn project_summary(project: &Project) -> Json {
             "fullscreen": project.game.fullscreen,
         },
     })
+}
+
+/// What the summary request asks: the whole summary, or one model's parts (`model`, by its ID
+/// or name), `offset` and `limit` paging them (default [`TREE_LIMIT`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectQuery {
+    pub model: Option<String>,
+    pub page: Page,
+}
+impl ProjectQuery {
+    pub fn parse(args: &Json) -> Result<Self, String> {
+        Ok(Self {
+            model: arg(args, "model")?,
+            page: Page::parse(args, TREE_LIMIT)?,
+        })
+    }
+}
+
+/// The pieces of a model without a parent in it: one for the models save_model makes.
+fn model_roots(pieces: &[Entity]) -> Vec<&Entity> {
+    pieces
+        .iter()
+        .filter(|e| {
+            e.parent
+                .as_ref()
+                .is_none_or(|p| !pieces.iter().any(|o| o.id == *p))
+        })
+        .collect()
+}
+
+/// The model `model` (its ID or name, as place_model takes it) and its parts: {id, name, root?,
+/// parts: [{id, name, parent, kind}], total, next_offset?}: a page of the parts, each parent
+/// before its children (a root's parent null). Their IDs, as the model keeps them, are the ones
+/// `"$N@<id>"` takes after a place_model.
+pub fn model_parts(project: &Project, model: &str, page: Page) -> Result<Json, String> {
+    let id = command::find_model(project, model)?;
+    let asset = project.asset(&id).expect("found");
+    let pieces = asset.model.as_deref().unwrap_or_default();
+    let mut ordered: Vec<&Entity> = Vec::with_capacity(pieces.len());
+    let mut pending = model_roots(pieces);
+    pending.reverse();
+    while let Some(e) = pending.pop() {
+        ordered.push(e);
+        let children = pieces
+            .iter()
+            .rev()
+            .filter(|child| child.parent.as_deref() == Some(e.id.as_str()));
+        pending.extend(children);
+    }
+    let parts: Vec<Json> = ordered
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "name": e.name,
+                "parent": e.parent.as_ref().filter(|p| pieces.iter().any(|o| o.id == **p)),
+                "kind": entity_kind(e),
+            })
+        })
+        .collect();
+    let (parts, about) = page.cut(parts);
+    let mut answer = json!({"id": asset.id, "name": asset.name});
+    if let [root] = model_roots(pieces).as_slice() {
+        answer["root"] = json!({"id": root.id, "name": root.name});
+    }
+    answer["parts"] = json!(parts);
+    answer.as_object_mut().unwrap().extend(about);
+    Ok(answer)
 }
 
 /// The project checked with the rules of saving: `valid`, the `error` that blocks saving when
@@ -1030,7 +1111,7 @@ fn value_text(
 /// [`label_detail`] gives. Nodes that would share a label add the first parameter they use
 /// whose value differs among them, as in "attribute.set(Aviso, value = \"3\")"; a label still
 /// repeated in the graph ends in #N, N being the node's index in the stored graph.
-fn node_labels(project: &Project, scene: &Scene, graph: &Graph) -> Vec<String> {
+pub(crate) fn node_labels(project: &Project, scene: &Scene, graph: &Graph) -> Vec<String> {
     let mut details: Vec<Option<String>> = graph
         .nodes
         .iter()

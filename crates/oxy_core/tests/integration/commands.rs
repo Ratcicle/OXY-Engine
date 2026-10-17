@@ -3583,3 +3583,641 @@ fn collision_filters_take_group_names_in_patches_and_presets_and_reads_name_them
         "{error}"
     );
 }
+
+#[test]
+fn disconnect_takes_many_links_like_connect_and_names_what_is_not_linked() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Painel"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Outro"},
+            {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$0", "operation": "value.number",
+             "params": {"value": 2.0}},
+            {"op": "add_node", "entity": "$0", "operation": "control.wait",
+             "links": [["$2", "exec", "exec"], ["$3", "value", "seconds"]]},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "links": [["$4", "exec", "exec"]]},
+            {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+        ])),
+    )
+    .unwrap();
+    let painel = applied[0].created[0].clone();
+    let [start, number, wait, message, other] =
+        [2, 3, 4, 5, 6].map(|i| applied[i].created[0].clone());
+    let edges = |project: &Project| {
+        project.scenes[0]
+            .entity(&painel)
+            .unwrap()
+            .graph
+            .edges
+            .clone()
+    };
+    assert_eq!(edges(&project).len(), 3);
+    // A link that is not there refuses the batch, by its place in links and the nodes by name.
+    let before = project.clone();
+    for (commands, expected) in [
+        (
+            json!({"op": "disconnect", "entity": painel, "links": [
+                [start, "exec", wait, "exec"], [message, "exec", wait, "exec"]]}),
+            "Comando 0 (disconnect, o 1º do lote): Ligação 1 de links (a 2ª): A saída exec de \
+             Mensagem de diagnóstico (debug.message) não está ligada à entrada exec de Esperar \
+             sem bloquear (control.wait)",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "links": [
+                [start, "exec", wait, "exec"], [start, "exec", wait, "exec"]]}),
+            "Ligação 1 de links (a 2ª): a ligação 0 de links já desliga essas portas",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "links": [
+                [other, "exec", wait, "exec"]]}),
+            "Ligação 0 de links (a 1ª): O nó Ao iniciar cena (event.scene_start) é da lógica \
+             de Outro, não da de Painel",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "from_node": number,
+                   "from_port": "value", "to_node": message, "to_port": "value"}),
+            "Comando 0 (disconnect, o 1º do lote): A saída value de Número (value.number) não \
+             está ligada à entrada value de Mensagem de diagnóstico (debug.message)",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "from_node": start,
+                   "links": [[start, "exec", wait, "exec"]]}),
+            "Use links ou from_node, from_port, to_node e to_port, não os dois",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "links": []}),
+            "Informe from_node, from_port, to_node e to_port, ou links",
+        ),
+    ] {
+        let error = command::apply(&mut project, &scene, &batch(commands))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(project, before, "a refused batch changes nothing");
+    }
+    // Many links in one command, all of them.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "disconnect", "entity": painel, "links": [
+            [start, "exec", wait, "exec"], [number, "value", wait, "seconds"]]})),
+    )
+    .unwrap();
+    let left = edges(&project);
+    assert_eq!(left.len(), 1);
+    assert_eq!((&left[0].from_node, &left[0].to_node), (&wait, &message));
+    // One link the way it always was.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "disconnect", "entity": painel, "from_node": wait,
+                      "from_port": "exec", "to_node": message, "to_port": "exec"}),
+        ),
+    )
+    .unwrap();
+    assert!(edges(&project).is_empty());
+    // The links write back in the form they read, so placeholders reach them.
+    let read = batch(json!({"op": "disconnect", "entity": "x", "links": [["a", "b", "c", "d"]]}));
+    assert_eq!(
+        serde_json::to_value(&read[0]).unwrap(),
+        json!({"op": "disconnect", "scene": null, "entity": "x", "links": [["a", "b", "c", "d"]]})
+    );
+    assert_eq!(read[0].label(), "Desligar portas");
+}
+
+/// The logs a run of `project` writes, by time and text, and the watched object `watched` at
+/// its end, as text; `action` is pressed at 0.5 s.
+fn logged_run(project: &Project, action: &str, watched: &str) -> (Vec<(f64, String)>, String) {
+    let report = oxy_core::headless::simulate(
+        project,
+        &serde_json::from_value(json!({
+            "seconds": 1.0,
+            "inputs": [{"type": "press", "at": 0.5, "action": action},
+                       {"type": "release", "at": 0.6, "action": action}],
+            "watch": [watched],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let logs = report
+        .logs
+        .iter()
+        .map(|l| ((l.time * 100.).round() / 100., l.text.clone()))
+        .collect();
+    (logs, serde_json::to_string(&report.watched).unwrap())
+}
+
+#[test]
+fn arrange_logic_gives_each_lane_its_own_shared_data_and_the_game_runs_the_same() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    // The start and the jump both read Pontos + 10; the jump reads Pontos too.
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Pular", "key": "Space"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Placar"},
+            {"op": "set_attribute", "entity": "$1", "name": "Pontos", "value": {"Number": 2}},
+            {"op": "add_node", "entity": "$1", "operation": "attribute.get",
+             "params": {"attribute": "Pontos"}},
+            {"op": "add_node", "entity": "$1", "operation": "value.number",
+             "params": {"value": 10.0}},
+            {"op": "add_node", "entity": "$1", "operation": "math.binary",
+             "links": [["$3", "value", "a"], ["$4", "value", "b"]]},
+            {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$1", "operation": "debug.message",
+             "params": {"message": "Início"},
+             "links": [["$6", "exec", "exec"], ["$5", "value", "value"]]},
+            {"op": "add_node", "entity": "$1", "operation": "attribute.set",
+             "params": {"attribute": "Pontos"},
+             "links": [["$7", "exec", "exec"], ["$5", "value", "value"]]},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": "$0"}},
+            {"op": "add_node", "entity": "$1", "operation": "debug.message",
+             "params": {"message": "Pulo"},
+             "links": [["$9", "exec", "exec"], ["$5", "value", "value"]]},
+            {"op": "add_node", "entity": "$1", "operation": "debug.message",
+             "params": {"message": "Lido"},
+             "links": [["$10", "exec", "exec"], ["$3", "value", "value"]]},
+        ])),
+    )
+    .unwrap();
+    let id = |i: usize| applied[i].created[0].clone();
+    let (action, placar) = (id(0), id(1));
+    let (read, number, sum, start_message, jump_message, read_message) =
+        (id(3), id(4), id(5), id(7), id(10), id(11));
+    let before = logged_run(&project, &action, &placar);
+    assert_eq!(before.0.len(), 3, "{:?}", before.0);
+    assert!(before.0[1].1.contains("Pulo: 22"), "{:?}", before.0);
+    assert!(before.0[2].1.contains("Lido: 12"), "{:?}", before.0);
+
+    // One undo step: the copies come and go together.
+    let unsplit = project.clone();
+    let mut images = TextureCache::default();
+    let mut history = CommandHistory::new();
+    history.begin("Agente: Organizar lógica", &project, &images);
+    let arrange = batch(json!({"op": "arrange_logic", "entity": placar,
+                               "split_shared_data": true}));
+    let report = command::apply_and_report(&mut project, &scene, &arrange).unwrap();
+    history.commit(&project, &mut images).unwrap();
+    // The read, the number and the sum, once more for the jump's lane, named as created.
+    let created = report["created"]["0"].as_array().unwrap();
+    let names: Vec<&str> = created
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["attribute.get", "value.number", "math.binary"]);
+    assert!(report.get("warnings").is_none(), "{report}");
+    let copies: Vec<String> = created
+        .iter()
+        .map(|c| c["id"].as_str().unwrap().to_owned())
+        .collect();
+    let graph = project.scenes[0].entity(&placar).unwrap().graph.clone();
+    let fed = |to: &str, port: &str| {
+        graph
+            .edges
+            .iter()
+            .find(|e| e.to_node == to && e.to_port == port)
+            .unwrap()
+            .from_node
+            .clone()
+    };
+    assert_eq!(
+        fed(&start_message, "value"),
+        sum,
+        "the first lane keeps the originals"
+    );
+    assert_eq!(fed(&sum, "a"), read);
+    assert_eq!(fed(&sum, "b"), number);
+    assert_eq!(fed(&jump_message, "value"), copies[2]);
+    assert_eq!(fed(&copies[2], "a"), copies[0]);
+    assert_eq!(fed(&copies[2], "b"), copies[1]);
+    assert_eq!(fed(&read_message, "value"), copies[0]);
+    assert_nodes_apart(&graph);
+    // The game does exactly what it did.
+    assert_eq!(logged_run(&project, &action, &placar), before);
+    // The same project gives the same copies.
+    let mut again = unsplit.clone();
+    let repeated = command::apply(&mut again, &scene, &arrange).unwrap();
+    assert_eq!(repeated[0].created, copies);
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, unsplit);
+
+    // A wire a node that stays keeps long is listed; an execution wire, which copying data
+    // would not shorten, without the option.
+    let far = command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": placar, "operation": "debug.message",
+                      "position": [0.0, 4000.0], "params": {"message": "Longe"},
+                      "links": [[id(6), "exec", "exec"]]}),
+        ),
+    )
+    .unwrap()[0]
+        .created[0]
+        .clone();
+    let arranged = |project: &mut Project, extra: serde_json::Value| {
+        let mut command = json!({"op": "arrange_logic", "entity": placar, "nodes": [id(8)]});
+        command
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        command::apply_and_report(project, &scene, &batch(command)).unwrap()
+    };
+    let report = arranged(&mut project, json!({}));
+    let warning = report["warnings"][0].as_str().unwrap();
+    assert!(
+        warning.starts_with(
+            "Comando 0 (arrange_logic, o 1º do lote): a lógica de Placar ficou com 1 fio longo"
+        ) && warning.contains("event.scene_start.exec -> debug.message(Longe).exec (")
+            && !warning.contains("split_shared_data"),
+        "{warning}"
+    );
+    let report = arranged(&mut project, json!({"split_shared_data": true}));
+    let warning = report["warnings"][0].as_str().unwrap();
+    assert!(
+        warning.contains("debug.message(Longe)") && !warning.contains("split_shared_data"),
+        "{warning}"
+    );
+    // Laid out with the rest, it is not long any more.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "arrange_logic", "entity": placar, "nodes": [far]})),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
+
+    // Shared data pulled far by a node of the jump's lane: the warning suggests the option,
+    // naming the data it would copy, and the option copies it.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": placar, "operation": "debug.message",
+                      "position": [0.0, 4000.0], "params": {"message": "Longe 2"},
+                      "links": [[id(9), "exec", "exec"], [read, "value", "value"]]}),
+        ),
+    )
+    .unwrap();
+    let shared = |split: bool| {
+        command::apply_and_report(
+            &mut project.clone(),
+            &scene,
+            &batch(json!({"op": "arrange_logic", "entity": placar,
+                          "nodes": [read, number, sum], "split_shared_data": split})),
+        )
+        .unwrap()
+    };
+    let report = shared(false);
+    let warning = report["warnings"][0].as_str().unwrap();
+    let hint = warning
+        .split_once(
+            ". Com split_shared_data: true, o arrange_logic dá a cada faixa a sua cópia dos nós \
+             de dados puros que ela usa (",
+        )
+        .map(|(_, hint)| hint);
+    assert!(
+        warning.contains("debug.message(Longe 2)")
+            && hint.is_some_and(|hint| hint.contains("attribute.get(Pontos)")),
+        "{warning}"
+    );
+    let report = shared(true);
+    assert_eq!(
+        report["created"]["0"].as_array().unwrap().len(),
+        3,
+        "{report}"
+    );
+}
+
+#[test]
+fn models_are_replaced_keeping_their_id_renamed_deleted_when_unused_and_read_by_part() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Checkpoint 1",
+             "position": [3.0, 0.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+             "name": "Bandeira", "parent": "$0"},
+            {"op": "save_model", "entity": "$0", "name": "Checkpoint"},
+            {"op": "place_model", "model": "Checkpoint", "position": [0.0, 0.0, 10.0]},
+        ])),
+    )
+    .unwrap();
+    let model = report["created"]["2"][0]["id"].as_str().unwrap().to_owned();
+    // The placed root keeps the name it was saved with, and the answer says it.
+    assert_eq!(report["created"]["3"][0]["name"], "Checkpoint 1");
+    let first: Vec<String> = report["created"]["3"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|piece| piece["id"].as_str().unwrap().to_owned())
+        .collect();
+    let listed = |project: &Project| {
+        query::project_summary(project)["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == model.as_str())
+            .unwrap()
+            .clone()
+    };
+    let entry = listed(&project);
+    assert_eq!(
+        (&entry["part_count"], &entry["root"]["name"]),
+        (&json!(2), &json!("Checkpoint 1"))
+    );
+    // The parts, by name or ID, each parent before its children.
+    let parts =
+        query::answer(&project, &scene, "summary", &json!({"model": "checkpoint"})).unwrap();
+    let root = parts["root"]["id"].clone();
+    assert_eq!(
+        parts,
+        json!({"id": model, "name": "Checkpoint", "root": {"id": root, "name": "Checkpoint 1"},
+               "parts": [
+                   {"id": root, "name": "Checkpoint 1", "parent": null, "kind": "group"},
+                   {"id": parts["parts"][1]["id"], "name": "Bandeira", "parent": root,
+                    "kind": "shape"}],
+               "total": 2})
+    );
+    let page = query::answer(
+        &project,
+        &scene,
+        "summary",
+        &json!({"model": model, "limit": 1}),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            page["parts"].as_array().unwrap().len(),
+            &page["next_offset"]
+        ),
+        (1, &json!(1))
+    );
+    let error =
+        query::answer(&project, &scene, "summary", &json!({"model": "Fantasma"})).unwrap_err();
+    assert!(
+        error.starts_with("Modelo Fantasma não existe no projeto. Modelos: Checkpoint ("),
+        "{error}"
+    );
+
+    // Replaced, the model keeps its ID and name; the batch reaches the new content.
+    let replaced = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Ponto"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Sphere"},
+             "name": "Luz", "parent": "$0"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cylinder"},
+             "name": "Haste", "parent": "$0"},
+            {"op": "save_model", "entity": "$0", "replace": "Checkpoint"},
+            {"op": "place_model", "model": "$3", "position": [0.0, 0.0, 20.0]},
+            {"op": "rename_entity", "entity": "$4@$3@$1", "name": "Luz colocada"},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(
+        replaced["created"]["3"],
+        json!([{"id": model, "name": "Checkpoint"}])
+    );
+    let second = replaced["created"]["4"].as_array().unwrap().clone();
+    assert_eq!(second.len(), 3);
+    assert_eq!(second[0]["name"], "Ponto");
+    let level = project.scene(&scene).unwrap();
+    let lamp = level
+        .entities
+        .iter()
+        .find(|e| e.name == "Luz colocada")
+        .unwrap();
+    assert_eq!(lamp.parent.as_deref(), second[0]["id"].as_str());
+    // The placement made before is a copy: it keeps its pieces and its origin.
+    let kept: Vec<(&str, Option<&str>)> = first
+        .iter()
+        .map(|id| {
+            let e = level.entity(id).unwrap();
+            (e.name.as_str(), e.model_source.as_deref())
+        })
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            ("Checkpoint 1", Some(model.as_str())),
+            ("Bandeira", Some(model.as_str()))
+        ]
+    );
+    let entry = listed(&project);
+    assert_eq!(
+        (&entry["part_count"], &entry["root"]["name"]),
+        (&json!(3), &json!("Ponto"))
+    );
+    assert_eq!(entry["used_by"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        batch(json!({"op": "save_model", "entity": "x", "replace": "m"}))[0].label(),
+        "Substituir modelo"
+    );
+
+    // A name another model has, and an asset that is not a model, are refused.
+    let ponto = replaced["created"]["0"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "save_model", "entity": ponto, "name": "Marco"})),
+    )
+    .unwrap();
+    let texture = new_id();
+    let audio = new_id();
+    let stones = [new_id(), new_id()];
+    for (id, name, path, kind) in [
+        (&texture, "Placa", "assets/placa.png", AssetKind::Texture),
+        (
+            &audio,
+            "Checkpoint",
+            "assets/checkpoint.wav",
+            AssetKind::Audio,
+        ),
+        (&stones[0], "Pedra", "assets/pedra.png", AssetKind::Texture),
+        (
+            &stones[1],
+            "Pedra",
+            "assets/pedra-2.png",
+            AssetKind::Texture,
+        ),
+    ] {
+        project.assets.push(Asset {
+            id: id.clone(),
+            name: name.into(),
+            path: path.into(),
+            kind,
+            model: None,
+        });
+    }
+    let before = project.clone();
+    for (command, expected) in [
+        (
+            json!({"op": "save_model", "entity": ponto, "replace": model, "name": " marco "}),
+            "Já existe um modelo chamado \"Marco\"",
+        ),
+        (
+            json!({"op": "save_model", "entity": ponto, "replace": texture}),
+            "O recurso Placa não é um modelo",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "checkpoint", "name": "Outro"}),
+            "\"checkpoint\" é o nome de 2 recursos: Checkpoint (modelo), Checkpoint (áudio); \
+             passe kind (Model ou Audio)",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Checkpoint", "kind": "Model", "name": "marco"}),
+            "Já existe um modelo com o nome \"Marco\"; escolha outro nome",
+        ),
+        (
+            json!({"op": "save_model", "entity": ponto, "name": "checkpoint"}),
+            "escolha outro nome com name, ou troque o conteúdo desse modelo com replace",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Placa", "kind": "Model", "name": "X"}),
+            "O recurso Placa é uma textura, não um modelo",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Fantasma", "kind": "Model", "name": "X"}),
+            "O recurso Fantasma não existe no projeto. Modelos: Checkpoint (modelo), Marco \
+             (modelo)",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "pedra", "name": "X"}),
+            "\"pedra\" é o nome de 2 recursos: Pedra (textura, assets/pedra.png), Pedra \
+             (textura, assets/pedra-2.png); passe o ID que o oxy_project lista",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": texture, "kind": "Audio", "name": "X"}),
+            "O recurso Placa é uma textura, não um áudio",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Placa", "name": "  "}),
+            "Informe um nome para o recurso",
+        ),
+        (
+            json!({"op": "delete_asset", "asset": "Checkpoint", "kind": "Model"}),
+            "Não é possível excluir o modelo Checkpoint, que ainda está em uso; tire estes usos \
+             antes (as colocações do modelo saem com delete_entities das raízes listadas):\n\
+             Cena 3D → Checkpoint 1: modelo\nCena 3D → Ponto: modelo",
+        ),
+    ] {
+        let error = command::apply(&mut project, &scene, &batch(command))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        assert!(
+            stones.iter().all(|id| !error.contains(id.as_str())),
+            "{error}"
+        );
+        assert_eq!(project, before, "a refused batch changes nothing");
+    }
+    // Many assets of the kind asked for: the first ten, and how many more.
+    let mut crowded = project.clone();
+    crowded.assets.extend((1..=11).map(|n| Asset {
+        id: new_id(),
+        name: format!("Ladrilho {n}"),
+        path: format!("assets/ladrilho-{n}.png"),
+        kind: AssetKind::Texture,
+        model: None,
+    }));
+    let error = command::apply(
+        &mut crowded,
+        &scene,
+        &batch(json!({"op": "delete_asset", "asset": "Fantasma", "kind": "Texture"})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Texturas: Placa (textura), Pedra (textura)")
+            && error.contains("Ladrilho 7 (textura), … e mais 4"),
+        "{error}"
+    );
+    let error =
+        command::parse(&json!({"op": "delete_asset", "asset": "a", "kind": "model"})).unwrap_err();
+    assert!(error.contains("escreva `Model`"), "{error}");
+
+    // Renaming keeps the ID and the file; a name of another kind is fine; as one undo step.
+    let mut images = TextureCache::default();
+    let mut history = CommandHistory::new();
+    let start = project.clone();
+    history.begin("Agente: 4 comandos", &project, &images);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "rename_asset", "asset": "checkpoint", "kind": "Audio",
+             "name": "Som do checkpoint"},
+            {"op": "rename_asset", "asset": texture, "name": "Checkpoint"},
+            {"op": "delete_asset", "asset": "Checkpoint", "kind": "Texture"},
+            {"op": "add_node", "entity": ponto, "operation": "action.sound",
+             "params": {"asset": audio}},
+        ])),
+    )
+    .unwrap();
+    history.commit(&project, &mut images).unwrap();
+    assert!(applied.iter().take(3).all(|a| a.created.is_empty()));
+    let sound = project.asset(&audio).unwrap();
+    assert_eq!(
+        (sound.name.as_str(), sound.path.as_str()),
+        ("Som do checkpoint", "assets/checkpoint.wav")
+    );
+    assert!(project.asset(&texture).is_none(), "an unused asset goes");
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "delete_asset", "asset": "Som do checkpoint"})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Não é possível excluir o áudio Som do checkpoint")
+            && error.contains("Cena 3D → Ponto: ação Reproduzir WAV")
+            && !error.contains("delete_entities"),
+        "{error}"
+    );
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, start, "one undo step");
+    for (command, label) in [
+        (
+            json!({"op": "rename_asset", "asset": "a", "name": "b"}),
+            "Renomear recurso",
+        ),
+        (
+            json!({"op": "delete_asset", "asset": "a"}),
+            "Excluir recurso",
+        ),
+    ] {
+        assert_eq!(batch(command)[0].label(), label);
+    }
+
+    // Once its placements are gone, the model goes too.
+    let roots = [
+        first[0].clone(),
+        second[0]["id"].as_str().unwrap().to_owned(),
+    ];
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "delete_entities", "ids": roots},
+            {"op": "delete_asset", "asset": model},
+        ])),
+    )
+    .unwrap();
+    assert!(project.asset(&model).is_none());
+    validate_project(&project).unwrap();
+}

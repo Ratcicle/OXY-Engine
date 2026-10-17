@@ -25,7 +25,7 @@ use crate::{
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,16 +359,21 @@ pub enum Command {
         #[serde(default)]
         parent: Option<Id>,
     },
-    /// Saves an object and everything under it as a model asset that any scene can place.
+    /// Saves an object and everything under it as a model asset that any scene can place, or,
+    /// with `replace` (a model's ID or name), as the new content of that model, which keeps its
+    /// ID. Placements already made are copies and stay as they are.
     SaveModel {
         #[serde(default)]
         scene: Option<Id>,
         entity: Id,
-        /// Default: the object's name.
+        /// Default: the object's name, or the replaced model's own.
         #[serde(default)]
         name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replace: Option<Id>,
     },
-    /// Places a copy of a model (its ID or name). Position is relative to the parent.
+    /// Places a copy of a model (its ID or name). Position is relative to the parent. The root
+    /// keeps the name it was saved with unless `name` is given.
     PlaceModel {
         #[serde(default)]
         scene: Option<Id>,
@@ -379,6 +384,21 @@ pub enum Command {
         position: Option<[f32; 3]>,
         #[serde(default)]
         name: Option<String>,
+    },
+    /// Renames an asset of any kind (its ID or name; `kind` tells apart assets of different
+    /// kinds that share a name). Its ID, and its file, stay.
+    RenameAsset {
+        asset: Id,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<AssetKind>,
+    },
+    /// Removes an asset from the project, refused while anything uses it (see
+    /// [`editing::asset_uses`]); its file stays in the project folder, as the editor leaves it.
+    DeleteAsset {
+        asset: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<AssetKind>,
     },
     RenameEntity {
         #[serde(default)]
@@ -551,23 +571,34 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         links: Vec<[String; 4]>,
     },
+    /// One link or many in `links`, as [`Command::Connect`] takes them, all or none.
     Disconnect {
         #[serde(default)]
         scene: Option<Id>,
         entity: Id,
-        from_node: Id,
-        from_port: String,
-        to_node: Id,
-        to_port: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_node: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_port: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_node: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_port: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        links: Vec<[String; 4]>,
     },
     /// Lays out the object's logic ([`graph::arrange`]): the `nodes` given, or all of them; the
-    /// others stay where they are.
+    /// others stay where they are. With `split_shared_data`, those of them that only give data
+    /// and feed several lanes get a copy per lane first ([`graph::layout::split_shared_data`]),
+    /// which the command answers as created.
     ArrangeLogic {
         #[serde(default)]
         scene: Option<Id>,
         entity: Id,
         #[serde(default)]
         nodes: Option<Vec<Id>>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        split_shared_data: bool,
     },
     /// New input action (Ações de entrada) bound to `key`, one of
     /// [`input_actions::keys`]. Its ID is what logic nodes and simulations use.
@@ -673,8 +704,11 @@ impl Command {
             Self::DeleteEntities { .. } => "Excluir objetos",
             Self::DuplicateEntities { .. } => "Duplicar objetos",
             Self::CopyEntities { .. } => "Copiar objetos para outra cena",
-            Self::SaveModel { .. } => "Salvar modelo",
+            Self::SaveModel { replace: None, .. } => "Salvar modelo",
+            Self::SaveModel { .. } => "Substituir modelo",
             Self::PlaceModel { .. } => "Colocar modelo",
+            Self::RenameAsset { .. } => "Renomear recurso",
+            Self::DeleteAsset { .. } => "Excluir recurso",
             Self::RenameEntity { .. } => "Renomear objeto",
             Self::SetParent { .. } => "Mudar pai",
             Self::SetTransform { .. } => "Transformar objeto",
@@ -816,6 +850,7 @@ pub fn apply(
                 scene,
                 entity,
                 nodes,
+                ..
             } => {
                 let scene = scene_id(&draft, scene, default_scene).map_err(fail)?;
                 unplaced.retain(|(s, e, node)| {
@@ -827,7 +862,16 @@ pub fn apply(
             _ => {}
         }
         validate_project(&draft).map_err(|e| fail(e.to_string()))?;
-        checks.extend(raised.into_iter().map(|check| (index, check)));
+        for check in raised {
+            // The last layout of an object's logic is the one whose wires stay.
+            if let Check::LongWires { scene, entity, .. } = &check {
+                checks.retain(|(_, earlier)| {
+                    !matches!(earlier, Check::LongWires { scene: s, entity: e, .. }
+                        if s == scene && e == entity)
+                });
+            }
+            checks.push((index, check));
+        }
         let names = if created.is_empty() {
             Vec::new()
         } else {
@@ -903,6 +947,15 @@ enum Check {
         scene: Id,
         from: Id,
         nodes: Vec<(Id, Id, &'static str)>,
+    },
+    /// arrange_logic laid out `nodes` (None: all) of an object's logic, which may keep wires too
+    /// long to follow ([`graph::layout::long_wires`]); `split` says whether shared data was
+    /// copied already.
+    LongWires {
+        scene: Id,
+        entity: Id,
+        nodes: Option<Vec<Id>>,
+        split: bool,
     },
 }
 impl Check {
@@ -1010,6 +1063,88 @@ impl Check {
                      set_node_params com {params} {{\"Text\": \"{}\"}}{wire}: {}",
                     to.name,
                     to.id,
+                    listed.join("; ")
+                ))
+            }
+            Self::LongWires {
+                scene,
+                entity,
+                nodes,
+                split,
+            } => {
+                let level = project.scene(scene)?;
+                let e = level.entity(entity)?;
+                let wires = graph::layout::long_wires(&e.graph);
+                if wires.is_empty() {
+                    return None;
+                }
+                // The nodes as oxy_entity's summary names them.
+                let labels = crate::query::node_labels(project, level, &e.graph);
+                let label = |id: &str| {
+                    e.graph
+                        .nodes
+                        .iter()
+                        .position(|n| n.id == id)
+                        .map_or_else(|| id.to_owned(), |i| labels[i].clone())
+                };
+                let mut listed: Vec<String> = wires
+                    .iter()
+                    .map(|(i, height)| {
+                        let edge = &e.graph.edges[*i];
+                        format!(
+                            "{}.{} -> {}.{} ({})",
+                            label(&edge.from_node),
+                            edge.from_port,
+                            label(&edge.to_node),
+                            edge.to_port,
+                            height.round()
+                        )
+                    })
+                    .collect();
+                first_ten(&mut listed);
+                let limit = graph::layout::LONG_WIRE;
+                let counted = match wires.len() {
+                    1 => format!(
+                        "1 fio longo, que sobe ou desce mais de {limit} unidades entre as pontas \
+                         (mais de meia tela do editor em 100%) e cruza a lógica em volta"
+                    ),
+                    n => format!(
+                        "{n} fios longos, que sobem ou descem mais de {limit} unidades entre as \
+                         pontas (mais de meia tela do editor em 100%) e cruzam a lógica em volta, \
+                         o mais alto primeiro"
+                    ),
+                };
+                // Suggested only when it would copy where one of the wires starts: exec wires,
+                // and data tied to an event, stay as they are.
+                let mut sources: Vec<String> = Vec::new();
+                if !*split {
+                    let movable: HashSet<Id> = match nodes {
+                        Some(nodes) => nodes.iter().cloned().collect(),
+                        None => e.graph.nodes.iter().map(|n| n.id.clone()).collect(),
+                    };
+                    let shared = graph::layout::shared_data(&e.graph, &movable);
+                    for (i, _) in &wires {
+                        let from = &e.graph.edges[*i].from_node;
+                        let named = label(from);
+                        if shared.contains(from) && !sources.contains(&named) {
+                            sources.push(named);
+                        }
+                    }
+                    first_ten(&mut sources);
+                }
+                let hint = if sources.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ". Com split_shared_data: true, o arrange_logic dá a cada faixa a sua \
+                         cópia dos nós de dados puros que ela usa ({}), e eles deixam de puxar \
+                         fios de uma faixa para outra",
+                        sources.join(", ")
+                    )
+                };
+                Some(format!(
+                    "a lógica de {} ficou com {counted}: {}{hint}",
+                    e.name,
                     listed.join("; ")
                 ))
             }
@@ -1663,6 +1798,21 @@ fn lowercase_first(text: &str) -> String {
         first.to_lowercase().chain(chars).collect()
     })
 }
+/// `listed` cut to its first ten, the rest counted: "… e mais 3".
+fn first_ten(listed: &mut Vec<String>) {
+    let more = listed.len().saturating_sub(10);
+    listed.truncate(10);
+    if more > 0 {
+        listed.push(format!("… e mais {more}"));
+    }
+}
+/// "modelos" as "Modelos", to start a sentence.
+fn uppercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
 
 /// `id` as an error names it: the object, node or animation of the project that has it, with
 /// the ID; the ID alone when nothing has it.
@@ -1836,6 +1986,188 @@ fn finite(values: &[f32], what: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{what} precisa de números finitos"))
+    }
+}
+
+/// The links a connect or disconnect gives: the one of its four fields, or those of `links`.
+fn edges_given(single: [&Option<String>; 4], links: &[[String; 4]]) -> Result<Vec<Edge>, String> {
+    if links.is_empty() {
+        let [
+            Some(from_node),
+            Some(from_port),
+            Some(to_node),
+            Some(to_port),
+        ] = single
+        else {
+            return Err(
+                "Informe from_node, from_port, to_node e to_port, ou links: \
+                        [[from_node, from_port, to_node, to_port], …]"
+                    .into(),
+            );
+        };
+        return Ok(vec![Edge {
+            from_node: from_node.clone(),
+            from_port: from_port.clone(),
+            to_node: to_node.clone(),
+            to_port: to_port.clone(),
+        }]);
+    }
+    if single.iter().any(|field| field.is_some()) {
+        return Err("Use links ou from_node, from_port, to_node e to_port, não os dois".into());
+    }
+    Ok(links
+        .iter()
+        .map(|[from_node, from_port, to_node, to_port]| Edge {
+            from_node: from_node.clone(),
+            from_port: from_port.clone(),
+            to_node: to_node.clone(),
+            to_port: to_port.clone(),
+        })
+        .collect())
+}
+
+/// Removes `edges` from the logic of `entity` in `scene`, in order; the first one that is not
+/// there fails them all, by its place in `links` when `numbered`, with the nodes by name.
+fn unlink_all(
+    project: &mut Project,
+    scene: &str,
+    entity: &str,
+    edges: &[Edge],
+    numbered: bool,
+) -> Result<(), String> {
+    let place = |index: usize, problem: String| {
+        if numbered {
+            format!("Ligação {index} de links (a {}ª): {problem}", index + 1)
+        } else {
+            problem
+        }
+    };
+    let owner = project
+        .scene(scene)
+        .unwrap()
+        .entity(entity)
+        .ok_or_else(|| absent(entity))?;
+    let mut left = owner.graph.edges.clone();
+    for (index, edge) in edges.iter().enumerate() {
+        let mut named = Vec::new();
+        for id in [&edge.from_node, &edge.to_node] {
+            match owner.graph.node(id) {
+                Some(node) => named.push(node_named(node)),
+                None => return Err(place(index, missing_node(project, &owner.name, id))),
+            }
+        }
+        let Some(at) = left.iter().position(|e| e == edge) else {
+            let again = edges[..index].iter().position(|e| e == edge);
+            return Err(place(
+                index,
+                match again {
+                    Some(first) => format!("a ligação {first} de links já desliga essas portas"),
+                    None => format!(
+                        "A saída {} de {} não está ligada à entrada {} de {}",
+                        edge.from_port, named[0], edge.to_port, named[1]
+                    ),
+                },
+            ));
+        };
+        left.remove(at);
+    }
+    entity_mut(scene_mut(project, scene), entity)?.graph.edges = left;
+    Ok(())
+}
+
+/// How messages name an asset kind: alone, with "um" or "uma", with "o" or "a", and many.
+fn asset_kind(kind: AssetKind) -> (&'static str, &'static str, &'static str, &'static str) {
+    match kind {
+        AssetKind::Texture => ("textura", "uma textura", "a textura", "texturas"),
+        AssetKind::Audio => ("áudio", "um áudio", "o áudio", "áudios"),
+        AssetKind::Model => ("modelo", "um modelo", "o modelo", "modelos"),
+    }
+}
+
+/// An asset of any kind by ID or, when no asset has that ID, by name (ignoring case); `kind`
+/// keeps only assets of that kind, telling apart a model and a sound that share a name.
+fn find_asset(project: &Project, asset: &str, kind: Option<AssetKind>) -> Result<Id, String> {
+    // Said as when the ID is of an asset of another kind.
+    let other_kind = |found: &[&Asset], kind: AssetKind| {
+        let kinds: BTreeSet<&str> = found.iter().map(|a| asset_kind(a.kind).1).collect();
+        format!(
+            "O recurso {} é {}, não {}",
+            found[0].name,
+            kinds.into_iter().collect::<Vec<_>>().join(" e "),
+            asset_kind(kind).1
+        )
+    };
+    if let Some(found) = project.asset(asset) {
+        return match kind {
+            Some(kind) if kind != found.kind => Err(other_kind(&[found], kind)),
+            _ => Ok(found.id.clone()),
+        };
+    }
+    let wanted = asset.trim().to_lowercase();
+    let same_name = |a: &&Asset| a.name.trim().to_lowercase() == wanted;
+    let of_kind = |a: &&Asset| kind.is_none_or(|kind| a.kind == kind);
+    let named: Vec<&Asset> = project
+        .assets
+        .iter()
+        .filter(of_kind)
+        .filter(same_name)
+        .collect();
+    let shown = |a: &Asset| format!("{} ({})", a.name, asset_kind(a.kind).0);
+    match named.as_slice() {
+        [one] => Ok(one.id.clone()),
+        [] => {
+            if let Some(kind) = kind {
+                let others: Vec<&Asset> = project.assets.iter().filter(same_name).collect();
+                if !others.is_empty() {
+                    return Err(other_kind(&others, kind));
+                }
+            }
+            let mut listed: Vec<String> =
+                project.assets.iter().filter(of_kind).map(shown).collect();
+            first_ten(&mut listed);
+            let many = kind.map_or("recursos", |kind| asset_kind(kind).3);
+            Err(if listed.is_empty() {
+                format!("O recurso {asset} não existe no projeto, que não tem {many}")
+            } else {
+                format!(
+                    "O recurso {asset} não existe no projeto. {}: {}",
+                    uppercase_first(many),
+                    listed.join(", ")
+                )
+            })
+        }
+        many => {
+            let kinds: BTreeSet<&str> = many.iter().map(|a| asset_kind(a.kind).0).collect();
+            // Of different kinds, the kind tells them apart; of one kind, only the ID does,
+            // which the message leaves to oxy_project: images and sounds by their files.
+            if kinds.len() == many.len() {
+                Err(format!(
+                    "\"{}\" é o nome de {} recursos: {}; passe kind ({})",
+                    asset.trim(),
+                    many.len(),
+                    many.iter().map(|a| shown(a)).collect::<Vec<_>>().join(", "),
+                    many.iter()
+                        .map(|a| format!("{:?}", a.kind))
+                        .collect::<Vec<_>>()
+                        .join(" ou ")
+                ))
+            } else {
+                let mut listed: Vec<String> = many
+                    .iter()
+                    .map(|a| match a.path.as_str() {
+                        "" => shown(a),
+                        path => format!("{} ({}, {path})", a.name, asset_kind(a.kind).0),
+                    })
+                    .collect();
+                first_ten(&mut listed);
+                Err(format!(
+                    "\"{}\" é o nome de {} recursos: {}; passe o ID que o oxy_project lista",
+                    asset.trim(),
+                    many.len(),
+                    listed.join(", ")
+                ))
+            }
+        }
     }
 }
 
@@ -2149,8 +2481,13 @@ fn apply_one(
             scene,
             entity,
             name,
+            replace,
         } => {
             let id = scene_id(project, scene, default)?;
+            let replaced = replace
+                .as_deref()
+                .map(|model| find_model(project, model))
+                .transpose()?;
             let source = project.scene(&id).unwrap();
             check_entities(source, std::slice::from_ref(entity))?;
             let name = match name {
@@ -2158,18 +2495,36 @@ fn apply_one(
                     return Err("Informe um nome para o modelo".into());
                 }
                 Some(name) => name.trim().to_owned(),
-                None => source.entity(entity).unwrap().name.clone(),
+                None => match &replaced {
+                    Some(model) => project.asset(model).unwrap().name.clone(),
+                    None => source.entity(entity).unwrap().name.clone(),
+                },
             };
             // place_model takes a model by name, which two models would share.
-            if let Some(other) = project.model_named(&name) {
+            if let Some(other) = project
+                .model_named(&name)
+                .filter(|other| Some(&other.id) != replaced.as_ref())
+            {
+                let replace = if replaced.is_none() {
+                    ", ou troque o conteúdo desse modelo com replace"
+                } else {
+                    ""
+                };
                 return Err(format!(
-                    "Já existe um modelo chamado \"{}\" ({}); escolha outro nome com name",
+                    "Já existe um modelo chamado \"{}\" ({}); escolha outro nome com \
+                     name{replace}",
                     other.name, other.id
                 ));
             }
             let pieces: HashSet<Id> = source.descendants(entity).into_iter().collect();
             refuse_outside(source, &pieces, "do modelo")?;
-            let (model, map) = project.save_model_mapped(&id, entity, name)?;
+            let (model, map) = match replaced {
+                Some(model) => {
+                    let map = project.replace_model_mapped(&model, &id, entity, name)?;
+                    (model, map)
+                }
+                None => project.save_model_mapped(&id, entity, name)?,
+            };
             copies.push(Arc::new(map));
             Ok(vec![model])
         }
@@ -2191,6 +2546,52 @@ fn apply_one(
             )?;
             copies.extend(std::iter::repeat_n(Arc::new(map), pieces.len()));
             Ok(pieces)
+        }
+        C::RenameAsset { asset, name, kind } => {
+            let id = find_asset(project, asset, *kind)?;
+            let name = name.trim();
+            if name.is_empty() {
+                return Err("Informe um nome para o recurso".into());
+            }
+            let renamed = project.asset(&id).unwrap();
+            // Assets are found by name, which two of a kind would share.
+            if let Some(other) = project.assets.iter().find(|a| {
+                a.id != id
+                    && a.kind == renamed.kind
+                    && a.name.trim().to_lowercase() == name.to_lowercase()
+            }) {
+                return Err(format!(
+                    "Já existe {} com o nome \"{}\"; escolha outro nome",
+                    asset_kind(other.kind).1,
+                    other.name
+                ));
+            }
+            let renamed = project.assets.iter_mut().find(|a| a.id == id).unwrap();
+            renamed.name = name.to_owned();
+            Ok(vec![])
+        }
+        C::DeleteAsset { asset, kind } => {
+            let id = find_asset(project, asset, *kind)?;
+            let mut uses = editing::asset_references(project, &id);
+            if !uses.is_empty() {
+                let removed = project.asset(&id).unwrap();
+                first_ten(&mut uses);
+                // A placement keeps its pieces as they are; deleting its root takes them away.
+                let placements = if removed.kind == AssetKind::Model {
+                    " (as colocações do modelo saem com delete_entities das raízes listadas)"
+                } else {
+                    ""
+                };
+                return Err(format!(
+                    "Não é possível excluir {} {}, que ainda está em uso; tire estes usos \
+                     antes{placements}:\n{}",
+                    asset_kind(removed.kind).2,
+                    removed.name,
+                    uses.join("\n")
+                ));
+            }
+            editing::remove_asset(project, &id)?;
+            Ok(vec![])
         }
         C::RenameEntity {
             scene,
@@ -2580,42 +2981,7 @@ fn apply_one(
             links,
         } => {
             let id = scene_id(project, scene, default)?;
-            let single = [from_node, from_port, to_node, to_port];
-            let edges: Vec<Edge> = if links.is_empty() {
-                let [
-                    Some(from_node),
-                    Some(from_port),
-                    Some(to_node),
-                    Some(to_port),
-                ] = single
-                else {
-                    return Err(
-                        "Informe from_node, from_port, to_node e to_port, ou links: \
-                                [[from_node, from_port, to_node, to_port], …]"
-                            .into(),
-                    );
-                };
-                vec![Edge {
-                    from_node: from_node.clone(),
-                    from_port: from_port.clone(),
-                    to_node: to_node.clone(),
-                    to_port: to_port.clone(),
-                }]
-            } else if single.iter().any(|field| field.is_some()) {
-                return Err(
-                    "Use links ou from_node, from_port, to_node e to_port, não os dois".into(),
-                );
-            } else {
-                links
-                    .iter()
-                    .map(|[from_node, from_port, to_node, to_port]| Edge {
-                        from_node: from_node.clone(),
-                        from_port: from_port.clone(),
-                        to_node: to_node.clone(),
-                        to_port: to_port.clone(),
-                    })
-                    .collect()
-            };
+            let edges = edges_given([from_node, from_port, to_node, to_port], links)?;
             link_all(project, &id, entity, &edges, !links.is_empty())?;
             Ok(vec![])
         }
@@ -2626,32 +2992,25 @@ fn apply_one(
             from_port,
             to_node,
             to_port,
+            links,
         } => {
             let id = scene_id(project, scene, default)?;
-            let graph = &mut entity_mut(scene_mut(project, &id), entity)?.graph;
-            let before = graph.edges.len();
-            graph.edges.retain(|edge| {
-                !(edge.from_node == *from_node
-                    && edge.from_port == *from_port
-                    && edge.to_node == *to_node
-                    && edge.to_port == *to_port)
-            });
-            if graph.edges.len() == before {
-                return Err("Essas portas não estão ligadas".into());
-            }
+            let edges = edges_given([from_node, from_port, to_node, to_port], links)?;
+            unlink_all(project, &id, entity, &edges, !links.is_empty())?;
             Ok(vec![])
         }
         C::ArrangeLogic {
             scene,
             entity,
             nodes,
+            split_shared_data,
         } => {
             let id = scene_id(project, scene, default)?;
             let e = entity_mut(scene_mut(project, &id), entity)?;
             if e.graph.nodes.is_empty() {
                 return Err(format!("{} não tem lógica para organizar", e.name));
             }
-            let movable: HashSet<Id> = match nodes {
+            let mut movable: HashSet<Id> = match nodes {
                 None => e.graph.nodes.iter().map(|n| n.id.clone()).collect(),
                 Some(nodes) if nodes.is_empty() => {
                     return Err(
@@ -2667,8 +3026,20 @@ fn apply_one(
                     nodes.iter().cloned().collect()
                 }
             };
+            let copies = if *split_shared_data {
+                graph::layout::split_shared_data(&mut e.graph, &movable, entity)
+            } else {
+                Vec::new()
+            };
+            movable.extend(copies.iter().cloned());
             graph::arrange(&mut e.graph, &movable);
-            Ok(vec![])
+            checks.push(Check::LongWires {
+                scene: id,
+                entity: entity.clone(),
+                nodes: nodes.clone(),
+                split: *split_shared_data,
+            });
+            Ok(copies)
         }
         C::CreateInputAction { name, key } => {
             let key = input_actions::check_key(key)?;
@@ -3157,11 +3528,7 @@ fn refuse_outside(scene: &Scene, pieces: &HashSet<Id>, what: &str) -> Result<(),
     if found.is_empty() {
         return Ok(());
     }
-    let more = found.len().saturating_sub(10);
-    found.truncate(10);
-    if more > 0 {
-        found.push(format!("… e mais {more}"));
-    }
+    first_ten(&mut found);
     Err(format!(
         "Estas referências apontam para fora {what}; leve junto os objetos e animações \
          que elas usam ou tire as referências antes:\n{}",
@@ -3261,7 +3628,7 @@ fn copy_entities(
 }
 
 /// A model asset by ID or, when no asset has that ID, by name (ignoring case).
-fn find_model(project: &Project, model: &str) -> Result<Id, String> {
+pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
     if let Some(asset) = project.asset(model) {
         return if asset.kind == AssetKind::Model && asset.model.is_some() {
             Ok(asset.id.clone())

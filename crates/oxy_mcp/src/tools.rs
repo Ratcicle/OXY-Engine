@@ -360,7 +360,9 @@ pub fn definitions() -> Json {
             "Summary of a project: scenes (ID, name, 2D/3D, object count, background: \"sky\" \
              or {color: [r, g, b, a]}, as set_scene_background takes it), assets [{id, name, \
              kind: Texture|Audio|Model, path (images and sounds, relative to the project \
-             folder), used_by}], input actions [{id, name, key, shares_key_with?, used_by}] \
+             folder), part_count and root {id, name} (models: the root a placement gets, by \
+             the name place_model gives it), used_by}], input actions [{id, name, key, \
+             shares_key_with?, used_by}] \
              (shares_key_with: the other actions [{id, name}] on the same key, which the game \
              fires together), physics surfaces [{id, name, friction, traction, \
              speed_multiplier, conveyor, conveyor_space, used_by}], game variables [{id, name, \
@@ -375,8 +377,15 @@ pub fn definitions() -> Json {
              interface element's image) or model (a model's placements, one per placed root); \
              model names the model asset holding an object that exists only inside it, which \
              oxy_entity and oxy_find do not reach. used_by_total counts them when there are \
-             more.",
-            json!({"project": project}),
+             more. With model, only that model: {id, name, root?, parts: [{id, name, parent \
+             (null for the root), kind}], total, next_offset?}, each parent before its \
+             children; a part's ID is what \"$N@<id>\" takes after a place_model N.",
+            json!({"project": project,
+                   "model": {"type": "string", "description":
+                       "A model's ID or name (any case): its parts instead of the summary."},
+                   "offset": offset,
+                   "limit": {"type": "integer", "minimum": 0, "description":
+                       "With model: parts at most (default 100)."}}),
             json!([])
         ),
         tool(
@@ -798,21 +807,22 @@ project lacks, two actions on one key (the game fires both), an action.component
 parameter names an object lacking the part it switches (the node stops with an error), a \
 variable.set whose value parameter is not of the variable's type (the same), a box \
 collider left at an object's old dimensions, a convex or mesh collider left at an object's old \
-shape, logic copied to another scene that still opens the scene it came from.
+shape, logic copied to another scene that still opens the scene it came from, and wires \
+arrange_logic left running across the logic, which make it hard to follow.
 Placeholders: in later commands, a whole string \"$N\" is the first ID created by command N \
 (0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included. \"$N@<id>\" \
 (\"$N.M@<id>\") is the copy of the object, node or animation <id> in what command N copied \
 (the copy of its M-th created ID): duplicate_entities (with count 3, \"$N.1@<node>\" is that \
 node in the second copy), copy_entities, save_model (the copy in the model), place_model (<id> \
-as the model holds it, which reads never show: \"$P@$S@<id>\" when save_model S saved it in \
-the batch) and duplicate_scene; <id> may be \"$K\" or \"$K.M\". \"$$N\" (\"$$N@<id>\") is the \
-text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 de bônus\", stays as it is. \
-A command that takes a scene and has none, whose entity (else the first of its ids, else its \
-parent) is a placeholder of an object, uses that object's scene: logic added with entity \
-\"$4\" goes where command 4 created the object, whatever the batch's default scene. An object \
-the command's scene lacks is refused naming that scene and, when another scene has the object, \
-that one: \"Controle não existe na cena Menu (a do comando); ele está na cena Pista: passe \
-scene\".
+as the model holds it: a part ID from oxy_project {model}, or \"$P@$S@<id>\" when save_model S \
+saved it in the batch) and duplicate_scene; <id> may be \"$K\" or \"$K.M\". \"$$N\" \
+(\"$$N@<id>\") is the text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 \
+de bônus\", stays as it is. A command that takes a scene and has none, whose entity (else the \
+first of its ids, else its parent) is a placeholder of an object, uses that object's scene: \
+logic added with entity \"$4\" goes where command 4 created the object, whatever the batch's \
+default scene. An object the command's scene lacks is refused naming that scene and, when \
+another scene has the object, that one: \"Controle não existe na cena Menu (a do comando); ele \
+está na cena Pista: passe scene\".
 Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
@@ -850,12 +860,25 @@ move them, under a scaled or turned parent too; answers the copies' roots. Refus
 point to objects or animations left behind (copy those too). action.scene and value.scene nodes \
 keep their scene: those naming the scene copied from come back in warnings, each with its copy's \
 ID (set_node_params them), unless their scene input is connected
-- save_model {entity, name?}: the object and everything under it become a model asset (answers \
-its ID); a name another model has is refused (any case). place_model {model: ID or name, \
-parent?, position?, name?}: places a copy in `scene`, answering every piece, its root first. \
+- save_model {entity, name?, replace?}: the object and everything under it become a model asset \
+(answers its ID); a name another model has is refused (any case). With replace (a model's ID or \
+name) they become that model's content instead: it keeps its ID (answered all the same) and, \
+without name, its name. Placements already made are editable copies that only record the model \
+they came from: they keep their pieces, and only later place_model calls get the new content. \
+place_model {model: ID or name, parent?, position?, name?}: places a copy in `scene`, answering \
+every piece with its name, its root first; the root keeps the name it was saved with \
+(oxy_project root) unless name gives it another, so name placements to tell them apart. \
 Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene and value.scene \
 nodes keep the scene they named when it was saved, with no warning (a restart saved in level 1 \
 reopens level 1): set_node_params them after placing
+- rename_asset {asset, name, kind?}; delete_asset {asset, kind?}: any asset oxy_project lists, by \
+ID or name (any case); kind (Texture|Audio|Model) picks among assets of different kinds that \
+share a name (two of one kind: by ID, the refusal naming their files). rename_asset keeps the \
+ID, which nodes and objects use, and the file; a name \
+another asset of its kind has is refused. delete_asset is refused while anything uses the asset \
+(oxy_project used_by: objects showing an image, nodes playing a sound, a model's placements by \
+their roots), naming the uses; its file stays in the assets folder, as the editor's Excluir \
+leaves it
 - Scene changes without a fixed scene: action.scene's scene input (text) replaces its scene \
 parameter. Restart: connect scene.current.scene -> action.scene.scene, and the logic reopens \
 whatever scene it is in, copied or placed anywhere. Next scene: value.scene gives the ID of the \
@@ -913,22 +936,30 @@ to_port], …]}: links wires the new node's inputs as it is added, each from an 
 the object already has (\"$N\" too), as in links: [[\"$3\", \"exec\", \"exec\"], [\"$5\", \
 \"context\", \"target\"]]; remove_node {entity, node}; set_node_params {entity, node, params}; \
 connect {entity, from_node, from_port, to_node, to_port} or {entity, links: [[from_node, \
-from_port, to_node, to_port], …]}, many links in one command; disconnect {entity, from_node, \
-from_port, to_node, to_port}. Links go in order and all or none: a refused one fails the batch, \
-named \"Ligação N de links (a Kª)\" (N from 0) with the nodes by label and operation and the \
-ports the node has. Building a graph in creation order, add each node with links to the nodes \
-before it, and connect links for the rest. Nodes added without position (best left out) are \
-laid out when the batch ends, around the nodes that stay: events in the first column, execution \
-left to right, data \
-left of what it feeds, a band per event, right of the nodes that feed them or below the graph. \
-arrange_logic {entity, nodes?} lays out those nodes (default all); the others stay. Parameter \
-values are tagged like attributes, or plain when oxy_catalog gives the parameter's type: a \
-number for a Number parameter, a text for Text, true/false for Bool (\"mode\": \"held\"). A \
-parameter with an input port of the same id of type any (attribute.set value, condition.compare \
-a and b) takes any type: its default is only where it starts, and a plain number, text or \
-true/false keeps that type. Other plain values are refused with the tagged form expected. A \
-parameter with choices in oxy_catalog takes only those values, and one with min and max only \
-numbers within them. An input action parameter (ref \
+from_port, to_node, to_port], …]}, many links in one command; disconnect takes the same two \
+forms, a link that is not there refused with its nodes by name. Links go in order and all or \
+none: a refused one fails the batch, named \"Ligação N de links (a Kª)\" (N from 0) with the \
+nodes by label and operation and the ports the node has. Building a graph in creation order, \
+add each node with links to the nodes before it, and connect links for the rest. Nodes added \
+without position (best left out) are laid out when the batch ends, around the nodes that stay: \
+events in the first column, execution left to right, data left of what it feeds, a band per \
+event, right of the nodes that feed them or below the graph. \
+arrange_logic {entity, nodes?, split_shared_data?} lays out those nodes (default all); the \
+others stay. With split_shared_data: true, each lane (the nodes one event runs) first gets its \
+own copy of the nodes among them that only give data, read nothing but other such data \
+(attribute.get, variable.get, scene.current, value.*, math on them…) and feed several lanes, so \
+no wire runs from one lane to another; the game reads copies alike, so the logic does what it \
+did, and created lists the copies (the same graph gives the same IDs). Wires that still climb \
+or drop more than 600 units between their ends (over half a screen of the editor), across the \
+logic, come back in warnings, the tallest first; when some start at shared data, the warning \
+names it and suggests split_shared_data (execution wires, and data tied to an event, it leaves \
+as they are). Parameter values are tagged like attributes, or plain when oxy_catalog gives the \
+parameter's type: a number for a Number parameter, a text for Text, true/false for Bool \
+(\"mode\": \"held\"). A parameter with an input port of the same \
+id of type any (attribute.set value, condition.compare a and b) takes any type: its default is \
+only where it starts, and a plain number, text or true/false keeps that type. Other plain values \
+are refused with the tagged form expected. A parameter with choices in oxy_catalog takes only \
+those values, and one with min and max only numbers within them. An input action parameter (ref \
 input_action) takes the action's ID or name and stores the ID, which the game reads.
 - create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
 key}; delete_input_action {action}, refused while used (oxy_project lists used_by). action is \
@@ -961,8 +992,8 @@ puts them back at their initial values and erases the progress, save.state (exis
 whether there is any; nothing is saved without save.write. The exported game keeps it in \
 %APPDATA%\\OXY Engine\\Jogos\\<project id>\\progresso.json, the editor test in memory until \
 another project opens; oxy_simulate takes and reports it (save, saves).
-Project, scene, input action, surface and variable commands take no `scene`; the others accept \
-it, and the tool's `scene` fills it when absent (for copy_entities, the scene copied from). \
+Project, scene, asset, input action, surface and variable commands take no `scene`; the others \
+accept it, and the tool's `scene` fills it when absent (for copy_entities, the scene copied from). \
 Wherever a command or a node takes a scene (scene, to_scene, the scene parameter of \
 action.scene and value.scene, ref scene in oxy_catalog), it takes the scene's ID or its name, in \
 any case, when no other scene has it, and nodes store the ID; an unknown or shared name is \
@@ -1138,7 +1169,7 @@ const PLAY_ACTIONS: [&str; 5] = ["start", "stop", "pause", "resume", "input"];
 
 /// Project-level commands: they take no `scene`, so the tool's default scene is not added
 /// (commands refuse unknown fields).
-const PROJECT_OPS: [&str; 17] = [
+const PROJECT_OPS: [&str; 19] = [
     "rename_project",
     "set_start_scene",
     "set_game_settings",
@@ -1146,6 +1177,8 @@ const PROJECT_OPS: [&str; 17] = [
     "rename_scene",
     "duplicate_scene",
     "delete_scene",
+    "rename_asset",
+    "delete_asset",
     "create_input_action",
     "rename_input_action",
     "set_input_key",
@@ -1377,7 +1410,10 @@ impl Tools {
             // through the same query::answer.
             "oxy_project" | "oxy_scene" | "oxy_entity" | "oxy_find" => {
                 let request = match name {
-                    "oxy_project" => "summary",
+                    "oxy_project" => {
+                        query::ProjectQuery::parse(args)?;
+                        "summary"
+                    }
                     "oxy_scene" => {
                         query::TreeQuery::parse(args)?;
                         "scene_tree"
@@ -2825,6 +2861,8 @@ mod tests {
             json!({"op": "rename_scene", "scene": "s", "name": "S"}),
             json!({"op": "duplicate_scene", "scene": "s"}),
             json!({"op": "delete_scene", "scene": "s"}),
+            json!({"op": "rename_asset", "asset": "a", "name": "B", "kind": "Model"}),
+            json!({"op": "delete_asset", "asset": "a"}),
             json!({"op": "create_input_action", "name": "Pausar", "key": "P"}),
             json!({"op": "rename_input_action", "action": "a", "name": "B"}),
             json!({"op": "set_input_key", "action": "a", "key": "K"}),
@@ -3682,13 +3720,173 @@ mod tests {
         for text in [
             "\"$N@<id>\"",
             "\"$P@$S@<id>\" when save_model S saved it",
-            "arrange_logic {entity, nodes?}",
+            "arrange_logic {entity, nodes?, split_shared_data?}",
             "laid out when the batch ends",
             "box|sphere|capsule|convex|mesh|auto",
             "a convex or mesh collider left at an object's old shape",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_read_replace_rename_and_delete_models_and_split_shared_logic() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-models-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Modelos", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Ladrilho 1"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Tampa", "parent": "$0"},
+                {"op": "save_model", "entity": "$0", "name": "Ladrilho que cai"},
+                {"op": "place_model", "model": "Ladrilho que cai", "position": [0, 0, 5]},
+            ]}),
+        )
+        .unwrap();
+        // The placed root keeps the name it was saved with, which the summary shows.
+        assert_eq!(applied["created"]["3"][0]["name"], "Ladrilho 1");
+        let model_entry = |summary: &Json| {
+            summary["assets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["kind"] == "Model")
+                .cloned()
+        };
+        let model = model_entry(&call("oxy_project", json!({})).unwrap()).unwrap();
+        assert_eq!(
+            (&model["root"]["name"], &model["part_count"]),
+            (&json!("Ladrilho 1"), &json!(2))
+        );
+        let parts = call("oxy_project", json!({"model": "ladrilho que cai"})).unwrap();
+        assert_eq!(parts["parts"][1]["name"], "Tampa");
+        assert_eq!(parts["parts"][1]["parent"], parts["root"]["id"]);
+        let error = call("oxy_project", json!({"model": 3})).unwrap_err();
+        assert!(error.starts_with("model inválido"), "{error}");
+        // A part's ID reaches its copy in the batch that places the model.
+        let tampa = parts["parts"][1]["id"].as_str().unwrap().to_owned();
+        let placed = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "place_model", "model": "Ladrilho que cai", "name": "Ladrilho 2"},
+                {"op": "rename_entity", "entity": format!("$0@{tampa}"), "name": "Tampa 2"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(placed["created"]["0"][0]["name"], "Ladrilho 2");
+        assert_eq!(placed["created"]["0"][1]["name"], "Tampa 2");
+
+        // Replaced in place and renamed; deleted once nothing uses it. The tool's scene stays
+        // out of the asset commands.
+        let replaced = call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Ladrilho"},
+                {"op": "save_model", "entity": "$0", "replace": "Ladrilho que cai"},
+                {"op": "rename_asset", "asset": "Ladrilho que cai", "name": "Ladrilho frágil"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(replaced["created"]["1"][0]["id"], model["id"]);
+        let renamed = model_entry(&call("oxy_project", json!({})).unwrap()).unwrap();
+        assert_eq!(
+            (
+                &renamed["name"],
+                &renamed["root"]["name"],
+                &renamed["part_count"]
+            ),
+            (&json!("Ladrilho frágil"), &json!("Ladrilho"), &json!(1))
+        );
+        assert_eq!(renamed["used_by"].as_array().unwrap().len(), 2);
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "delete_asset", "asset": "ladrilho frágil"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Não é possível excluir o modelo Ladrilho frágil")
+                && error.contains("Ladrilho 2: modelo"),
+            "{error}"
+        );
+        let roots = [
+            applied["created"]["3"][0]["id"].clone(),
+            placed["created"]["0"][0]["id"].clone(),
+        ];
+        call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "delete_entities", "ids": roots},
+                {"op": "delete_asset", "asset": "Ladrilho frágil", "kind": "Model"},
+            ]}),
+        )
+        .unwrap();
+        assert!(model_entry(&call("oxy_project", json!({})).unwrap()).is_none());
+
+        // Shared data gets a copy per lane, and disconnect takes links like connect.
+        let logic = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Contador"},
+                {"op": "add_node", "entity": "$0", "operation": "attribute.get",
+                 "params": {"attribute": "Etapa"}},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "links": [["$2", "exec", "exec"], ["$1", "value", "value"]]},
+                {"op": "add_node", "entity": "$0", "operation": "event.click"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "links": [["$4", "exec", "exec"], ["$1", "value", "value"]]},
+                {"op": "arrange_logic", "entity": "$0", "split_shared_data": true},
+                {"op": "disconnect", "entity": "$0", "links": [
+                    ["$2", "exec", "$3", "exec"], ["$4", "exec", "$5", "exec"]]},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(logic["created"]["6"][0]["name"], "attribute.get");
+        let counter = logic["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+        let graph = call(
+            "oxy_entity",
+            json!({"id": counter, "graph": "full", "fields": ["graph"]}),
+        )
+        .unwrap();
+        assert_eq!(graph["graph"]["nodes"].as_array().unwrap().len(), 6);
+        let edges = graph["graph"]["edges"].as_array().unwrap();
+        let sources: HashSet<&str> = edges
+            .iter()
+            .map(|e| e["from_node"].as_str().unwrap())
+            .collect();
+        assert_eq!((edges.len(), sources.len()), (2, 2), "{graph}");
+
+        for text in [
+            "save_model {entity, name?, replace?}",
+            "rename_asset {asset, name, kind?}",
+            "delete_asset {asset, kind?}",
+            "disconnect takes the same two forms",
+            "split_shared_data: true",
+            "names it and suggests split_shared_data",
+            "two of one kind: by ID",
+            "wires arrange_logic left running across the logic",
+            "a part ID from oxy_project {model}",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(schema("oxy_project")["model"].is_object());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

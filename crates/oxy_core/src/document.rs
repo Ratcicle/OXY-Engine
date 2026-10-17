@@ -954,6 +954,64 @@ impl Project {
                 other.name, other.id
             ));
         }
+        let (pieces, map) = self.model_pieces(scene_id, entity_id)?;
+        let id = new_id();
+        self.assets.push(Asset {
+            id: id.clone(),
+            name,
+            path: String::new(),
+            kind: AssetKind::Model,
+            model: Some(pieces),
+        });
+        if let Err(error) = validate_project(self) {
+            self.assets.pop();
+            return Err(error);
+        }
+        Ok((id, map))
+    }
+    /// Makes an object of `scene_id` and everything under it the content of the model `model`,
+    /// named `name`, as [`Self::save_model_mapped`] would save it, keeping the model's ID. The
+    /// placements already made keep their pieces: they are copies, which only record the model
+    /// they came from. A name another model has is refused.
+    pub fn replace_model_mapped(
+        &mut self,
+        model: &str,
+        scene_id: &str,
+        entity_id: &str,
+        name: impl Into<String>,
+    ) -> Result<CopyMap, String> {
+        let name = name.into();
+        if let Some(other) = self.model_named(&name).filter(|other| other.id != model) {
+            return Err(format!(
+                "Já existe um modelo chamado \"{}\" ({})",
+                other.name, other.id
+            ));
+        }
+        let (pieces, map) = self.model_pieces(scene_id, entity_id)?;
+        let asset = self
+            .assets
+            .iter_mut()
+            .find(|a| a.id == model && a.kind == AssetKind::Model)
+            .ok_or("Modelo não encontrado")?;
+        let before = (
+            std::mem::replace(&mut asset.name, name),
+            asset.model.replace(pieces),
+        );
+        if let Err(error) = validate_project(self) {
+            let asset = self.assets.iter_mut().find(|a| a.id == model).unwrap();
+            (asset.name, asset.model) = before;
+            return Err(error);
+        }
+        Ok(map)
+    }
+    /// The pieces a model of the object `entity_id` of `scene_id` holds: copies of it and
+    /// everything under it with new IDs, its root at the origin and without a parent, none of
+    /// them a placement. Answers the IDs they took too.
+    fn model_pieces(
+        &self,
+        scene_id: &str,
+        entity_id: &str,
+    ) -> Result<(Vec<Entity>, CopyMap), String> {
         let scene = self.scene(scene_id).ok_or("Cena não encontrada")?;
         if scene.entity(entity_id).is_none() {
             return Err("Objeto não encontrado".into());
@@ -980,19 +1038,7 @@ impl Project {
         for piece in &mut pieces {
             piece.model_source = None;
         }
-        let id = new_id();
-        self.assets.push(Asset {
-            id: id.clone(),
-            name,
-            path: String::new(),
-            kind: AssetKind::Model,
-            model: Some(pieces),
-        });
-        if let Err(error) = validate_project(self) {
-            self.assets.pop();
-            return Err(error);
-        }
-        Ok((id, map))
+        Ok((pieces, map))
     }
     pub fn instantiate_model(&mut self, asset_id: &str, scene_id: &str) -> Result<Id, String> {
         self.instantiate_model_mapped(asset_id, scene_id)
