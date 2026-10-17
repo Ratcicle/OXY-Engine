@@ -1522,4 +1522,16 @@ mod tests {
         assert!(engine_version().starts_with(|c: char| c.is_ascii_digit()));
         assert!(!engine_version().contains('+'));
     }
+
+    /// The README says which version this is and names its ZIP, and the CHANGELOG has its
+    /// section, so a version bump carries them along.
+    #[test]
+    fn the_readme_and_the_changelog_name_this_version() {
+        let version = engine_version();
+        let readme = include_str!("../../../README.md");
+        assert!(readme.contains(&format!("**Versão atual: {version}.**")));
+        assert!(readme.contains(&format!("OXY-Engine-{version}-windows-x64.zip")));
+        let changelog = include_str!("../../../CHANGELOG.md");
+        assert!(changelog.contains(&format!("\n## {version} — ")));
+    }
 }

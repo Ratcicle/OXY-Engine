@@ -2419,7 +2419,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_audio"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "cpal",
  "hound",
@@ -2428,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "glam 0.30.9",
  "hound",
@@ -2442,7 +2442,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_editor"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_mcp"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "glam 0.30.9",
  "oxy_core",
@@ -2471,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_player"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "oxy_render"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "bytemuck",
  "eframe",
