@@ -1,6 +1,9 @@
 //! Atomic, bounded relocation shared by graphs and native callers.
 use super::*;
 impl Runtime {
+    /// The world the queries of logic see, every character's body where it stands. The
+    /// movement step keeps it so, syncing each body as soon as it moves, and so does a
+    /// teleport; what else moves bodies or changes their shapes marks it dirty.
     pub(in crate::runtime) fn refresh_character_queries(&mut self) -> Result<(), String> {
         if self.scene().kind != SceneKind::ThreeD {
             return Err("Esta consulta exige cena 3D.".into());
@@ -10,27 +13,30 @@ impl Runtime {
         }
         let evaluation = SceneEvaluation::new(self.scene())?;
         let mut overrides = HashMap::new();
-        for (id, state) in &self.characters.states {
-            if let Some(e) = self.entity(id) {
-                let matrix = evaluation
-                    .index
-                    .position(id)
-                    .and_then(|i| evaluation.worlds[i])
-                    .ok_or("Transformação do personagem ausente")?;
-                // Validate structural edits before reusing the authoritative
-                // pose. Never hide a parent that now deforms the physical root.
-                let (_, rotation, scale) = crate::physics3d::world_pose(matrix)?;
-                character_scale(rotation, scale)?;
-                overrides.insert(
-                    id.clone(),
-                    ColliderOverride {
-                        config: actual_collider(e, state, state.uniform_scale),
-                        position: state.position,
-                        rotation: Quat::from_rotation_y(state.yaw),
-                        scale: Vec3::splat(state.uniform_scale),
-                    },
-                );
-            }
+        // Scene order: the first refusal is the one reported, whatever the map's order.
+        for e in &self.scene().entities {
+            let Some(state) = self.characters.states.get(&e.id) else {
+                continue;
+            };
+            let id = &e.id;
+            let matrix = evaluation
+                .index
+                .position(id)
+                .and_then(|i| evaluation.worlds[i])
+                .ok_or("Transformação do personagem ausente")?;
+            // Validate structural edits before reusing the authoritative
+            // pose. Never hide a parent that now deforms the physical root.
+            let (_, rotation, scale) = crate::physics3d::world_pose(matrix)?;
+            character_scale(rotation, scale)?;
+            overrides.insert(
+                id.clone(),
+                ColliderOverride {
+                    config: actual_collider(e, state, state.uniform_scale),
+                    position: state.position,
+                    rotation: Quat::from_rotation_y(state.yaw),
+                    scale: Vec3::splat(state.uniform_scale),
+                },
+            );
         }
         let mut world = self.characters.world.take().unwrap_or_default();
         let result = world.sync_evaluated(self.scene(), &evaluation, &overrides);
@@ -80,11 +86,12 @@ impl Runtime {
                 .look
                 .is_some_and(|v| v.iter().any(|v| !v.is_finite()))
             || !options.search_radius.is_finite()
-            || !(0. ..=2.).contains(&options.search_radius)
+            || !(0. ..=MAX_TELEPORT_SEARCH).contains(&options.search_radius)
         {
-            return Err(
-                "Destino/orientação inválidos; busca local deve estar entre 0 e 2 m.".into(),
-            );
+            return Err(format!(
+                "Destino/orientação inválidos; busca local deve estar entre 0 e \
+                 {MAX_TELEPORT_SEARCH} m."
+            ));
         }
         self.ensure_character_state(id)?;
         self.refresh_character_queries()?;
@@ -198,13 +205,11 @@ impl Runtime {
             };
         }
         self.step_input = InputFrame::default();
+        // The events its old path made that have not run yet (landings, contacts, area
+        // crossings, its own step and input events) go: they no longer happened, and the step's
+        // input is spent. Flows already running, waits included, go on, whoever owns them; a
+        // wait holds no events, only flows that started.
         self.ready.retain(|task| {
-            task.context
-                .trajectory
-                .as_ref()
-                .is_none_or(|(target, _)| target != id)
-        });
-        self.waiting.retain(|task| {
             task.context
                 .trajectory
                 .as_ref()
@@ -334,6 +339,8 @@ impl Runtime {
                 );
             }
             self.characters.states.get_mut(id).unwrap().height = body.height;
+            // The queries of the rest of this step see the new body, not the old one.
+            self.physics_dirty = true;
         }
         self.entity_mut(id).unwrap().character3d = Some(config);
         Ok(())

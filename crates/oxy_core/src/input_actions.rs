@@ -1,5 +1,8 @@
 //! Stable input identities and editable display names, independent of native keys/UI.
-use crate::document::*;
+use crate::{
+    document::*,
+    graph::{self, Reference},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -121,8 +124,9 @@ WheelUp WheelDown";
 pub fn keys() -> impl Iterator<Item = &'static str> {
     KEY_NAMES.split(' ')
 }
-/// Keys the game reads but never hands to input actions: Escape releases the game and F3
-/// opens the player's diagnostics.
+/// Keys the game reads but never hands to input actions: Escape opens the game's pause menu
+/// (or pauses and releases the game, in a scene without one) and F3 opens the player's
+/// diagnostics.
 pub const RESERVED_KEYS: [&str; 2] = ["Escape", "F3"];
 /// Other spellings the game reads for the same keys, besides lowercase letters and
 /// Digit0/Numpad0 for digits.
@@ -184,7 +188,10 @@ fn key_name(key: &str) -> Option<&'static str> {
 /// The name an input action stores for `key`, or why it cannot use it.
 pub fn check_key(key: &str) -> Result<&'static str, String> {
     match key_name(key) {
-        Some("Escape") => Err("Escape é reservada: ela pausa o jogo e libera o mouse".into()),
+        Some("Escape") => Err(
+            "Escape é reservada: ela abre o menu de pausa do jogo, quando a cena tem um, ou pausa o jogo e libera o mouse"
+                .into(),
+        ),
         Some("F3") => Err("F3 é reservada ao diagnóstico do player".into()),
         Some(name) => Ok(name),
         None => Err(format!("Tecla desconhecida: \"{key}\"")),
@@ -271,8 +278,8 @@ impl From<Holder<'_>> for String {
     }
 }
 
-/// Every object of the scenes and models, with the scene or model holding it.
-pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (Holder<'_>, &Entity)> {
+/// Every scene and model, with its objects.
+pub(crate) fn every_holder(project: &Project) -> impl Iterator<Item = (Holder<'_>, &[Entity])> {
     project
         .scenes
         .iter()
@@ -290,7 +297,11 @@ pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (Holder<'_
             };
             a.model.as_deref().map(|m| (scope, m))
         }))
-        .flat_map(|(scope, entities)| entities.iter().map(move |e| (scope, e)))
+}
+
+/// Every object of the scenes and models, with the scene or model holding it.
+pub(crate) fn every_entity(project: &Project) -> impl Iterator<Item = (Holder<'_>, &Entity)> {
+    every_holder(project).flat_map(|(scope, entities)| entities.iter().map(move |e| (scope, e)))
 }
 
 /// Where the action `id` is used, in each object's order: 2D controller, 3D character, logic
@@ -314,9 +325,9 @@ pub fn uses(project: &Project, id: &str) -> Vec<Use> {
             add("character");
         }
         for node in &entity.graph.nodes {
-            if matches!(node.operation.as_str(), "event.input" | "input.read")
-                && node.text("action") == id
-            {
+            if graph::node_references(node).any(|(param, reference, _)| {
+                reference == Reference::InputAction && node.text(param.id) == id
+            }) {
                 add(&node.operation);
             }
         }
@@ -335,11 +346,13 @@ pub fn references(project: &Project, id: &str) -> Vec<String> {
         .into_iter()
         .map(|found| {
             let role = match found.role.as_str() {
-                "controller2d" => "controlador",
-                "character" => "personagem 3D",
-                "camera_control" => "câmera de personagem",
-                "input.read" => "nó Ler ação de entrada",
-                _ => "nó Ação de entrada",
+                "controller2d" => "controlador".to_owned(),
+                "character" => "personagem 3D".to_owned(),
+                "camera_control" => "câmera de personagem".to_owned(),
+                operation => format!(
+                    "nó {}",
+                    graph::definition(operation).map_or("Ação de entrada", |d| d.label)
+                ),
             };
             format!("{} → {} → {role}", found.scope, found.name)
         })

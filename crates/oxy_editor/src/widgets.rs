@@ -820,6 +820,34 @@ pub fn property_row_with<R>(
     .inner
 }
 
+/// `property_row_with` while the label fits the column and `width` points of field fit beside
+/// it; otherwise the label takes its own line over the field, since a wider row would grow the
+/// side panel. Returns whether the field sits beside the label.
+pub fn property_row_fit(
+    ui: &mut Ui,
+    column: f32,
+    label: &str,
+    hint: &str,
+    width: f32,
+    add: impl FnOnce(&mut Ui),
+) -> bool {
+    let beside = label_column(ui, &[label]) <= column
+        && ui.available_width() >= column + ui.spacing().item_spacing.x + width;
+    if beside {
+        property_row_with(ui, column, label, hint, add);
+    } else {
+        let response = ui.label(RichText::new(label).size(12.).color(theme::TEXT_MUTED));
+        if !hint.is_empty() {
+            response.on_hover_text(hint);
+        }
+        ui.horizontal(|ui| {
+            ui.set_min_height(theme::CONTROL_HEIGHT);
+            add(ui)
+        });
+    }
+    beside
+}
+
 /// X/Y/Z fields in one row, each marked with its axis colour. Returns the field responses.
 pub fn vec3_fields(
     ui: &mut Ui,
@@ -1034,7 +1062,7 @@ pub fn primary_button(ui: &mut Ui, text: &str, enabled: bool) -> Response {
 }
 
 /// Framed neutral button, such as Cancelar.
-pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
+pub fn secondary_button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
     ui.add(
         egui::Button::new(text)
             .fill(theme::BG_RAISED)

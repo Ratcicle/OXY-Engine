@@ -25,26 +25,43 @@ impl Characters {
         time: f64,
     ) {
         self.states.retain(|id, _| !ids.contains(id));
-        for (id, state) in &mut self.states {
-            if state
-                .support
-                .as_ref()
-                .is_some_and(|s| ids.contains(&s.object))
-            {
-                let config = scene.entity(id).and_then(|e| e.character3d.as_ref());
-                let support = state.support.take().unwrap();
-                state.velocity += motor::inherited(
-                    support.velocity,
-                    config.map_or(InheritPlatform::None, |c| c.inherit_platform),
-                );
-                state.grounded = false;
-                state.coyote_until = time + config.map_or(0., |c| f64::from(c.coyote_ms) * 0.001);
-                self.pending_records.push(MovementRecord {
-                    object: id.clone(),
-                    event: MovementEvent::LeftSupport,
-                    state: Arc::new(state.clone()),
-                });
-            }
+        // Scene order, never the maps' order: departures become events, and the removal order
+        // shapes the physics tree. Ids the scene no longer holds go last, by id.
+        let order = |id: &Id| {
+            (
+                scene
+                    .entities
+                    .iter()
+                    .position(|e| e.id == *id)
+                    .unwrap_or(usize::MAX),
+                id.clone(),
+            )
+        };
+        let mut left: Vec<_> = self
+            .states
+            .iter_mut()
+            .filter(|(_, state)| {
+                state
+                    .support
+                    .as_ref()
+                    .is_some_and(|s| ids.contains(&s.object))
+            })
+            .collect();
+        left.sort_by_cached_key(|(id, _)| order(id));
+        for (id, state) in left {
+            let config = scene.entity(id).and_then(|e| e.character3d.as_ref());
+            let support = state.support.take().unwrap();
+            state.velocity += motor::inherited(
+                support.velocity,
+                config.map_or(InheritPlatform::None, |c| c.inherit_platform),
+            );
+            state.grounded = false;
+            state.coyote_until = time + config.map_or(0., |c| f64::from(c.coyote_ms) * 0.001);
+            self.pending_records.push(MovementRecord {
+                object: id.clone(),
+                event: MovementEvent::LeftSupport,
+                state: Arc::new(state.clone()),
+            });
         }
         self.paths.retain(|id, _| !ids.contains(id));
         self.overrides.retain(|id, _| !ids.contains(id));
@@ -68,11 +85,17 @@ impl Characters {
         self.released
             .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
         if let Some(world) = &mut self.world {
-            for id in ids {
+            let mut removed: Vec<_> = ids.iter().collect();
+            removed.sort_by_cached_key(|id| order(id));
+            for id in removed {
                 world.remove(id);
             }
             world.flush();
         }
+    }
+    /// Forgets who is inside the area `id`: they enter it afresh at the next detection.
+    pub(in crate::runtime) fn forget_area(&mut self, id: &str) {
+        self.sensor_pairs.retain(|(area, _)| area != id);
     }
     fn detect_sensors(&mut self, scene: &Scene) -> Result<(), String> {
         self.sensor_events.clear();

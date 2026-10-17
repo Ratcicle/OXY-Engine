@@ -4,26 +4,28 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 
 ![Editor da OXY Engine com o Laboratório 3D aberto](assets/screenshots/editor.png)
 
-**Versão atual: 0.5.1.** Veja as novidades no [CHANGELOG](CHANGELOG.md), o uso detalhado no [guia do editor](docs/guia-do-editor.md) e os próximos passos no [roadmap](docs/roadmap.md).
+**Versão atual: 0.6.0.** Veja as novidades no [CHANGELOG](CHANGELOG.md), o uso detalhado no [guia do editor](docs/guia-do-editor.md) e os próximos passos no [roadmap](docs/roadmap.md).
 
 ## O que ela faz
 
-- **Cenas 2D e 3D** com hierarquia, grupos, câmeras, interface de jogo (texto, imagem, botão, barra) e importação de PNG/WAV.
+- **Cenas 2D e 3D** com hierarquia, grupos, câmeras, fundo com o céu da OXY ou uma cor, interface de jogo (texto, imagem, botão, barra) e importação de PNG/WAV.
 - **Modelagem** de primitivas paramétricas e malhas poligonais: extrusão, borda interna, corte em loop, bisturi, arredondamento e encaixe.
 - **Pintura** direto na imagem ou na superfície da peça, com atlas UV que preserva os pixels após cortes.
 - **Animação** rígida por peças, com timeline, quadros-chave e eventos.
-- **Lógica visual** por nós, com ações de entrada e um guia offline com doze receitas prontas.
-- **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa e um laboratório de movimento editável.
-- **Player separado** (`oxy_player.exe`) para distribuir só o jogo, sem o editor.
-- **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam e capturam o projeto, ao vivo no editor e com tudo desfazível. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
+- **Lógica visual** por nós, com ações de entrada, variáveis do jogo, progresso salvo entre partidas, menu de pausa feito na lógica e um guia offline com catorze receitas prontas.
+- **Som** com mixador próprio: música e efeitos em canais, loops com transição e volumes pela lógica.
+- **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa, plataformas móveis que levam o personagem também quando giram e um laboratório de movimento editável.
+- **Jogos exportados** pelo editor: uma pasta com o executável do jogo (o player, `oxy_player.exe`, com o nome do jogo), os dados e as licenças, para distribuir só o jogo, sem o editor.
+- **OXY Parkour**, um jogo completo em primeira pessoa feito só com os nós e componentes da engine (menu, pista, cronômetro, pausa, recorde salvo e música), que abre como exemplo na tela inicial.
+- **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam (com um bot que percorre a fase) e capturam o projeto, ao vivo no editor e com as edições desfazíveis, e criam projetos e exportam o jogo quando você pede. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
 
 ## Baixar e abrir
 
 Requisitos: Windows 10/11 x64, driver gráfico atualizado e GPU compatível com DirectX 12 ou Vulkan.
 
 1. Baixe o ZIP da [última Release](https://github.com/Ratcicle/OXY-Engine/releases/latest) e extraia tudo em uma pasta gravável.
-2. Abra **`OXY Engine.exe`**. Mantenha a pasta `data` e as DLLs junto dos executáveis.
-3. Na tela inicial, escolha **Novo projeto**, **Abrir projeto**, **Projeto de exemplo** ou **Laboratório 3D · movimento**.
+2. Abra **`OXY Engine.exe`**. Mantenha as pastas `data` e `parkour` e as DLLs junto dos executáveis.
+3. Na tela inicial, escolha **Novo projeto**, **Abrir projeto**, **Projeto de exemplo**, **Laboratório 3D · movimento** ou **OXY Parkour**.
 
 Os exemplos abrem como cópias seguras. Projetos recentes e preferências ficam em `%LOCALAPPDATA%/OXY Engine`, fora do projeto.
 
@@ -50,6 +52,7 @@ Nesta máquina, `scripts/cargo.ps1` configura o compilador GNU preparado; passe 
 |---|---|
 | `oxy_core` | Documentos, persistência, migração, geometria, física, runtime e grafo de lógica. Sem GPU nem interface. |
 | `oxy_render` | Renderer wgpu, seleção, interface de jogo e tema visual compartilhado. |
+| `oxy_audio` | Som do editor e do player: o dispositivo de saída (cpal) e um mixador próprio. |
 | `oxy_editor` | O editor (`OXY Engine.exe`). |
 | `oxy_player` | O runtime dos jogos (`oxy_player.exe`). |
 
@@ -64,10 +67,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ./scripts/test-native.ps1
 # Engine portátil: editor + player + exemplos. -SkipBuild reutiliza o release já compilado.
 ./scripts/package-engine.ps1
-./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.5.1-windows-x64.zip'
-# Exportar um jogo: só runtime e dados, sem depender do editor.
-./scripts/package.ps1 -Project 'examples/validacao' -Destination 'dist/Meu-Jogo'
+./scripts/test-portable.ps1 -Zip './dist/OXY-Engine-0.6.0-windows-x64.zip'
 ```
+
+Para exportar um jogo, use o editor: **Projeto → Exportar jogo…** cria `<Destino>\<Nome do jogo>` com `<Nome do jogo>.exe`, a pasta `data`, as licenças e um `LEIA-ME.txt`, e confere o jogo (que ele abre e roda) antes de pôr a pasta no lugar; uma exportação anterior do mesmo jogo só é substituída depois disso. O título, a janela e a tela cheia do jogo ficam no projeto. `scripts/package.ps1` continua sendo o empacotador da engine, usado pelo `package-engine.ps1`, e o `test-portable.ps1` roda `oxy_player.exe --verificar` nos dados do pacote.
 
 Os testes nativos e as medições gravam capturas e relatórios em `target/qa/` (ou na pasta de `OXY_QA_DIR`). Benchmarks e comparações estão descritos em [`benchmarks/README.md`](benchmarks/README.md).
 
@@ -75,7 +78,7 @@ O CI (`ci.yml`) verifica formatação, build, testes e Clippy. `portable-windows
 
 ## Compatibilidade
 
-O formato atual dos projetos é **schema_version 4**. Documentos de versões anteriores são migrados em memória sem mudar IDs; ao salvar, um backup dos bytes originais é criado. Versões futuras ou inválidas são recusadas. Os limites de cada ferramenta estão no [guia do editor](docs/guia-do-editor.md#compatibilidade-e-domínio-suportado).
+O formato atual dos projetos é **schema_version 5**, da 0.6. Documentos de versões anteriores são migrados em memória sem mudar IDs; ao salvar, um backup dos bytes originais é criado. Versões futuras ou inválidas são recusadas, e a 0.5.x e versões anteriores não abrem projetos salvos pela 0.6. Os limites de cada ferramenta estão no [guia do editor](docs/guia-do-editor.md#compatibilidade-e-domínio-suportado).
 
 ## Licença
 

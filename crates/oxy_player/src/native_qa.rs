@@ -2,6 +2,7 @@
 use crate::Player;
 mod mesh;
 mod movement;
+mod pause;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect};
 use oxy_core::{
     document::{Id, UiKind, new_id},
@@ -169,6 +170,10 @@ impl NativePlayerQa {
                 let runtime = self.player.runtime.as_ref().ok_or("Runtime ausente")?;
                 if !runtime.paused {
                     return Err("Escape não pausou o player".into());
+                }
+                // Without a pause menu, Esc stays the engine's pause, as before.
+                if runtime.has_pause_menu() || runtime.game_paused() {
+                    return Err("Escape pausou o jogo numa cena sem menu de pausa".into());
                 }
                 self.paused_time = runtime.time;
                 self.wait = 8;
@@ -354,6 +359,15 @@ fn capture_labels(ctx: &egui::Context) -> Vec<(String, Rect)> {
     }
     result
 }
+/// Points the player's progress (OXY_SAVE_DIR) to a new temporary folder, so a native run never
+/// reads or writes the real %APPDATA%.
+pub(crate) fn isolate_progress() -> PathBuf {
+    let folder = std::env::temp_dir().join(format!("oxy-player-progress-{}", new_id()));
+    // SAFETY: each native test runs alone in its own process (scripts/test-native.ps1) and sets
+    // this before the player starts, when no other thread reads the environment.
+    unsafe { std::env::set_var("OXY_SAVE_DIR", &folder) };
+    folder
+}
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {
@@ -371,6 +385,7 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 #[ignore = "Opens an inactive native WGPU player; inputs stay inside its RawInput"]
 fn native_player_portable_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
+    isolate_progress();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = oxy_core::qa::output_dir("v0.2.1/m7/player-regression");
     std::fs::create_dir_all(&output).unwrap();

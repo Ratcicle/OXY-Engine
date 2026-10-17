@@ -6,8 +6,10 @@
 //! requests `{"id": 1, "method": "...", "params": {...}}`, one per line, and receives
 //! `{"id": 1, "result": ...}` or `{"id": 1, "error": "..."}`. Requests run on the UI thread
 //! in the next frame, and edits wait while a person is dragging or typing. Besides edits and
-//! reads, an agent can import a PNG or WAV (`import`) and read the console (`console`), and
-//! `status` says whether the person is testing the game.
+//! reads, an agent can import PNGs and WAVs (`import`), read the console (`console`), play a
+//! test of the game (`play`), save when the person allowed it (`save`) and export the game
+//! (`export`, answered when the export, on its own thread, is over), and `status` says whether
+//! the game is being tested, and by whom.
 use super::*;
 use oxy_core::{command, query};
 use serde_json::{Value as Json, json};
@@ -25,6 +27,8 @@ use std::{
 
 /// How long a connection waits for the editor to answer one request.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(60);
+/// An export copies the game and runs it before it answers.
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) struct Incoming {
     method: String,
@@ -198,11 +202,16 @@ fn serve(
             params: request.get("params").cloned().unwrap_or(Json::Null),
             reply,
         };
+        let timeout = if incoming.method == "export" {
+            EXPORT_TIMEOUT
+        } else {
+            REPLY_TIMEOUT
+        };
         if sender.send(incoming).is_err() {
             break;
         }
         ctx.request_repaint();
-        let response = match answer.recv_timeout(REPLY_TIMEOUT) {
+        let response = match answer.recv_timeout(timeout) {
             Ok(Ok(result)) => json!({"id": id, "result": result}),
             Ok(Err(error)) => json!({"id": id, "error": error}),
             Err(_) => json!({"id": id, "error": "O editor não respondeu a tempo."}),
@@ -215,11 +224,12 @@ fn serve(
     ctx.request_repaint();
 }
 
-/// Requests that change the project, and therefore wait for a person's gesture to end.
+/// Requests that change the project or the editor's state, or take the project as it is
+/// (`save`, `export`), and therefore wait for a person's gesture to end.
 fn edits(method: &str) -> bool {
     matches!(
         method,
-        "apply" | "import" | "undo" | "redo" | "select" | "frame"
+        "apply" | "import" | "undo" | "redo" | "select" | "frame" | "play" | "save" | "export"
     )
 }
 
@@ -229,6 +239,8 @@ impl Editor {
     pub(crate) fn agent_frame(&mut self, ctx: &egui::Context) {
         // Before anything else this frame, so the lines of the last frame's test are kept.
         self.sync_console_feed();
+        // Answered even after agents are turned off, for the Console line.
+        self.poll_agent_export(ctx);
         if self.preferences.allow_agents != self.agents.is_some() {
             self.agents = if self.preferences.allow_agents {
                 match AgentChannel::start(ctx) {
@@ -267,6 +279,11 @@ impl Editor {
                 break;
             }
             let request = self.agents.as_mut().unwrap().queue.pop_front().unwrap();
+            if request.method == "export" {
+                // It answers when the export is over, while requests go on.
+                self.agent_export(ctx, &request.params, request.reply);
+                continue;
+            }
             let result = self.agent_request(ctx, &request.method, &request.params);
             let _ = request.reply.send(result);
         }
@@ -274,14 +291,57 @@ impl Editor {
     pub(crate) fn agent_connected(&self) -> bool {
         self.agents.as_ref().is_some_and(AgentChannel::connected)
     }
+    /// The scene a request names by its ID or name, else the one open in the editor.
     fn agent_scene(&self, params: &Json) -> Result<Id, String> {
         if self.home.visible {
             return Err("Nenhum projeto aberto no editor.".into());
         }
-        Ok(params["scene"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.scene_id.clone()))
+        match params["scene"].as_str() {
+            Some(scene) => Ok(self.state.project.find_scene(scene, "scene")?.id.clone()),
+            None => Ok(self.scene_id.clone()),
+        }
+    }
+    /// The test of the game as agents read it, in `status` and in answers to `play`.
+    pub(crate) fn play_status(&self) -> Json {
+        let Some(runtime) = &self.play.runtime else {
+            // The last test's seed stays for the person's report after it stops.
+            return match self.play.seed {
+                Some(seed) => json!({"running": false, "seed": seed}),
+                None => json!({"running": false}),
+            };
+        };
+        let mut play = json!({
+            "running": true,
+            "paused": runtime.paused,
+            // The game's own pause (its menu), apart from the test's.
+            "game_paused": runtime.game_paused(),
+            "driven_by": match self.play.driver {
+                Driver::Person => "person",
+                Driver::Agent => "agent",
+            },
+            "mouse_captured": self.play.capture
+                && self.showing_game()
+                && runtime.wants_relative_mouse(),
+            // What the game asks, whoever plays: a person's cursor would be free.
+            "cursor_free": !runtime.wants_relative_mouse(),
+            // Game time goes on only while the game view is drawn.
+            "advancing": self.showing_game() && !runtime.paused,
+            "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
+            "time": runtime.time,
+            "seed": self.play.seed,
+        });
+        if let Some(until) = self.play.queued_until() {
+            play["queued_until"] = json!(until);
+        }
+        // Capped like a simulation report's variables.
+        let (variables, left_out) = runtime.variable_values(oxy_core::headless::MAX_ENTRIES);
+        if !variables.is_empty() {
+            play["variables"] = json!(variables);
+        }
+        if left_out > 0 {
+            play["variables_truncated"] = json!(left_out);
+        }
+        play
     }
     fn agent_request(
         &mut self,
@@ -290,34 +350,36 @@ impl Editor {
         params: &Json,
     ) -> Result<Json, String> {
         match method {
-            "status" => Ok(json!({
-                "editor": env!("OXY_APP_VERSION"),
-                "project": (!self.home.visible).then(|| json!({
-                    "name": self.state.project.name,
-                    "path": self.path.as_ref().map(|p| p.display().to_string()),
-                    "unsaved_changes": self.dirty(),
-                })),
-                "active_scene": (!self.home.visible).then(|| self.scene_id.clone()),
-                "mode": match self.tab {
-                    Tab::Scene => "scene",
-                    Tab::Studio => "studio",
-                    Tab::Logic => "logic",
-                },
-                "selection": self.selection.ids,
-                "busy": self.agent_busy(),
-                "undo": self.history.undo_label(),
-                "redo": self.history.redo_label(),
-                // A test the person is running: edits are refused until it stops.
-                "play": match &self.play.runtime {
-                    Some(runtime) => json!({
-                        "running": true,
-                        "paused": runtime.paused,
-                        "scene": {"id": runtime.scene_id(), "name": runtime.scene().name},
-                        "time": runtime.time,
-                    }),
-                    None => json!({"running": false}),
-                },
-            })),
+            "status" => {
+                let save_refusal = self.save_refusal();
+                let mut status = json!({
+                    "editor": env!("OXY_APP_VERSION"),
+                    "project": (!self.home.visible).then(|| json!({
+                        "name": self.state.project.name,
+                        "path": self.path.as_ref().map(|p| p.display().to_string()),
+                        "unsaved_changes": self.dirty(),
+                    })),
+                    "active_scene": (!self.home.visible).then(|| self.scene_id.clone()),
+                    "mode": match self.tab {
+                        Tab::Scene => "scene",
+                        Tab::Studio => "studio",
+                        Tab::Logic => "logic",
+                    },
+                    "selection": self.selection.ids,
+                    "busy": self.agent_busy(),
+                    "undo": self.history.undo_label(),
+                    "redo": self.history.redo_label(),
+                    // While a test runs, edits are refused until it stops.
+                    "play": self.play_status(),
+                    "can_save": save_refusal.is_none(),
+                });
+                if let Some(reason) = save_refusal {
+                    status["save_refusal"] = json!(reason);
+                }
+                Ok(status)
+            }
+            "play" => self.agent_play(params),
+            "save" => self.agent_save(),
             "console" => self.console_answer(params),
             "document" => {
                 self.agent_scene(params)?;
@@ -339,8 +401,8 @@ impl Editor {
             }
             "import" => {
                 let scene = self.agent_scene(params)?;
-                let request = oxy_core::asset_import::ImportRequest::parse(params)?;
-                self.import_agent(&request, &scene)
+                let batch = oxy_core::asset_import::ImportBatch::parse(params)?;
+                self.import_agent(&batch, &scene)
             }
             "undo" | "redo" => {
                 let label = self.agent_undo(method == "redo")?;
@@ -369,8 +431,8 @@ impl Editor {
             "screenshot" => {
                 self.agent_scene(params)?;
                 let colliders = params["colliders"].as_bool() == Some(true);
-                let (pixels, size) = if colliders {
-                    self.agent_capture_colliders(ctx.pixels_per_point())?
+                let (pixels, size) = if colliders || self.showing_game() {
+                    self.agent_capture(ctx.pixels_per_point(), colliders)?
                 } else {
                     self.renderer.read_pixels(&self.render_state)?
                 };
@@ -391,14 +453,17 @@ impl Editor {
             other => Err(format!("Pedido desconhecido: {other}")),
         }
     }
-    /// The view on screen drawn again with the collider view on top, as with the debug view
-    /// on: the game camera while the game runs, the editor camera otherwise (without the
-    /// Studio's modeling marks). The frame shown to the person is not touched.
-    fn agent_capture_colliders(
+    /// The view on screen drawn again, with the collider view on top when `colliders` is set,
+    /// as with the debug view on: while the game shows, the game camera with the game
+    /// interface, as the person sees them; otherwise the editor camera (without the Studio's
+    /// modeling marks). Interface images come from the project files, so an image painted
+    /// and not yet saved shows as saved. The frame shown to the person is not touched.
+    fn agent_capture(
         &mut self,
         pixels_per_point: f32,
+        colliders: bool,
     ) -> Result<(Vec<u8>, [u32; 2]), String> {
-        use oxy_render::offscreen::ColliderOverlay;
+        use oxy_render::offscreen::{ColliderOverlay, Overlays};
         let size = self.renderer.target_size();
         let root = self.root();
         let show_disabled = self.view.show_disabled_colliders;
@@ -414,12 +479,15 @@ impl Editor {
                 &CameraState::for_runtime(runtime),
                 size,
                 None,
-                Some(ColliderOverlay {
-                    selected: &[],
-                    show_disabled,
-                    runtime_world: runtime.physics_world(),
+                Overlays {
+                    interface: true,
+                    colliders: colliders.then(|| ColliderOverlay {
+                        selected: &[],
+                        show_disabled,
+                        runtime_world: runtime.physics_world(),
+                    }),
                     pixels_per_point,
-                }),
+                },
             );
         }
         let scene = self.view_scene();
@@ -432,12 +500,15 @@ impl Editor {
             &self.camera,
             size,
             self.selected.clone(),
-            Some(ColliderOverlay {
-                selected: &self.selection.ids,
-                show_disabled,
-                runtime_world: None,
+            Overlays {
+                interface: false,
+                colliders: colliders.then(|| ColliderOverlay {
+                    selected: &self.selection.ids,
+                    show_disabled,
+                    runtime_world: None,
+                }),
                 pixels_per_point,
-            }),
+            },
         )
     }
 }

@@ -14,7 +14,7 @@ pub(super) struct CameraControl {
     pub pitch: f32,
     pub mode: CameraMode,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct RigState {
     yaw: f32,
     pitch: f32,
@@ -26,7 +26,14 @@ struct RigState {
     pivot: Option<Vec3>,
     shown_distance: Option<f32>,
     rotation: Option<Quat>,
+    /// How far the platform under the target turned the first person view in the last step,
+    /// shown along the step as the body's own turn is.
+    carried: f32,
+    /// Where the camera object stood when the view was fixed at the first person eyes: until
+    /// it moves, the view keeps hiding the pieces the first person hid.
+    fixed_at: Option<[f32; 3]>,
 }
+#[derive(Debug)]
 struct Transition {
     from: GameCameraPose,
     elapsed: f32,
@@ -82,6 +89,41 @@ impl Cameras {
             runtime.log(format!("Câmera {id}: {warning}"));
             self.reported.insert(id, warning);
         }
+    }
+    /// What the state digest reads of the cameras (see `Runtime::state_digest`): the active
+    /// one, each rig's control by ID, the pose shown with a transition under way, the view
+    /// aspect it is framed for and the warnings given. Debug text keeps floats exact.
+    pub(super) fn write_digest(
+        &self,
+        scene: &Scene,
+        out: &mut dyn std::fmt::Write,
+    ) -> std::fmt::Result {
+        use super::state_hash::sorted;
+        // Every field, so that a new one is read here or left out on purpose.
+        let Self {
+            // Rebuilt for every presentation, and the editor's preview.
+            debug: _,
+            worlds: _,
+            query_world: _,
+            active_override,
+            states,
+            pose,
+            aspect,
+            reported,
+            key,
+            transition,
+            next_transition,
+        } = self;
+        let mut states: Vec<_> = states.iter().collect();
+        states.sort_by(|a, b| a.0.cmp(b.0));
+        write!(
+            out,
+            "{:?};{active_override:?};{states:?};{pose:?};{transition:?};{next_transition:?};\
+             {key:?};{:?};{:?}",
+            self.active(scene).map(|e| &e.id),
+            aspect.to_bits(),
+            sorted(reported),
+        )
     }
     pub(super) fn active<'a>(&self, scene: &'a Scene) -> Option<&'a crate::document::Entity> {
         self.active_override
@@ -164,6 +206,8 @@ impl Cameras {
             pivot: None,
             shown_distance: None,
             rotation: None,
+            carried: 0.,
+            fixed_at: None,
         });
         if state.authored_distance != rig.distance {
             state.distance = rig.distance;
@@ -228,6 +272,32 @@ impl Cameras {
             mode,
         }))
     }
+    /// Turns the active first person view by the turn the platform under its target gave the
+    /// body in this step (`turns`, by character), since the body's yaw is the view's; the turn
+    /// is shown along the step. A third person view keeps its own.
+    pub(super) fn carry(&mut self, scene: &Scene, turns: &[(Id, f32)]) {
+        self.settle();
+        let Some(entity) = self.active(scene) else {
+            return;
+        };
+        let target = entity.camera_rig.as_ref().and_then(|r| r.target.as_ref());
+        let Some((_, turn)) = turns.iter().find(|(id, _)| Some(id) == target) else {
+            return;
+        };
+        if self.mode(entity) != CameraMode::FirstPerson {
+            return;
+        }
+        if let Some(state) = self.states.get_mut(&entity.id) {
+            state.yaw = (state.yaw + turn).rem_euclid(std::f32::consts::TAU);
+            state.carried = *turn;
+        }
+    }
+    /// Shows the views where the last step left them, as the characters' `settle` does.
+    pub(super) fn settle(&mut self) {
+        for state in self.states.values_mut() {
+            state.carried = 0.;
+        }
+    }
     fn present(
         &mut self,
         scene: &Scene,
@@ -286,6 +356,36 @@ impl Cameras {
             ..Default::default()
         };
         let settings = rig.cloned().unwrap_or_default();
+        // The camera passes through the body it belongs to in every mode: a fixed view may
+        // stand where the eyes were.
+        if let Some(target) = rig.and_then(|r| r.target.as_ref()) {
+            options.exclude.insert(target.clone());
+            options.exclude.extend(scene.descendants(target));
+        }
+        let hides = match mode {
+            CameraMode::FirstPerson => true,
+            CameraMode::ThirdPerson => !settings.hide_first_person_only,
+            // A view fixed at the eyes keeps hiding what covered them until its object moves.
+            CameraMode::Fixed => {
+                !settings.hide_first_person_only
+                    || self.states.get(&entity.id).and_then(|s| s.fixed_at)
+                        == Some(entity.transform.position)
+            }
+        };
+        let mut hidden = Vec::new();
+        if hides {
+            let mut ids: HashSet<_> = settings.hidden.iter().cloned().collect();
+            for id in &settings.hidden {
+                ids.extend(scene.descendants(id));
+            }
+            hidden.extend(
+                scene
+                    .entities
+                    .iter()
+                    .filter(|e| ids.contains(&e.id))
+                    .map(|e| e.id.clone()),
+            );
+        }
         if mode == CameraMode::Fixed {
             let (position, rotation, _) =
                 crate::physics3d::world_pose(view.world_matrix(&entity.id)?)?;
@@ -293,7 +393,7 @@ impl Cameras {
                 position,
                 rotation,
                 fov: camera.fov,
-                hidden: Vec::new(),
+                hidden,
             };
             anchor = position;
         } else {
@@ -304,8 +404,6 @@ impl Cameras {
                 view.world_matrix(target)
                     .map_err(|_| "Alvo da câmera ausente; última vista preservada.")?,
             )?;
-            options.exclude.insert(target.clone());
-            options.exclude.extend(scene.descendants(target));
             let character = characters.states.get(target);
             let state = self
                 .states
@@ -317,6 +415,7 @@ impl Cameras {
                 } else {
                     (state.yaw, state.pitch)
                 };
+            let yaw = yaw - state.carried * (1. - alpha);
             let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
             let eye = character
                 .filter(|s| s.eye_height > 0.)
@@ -355,20 +454,6 @@ impl Cameras {
                         * settings.shoulder
                         * state.shoulder_sign;
                 anchor = pivot;
-            }
-            let mut hidden = Vec::new();
-            if mode == CameraMode::FirstPerson || !settings.hide_first_person_only {
-                let mut ids: HashSet<_> = settings.hidden.iter().cloned().collect();
-                for id in &settings.hidden {
-                    ids.extend(scene.descendants(id));
-                }
-                hidden.extend(
-                    scene
-                        .entities
-                        .iter()
-                        .filter(|e| ids.contains(&e.id))
-                        .map(|e| e.id.clone()),
-                );
             }
             desired = GameCameraPose {
                 position,
@@ -633,6 +718,7 @@ impl Runtime {
                 state.pivot = None;
                 state.rotation = None;
                 state.shown_distance = None;
+                state.carried = 0.;
                 if let Some([yaw, pitch]) = look {
                     state.yaw = yaw.rem_euclid(std::f32::consts::TAU);
                     state.pitch = pitch;
@@ -707,7 +793,7 @@ impl Runtime {
                 world.sync_scene(self.scene(), false)?;
                 self.characters.world = Some(world);
             }
-            let pending = if self.paused {
+            let pending = if self.paused || self.look_held() {
                 Vec2::ZERO
             } else {
                 Vec2::from(self.pending_look)
@@ -715,12 +801,14 @@ impl Runtime {
                         .input_timeline
                         .unconsumed_look(self.time + f64::from(self.accumulator))
             };
+            // The game pause freezes smoothing and transitions where they are.
+            let dt = if self.game_paused { 0. } else { dt.min(0.25) };
             cameras.present(
                 self.scene(),
                 &self.characters,
-                (self.accumulator / FIXED_DT).clamp(0., 1.),
+                self.presentation_alpha(),
                 pending,
-                dt.min(0.25),
+                dt,
             )
         })();
         let warning = result.err().or_else(|| {
@@ -762,17 +850,55 @@ impl Runtime {
         self.update_presentation(0.);
         Ok(())
     }
+    /// Switches the mode of the camera `id`, with a transition of `seconds`. Fixed keeps the
+    /// view the active camera shows: the camera object goes where the view is, and moving it
+    /// afterwards moves the view. A camera already fixed, or not the active one, stays where
+    /// its object is, as with [`Runtime::fix_camera_on_object`]. Fixed from the first person,
+    /// the view keeps hiding the pieces the first person hides until its object moves.
     pub fn set_camera_mode(
         &mut self,
         id: &str,
         mode: CameraMode,
         seconds: f32,
     ) -> Result<(), String> {
+        self.switch_camera_mode(id, mode, seconds, mode == CameraMode::Fixed)
+    }
+    /// Fixes the camera `id` where its object is, with a transition of `seconds` from the view
+    /// shown.
+    pub fn fix_camera_on_object(&mut self, id: &str, seconds: f32) -> Result<(), String> {
+        self.switch_camera_mode(id, CameraMode::Fixed, seconds, false)
+    }
+    fn switch_camera_mode(
+        &mut self,
+        id: &str,
+        mode: CameraMode,
+        seconds: f32,
+        keep_view: bool,
+    ) -> Result<(), String> {
         if self.entity(id).is_none_or(|e| e.camera_rig.is_none())
             || !seconds.is_finite()
             || seconds < 0.
         {
             return Err("Escolha uma câmera de personagem e uma duração válida.".into());
+        }
+        let before = self.camera_mode(id);
+        let mut eyes = None;
+        if keep_view && self.active_camera() == Some(id) && before != Some(CameraMode::Fixed) {
+            // The view as it shows now, the step's own look included.
+            self.update_presentation(0.);
+            if let Some(pose) = self.cameras.pose.clone() {
+                self.place_at(id, pose.position, pose.rotation)
+                    .map_err(|error| format!("Fixa na vista atual não moveu a câmera: {error}"))?;
+                if before == Some(CameraMode::FirstPerson) {
+                    eyes = self.entity(id).map(|e| e.transform.position);
+                }
+            }
+        }
+        if mode == CameraMode::Fixed
+            && before != Some(CameraMode::Fixed)
+            && let Some(state) = self.cameras.states.get_mut(id)
+        {
+            state.fixed_at = eyes;
         }
         let rig = self.entity_mut(id).unwrap().camera_rig.as_mut().unwrap();
         rig.mode = mode;
@@ -822,6 +948,11 @@ impl Runtime {
                 return Err("Alvo do olhar inválido.".into());
             }
         }
+        // Clearing keeps the shown view: shown at the step's end, it keeps the turn a platform
+        // gave it.
+        if let Some(state) = self.cameras.states.get_mut(id) {
+            state.carried = 0.;
+        }
         self.update_presentation(0.);
         let state = self
             .cameras
@@ -855,6 +986,7 @@ impl Runtime {
         state.yaw = yaw.rem_euclid(std::f32::consts::TAU);
         state.pitch = pitch.clamp(-limit, limit);
         state.rotation = None;
+        state.carried = 0.;
         self.update_presentation(0.);
         Ok(())
     }

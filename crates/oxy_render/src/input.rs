@@ -22,9 +22,10 @@ fn command(modifiers: Modifiers) -> bool {
     modifiers.command || modifiers.ctrl || modifiers.alt || modifiers.mac_cmd
 }
 
-/// Escape and F3 belong to the native host (pause and diagnostics). Other keys are
-/// resolved solely through project bindings. Text focus and command chords never
-/// reach either `pressed` or `held`, including fast chords released in one frame.
+/// Escape and F3 belong to the native host (the pause, or the game's pause menu when the
+/// scene has one, and diagnostics). Other keys are resolved solely through project
+/// bindings. Text focus and command chords never reach either `pressed` or `held`,
+/// including fast chords released in one frame.
 fn collect_keyboard(
     ctx: &Context,
     bindings: &BTreeMap<String, String>,
@@ -157,6 +158,11 @@ pub fn accepts_game_click(ctx: &Context) -> bool {
     ctx.data_mut(|d| d.get_temp::<MouseCapture>(egui::Id::new("oxy_relative_mouse")))
         .is_some_and(|s| s.enabled && !s.ignore_click)
 }
+/// Whether the game holds the cursor now: grabbed and hidden for relative look.
+pub fn cursor_captured(ctx: &Context) -> bool {
+    ctx.data_mut(|d| d.get_temp::<MouseCapture>(egui::Id::new("oxy_relative_mouse")))
+        .is_some_and(|s| s.relative)
+}
 pub fn collect_input(
     ctx: &Context,
     bindings: &BTreeMap<String, String>,
@@ -169,6 +175,19 @@ pub fn collect_game_input(
     bindings: &BTreeMap<String, String>,
     enabled: bool,
     relative: bool,
+) -> InputFrame {
+    collect_game_input_where(ctx, bindings, enabled, relative, |_| true)
+}
+/// `collect_game_input` for a host that knows where the game takes presses: while the cursor
+/// is free, a mouse press where `game_press` is false (on one of the game's buttons, or on the
+/// editor around the game) belongs to that control, and so do its hold and release: none of
+/// them reaches the actions bound to that mouse button.
+pub fn collect_game_input_where(
+    ctx: &Context,
+    bindings: &BTreeMap<String, String>,
+    enabled: bool,
+    relative: bool,
+    game_press: impl Fn(egui::Pos2) -> bool,
 ) -> InputFrame {
     let mut frame = collect_keyboard(ctx, bindings, enabled);
     let id = egui::Id::new("oxy_relative_mouse");
@@ -216,11 +235,15 @@ pub fn collect_game_input(
                     frame.look[1] += delta.y;
                 }
                 Event::PointerButton {
+                    pos,
                     button,
                     pressed,
                     modifiers,
-                    ..
                 } if !command(modifiers) && !state.suppressed.contains(&button) => {
+                    if pressed && !capturing && !game_press(pos) {
+                        state.suppressed.push(button);
+                        continue;
+                    }
                     let name = match button {
                         egui::PointerButton::Primary => "MouseLeft",
                         egui::PointerButton::Secondary => "MouseRight",
@@ -283,6 +306,8 @@ pub fn collect_game_input(
                 }
             }
         }
+        // A button's click that began and ended within the frame leaves nothing to suppress.
+        state.suppressed.retain(|b| down.contains(b));
     }
     state.active = if allowed {
         down.into_iter()
@@ -467,6 +492,58 @@ mod tests {
         assert!(input.pressed("pular") && input.released.contains("pular") && !input.held("pular"));
         assert_eq!(input.wheel, 0., "Explicit jump binding wins over zoom");
         assert!(mouse_frame(&ctx, true, vec![]).pressed.is_empty());
+    }
+
+    #[test]
+    fn presses_on_game_buttons_and_around_the_game_are_not_actions() {
+        let bindings = BTreeMap::from([("atacar".to_owned(), "MouseLeft".to_owned())]);
+        // A button covers the left half; the game takes presses on the rest.
+        let game = |p: egui::Pos2| p.x > 100.;
+        let ctx = Context::default();
+        let frame = |relative: bool, events: Vec<Event>| {
+            let mut output = InputFrame::default();
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    output = collect_game_input_where(ctx, &bindings, true, relative, game);
+                },
+            );
+            output
+        };
+        let button = |x: f32, pressed: bool| Event::PointerButton {
+            pos: egui::pos2(x, 10.),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        frame(false, vec![]);
+        // On the button: no press, no hold while it is down, no release.
+        let press = frame(false, vec![button(50., true)]);
+        assert!(
+            press.pressed.is_empty() && press.held.is_empty(),
+            "{press:?}"
+        );
+        assert!(frame(false, vec![]).held.is_empty());
+        assert!(frame(false, vec![button(50., false)]).released.is_empty());
+        // A quick click within one frame neither.
+        let quick = frame(false, vec![button(50., true), button(50., false)]);
+        assert!(quick.pressed.is_empty() && quick.released.is_empty());
+        // Elsewhere in the game, the action as before.
+        let press = frame(false, vec![button(300., true)]);
+        assert!(press.pressed("atacar") && press.held("atacar"));
+        assert!(
+            frame(false, vec![button(300., false)])
+                .released
+                .contains("atacar")
+        );
+        // A captured cursor has no place: every press is the game's.
+        frame(true, vec![]);
+        frame(true, vec![]);
+        let captured = frame(true, vec![button(50., true)]);
+        assert!(captured.pressed("atacar"), "{captured:?}");
     }
 
     #[test]

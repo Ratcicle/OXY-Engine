@@ -601,7 +601,10 @@ fn native_gpu_editable_mesh_equivalence() {
 #[ignore = "Requires a native WGPU adapter; run explicitly for graphics validation"]
 fn native_gpu_capture_collider_view_and_free_cameras() {
     use crate::offscreen::{ShotView, framed_bounds, headless_state, view_png};
-    use oxy_core::physics3d::{Collider3d, CollisionShape};
+    use oxy_core::{
+        document::{UiAnchor, UiElement, UiKind, Value},
+        physics3d::{Collider3d, CollisionShape},
+    };
     let rs = headless_state().expect("Native WGPU adapter");
     let mut renderer = Renderer::new(&rs);
     let mut project = Project::new("Captura");
@@ -625,7 +628,26 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
         sensor: true,
         ..Default::default()
     });
-    scene.entities = vec![floor, checkpoint];
+    // The game interface: a white text and a bar three quarters full of white.
+    let mut score = Entity::new("Placar", None);
+    score.ui = Some(UiElement {
+        text: "Pontos".into(),
+        position: [16., 16.],
+        ..Default::default()
+    });
+    let mut health = Entity::new("Vida", None);
+    health.attributes.insert("vida".into(), Value::Number(75.));
+    health.ui = Some(UiElement {
+        kind: UiKind::Bar,
+        anchor: UiAnchor::BottomRight,
+        position: [16., 16.],
+        size: [200., 28.],
+        text: String::new(),
+        color: [0.95, 0.95, 0.95, 1.],
+        binding_attribute: "vida".into(),
+        ..Default::default()
+    });
+    scene.entities = vec![floor, checkpoint, score, health];
     let mut runtime = oxy_core::runtime::Runtime::new(&project, &project.start_scene).unwrap();
     // What the editor shows must survive a capture.
     renderer.render(
@@ -640,8 +662,9 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
     );
     let shown = read_pixels(&renderer, &rs);
     let bounds = framed_bounds(runtime.scene(), &[]).unwrap();
+    let interface = oxy_core::game_ui::ui_state(runtime.project(), runtime.scene(), [320., 240.]);
     let decode = |png: &[u8]| image::load_from_memory(png).unwrap().to_rgba8();
-    let mut shot = |view: &ShotView, colliders: bool| {
+    let mut shot = |view: &ShotView, interface: bool, colliders: bool| {
         let (png, camera) = view_png(
             &rs,
             &mut renderer,
@@ -649,14 +672,15 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
             Path::new(""),
             [320, 240],
             view,
+            interface,
             colliders,
         )
         .unwrap();
         (decode(&png), camera)
     };
-    let (plain, camera) = shot(&ShotView::Top(bounds), false);
+    let (plain, camera) = shot(&ShotView::Top(bounds), false, false);
     assert_eq!(camera.kind, SceneKind::TwoD, "orthographic top view");
-    let (with, _) = shot(&ShotView::Top(bounds), true);
+    let (with, _) = shot(&ShotView::Top(bounds), false, true);
     assert_eq!(plain.dimensions(), (320, 240));
     let count = |image: &image::RgbaImage, test: fn(&[u8]) -> bool| {
         image.pixels().filter(|p| test(&p.0)).count()
@@ -679,11 +703,228 @@ fn native_gpu_capture_collider_view_and_free_cameras() {
             fov: 60.,
         },
         false,
+        false,
     );
     assert_eq!(camera.kind, SceneKind::ThreeD);
     assert!(blue(&free.get_pixel(160, 120).0), "looking at the floor");
     assert!(!blue(&free.get_pixel(160, 2).0), "background above it");
+
+    // The game camera with the interface: drawn as the player draws it, inside the rects the
+    // simulation reports for the same size, and only when asked.
+    let (drawn, _) = shot(&ShotView::Game, true, false);
+    let (bare, _) = shot(&ShotView::Game, false, false);
+    let bright: fn(&[u8]) -> bool = |p| p[0] > 200 && p[1] > 200 && p[2] > 200;
+    let inside = |rect: [f64; 4], x: u32, y: u32| {
+        let (x, y) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+        x > rect[0] && x < rect[0] + rect[2] && y > rect[1] && y < rect[1] + rect[3]
+    };
+    let lit = |image: &image::RgbaImage, rect: [f64; 4]| {
+        image
+            .enumerate_pixels()
+            .filter(|(x, y, p)| inside(rect, *x, *y) && bright(&p.0))
+            .count()
+    };
+    assert_eq!(interface.len(), 2);
+    for element in &interface {
+        assert!(
+            lit(&drawn, element.rect) > 40,
+            "{} drawn at {:?}",
+            element.name,
+            element.rect
+        );
+        assert_eq!(lit(&bare, element.rect), 0, "{} left out", element.name);
+    }
+    assert_eq!(count(&bare, bright), 0);
+    let stray = drawn
+        .enumerate_pixels()
+        .filter(|(x, y, p)| bright(&p.0) && !interface.iter().any(|e| inside(e.rect, *x, *y)))
+        .count();
+    assert_eq!(stray, 0, "nothing bright outside the interface rects");
+    // Past three quarters, the bar shows its dark track.
+    let [x, y, width, height] = interface[1].rect;
+    assert_eq!(interface[1].fraction, Some(0.75));
+    assert_eq!(
+        lit(
+            &drawn,
+            [x + width * 0.8, y + 3., width * 0.2 - 3., height - 6.]
+        ),
+        0
+    );
+    assert!(lit(&drawn, [x + 3., y + 3., width * 0.2, height - 6.]) > 40);
+    let output = oxy_core::qa::output_dir("v0.6/captures");
+    std::fs::create_dir_all(&output).unwrap();
+    for (name, image) in [
+        ("game-interface.png", &drawn),
+        ("game-without-interface.png", &bare),
+        ("top-colliders.png", &with),
+    ] {
+        image.save(output.join(name)).unwrap();
+    }
+    println!("Capture evidence: {}", output.display());
     assert_eq!(renderer.target_size(), [64, 48]);
     assert_eq!(read_pixels(&renderer, &rs), shown);
+    assert!(renderer.take_errors().is_empty());
+}
+
+/// Captures `project`'s first scene through `camera`, with nothing painted over it.
+fn background_shot(
+    rs: &RenderState,
+    renderer: &mut Renderer,
+    project: &Project,
+    camera: &CameraState,
+) -> image::RgbaImage {
+    let (pixels, size) = renderer
+        .capture(
+            rs,
+            project,
+            &project.scenes[0],
+            Path::new(""),
+            camera,
+            [320, 240],
+            None,
+            crate::offscreen::Overlays {
+                interface: false,
+                colliders: None,
+                pixels_per_point: 1.,
+            },
+        )
+        .unwrap();
+    image::RgbaImage::from_raw(size[0], size[1], pixels).unwrap()
+}
+
+#[test]
+#[ignore = "Requires a native WGPU adapter; run explicitly for graphics validation"]
+fn native_gpu_scene_backgrounds() {
+    use crate::offscreen::{ShotView, framed_bounds, headless_state, view_png};
+    use oxy_core::document::Background;
+    let rs = headless_state().expect("Native WGPU adapter");
+    let mut renderer = Renderer::new(&rs);
+    renderer.show_grid = false;
+    let mut project = Project::new("Fundos");
+    let scene = &mut project.scenes[0];
+    scene.kind = SceneKind::ThreeD;
+    scene.background = Some(Background::Sky);
+    let mut floor = Entity::new("Chão", Some(Primitive::Cube));
+    floor.dimensions = [6., 1., 6.];
+    floor.transform.position = [0., -0.5, 0.];
+    floor.material.color = [0.15, 0.6, 0.2, 1.];
+    scene.entities = vec![floor];
+    // Level with the horizon, 8 m from the floor's middle, along -Z turned by `yaw`.
+    let level = |scene: &Scene, yaw: f32| {
+        let mut camera = CameraState::for_scene(scene);
+        camera.target = Vec3::new(0., 1., 0.);
+        camera.distance = 8.;
+        camera.yaw = yaw;
+        camera.pitch = 0.;
+        camera
+    };
+    let sky: fn(&[u8]) -> bool = |p| p[2] > 200 && p[2] > p[0] + 25 && p[1] > 120;
+    let close = |p: &[u8], color: [f32; 4]| {
+        p.iter()
+            .zip(color)
+            .all(|(p, c)| p.abs_diff((c * 255.).round() as u8) <= 1)
+    };
+    let output = oxy_core::qa::output_dir("v0.6/backgrounds");
+    std::fs::create_dir_all(&output).unwrap();
+
+    // Looking along -Z: the sky above the horizon, the floor drawn over it.
+    let forward = background_shot(&rs, &mut renderer, &project, &level(&project.scenes[0], 0.));
+    forward.save(output.join("sky-forward.png")).unwrap();
+    for x in [0, 160, 319] {
+        for y in [0, 40, 100] {
+            let p = forward.get_pixel(x, y).0;
+            assert!(sky(&p), "sky at ({x}, {y}): {p:?}");
+        }
+    }
+    let ground = forward.get_pixel(160, 150).0;
+    assert!(
+        ground[1] > ground[0] + 40,
+        "the floor over the sky: {ground:?}"
+    );
+    assert_ne!(
+        forward.get_pixel(160, 0).0,
+        forward.get_pixel(160, 100).0,
+        "the panorama, not one color"
+    );
+    assert_eq!(renderer.stats().draw_calls, 2, "the sky and the floor");
+    // The same view again: the same image, nothing new to upload.
+    let stats = renderer.stats();
+    let again = background_shot(&rs, &mut renderer, &project, &level(&project.scenes[0], 0.));
+    assert_eq!(again, forward);
+    assert_eq!(renderer.stats().uniform_uploads, stats.uniform_uploads);
+
+    // Looking along +Z, where the panorama wraps around: no seam down the middle.
+    let back = background_shot(
+        &rs,
+        &mut renderer,
+        &project,
+        &level(&project.scenes[0], std::f32::consts::PI),
+    );
+    back.save(output.join("sky-wrap.png")).unwrap();
+    for y in 0..100 {
+        let [a, b] = [back.get_pixel(159, y).0, back.get_pixel(160, y).0];
+        assert!(
+            a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 8),
+            "seam at row {y}: {a:?} {b:?}"
+        );
+        assert!(sky(&a), "sky behind at row {y}: {a:?}");
+    }
+
+    // Looking up, wide: every pixel is sky, clouds and the sun included.
+    let mut up = level(&project.scenes[0], 2.);
+    up.target.y = 30.;
+    up.pitch = -0.8;
+    up.fov = 100.;
+    let above = background_shot(&rs, &mut renderer, &project, &up);
+    above.save(output.join("sky-up.png")).unwrap();
+    assert!(
+        above
+            .pixels()
+            .all(|p| p[2] > 180 && p[2] >= p[0] && p[2] >= p[1])
+    );
+
+    // A capture from above is orthographic: around the floor, the sky's horizon color.
+    let mut runtime = oxy_core::runtime::Runtime::new(&project, &project.start_scene).unwrap();
+    let mut bounds = framed_bounds(runtime.scene(), &[]).unwrap();
+    bounds.min -= Vec3::splat(4.);
+    bounds.max += Vec3::splat(4.);
+    let (png, camera) = view_png(
+        &rs,
+        &mut renderer,
+        &mut runtime,
+        Path::new(""),
+        [320, 240],
+        &ShotView::Top(bounds),
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(camera.kind, SceneKind::TwoD);
+    let top = image::load_from_memory(&png).unwrap().to_rgba8();
+    top.save(output.join("sky-top.png")).unwrap();
+    assert!(close(&top.get_pixel(2, 2).0, crate::sky::HORIZON));
+    let middle = top.get_pixel(160, 120).0;
+    assert!(
+        middle[1] > middle[0] + 40,
+        "the floor in the middle: {middle:?}"
+    );
+
+    // A color clears to itself, in 3D and in 2D; without a background, the dark color.
+    let orange = [0.9, 0.45, 0.1, 1.];
+    project.scenes[0].background = Some(Background::Color(orange));
+    let colored = background_shot(&rs, &mut renderer, &project, &level(&project.scenes[0], 0.));
+    colored.save(output.join("color-3d.png")).unwrap();
+    assert!(close(&colored.get_pixel(5, 5).0, orange));
+    assert_eq!(renderer.stats().draw_calls, 1, "the floor alone");
+    project.scenes[0].kind = SceneKind::TwoD;
+    project.scenes[0].entities[0].primitive = Some(Primitive::Rectangle);
+    let camera = CameraState::for_scene(&project.scenes[0]);
+    let flat = background_shot(&rs, &mut renderer, &project, &camera);
+    flat.save(output.join("color-2d.png")).unwrap();
+    assert!(close(&flat.get_pixel(5, 5).0, orange));
+    project.scenes[0].background = None;
+    let dark = background_shot(&rs, &mut renderer, &project, &camera);
+    assert!(close(&dark.get_pixel(5, 5).0, Background::DARK));
+    println!("Background evidence: {}", output.display());
     assert!(renderer.take_errors().is_empty());
 }

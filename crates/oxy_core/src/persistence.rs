@@ -1,6 +1,6 @@
 //! Validated documents and staged, recoverable file replacement.
 use crate::{
-    document::{Asset, AssetKind, Id, Project, new_id, validate_project},
+    document::{Asset, AssetKind, GameSettings, Id, Project, new_id, validate_project},
     migration::MigrationError,
     painting::PaintImage,
     texture_cache::TextureCache,
@@ -83,6 +83,9 @@ pub enum PersistenceError {
         "Falha no salvamento: {error}. Cópias de recuperação foram mantidas na pasta. Falha ao restaurar: {restore}"
     )]
     SaveRecoveryKept { error: String, restore: String },
+    /// A folder a new project may not go in (see [`create_project`]).
+    #[error("{0}")]
+    ProjectFolder(String),
 }
 impl From<PersistenceError> for String {
     fn from(error: PersistenceError) -> Self {
@@ -133,6 +136,32 @@ fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), 
     }
     Ok((project, migrated))
 }
+/// The game's title (its name, else the project's) and its settings, read from the document at
+/// `path` without loading the project: the player opens its window before that. None when the
+/// document cannot be read; settings it cannot use read as the defaults. Loading then says what
+/// is wrong.
+pub fn read_game_settings(path: &Path) -> Option<(String, GameSettings)> {
+    let path = if path.is_dir() {
+        path.join(PROJECT_FILE)
+    } else {
+        path.to_owned()
+    };
+    if fs::metadata(&path).ok()?.len() > 64 * 1024 * 1024 {
+        return None;
+    }
+    let document: serde_json::Value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+    let game = document
+        .get("game")
+        .and_then(|game| serde_json::from_value::<GameSettings>(game.clone()).ok())
+        .filter(|game| game.validate().is_ok())
+        .unwrap_or_default();
+    let title = match game.title.trim() {
+        "" => document["name"].as_str()?.trim(),
+        title => title,
+    }
+    .to_owned();
+    (!title.is_empty()).then_some((title, game))
+}
 pub fn save_project(path: &Path, project: &Project) -> Result<(), PersistenceError> {
     validate_project(project).map_err(PersistenceError::InvalidProject)?;
     let path = if path.is_dir() {
@@ -145,6 +174,111 @@ pub fn save_project(path: &Path, project: &Project) -> Result<(), PersistenceErr
     let mut writes: Vec<_> = crate::migration::backup(&path)?.into_iter().collect();
     writes.push((path, serde_json::to_vec_pretty(project)?));
     transaction_write(writes)
+}
+/// Writes `project` as a new project in `folder`, as the editor's first Salvar of a new project
+/// does (the project file alone, in the current format), where an agent may create one: a full
+/// path on a disk of this computer, not a disk's root, neither in nor holding a `protected`
+/// folder (the engine's), and a folder that is new or empty, named as such (not as its project
+/// file). Everything is checked before anything is written, and the folders made for it go
+/// again when saving fails. Answers the project file.
+pub fn create_project(
+    folder: &Path,
+    project: &Project,
+    protected: &[PathBuf],
+) -> Result<PathBuf, PersistenceError> {
+    validate_project(project).map_err(PersistenceError::InvalidProject)?;
+    let folder = new_project_folder(folder, protected)?;
+    // Only what is truly absent: a link that leads nowhere is the person's, not made here.
+    let created: Vec<PathBuf> = folder
+        .ancestors()
+        .take_while(|folder| {
+            matches!(fs::symlink_metadata(folder), Err(e) if e.kind() == io::ErrorKind::NotFound)
+        })
+        .map(Path::to_owned)
+        .collect();
+    let file = folder.join(PROJECT_FILE);
+    let saved = fs::create_dir_all(&folder)
+        .map_err(io_context("Não foi possível criar pasta do projeto"))
+        .and_then(|()| save_project(&file, project));
+    if let Err(error) = saved {
+        // Only empty folders go, the deepest first.
+        for folder in &created {
+            let _ = fs::remove_dir(folder);
+        }
+        return Err(error);
+    }
+    Ok(file)
+}
+/// `folder` as a new project's folder, with `.` and `..` worked out, refusing what
+/// [`create_project`] refuses.
+fn new_project_folder(folder: &Path, protected: &[PathBuf]) -> Result<PathBuf, PersistenceError> {
+    use crate::asset_import::{local_disk_path, normalized, overlaps, real};
+    let refuse = |message: String| Err(PersistenceError::ProjectFolder(message));
+    let text = folder.to_string_lossy();
+    let folder = normalized(local_disk_path(&text, true).map_err(PersistenceError::ProjectFolder)?);
+    if folder.parent().is_none() {
+        return refuse(format!(
+            "A raiz de um disco ({}) não recebe projetos; escolha uma pasta dentro dele.",
+            folder.display()
+        ));
+    }
+    let resolved = real(&folder);
+    if protected
+        .iter()
+        .any(|engine| overlaps(&resolved, &real(engine)))
+    {
+        return refuse(format!(
+            "A pasta do projeto ({}) não pode ficar dentro da pasta da OXY Engine nem contê-la; escolha outra pasta.",
+            folder.display()
+        ));
+    }
+    let project_file = |path: &Path| {
+        path.file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(PROJECT_FILE))
+    };
+    let meta = match fs::metadata(&folder) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        meta => Some(meta.map_err(io_context("Não foi possível ler a pasta do projeto"))?),
+    };
+    // A project already there, named by its folder or by its file.
+    let file = if meta.as_ref().is_some_and(fs::Metadata::is_dir) {
+        folder.join(PROJECT_FILE)
+    } else {
+        folder.clone()
+    };
+    if file.is_file() && project_file(&file) {
+        return refuse(format!(
+            "Já existe um projeto em {}. Abra-o ou escolha outra pasta.",
+            file.parent().unwrap_or(&folder).display()
+        ));
+    }
+    // Else the project would go in a folder named like its file.
+    if project_file(&folder) {
+        return refuse(format!(
+            "Informe a pasta do projeto ({}), não o arquivo {PROJECT_FILE}.",
+            folder.parent().unwrap_or(&folder).display()
+        ));
+    }
+    let Some(meta) = meta else {
+        return Ok(folder);
+    };
+    if !meta.is_dir() {
+        return refuse(format!(
+            "{} não é uma pasta; escolha uma pasta para o projeto.",
+            folder.display()
+        ));
+    }
+    let empty = fs::read_dir(&folder)
+        .map_err(io_context("Não foi possível ler a pasta do projeto"))?
+        .next()
+        .is_none();
+    if !empty {
+        return refuse(format!(
+            "A pasta {} já tem outros arquivos; um projeto novo vai numa pasta nova ou vazia.",
+            folder.display()
+        ));
+    }
+    Ok(folder)
 }
 /// Paint buffers stay in memory until the whole save has been staged successfully.
 /// The manifest is replaced last; every previous file has a rollback copy.
@@ -426,7 +560,7 @@ fn validate_asset_file(asset: &Asset, path: &Path) -> Result<(), PersistenceErro
     }
     Ok(())
 }
-fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
+pub(crate) fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
     let meta = fs::metadata(path).map_err(|source| PersistenceError::AssetMissing {
         name: asset.name.clone(),
         source,
@@ -776,6 +910,43 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn game_settings_are_read_without_loading_the_project() {
+        let dir = temp();
+        let path = dir.join(PROJECT_FILE);
+        let mut project = Project::new("Corrida");
+        save_project(&path, &project).unwrap();
+        assert_eq!(
+            read_game_settings(&dir),
+            Some(("Corrida".to_owned(), GameSettings::default()))
+        );
+        project.game = GameSettings {
+            title: "Corrida Noturna".into(),
+            window: [800, 600],
+            fullscreen: true,
+        };
+        save_project(&path, &project).unwrap();
+        assert_eq!(
+            read_game_settings(&path),
+            Some(("Corrida Noturna".to_owned(), project.game.clone()))
+        );
+        // A project that would not load still opens its window; settings out of range or a
+        // document that cannot be read give the defaults.
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["scenes"] = serde_json::json!([]);
+        json["game"]["window"] = serde_json::json!([10, 10]);
+        fs::write(&path, json.to_string()).unwrap();
+        assert!(load_project(&path).is_err());
+        assert_eq!(
+            read_game_settings(&path),
+            Some(("Corrida".to_owned(), GameSettings::default()))
+        );
+        fs::write(&path, b"{ quebrado").unwrap();
+        assert_eq!(read_game_settings(&path), None);
+        assert_eq!(read_game_settings(&dir.join("ausente")), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn imported_png_and_paint_link_survive() {
         let dir = temp();
         let origin = dir.join("source.png");
@@ -1029,5 +1200,91 @@ mod tests {
         );
         assert_eq!(restored, project);
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn new_projects_go_only_to_new_or_empty_folders_and_leave_nothing_when_refused() {
+        use crate::document::SceneKind;
+        let dir = temp();
+        let engine = dir.join("OXY Engine");
+        fs::create_dir_all(&engine).unwrap();
+        let protected = [engine.clone()];
+        let project = crate::editing::blank_project("Novo", SceneKind::ThreeD).unwrap();
+        let occupied = dir.join("Ocupada");
+        fs::create_dir_all(&occupied).unwrap();
+        fs::write(occupied.join("nota.txt"), b"de outra pessoa").unwrap();
+        let existing = dir.join("Existente");
+        save_project(&existing.join(PROJECT_FILE), &Project::new("Antigo")).unwrap();
+        let listing = || {
+            let mut names: Vec<_> = walk(&dir);
+            names.sort();
+            names
+        };
+        let before = listing();
+        for (folder, expected) in [
+            (PathBuf::from("Projetos"), "caminho completo da pasta"),
+            (PathBuf::from(r"\\servidor\projetos"), "rede"),
+            (PathBuf::from(r"C:\"), "raiz de um disco"),
+            (PathBuf::from(r"C:\Projetos\.."), "raiz de um disco"),
+            (engine.join("Novo"), "pasta da OXY Engine"),
+            (dir.clone(), "pasta da OXY Engine"),
+            (occupied.clone(), "outros arquivos"),
+            (occupied.join("nota.txt"), "não é uma pasta"),
+            (existing.clone(), "Já existe um projeto"),
+            (existing.join(PROJECT_FILE), "Já existe um projeto"),
+            (
+                dir.join("Novo").join(PROJECT_FILE),
+                "não o arquivo project.oxy.json",
+            ),
+            (dir.join("Novo").join("Project.OXY.json"), "não o arquivo"),
+        ] {
+            let error = create_project(&folder, &project, &protected)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{folder:?}: {error}");
+        }
+        // An invalid project is refused before its folder exists, and a save that fails takes
+        // the folders made for it away.
+        let mut invalid = project.clone();
+        invalid.start_scene = "nenhuma".into();
+        assert!(create_project(&dir.join("Inválido").join("Fundo"), &invalid, &protected).is_err());
+        let mut missing = project.clone();
+        missing.assets.push(Asset {
+            id: new_id(),
+            name: "Ausente".into(),
+            path: "assets/ausente.png".into(),
+            kind: AssetKind::Texture,
+            model: None,
+        });
+        let error = create_project(&dir.join("Falha").join("Fundo"), &missing, &protected)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Ausente"), "{error}");
+        assert_eq!(listing(), before);
+        // New folders are made; an empty one is taken, `..` worked out.
+        let file = create_project(&dir.join("Jogos").join("Novo"), &project, &protected).unwrap();
+        assert_eq!(file, dir.join("Jogos").join("Novo").join(PROJECT_FILE));
+        assert_eq!(load_project(&file).unwrap(), project);
+        let empty = dir.join("Vazia");
+        fs::create_dir(&empty).unwrap();
+        let file = create_project(&empty.join("x").join(".."), &project, &protected).unwrap();
+        assert_eq!(file, empty.join(PROJECT_FILE));
+        assert_eq!(
+            fs::read_dir(&empty).unwrap().count(),
+            1,
+            "the project file alone"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    /// Every file and folder under `root`, relative to it.
+    fn walk(root: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                found.extend(walk(&path));
+            }
+            found.push(path);
+        }
+        found
     }
 }

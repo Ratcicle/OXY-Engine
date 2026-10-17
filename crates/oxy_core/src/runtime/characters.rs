@@ -32,17 +32,88 @@ pub(super) struct Characters {
     /// (character, platform) pairs already warned about a released support: once per scene
     /// load, however often the support switches between platforms.
     released: HashSet<(Id, Id)>,
+    /// How far the platforms under them turned the characters this step, in scene order: the
+    /// first person view turns with them.
+    turns: Vec<(Id, f32)>,
     sensor_pairs: HashSet<(Id, Id)>,
     sensor_events: Vec<SensorCrossing>,
 }
 impl Characters {
+    /// What the state digest reads of character `id` (see `Runtime::state_digest`): its state
+    /// and what logic asked of it for the coming step. None when it is not a character.
+    pub(super) fn write_character(
+        &self,
+        id: &str,
+        out: &mut dyn std::fmt::Write,
+    ) -> Option<std::fmt::Result> {
+        let state = self.states.get(id)?;
+        Some(write!(
+            out,
+            "{state:?};{:?};{};{:?};{:?};{};{:?}",
+            self.intents.get(id),
+            self.jumps.contains(id),
+            self.sprints.get(id),
+            self.crouches.get(id),
+            self.slides.contains(id),
+            self.paths.get(id)
+        ))
+    }
+    /// The frame platform `id` moved by in the last step, which carries whoever stands on it.
+    pub(super) fn write_platform(
+        &self,
+        id: &str,
+        out: &mut dyn std::fmt::Write,
+    ) -> Option<std::fmt::Result> {
+        self.platforms.get(id).map(|frame| write!(out, "{frame:?}"))
+    }
+    /// The rest the state digest reads, belonging to no one character: pairs in contact,
+    /// warnings given, and movement records and sensor crossings still to come.
+    pub(super) fn write_shared(&self, out: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        use super::state_hash::sorted;
+        // Every field, so that a new one is read somewhere or left out on purpose.
+        let Self {
+            // Synced from the scene every step.
+            world: _,
+            overrides: _,
+            // Handed to the cameras in the step that turned them.
+            turns: _,
+            // Read per object by write_character and write_platform.
+            states: _,
+            intents: _,
+            jumps: _,
+            sprints: _,
+            crouches: _,
+            slides: _,
+            paths: _,
+            platforms: _,
+            sensor_pairs,
+            lateral,
+            released,
+            ignored_tracks,
+            looped,
+            reported,
+            events,
+            records,
+            pending_records,
+            sensor_events,
+            warnings,
+        } = self;
+        write!(
+            out,
+            "{:?};{:?};{:?};{:?};{:?};{:?};{events:?};{records:?};{pending_records:?};\
+             {sensor_events:?};{warnings:?}",
+            sorted(sensor_pairs),
+            sorted(lateral),
+            sorted(released),
+            sorted(ignored_tracks),
+            sorted(looped),
+            sorted(reported),
+        )
+    }
     pub(super) fn presentation_worlds(&self, alpha: f32) -> HashMap<Id, Mat4> {
         let mut worlds = HashMap::with_capacity(self.states.len() + self.platforms.len());
         for (id, platform) in &self.platforms {
-            if !platform.discontinuous {
-                let mut matrix = platform.matrix;
-                let position = matrix.w_axis.truncate() - platform.delta * (1. - alpha);
-                matrix.w_axis = position.extend(1.);
+            if let Some(matrix) = platform.shown(alpha) {
                 worlds.insert(id.clone(), matrix);
             }
         }
@@ -73,15 +144,33 @@ impl Characters {
         self.sprints.clear();
         self.crouches.clear();
         self.slides.clear();
-        self.paths.clear();
         for state in self.states.values_mut() {
             state.jump_until = None;
             state.want_crouch = false;
             state.sprinting = false;
+        }
+        self.settle();
+    }
+    /// Shows everyone, and the platforms, where the last step left them, with no movement still
+    /// to interpolate, as a pause starts or ends. What logic asked of them stays, a toggled
+    /// crouch too.
+    pub(super) fn settle(&mut self) {
+        self.paths.clear();
+        for state in self.states.values_mut() {
             state.previous_position = state.position;
             state.previous_eye_height = state.eye_height;
             state.previous_yaw = state.yaw;
         }
+        for frame in self.platforms.values_mut() {
+            frame.settle();
+        }
+    }
+    /// Drops the one-step requests logic made (movement, jumps, slides), which the game pause
+    /// kept from running.
+    pub(super) fn forget_requests(&mut self) {
+        self.intents.clear();
+        self.jumps.clear();
+        self.slides.clear();
     }
     fn step(
         &mut self,
@@ -107,8 +196,8 @@ impl Characters {
         #[cfg(feature = "profiling")]
         let prepare_started = std::time::Instant::now();
         let mut evaluation = SceneEvaluation::new(scene)?;
-        // A platform that turns, scales or jumps is reported by the characters it drops
-        // (motor), not on its own: with nobody on it, nothing goes wrong.
+        // A platform that turns too fast, scales or jumps is reported by the characters it
+        // drops (motor), not on its own: with nobody on it, nothing goes wrong.
         self.platforms =
             platforms::advance(scene, &mut evaluation, &self.platforms, &self.looped, dt)?;
         self.ignored_tracks.retain(|(owner, clip, target)| {
@@ -127,6 +216,7 @@ impl Characters {
                 .map(|r| (r.object.clone(), r.event.clone())),
         );
         self.paths.clear();
+        self.turns.clear();
         self.states.retain(|id, _| {
             evaluation
                 .index
@@ -241,12 +331,7 @@ impl Characters {
                         .is_some_and(|r| r.target.as_deref() == Some(&id))
             });
             if config.enabled && !first_person {
-                let reference = match config.reference {
-                    MovementReference::World => 0.,
-                    MovementReference::Body => state.yaw,
-                    MovementReference::Camera => state.look_yaw,
-                };
-                let direction = wish_direction(axis, reference);
+                let direction = wish_direction(axis, config.reference.yaw(state));
                 let target = if config.facing == BodyFacing::Look {
                     Some(state.look_yaw)
                 } else if direction.length_squared() > 1e-8 {
@@ -286,6 +371,7 @@ impl Characters {
             };
             let events_before = self.events.len();
             let records_before = self.records.len();
+            let turn;
             let result = if config.enabled {
                 crate::metrics::timed(
                     || {
@@ -315,6 +401,7 @@ impl Characters {
                     continue;
                 }
                 Ok(result) => {
+                    turn = result.turn;
                     if let Some(warning) = result.warning {
                         self.warnings.push((id.clone(), warning));
                     }
@@ -329,7 +416,8 @@ impl Characters {
                             id.clone(),
                             format!(
                                 "Apoio em {name} liberado sem herdar velocidade, porque a \
-                                 plataforma girou, mudou de escala ou saltou de posição."
+                                 plataforma girou rápido demais, mudou de escala ou saltou de \
+                                 posição."
                             ),
                         ));
                     }
@@ -415,6 +503,9 @@ impl Characters {
                 continue;
             }
             scene.entities[i].transform = transform;
+            if turn != 0. {
+                self.turns.push((id.clone(), turn));
+            }
             self.overrides.insert(
                 id.clone(),
                 ColliderOverride {
@@ -513,6 +604,8 @@ impl Runtime {
         };
         self.cameras = cameras;
         let mut characters = std::mem::take(&mut self.characters);
+        // Timing windows (coyote time, jump buffer) run on the game clock, across the pause.
+        let time = self.game_time();
         let scene = self
             .project
             .scenes
@@ -524,13 +617,21 @@ impl Runtime {
             &self.project.surfaces,
             input,
             control.as_ref(),
-            self.time,
+            time,
             FIXED_DT,
         );
         let failed = result.is_err();
         if let Err(error) = result {
             self.log(format!("Movimento 3D: {error}"));
         }
+        let scene = self
+            .project
+            .scenes
+            .iter()
+            .find(|s| s.id == self.scene_id)
+            .unwrap();
+        self.cameras
+            .carry(scene, &std::mem::take(&mut characters.turns));
         for (id, error) in std::mem::take(&mut characters.warnings) {
             if characters.reported.get(&id) != Some(&error) {
                 self.log(format!("Personagem {id}: {error}"));
@@ -548,6 +649,13 @@ impl Runtime {
     }
     pub fn character_state(&self, id: &str) -> Option<&CharacterState> {
         self.characters.states.get(id)
+    }
+    /// The yaw character `id`'s movement axis turns with, as its movement reference picks it in
+    /// the step (see [`wish_direction`]): 0 for World, the body's for Body, the camera's for
+    /// Camera. None when `id` is not a character of the running scene.
+    pub fn movement_yaw(&self, id: &str) -> Option<f32> {
+        let config = self.entity(id)?.character3d.as_ref()?;
+        Some(config.reference.yaw(self.characters.states.get(id)?))
     }
     pub fn physics_world(&self) -> Option<&PhysicsWorld> {
         self.characters.world.as_ref()
@@ -593,8 +701,10 @@ impl Runtime {
         self.characters.jumps.insert(id.into());
         Ok(())
     }
+    /// Whether the host should grab the cursor: a camera that turns with the mouse, outside the
+    /// game pause, whose menu needs a free cursor, and unless logic showed the cursor.
     pub fn wants_relative_mouse(&self) -> bool {
-        self.cameras.relative(self.scene())
+        !self.look_held() && self.cameras.relative(self.scene())
     }
     /// Presentation-only pose. Unconsumed look is displayed immediately, without
     /// changing collision positions or consuming the same delta a second time.
@@ -614,7 +724,7 @@ impl Runtime {
         let forward = rotation * -Vec3::Z;
         let initial = CharacterState::new(position, (-forward.x).atan2(-forward.z));
         let state = self.characters.states.get(target).unwrap_or(&initial);
-        let pending = if state.look_blocks.is_empty() {
+        let pending = if state.look_blocks.is_empty() && !self.look_held() {
             Vec2::from(self.pending_look)
                 + self
                     .input_timeline
@@ -623,7 +733,7 @@ impl Runtime {
             Vec2::ZERO
         };
         let (yaw, pitch) = rig.look(state.yaw, state.pitch, pending);
-        let alpha = (self.accumulator / FIXED_DT).clamp(0., 1.);
+        let alpha = self.presentation_alpha();
         Some(GameCameraPose {
             position: state.previous_position.lerp(state.position, alpha)
                 + Vec3::Y

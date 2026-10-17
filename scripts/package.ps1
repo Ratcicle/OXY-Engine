@@ -13,7 +13,7 @@ $projectResolved = (Resolve-Path -LiteralPath $projectCandidate).Path
 $manifestPath = if (Test-Path -LiteralPath $projectResolved -PathType Container) { Join-Path $projectResolved 'project.oxy.json' } else { $projectResolved }
 $dataRoot = Split-Path $manifestPath -Parent
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.schema_version -notin @(1,2,3,4)) { throw 'Versão incompatível: o pacote aceita schema_version 1, 2, 3 e 4.' }
+if ($manifest.schema_version -notin @(1,2,3,4,5)) { throw 'Versão incompatível: o pacote aceita schema_version 1 a 5.' }
 $destinationPath = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($Destination)) { $Destination } else { Join-Path $workspace $Destination }))
 if ($destinationPath.TrimEnd('\','/') -eq $workspace.TrimEnd('\','/') -or $destinationPath.TrimEnd('\','/') -eq $dataRoot.TrimEnd('\','/')) { throw 'Escolha uma pasta de pacote separada do projeto e do repositório.' }
 if ($destinationPath.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($destinationPath).TrimEnd('\','/')) { throw 'A raiz de um disco não pode ser pasta de pacote.' }
@@ -70,6 +70,8 @@ foreach ($dll in @('libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll')
     $source = Join-Path $compilerBin $dll
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-Item -LiteralPath $source -Destination (Join-Path $stagingPath $dll) -Force }
 }
+# Backups an agent leaves next to a project (project.oxy.json.agente.bak) never ship.
+Get-ChildItem -LiteralPath $stagingPath -Recurse -File -Filter '*.agente.bak' | Remove-Item -Force
 $previousPath = $null
 if (Test-Path -LiteralPath $destinationPath) {
     if (!(Test-Path -LiteralPath $destinationPath -PathType Container)) { throw 'O destino existente deve ser uma pasta.' }

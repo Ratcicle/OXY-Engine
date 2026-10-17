@@ -1,7 +1,10 @@
 //! Runs a game without a window for a simulated time and reports what happened: scene
-//! changes, logs, logic actions, sounds, movement and area events, the game camera, the game
-//! interface and the state of watched objects. Used by the MCP server so an agent can test a
-//! change, and by tests.
+//! changes, logs, logic actions, sounds and changes of what plays, movement and area events,
+//! the game pause, the game camera, the game interface, the state of watched objects, the game
+//! variables, the progress saved, what plays and a hash of the whole state at the end. Used by
+//! the MCP server so an agent can test a change, and by tests. On request a second copy runs
+//! alongside on the same inputs, to check that the run repeats itself step by step, and a bot
+//! plays one character along a path of points (see [`crate::bot`]).
 //!
 //! Everything runs on a copy of the project: `setup` commands and `spawn` change only that
 //! copy. Timed inputs live here, not in the runtime, so a scene change or reload neither
@@ -9,6 +12,8 @@
 //! events and spawned objects come from the runtime's `Recording`, taken when they happen, so
 //! logic that removes the objects involved in the same step cannot hide them.
 use crate::{
+    audio::{AudioChange, AudioSettings, ChangeKind, Channel},
+    bot::{self, Bot, BotEvent, BotState, StuckReason},
     character::{CameraMode, CharacterState, MovementEvent, Posture},
     command::{self, Applied, Command},
     document::*,
@@ -16,7 +21,10 @@ use crate::{
     graph::{self, Edge, Graph, PortType},
     input_actions,
     input_timeline::{InputChange, InputTimeline, TimedInput},
-    runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime},
+    random,
+    runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime, RuntimeOptions},
+    save::{self, SaveRequest, SaveSlot},
+    variables,
 };
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -30,8 +38,14 @@ use std::{
 pub const MAX_SECONDS: f64 = 600.;
 /// Most entries one report list keeps; older ones are dropped and counted in `truncated`.
 pub const MAX_ENTRIES: usize = 300;
-/// Game view the interface is laid out in when a request gives no size, in pixels.
-pub const VIEW_SIZE: [u32; 2] = [960, 540];
+/// Smallest and largest side of the game view a run lays out the interface in, in pixels.
+pub const MIN_VIEW: u32 = 16;
+pub const MAX_VIEW: u32 = 4096;
+/// Most samples a watched object reports, the final state included.
+pub const MAX_SAMPLES: usize = 120;
+/// Steps a run keeps to spread `samples` over the time it ran when `until` or Sair do jogo stops
+/// it early: past it, every other one goes and only every second step after is kept, and so on.
+pub const SPREAD_KEPT: usize = 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -56,10 +70,22 @@ pub enum InputEvent {
         at: f64,
         value: [f32; 2],
     },
-    /// Clicks an object or its interface button.
+    /// Clicks an object or its interface button, by its ID or name. A hidden element takes no
+    /// click, nor does a world object in the game pause, as in the game, nor an object that is
+    /// not in the running scene (a log line says so). Or clicks the game view at `point`, x and
+    /// y in its pixels from the top-left corner: the topmost visible button there takes it, as
+    /// in the game (see [`game_ui::button_at`]).
     Click {
         at: f64,
-        entity: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entity: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        point: Option<[f32; 2]>,
+    },
+    /// What Esc does in the game: pauses or resumes it when the scene has a pause menu (logic
+    /// listening to Ao pausar ou retomar); otherwise a log line says there is none.
+    Escape {
+        at: f64,
     },
 }
 impl InputEvent {
@@ -69,7 +95,8 @@ impl InputEvent {
             | Self::Release { at, .. }
             | Self::Movement { at, .. }
             | Self::Look { at, .. }
-            | Self::Click { at, .. } => *at,
+            | Self::Click { at, .. }
+            | Self::Escape { at } => *at,
         }
     }
 }
@@ -123,7 +150,8 @@ pub enum AttributeFilter {
     Names(Vec<String>),
 }
 
-/// An object to report: its ID, or `{id, fields?, attributes?}`.
+/// An object to report: its ID or name (see [`Project::find_entity`]), or `{id, fields?,
+/// attributes?}`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(try_from = "Json")]
 pub struct Watch {
@@ -169,7 +197,7 @@ impl TryFrom<Json> for Watch {
     }
 }
 
-/// Places an object before the run, in world space.
+/// Places an object of the start scene (by ID or name) before the run, in world space.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Spawn {
@@ -184,18 +212,42 @@ pub struct Spawn {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Until {
-    /// `true`: any scene start, reloads included; a scene ID: that scene starting.
+    /// `true`: any scene start, reloads included; a scene's ID or name: that scene starting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_change: Option<SceneCondition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_contains: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribute: Option<AttributeCondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variable: Option<VariableCondition>,
     /// The object no longer exists in the running scene.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entity_absent: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<EventCondition>,
+    /// `true`: the game pause starts; `false`: it ends (a scene change ending it included).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
+    /// A sound, by the audio's ID or name, starts playing: once or in a loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+    /// The request's bot is done with its path, stuck, or either.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<BotEnd>,
+    /// Not a condition: once one holds, the run goes on this many seconds more (past `seconds`
+    /// too, the whole run within [`MAX_SECONDS`]) before it ends, so the report and a capture
+    /// show what came after; `stopped_at` still says when the condition held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub then_seconds: Option<f64>,
+}
+/// How a bot ends: at the end of its path or stuck; `Any` stands for either in `until`.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BotEnd {
+    Done,
+    Stuck,
+    Any,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
@@ -210,7 +262,22 @@ pub struct AttributeCondition {
     pub name: String,
     pub op: Comparison,
     /// A plain number, boolean or text, or a tagged value such as `{"Number": 3}`, of the
-    /// attribute's type. For an object or surface attribute, a text is the ID (`"$N"` too).
+    /// attribute's type. For an object attribute, a text is the object, by ID or name (`"$N"`
+    /// too); for a surface one, its ID.
+    #[serde(deserialize_with = "plain_or_tagged")]
+    pub value: Value,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VariableCondition {
+    /// The game variable's ID or name (`"$N"` too).
+    pub variable: String,
+    /// The key whose value is compared; empty or absent, the variable's own value.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    pub op: Comparison,
+    /// A plain number, boolean or text, or a tagged value such as `{"Vector3": [0, 1, 0]}`, of
+    /// the variable's type.
     #[serde(deserialize_with = "plain_or_tagged")]
     pub value: Value,
 }
@@ -224,6 +291,22 @@ fn plain_or_tagged<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<
         Json::String(s) => Ok(Value::Text(s)),
         other => serde_json::from_value(other).map_err(serde::de::Error::custom),
     }
+}
+fn plain_or_tagged_values<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, Value>>, D::Error> {
+    let Some(values) = Option::<BTreeMap<String, Json>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    values
+        .into_iter()
+        .map(|(label, value)| {
+            let value = plain_or_tagged(value)
+                .map_err(|error| serde::de::Error::custom(format!("{label}: {error}")))?;
+            Ok((label, value))
+        })
+        .collect::<Result<_, D::Error>>()
+        .map(Some)
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Comparison {
@@ -298,7 +381,7 @@ pub enum EventKind {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SimulationRequest {
-    /// Scene to start in; the project's start scene when absent.
+    /// Scene to start in, by its ID or name; the project's start scene when absent.
     #[serde(default)]
     pub scene: Option<Id>,
     /// Simulated seconds; the upper bound when `until` is set.
@@ -308,14 +391,28 @@ pub struct SimulationRequest {
     /// Objects reported in every sample.
     #[serde(default)]
     pub watch: Vec<Watch>,
-    /// Evenly spaced samples of the watched objects, exactly this many, the last one being the
-    /// final state (0 or 1 report only the final state; at most 120, and at most one per step).
-    /// They are spaced across `seconds`, so a run that `until` stops early reports fewer.
+    /// Evenly spaced samples of the watched objects, this many, the last one being the final
+    /// state (0 or 1 report only the final state; at most [`MAX_SAMPLES`], and at most one per
+    /// step). They are spaced across the time the run lasts: across `seconds`, or, when `until`
+    /// or Sair do jogo stops it early, across the time it ran, each at the step nearest its
+    /// place (in runs longer than [`SPREAD_KEPT`] steps, within 1/[`SPREAD_KEPT`] of the run
+    /// from it).
     #[serde(default)]
     pub samples: u32,
+    /// A sample every this many seconds of run time (at most one per step), in place of
+    /// `samples`, and the final state: the most recent [`MAX_SAMPLES`] stay, the final state
+    /// among them, and those dropped are counted in the report's `truncated`.
+    #[serde(default)]
+    pub sample_every: Option<f64>,
+    /// Samples at these run times, in seconds from 0 to `seconds` (each at the step nearest it;
+    /// 0 is the start), in place of `samples` and `sample_every`, and the final state: at most
+    /// [`MAX_SAMPLES`] − 1 times, for [`MAX_SAMPLES`] with it. Times past the end of a run that
+    /// stopped early are not taken.
+    #[serde(default)]
+    pub samples_at: Vec<f64>,
     /// Commands applied to the copy before the run, as in a batch; commands without a scene
-    /// use the start scene. IDs they create are `"$N"` (or `"$N.M"`) in watch, inputs, spawn
-    /// and until.
+    /// use the start scene. IDs they create are `"$N"` (or `"$N.M"`) in watch, inputs, spawn,
+    /// bot and until. update_variable here gives a game variable another initial value.
     #[serde(default)]
     pub setup: Vec<Command>,
     #[serde(default)]
@@ -326,13 +423,39 @@ pub struct SimulationRequest {
     pub actions: ActionsMode,
     #[serde(default)]
     pub actions_filter: ActionFilter,
-    /// Size in pixels of the game view that lays out `ui` (16 to 4096 a side); `VIEW_SIZE`
-    /// when absent.
+    /// Width and height in pixels of the game view that lays out `ui` ([`MIN_VIEW`] to
+    /// [`MAX_VIEW`] a side); a side absent is the window's of the exported game (see
+    /// [`game_view`]) of the copy the run starts from, setup included.
     #[serde(default)]
-    pub view_size: Option<[u32; 2]>,
+    pub view_size: [Option<u32>; 2],
     /// Reports the game interface at the end; on unless `false`.
     #[serde(default = "on")]
     pub ui: bool,
+    /// What Sortear número draws from, 0 to [`random::MAX_SEED`]: the same seed and inputs
+    /// repeat the draws.
+    #[serde(default)]
+    pub seed: u64,
+    /// Runs a second copy of the game alongside, with the same inputs, and compares the two
+    /// states after every step: the report's `replay` says whether they stayed the same.
+    #[serde(default)]
+    pub check_replay: bool,
+    /// The progress a returning player has, which starts the persistent game variables: each
+    /// one by ID or name (`"$N"` too), `"name · key"` for the value of a key, with a plain or
+    /// tagged value of its type. Absent, the game runs as on a fresh install; the report's
+    /// `save` has this shape, so a run can start where another left off.
+    #[serde(default, deserialize_with = "plain_or_tagged_values")]
+    pub save: Option<BTreeMap<String, Value>>,
+    /// Plays one 3D character along a path of points, in place of the movement inputs, once
+    /// the character's scene runs (any scene of the project); its objects go by ID, name or
+    /// `"$N"` from setup. The report's `bot` says how it went.
+    #[serde(default)]
+    pub bot: Option<Bot>,
+}
+impl SimulationRequest {
+    /// Reads a `save` given apart from the rest of a request, as the MCP tools take it.
+    pub fn read_save(value: Json) -> Result<BTreeMap<String, Value>, serde_json::Error> {
+        plain_or_tagged_values(value).map(Option::unwrap_or_default)
+    }
 }
 fn on() -> bool {
     true
@@ -399,6 +522,49 @@ pub struct Watched {
 pub struct Event {
     pub time: f64,
     pub text: String,
+}
+/// A sound played once (no `kind`), or a change logic made to what plays.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SoundEvent {
+    pub time: f64,
+    /// The audio's name; for a stop of every loop, "Todos os sons do canal"; for a volume, the
+    /// channel's label.
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ChangeKind>,
+    /// A loop that starts (or starts over), not one already playing that only takes another
+    /// volume, as a restarted scene asking for its music at another volume.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub started: bool,
+    /// music or effects (always effects for a sound played once); all for a stop of both,
+    /// master for the general volume.
+    pub channel: &'static str,
+    /// What a loop or a volume was set to; a one-shot's when below 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    /// How loud it is heard: its volume times its channel's and the general volume, as they
+    /// are when the step ends and the game plays it. For a volume, what a sound at full volume
+    /// on that channel is heard at; 0 for a stop.
+    pub effective_volume: f64,
+    /// Seconds a loop fades in, or loops stopped fade out, when not at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fade: Option<f64>,
+}
+/// A sound the game keeps playing at the end.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PlayingSound {
+    pub asset: Id,
+    pub name: String,
+    pub volume: f64,
+}
+/// What the game keeps playing at the end, and the run's volumes.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct AudioReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub music: Option<PlayingSound>,
+    /// The effect loops.
+    pub loops: Vec<PlayingSound>,
+    pub volumes: AudioSettings,
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SceneChange {
@@ -471,16 +637,154 @@ pub struct StoppedAt {
     /// The event that met an `event` condition.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<EventKind>,
+    /// For quit, the object whose logic asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<Named>,
     /// What happened, in words.
     pub detail: String,
+    /// With `then_seconds`: when the run ended, that long after `time`, or sooner when Sair do
+    /// jogo ended it (which `detail` then adds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<f64>,
 }
+/// Two copies of the game run side by side on the same inputs, compared after every step.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ReplayCheck {
+    /// The two stayed the same to the end.
+    pub identical: bool,
+    /// Steps compared: all of the run's, or up to the one where the two first differed. The
+    /// start, before the first step, is compared too.
+    pub steps: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_difference: Option<ReplayDifference>,
+}
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ReplayDifference {
+    pub time: f64,
+    /// The object that differed; none for the run's own state (scene, time, input, tasks,
+    /// areas, characters, random, variables.<name>, save, audio, camera).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<Named>,
+    /// What differed, a part of [`crate::runtime::StateDigest`]: transform, attributes.<name>,
+    /// document, character… for an object; exists when only one copy has it, order when both
+    /// have it in another scene order.
+    pub part: String,
+}
+
+/// A request of Salvar progresso (write, with the values saved) or Apagar progresso (clear).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SaveEvent {
+    pub time: f64,
+    pub kind: SaveKind,
+    /// What a write saved, as in `variables`: up to `MAX_ENTRIES`, the variables' own values
+    /// first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<BTreeMap<String, Value>>,
+    /// Values of a write left out of `values`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub values_truncated: usize,
+}
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveKind {
+    Write,
+    Clear,
+}
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
+/// A change of the game pause: `paused` is the new state.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PauseEvent {
+    pub time: f64,
+    pub paused: bool,
+}
+
+/// How the request's bot went. The fields are those of its latest run: each new start of its
+/// character's scene after it took over (a reload, or the game coming back to it) starts the
+/// path over, and the run so far goes to `earlier`.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotReport {
+    /// The character it played.
+    pub entity: Named,
+    /// When it took over: `start` after the latest start of its character's scene. Absent, it
+    /// never did: that scene never ran, or `start` came after the run ended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<f64>,
+    /// The points it reached, in order.
+    pub reached: Vec<BotPoint>,
+    /// When it left the last point, its wait and jump there done; or when logic began holding
+    /// the character on the way to the last point (see `held_by`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_at: Option<f64>,
+    /// Where it gave up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<BotStuck>,
+    /// The reasons logic held the character's movement by (Bloquear / liberar entrada) when the
+    /// bot let go: with `stuck` reason held, or with `done_at` when the hold began on the way
+    /// to the last point.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub held_by: Vec<String>,
+    /// The runs before the latest, oldest first (the most recent `MAX_ENTRIES`): one that a new
+    /// start of the scene cut short has neither `done_at` nor `stuck`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub earlier: Vec<BotRunReport>,
+}
+/// A run of the bot along its path that a new start of its character's scene ended, with the
+/// fields of [`BotReport`].
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotRunReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<f64>,
+    pub reached: Vec<BotPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_at: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<BotStuck>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub held_by: Vec<String>,
+}
+/// A point the bot reached: its index in the path, from 0, and where the character stood.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotPoint {
+    pub index: usize,
+    pub time: f64,
+    pub position: [f32; 3],
+}
+/// The point the bot came no nearer to, where the character stood and how far from it, why
+/// ([`StuckReason`]) and the object the character last stood on.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotStuck {
+    pub index: usize,
+    pub time: f64,
+    pub position: [f32; 3],
+    pub distance: f32,
+    pub reason: StuckReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_support: Option<Named>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SimulationReport {
     pub seconds: f64,
     pub start_scene: Id,
     pub final_scene: Id,
+    /// The seed the draws came from, the one asked for.
+    pub seed: u64,
+    /// [`Runtime::state_hash`] at the end, 16 hex digits: runs that ended in the same state
+    /// have the same one. The seed is part of the state, draws or not.
+    pub state_hash: String,
+    /// The replay check, when asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ReplayCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<StoppedAt>,
+    /// Whether the game was in its own pause at the end.
+    pub paused: bool,
+    /// Each change of the game pause, oldest first (the most recent `MAX_ENTRIES`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pauses: Vec<PauseEvent>,
     /// What each setup command did, with the IDs it created.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub setup: Vec<Applied>,
@@ -488,16 +792,46 @@ pub struct SimulationReport {
     pub logs: Vec<Log>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actions: Option<Actions>,
-    pub sounds: Vec<Event>,
+    /// Sounds played once and changes of what plays, oldest first (the most recent
+    /// `MAX_ENTRIES`). The one-shots and effect loops of a scene that started and ended within
+    /// a step are left out, as the game never plays them, and so are the loops a step that
+    /// changed scene started and no longer plays at its end (see `Recording::audio`).
+    pub sounds: Vec<SoundEvent>,
     pub events: Vec<GameEvent>,
+    /// The bot, when the request has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot: Option<BotReport>,
     /// The game camera at the end.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraReport>,
     /// The game interface at the end, in drawing order (the topmost last).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ui: Vec<UiState>,
+    /// With `ui`: whether a person's cursor would be free at the end, so that the buttons take
+    /// clicks (see [`Runtime::wants_relative_mouse`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_free: Option<bool>,
+    /// The game view in pixels that `ui` rects and clicks at a point are measured in: each side
+    /// the one asked for, else the game window's (see [`game_view`]).
+    pub view_size: [u32; 2],
     pub watched: Vec<Watched>,
-    /// Entries dropped per list because it reached `MAX_ENTRIES`.
+    /// The game variables at the end, by name, or "name · key" for the value of a key: the
+    /// first `MAX_ENTRIES` of [`Runtime::variable_values`].
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub variables: BTreeMap<String, Value>,
+    /// What Salvar progresso and Apagar progresso asked, oldest first (the most recent
+    /// `MAX_ENTRIES`). The run never touches the disk.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub saves: Vec<SaveEvent>,
+    /// The saved progress at the end, in the shape [`SimulationRequest::save`] takes (up to
+    /// `MAX_ENTRIES` values); absent when there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub save: Option<BTreeMap<String, Value>>,
+    /// What plays at the end and the volumes; absent when nothing loops and every volume is 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioReport>,
+    /// Entries dropped per list because it reached `MAX_ENTRIES`; for samples, those of
+    /// `sample_every` each watched object dropped past [`MAX_SAMPLES`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub truncated: BTreeMap<&'static str, usize>,
 }
@@ -507,8 +841,23 @@ fn rounded(time: f64) -> f64 {
     (time * 10_000.).round() / 10_000.
 }
 
-/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th, and
-/// `"$$N"` for the text "$N" (see [`command::Placeholder`]); other text is an ID as it is.
+/// The game view of a run that asks for no size: the inside of the window the exported game
+/// opens (`set_game_settings`, else the player's default), so the interface is laid out as the
+/// player lays it out. A window wider or taller than [`MAX_VIEW`] is scaled down to fit,
+/// keeping its shape.
+pub fn game_view(project: &Project) -> [u32; 2] {
+    let window = project.game.window;
+    let largest = window[0].max(window[1]);
+    if largest <= MAX_VIEW {
+        return window;
+    }
+    let scale = f64::from(MAX_VIEW) / f64::from(largest);
+    window.map(|side| ((f64::from(side) * scale).round() as u32).max(MIN_VIEW))
+}
+
+/// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th,
+/// `"$N@<id>"` for the copy of `<id>` it made, and `"$$N"` for the text "$N" (see
+/// [`command::Placeholder`]); other text is an ID as it is.
 pub fn resolve(id: &str, applied: &[Applied]) -> Result<Id, String> {
     match command::Placeholder::parse(id) {
         None => Ok(id.into()),
@@ -668,6 +1017,18 @@ fn log_entry(lookup: Lookup, traces: &[NodeTrace], time: f64, line: &str) -> Log
     entry
 }
 
+/// Whether running a node of `operation` opens another scene: an action that names the scene
+/// to open, as Mudar de cena does.
+fn changes_scene(operation: &str) -> bool {
+    graph::definition(operation).is_some_and(|def| {
+        def.inputs.iter().any(|port| port.kind == PortType::Exec)
+            && def
+                .params
+                .iter()
+                .any(|param| graph::reference(def.id, param) == Some(graph::Reference::Scene))
+    })
+}
+
 /// Nodes of `graph` that run only because of the given event operations: those events and
 /// every node their execution flow reaches that no other event reaches.
 fn reached_only_from(graph: &Graph, events: &[String]) -> HashSet<Id> {
@@ -744,6 +1105,14 @@ struct Happened {
     scenes: Vec<Id>,
     logs: Vec<String>,
     events: Vec<GameEvent>,
+    /// The game pause's changes, each its new state.
+    pauses: Vec<bool>,
+    /// The audios that started playing, once or in a loop.
+    sounds: Vec<Id>,
+    /// How the bot ended in the step (done or stuck), in words.
+    bot: Option<(BotEnd, String)>,
+    /// The object whose Sair do jogo ran.
+    quit: Option<Named>,
 }
 
 /// "Object · Action", with the action's label.
@@ -836,8 +1205,10 @@ struct Recorder<'a> {
     scene: Id,
     scene_changes: Recent<SceneChange>,
     logs: Recent<Log>,
-    sounds: Recent<Event>,
+    sounds: Recent<SoundEvent>,
     events: Recent<GameEvent>,
+    saves: Recent<SaveEvent>,
+    pauses: Recent<PauseEvent>,
 }
 impl Recorder<'_> {
     fn lookup<'b>(&'b self, runtime: &'b Runtime) -> Lookup<'b> {
@@ -860,12 +1231,23 @@ impl Recorder<'_> {
         let logs = std::mem::take(&mut runtime.logs);
         let traces = std::mem::take(&mut runtime.traces);
         let sounds = std::mem::take(&mut runtime.sounds);
+        let saves = std::mem::take(&mut runtime.save_requests);
         let runtime = &*runtime;
         let Recording {
             crossings,
             movements,
             spawned,
+            pauses,
+            audio,
+            quit,
         } = recording;
+        for &paused in &pauses {
+            self.pauses.push(PauseEvent {
+                time: rounded(time),
+                paused,
+            });
+        }
+        happened.pauses = pauses;
         for object in spawned {
             // A copy's nodes have IDs of their own, so its exclusions come from its own graph.
             if self.mode != ActionsMode::None
@@ -901,14 +1283,48 @@ impl Recorder<'_> {
         for trace in traces {
             self.action(runtime, trace);
         }
-        for sound in sounds {
-            let name = runtime
+        let name = |asset: &str| {
+            runtime
                 .project()
-                .asset(&sound.asset)
-                .map_or(sound.asset, |a| a.name.clone());
-            self.sounds.push(Event {
+                .asset(asset)
+                .map_or_else(|| asset.to_owned(), |a| a.name.clone())
+        };
+        // The hosts play what a step asked at the volumes it ends with.
+        let settings = runtime.audio().settings;
+        for sound in sounds {
+            let volume = f64::from(sound.volume);
+            self.sounds.push(SoundEvent {
                 time: rounded(time),
-                text: name,
+                text: name(&sound.asset),
+                kind: None,
+                started: false,
+                channel: "effects",
+                volume: (volume < 1.).then_some(volume),
+                effective_volume: volume * settings.gain(Channel::Effects),
+                fade: None,
+            });
+            happened.sounds.push(sound.asset);
+        }
+        for change in audio {
+            self.sounds
+                .push(sound_change(rounded(time), &change, &settings, name));
+            if change.started
+                && let Some(asset) = change.asset
+            {
+                happened.sounds.push(asset);
+            }
+        }
+        for request in saves {
+            let (kind, values) = match &request {
+                SaveRequest::Write(values) => (SaveKind::Write, Some(values)),
+                SaveRequest::Clear => (SaveKind::Clear, None),
+            };
+            let values = values.map(|values| variables::labeled(self.source, values, MAX_ENTRIES));
+            self.saves.push(SaveEvent {
+                time: rounded(time),
+                kind,
+                values_truncated: values.as_ref().map_or(0, |(_, left_out)| *left_out),
+                values: values.map(|(values, _)| values),
             });
         }
         let lookup = Lookup {
@@ -916,6 +1332,7 @@ impl Recorder<'_> {
             source: self.source,
             spawned: &self.spawned,
         };
+        happened.quit = quit.map(|object| lookup.named(&object));
         let mut events = Vec::new();
         let event = |kind, object: &str, other: Option<&str>| GameEvent {
             time: rounded(time),
@@ -986,7 +1403,7 @@ impl Recorder<'_> {
         }
         // A scene change always shows, even from a chain an excluded event starts (a reset
         // on falling, checked every step), so each scene start has an action that explains it.
-        if !self.exclude_events.is_empty() && trace.operation != "action.scene" {
+        if !self.exclude_events.is_empty() && !changes_scene(&trace.operation) {
             if !self.excluded_nodes.contains_key(&trace.object) {
                 let nodes = self
                     .lookup(runtime)
@@ -1024,6 +1441,8 @@ impl Recorder<'_> {
         report.logs = self.logs.finish("logs", truncated);
         report.sounds = self.sounds.finish("sounds", truncated);
         report.events = self.events.finish("events", truncated);
+        report.saves = self.saves.finish("saves", truncated);
+        report.pauses = self.pauses.finish("pauses", truncated);
         report.actions = match self.mode {
             ActionsMode::None => None,
             ActionsMode::All => Some(Actions::All(self.actions.finish("actions", truncated))),
@@ -1038,11 +1457,232 @@ impl Recorder<'_> {
     }
 }
 
+/// A change of what plays as the report lists it, heard at `settings`.
+fn sound_change(
+    time: f64,
+    change: &AudioChange,
+    settings: &AudioSettings,
+    name: impl Fn(&str) -> String,
+) -> SoundEvent {
+    let text = match (change.kind, &change.asset) {
+        (_, Some(asset)) => name(asset),
+        (ChangeKind::Volume, None) => graph::VOLUME_CHANNELS
+            .iter()
+            .find(|(id, _)| *id == change.channel)
+            .map_or(change.channel, |(_, label)| label)
+            .to_owned(),
+        _ => graph::empty_choice("action.sound_stop", "asset")
+            .unwrap_or_default()
+            .to_owned(),
+    };
+    let effective_volume = match change.kind {
+        ChangeKind::Stop => 0.,
+        ChangeKind::Loop if change.channel == "music" => {
+            change.volume * settings.gain(Channel::Music)
+        }
+        ChangeKind::Loop => change.volume * settings.gain(Channel::Effects),
+        // The general volume, or a channel's under it.
+        ChangeKind::Volume if change.channel == "master" => change.volume,
+        ChangeKind::Volume => change.volume * settings.master,
+    };
+    SoundEvent {
+        time,
+        text,
+        kind: Some(change.kind),
+        started: change.started,
+        channel: change.channel,
+        volume: (change.kind != ChangeKind::Stop).then_some(change.volume),
+        effective_volume,
+        fade: (change.fade > 0.).then_some(change.fade),
+    }
+}
+
+/// What plays at the end, by name; none when nothing loops and every volume is 1.
+fn audio_report(runtime: &Runtime) -> Option<AudioReport> {
+    let audio = runtime.audio();
+    let playing = |voice: &crate::audio::LoopVoice| PlayingSound {
+        asset: voice.asset.clone(),
+        name: runtime
+            .project()
+            .asset(&voice.asset)
+            .map_or_else(|| voice.asset.clone(), |a| a.name.clone()),
+        volume: voice.volume,
+    };
+    let report = AudioReport {
+        music: audio.music.as_ref().map(playing),
+        loops: audio.loops.values().map(playing).collect(),
+        volumes: audio.settings,
+    };
+    let quiet = report.music.is_none()
+        && report.loops.is_empty()
+        && report.volumes == AudioSettings::default();
+    (!quiet).then_some(report)
+}
+
 struct WatchPlan {
     id: Id,
     fields: BTreeSet<Field>,
     /// None: every attribute.
     attributes: Option<BTreeSet<String>>,
+}
+
+/// The steps a request samples before the final state, which always ends the lists:
+/// `samples_at` when given, else `sample_every`, else `samples`.
+enum SamplePlan {
+    /// Sample k of `count` at the step nearest k/count of the planned run.
+    Even { count: usize, next: usize },
+    /// The steps asked, in order; 0 is the start.
+    At { steps: Vec<usize>, next: usize },
+    /// Sample k at the step nearest k × `every` seconds.
+    Every { every: f64, next: usize },
+}
+
+/// A sample of every watched object, and the step it was taken at.
+type Taken = (usize, Vec<Sample>);
+
+/// Takes the samples of the watched objects as the run goes, and picks the ones reported.
+struct Sampler {
+    plan: SamplePlan,
+    /// The steps the run lasts unless `until` or Sair do jogo stops it.
+    steps: usize,
+    /// The step the run now ends at, whose state is taken apart: `steps`, or later once a
+    /// condition with `then_seconds` held.
+    end: usize,
+    taken: VecDeque<Taken>,
+    /// Samples of `sample_every` dropped to keep the most recent.
+    dropped: usize,
+    /// With `samples`, every `stride`-th step (at most [`SPREAD_KEPT`]), to spread the samples
+    /// over the time run when the run stops early.
+    spread: Option<(usize, Vec<Taken>)>,
+}
+impl Sampler {
+    fn new(request: &SimulationRequest, steps: usize) -> Self {
+        let plan = if !request.samples_at.is_empty() {
+            let mut at: Vec<usize> = request
+                .samples_at
+                .iter()
+                .map(|at| (at / f64::from(FIXED_DT)).round() as usize)
+                .collect();
+            at.sort_unstable();
+            at.dedup();
+            SamplePlan::At { steps: at, next: 0 }
+        } else if let Some(every) = request.sample_every {
+            // At most one per step.
+            SamplePlan::Every {
+                every: every.max(f64::from(FIXED_DT)),
+                next: 1,
+            }
+        } else {
+            SamplePlan::Even {
+                count: request.samples.max(1) as usize,
+                next: 1,
+            }
+        };
+        // Any run may stop early: Sair do jogo ends it whatever `until` asks.
+        let spread =
+            matches!(plan, SamplePlan::Even { count, .. } if count > 1).then(|| (1, Vec::new()));
+        Self {
+            plan,
+            steps,
+            end: steps,
+            taken: VecDeque::new(),
+            dropped: 0,
+            spread,
+        }
+    }
+
+    /// Samples the state after `step` when the plan asks for it; the last step's is the final
+    /// state, taken apart.
+    fn take(&mut self, step: usize, sample: impl FnOnce() -> Vec<Sample>) {
+        if step >= self.end {
+            return;
+        }
+        let steps = self.steps;
+        let planned = match &mut self.plan {
+            // With fewer steps than samples, every step has one.
+            SamplePlan::Even { count, next } => {
+                let due = |k: usize| (k * steps + *count / 2) / *count;
+                while *next < *count && due(*next) < step {
+                    *next += 1;
+                }
+                step > 0 && *next < *count && due(*next) == step
+            }
+            SamplePlan::At { steps, next } => {
+                while *next < steps.len() && steps[*next] < step {
+                    *next += 1;
+                }
+                *next < steps.len() && steps[*next] == step
+            }
+            SamplePlan::Every { every, next } => {
+                let due = |k: usize| (k as f64 * *every / f64::from(FIXED_DT)).round() as usize;
+                let reached = due(*next) <= step;
+                while due(*next) <= step {
+                    *next += 1;
+                }
+                reached
+            }
+        };
+        let spread = step > 0
+            && self
+                .spread
+                .as_ref()
+                .is_some_and(|(stride, _)| step.is_multiple_of(*stride));
+        if !planned && !spread {
+            return;
+        }
+        let samples = sample();
+        if spread && let Some((stride, kept)) = &mut self.spread {
+            kept.push((step, samples.clone()));
+            if kept.len() >= SPREAD_KEPT {
+                *stride *= 2;
+                let stride = *stride;
+                kept.retain(|(step, _)| step.is_multiple_of(stride));
+            }
+        }
+        if planned {
+            if matches!(self.plan, SamplePlan::Every { .. }) && self.taken.len() == MAX_SAMPLES - 1
+            {
+                self.taken.pop_front();
+                self.dropped += 1;
+            }
+            self.taken.push_back((step, samples));
+        }
+    }
+
+    /// Each watched object's samples, oldest first, the final state `end` (after step `last`)
+    /// ending them, and how many `sample_every` dropped.
+    fn finish(self, last: usize, end: Vec<Sample>) -> (Vec<Vec<Sample>>, usize) {
+        let picked: Vec<Vec<Sample>> = match (self.spread, &self.plan) {
+            // Stopped early, or later with then_seconds: the samples spread over the time the
+            // run lasted.
+            (Some((_, kept)), SamplePlan::Even { count, .. }) if last != self.steps => {
+                let mut picks = BTreeSet::new();
+                for k in 1..*count {
+                    let due = (k * last + count / 2) / count;
+                    let after = kept.partition_point(|(step, _)| *step < due);
+                    let nearest = [after.checked_sub(1), Some(after)]
+                        .into_iter()
+                        .flatten()
+                        .filter(|&i| i < kept.len())
+                        .min_by_key(|&i| kept[i].0.abs_diff(due));
+                    picks.extend(nearest);
+                }
+                kept.into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| picks.contains(i))
+                    .map(|(_, (_, samples))| samples)
+                    .collect()
+            }
+            _ => self.taken.into_iter().map(|(_, samples)| samples).collect(),
+        };
+        let mut lists: Vec<Vec<Sample>> = end.iter().map(|_| Vec::new()).collect();
+        for samples in picked.into_iter().chain([end]) {
+            for (list, sample) in lists.iter_mut().zip(samples) {
+                list.push(sample);
+            }
+        }
+        (lists, self.dropped)
+    }
 }
 
 fn sample(lookup: Lookup, watch: &WatchPlan) -> Sample {
@@ -1171,8 +1811,16 @@ struct Stop {
     scene: Option<Option<Id>>,
     log: Option<String>,
     attribute: Option<(AttributeCondition, String)>,
+    /// With the variable's ID, and its label in reports.
+    variable: Option<(VariableCondition, String)>,
     absent: Option<(Id, String)>,
     event: Option<(EventKind, Option<Id>)>,
+    paused: Option<bool>,
+    /// The audio's ID and name.
+    sound: Option<(Id, String)>,
+    bot: Option<BotEnd>,
+    /// Steps the run goes on once a condition held.
+    then: Option<usize>,
 }
 impl Stop {
     fn new(
@@ -1180,22 +1828,21 @@ impl Stop {
         project: &Project,
         start: &str,
         applied: &[Applied],
+        bot: Option<&Bot>,
     ) -> Result<Self, String> {
-        let entity = |id: &str| {
+        // Objects by ID, name or "$N".
+        let entity = |text: &str, what: &str| {
+            let text = resolve(text, applied)?;
             project
-                .scenes
-                .iter()
-                .find_map(|s| s.entity(id))
-                .ok_or_else(|| format!("until: objeto {id} não existe no projeto"))
+                .find_entity(&text, &format!("until: {what}"))
+                .map(|(_, e)| e)
         };
         let scene = match &until.scene_change {
             None | Some(SceneCondition::Any(false)) => None,
             Some(SceneCondition::Any(true)) => Some(None),
-            Some(SceneCondition::Scene(id)) => {
-                let id = resolve(id, applied)?;
-                if project.scene(&id).is_none() {
-                    return Err(format!("until: cena {id} não existe"));
-                }
+            Some(SceneCondition::Scene(text)) => {
+                let text = resolve(text, applied)?;
+                let id = project.find_scene(&text, "until: scene_change")?.id.clone();
                 Some(Some(id))
             }
         };
@@ -1205,8 +1852,7 @@ impl Stop {
         let attribute = match &until.attribute {
             None => None,
             Some(condition) => {
-                let id = resolve(&condition.entity, applied)?;
-                let target = entity(&id)?;
+                let target = entity(&condition.entity, "attribute.entity")?;
                 let Some(current) = target.attributes.get(&condition.name) else {
                     return Err(format!(
                         "until: atributo {} não existe em {}",
@@ -1223,9 +1869,7 @@ impl Stop {
                 let value = match (current, &condition.value) {
                     (Value::Object(_), Value::Text(id)) if id.is_empty() => Value::Object(None),
                     (Value::Object(_), Value::Text(id) | Value::Object(Some(id))) => {
-                        let id = resolve(id, applied)?;
-                        entity(&id)?;
-                        Value::Object(Some(id))
+                        Value::Object(Some(entity(id, "attribute.value")?.id.clone()))
                     }
                     (Value::Surface(_), Value::Text(id)) if id.is_empty() => Value::Surface(None),
                     (Value::Surface(_), Value::Text(id) | Value::Surface(Some(id))) => {
@@ -1248,7 +1892,7 @@ impl Stop {
                 }
                 Some((
                     AttributeCondition {
-                        entity: id,
+                        entity: target.id.clone(),
                         value,
                         ..condition.clone()
                     },
@@ -1256,38 +1900,103 @@ impl Stop {
                 ))
             }
         };
+        let variable = match &until.variable {
+            None => None,
+            Some(condition) => {
+                let id = crate::variables::find(project, &resolve(&condition.variable, applied)?)
+                    .map_err(|error| format!("until: {error}"))?;
+                let declared = crate::variables::get(project, &id).expect("found above");
+                if condition.op.ordered() && condition.value.number().is_none() {
+                    return Err(format!(
+                        "until: a comparação {} precisa de um número",
+                        condition.op.symbol()
+                    ));
+                }
+                if std::mem::discriminant(&declared.value)
+                    != std::mem::discriminant(&condition.value)
+                {
+                    return Err(format!(
+                        "until: a variável {} é {}, mas o valor informado é {}",
+                        declared.name,
+                        crate::variables::kind(&declared.value),
+                        crate::variables::kind(&condition.value)
+                    ));
+                }
+                Some((
+                    VariableCondition {
+                        variable: id,
+                        ..condition.clone()
+                    },
+                    crate::variables::label(&declared.name, &condition.key),
+                ))
+            }
+        };
         let absent = match &until.entity_absent {
             None => None,
-            Some(id) => {
-                let id = resolve(id, applied)?;
-                let name = project
-                    .scene(start)
-                    .and_then(|s| s.entity(&id))
-                    .ok_or_else(|| format!("until: objeto {id} não está na cena inicial"))?
-                    .name
-                    .clone();
-                Some((id, name))
+            Some(text) => {
+                let scene = project.scene(start).ok_or("Cena inicial não existe")?;
+                let absent = scene.find_entity(&resolve(text, applied)?, "until: entity_absent")?;
+                Some((absent.id.clone(), absent.name.clone()))
             }
         };
         let event = match &until.event {
             None => None,
             Some(condition) => {
                 let object = match &condition.object {
-                    Some(id) => {
-                        let id = resolve(id, applied)?;
-                        entity(&id)?;
-                        Some(id)
-                    }
+                    Some(text) => Some(entity(text, "event.object")?.id.clone()),
                     None => None,
                 };
                 Some((condition.kind, object))
             }
         };
+        let sound = match &until.sound {
+            None => None,
+            Some(text) => {
+                let text = resolve(text, applied)?;
+                let audios = || project.assets.iter().filter(|a| a.kind == AssetKind::Audio);
+                let named: Vec<&Asset> = match audios().find(|a| a.id == text) {
+                    Some(asset) => vec![asset],
+                    None => audios()
+                        .filter(|a| a.name.trim().to_lowercase() == text.trim().to_lowercase())
+                        .collect(),
+                };
+                match named.as_slice() {
+                    [asset] => Some((asset.id.clone(), asset.name.clone())),
+                    [] => return Err(format!("until: o som \"{text}\" não existe no projeto")),
+                    many => {
+                        return Err(format!(
+                            "until: há {} sons chamados \"{text}\"; use o ID: {}",
+                            many.len(),
+                            many.iter()
+                                .map(|a| a.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+            }
+        };
+        if until.bot.is_some() && bot.is_none() {
+            return Err("until: bot só vale com um bot no pedido (informe bot)".into());
+        }
+        // NaN is outside any range.
+        if until
+            .then_seconds
+            .is_some_and(|then| !(0. ..=MAX_SECONDS).contains(&then))
+        {
+            return Err(format!(
+                "until: then_seconds precisa ser um número de segundos de 0 a {MAX_SECONDS}"
+            ));
+        }
         if scene.is_none()
             && until.log_contains.is_none()
             && attribute.is_none()
+            && variable.is_none()
             && absent.is_none()
             && event.is_none()
+            && until.paused.is_none()
+            && sound.is_none()
+            && until.bot.is_none()
         {
             return Err("until: informe ao menos uma condição".into());
         }
@@ -1295,8 +2004,15 @@ impl Stop {
             scene,
             log: until.log_contains.clone(),
             attribute,
+            variable,
             absent,
             event,
+            paused: until.paused,
+            sound,
+            bot: until.bot,
+            then: until
+                .then_seconds
+                .map(|then| (then / f64::from(FIXED_DT)).round() as usize),
         })
     }
 
@@ -1306,7 +2022,9 @@ impl Stop {
             time: rounded(runtime.time),
             reason,
             kind: None,
+            object: None,
             detail,
+            ended_at: None,
         };
         if let Some(target) = &self.scene
             && let Some(scene) = happened
@@ -1343,6 +2061,20 @@ impl Stop {
                 ),
             ));
         }
+        if let Some((condition, label)) = &self.variable
+            && let Some(value) = runtime.variable(&condition.variable, &condition.key)
+            && condition.op.holds(value, &condition.value)
+        {
+            return Some(stopped(
+                "variable",
+                format!(
+                    "{label} {} {} (valor {})",
+                    condition.op.symbol(),
+                    value_text(&condition.value),
+                    value_text(value)
+                ),
+            ));
+        }
         if let Some((id, name)) = &self.absent
             && runtime.scene().entity(id).is_none()
         {
@@ -1364,7 +2096,189 @@ impl Stop {
                 ..stopped("event", event_detail(event))
             });
         }
+        if let Some(paused) = self.paused
+            && happened.pauses.contains(&paused)
+        {
+            let detail = if paused {
+                "O jogo pausou"
+            } else {
+                "O jogo saiu da pausa"
+            };
+            return Some(stopped("paused", detail.into()));
+        }
+        if let Some((id, name)) = &self.sound
+            && happened.sounds.contains(id)
+        {
+            return Some(stopped("sound", format!("O som {name} começou a tocar")));
+        }
+        if let Some(wanted) = self.bot
+            && let Some((end, detail)) = &happened.bot
+            && (wanted == BotEnd::Any || wanted == *end)
+        {
+            return Some(stopped("bot", detail.clone()));
+        }
         None
+    }
+}
+
+/// The request's bot as it plays, and what it did.
+struct BotRun {
+    bot: Bot,
+    state: BotState,
+    report: BotReport,
+    earlier: Recent<BotRunReport>,
+}
+impl BotRun {
+    /// The scenes a step started, for the bot waiting for its character's, or starting its
+    /// path over when that scene starts again: the run so far goes to `earlier`.
+    fn scenes(&mut self, runtime: &Runtime, happened: &Happened) {
+        if !happened.scenes.is_empty() && self.state.scene_started(runtime, &self.bot) {
+            let report = &mut self.report;
+            self.earlier.push(BotRunReport {
+                started_at: report.started_at.take(),
+                reached: std::mem::take(&mut report.reached),
+                done_at: report.done_at.take(),
+                stuck: report.stuck.take(),
+                held_by: std::mem::take(&mut report.held_by),
+            });
+        }
+    }
+    fn finish(self, truncated: &mut BTreeMap<&'static str, usize>) -> BotReport {
+        BotReport {
+            earlier: self.earlier.finish("bot_earlier", truncated),
+            ..self.report
+        }
+    }
+    /// Plays the coming step and records what happened; how the bot ended, if it did now.
+    /// `lookup` names the objects it reports, removed ones included.
+    fn steer(&mut self, lookup: Lookup, frame: &mut InputFrame) -> Option<(BotEnd, String)> {
+        let runtime = lookup.runtime;
+        let time = rounded(runtime.time);
+        let name = &self.report.entity.name;
+        let event = bot::steer(runtime, &self.bot, &mut self.state, frame);
+        if self.report.started_at.is_none() {
+            self.report.started_at = self.state.started_at().map(rounded);
+        }
+        match event {
+            Some(BotEvent::Reached { index, position }) => self.report.reached.push(BotPoint {
+                index,
+                time,
+                position: position.to_array(),
+            }),
+            Some(BotEvent::Stuck {
+                index,
+                position,
+                distance,
+                reason,
+                last_support,
+                held_by,
+            }) => {
+                let scene = runtime.scene();
+                let last_support = last_support.map(|id| lookup.named(&id));
+                let detail = match reason {
+                    StuckReason::Fell => match &last_support {
+                        Some(support) => format!(
+                            "{name} caiu a caminho do ponto {index} do bot; pisou por último em \
+                             {}",
+                            support.name
+                        ),
+                        None => format!("{name} caiu a caminho do ponto {index} do bot"),
+                    },
+                    StuckReason::Held => format!(
+                        "A lógica travou o movimento de {name} (motivos: {}) a caminho do ponto \
+                         {index} do bot, a {distance:.2} m dele",
+                        held_by.join(", ")
+                    ),
+                    StuckReason::Blocked => format!(
+                        "{name} parou de avançar rumo ao ponto {index} do bot, a {distance:.2} m \
+                         dele"
+                    ),
+                    StuckReason::Waiting => {
+                        let wait = self.bot.path.get(index).and_then(|p| p.wait_for.as_ref());
+                        let object = wait
+                            .and_then(|wait| lookup.name(&wait.object))
+                            .unwrap_or("o objeto");
+                        format!(
+                            "{name} esperou {} s por {object}, que não ficou ao alcance (wait_for \
+                             do ponto {index} do bot)",
+                            wait.map_or(0., |wait| wait.timeout)
+                        )
+                    }
+                    StuckReason::Absent if scene.entity(&self.bot.entity).is_none() => format!(
+                        "{name} não está na cena atual ({}); o bot desistiu do ponto {index}",
+                        scene.name
+                    ),
+                    StuckReason::Absent => {
+                        let point = self.bot.path.get(index);
+                        let follows = point.and_then(|point| point.object.as_ref());
+                        // The point's object is there: the one its wait_for waits for is not.
+                        let waits = point
+                            .and_then(|point| point.wait_for.as_ref())
+                            .map(|wait| &wait.object)
+                            .filter(|id| {
+                                scene.entity(id).is_none()
+                                    && follows.is_none_or(|id| scene.entity(id).is_some())
+                            });
+                        let called = |id: Option<&Id>| {
+                            id.and_then(|id| lookup.name(id)).unwrap_or("um objeto")
+                        };
+                        match waits {
+                            Some(id) => format!(
+                                "O wait_for do ponto {index} do bot espera {}, que não está na \
+                                 cena atual ({})",
+                                called(Some(id)),
+                                scene.name
+                            ),
+                            None => format!(
+                                "O ponto {index} do bot segue {}, que não está na cena atual \
+                                 ({})",
+                                called(follows),
+                                scene.name
+                            ),
+                        }
+                    }
+                };
+                self.report.stuck = Some(BotStuck {
+                    index,
+                    time,
+                    position: position.to_array(),
+                    distance,
+                    reason,
+                    last_support,
+                });
+                self.report.held_by = held_by;
+                return Some((BotEnd::Stuck, detail));
+            }
+            Some(BotEvent::Released { held_by }) => return Some(self.release(held_by, time)),
+            None => {}
+        }
+        if self.state.done() && self.report.done_at.is_none() {
+            self.report.done_at = Some(time);
+            return Some((
+                BotEnd::Done,
+                format!("{name} percorreu o caminho do bot até o fim"),
+            ));
+        }
+        None
+    }
+    /// After the step: logic that began holding the character in it on the way to the last
+    /// point ends the path in this step (see [`bot::released`]).
+    fn released(&mut self, runtime: &Runtime) -> Option<(BotEnd, String)> {
+        let held_by = bot::released(runtime, &self.bot, &mut self.state)?;
+        Some(self.release(held_by, rounded(runtime.time)))
+    }
+    /// The path done at `time` because logic holds the character by `held_by`.
+    fn release(&mut self, held_by: Vec<String>, time: f64) -> (BotEnd, String) {
+        let detail = format!(
+            "A lógica travou o movimento de {} (motivos: {}) a caminho do último ponto do bot \
+             ({}); o caminho conta como feito",
+            self.report.entity.name,
+            held_by.join(", "),
+            self.bot.path.len() - 1
+        );
+        self.report.done_at = Some(time);
+        self.report.held_by = held_by;
+        (BotEnd::Done, detail)
     }
 }
 
@@ -1393,12 +2307,277 @@ fn event_detail(event: &GameEvent) -> String {
     }
 }
 
+/// An input given to the game itself rather than through its input actions, as a window does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Direct {
+    Click(Id),
+    /// A click at `point` of a game view of `view` pixels: the topmost visible button there
+    /// takes it.
+    ClickAt {
+        point: [f32; 2],
+        view: [f32; 2],
+    },
+    Escape,
+}
+impl Direct {
+    pub fn apply(&self, runtime: &mut Runtime) {
+        match self {
+            Self::Click(entity) => runtime.click(entity),
+            Self::ClickAt { point, view } => {
+                let viewport = game_ui::ScreenRect::from_size(view[0], view[1]);
+                match game_ui::button_at(runtime.scene(), viewport, *point) {
+                    Some(button) => runtime.click(&button),
+                    None => runtime.log(format!(
+                        "Clique ignorado: nenhum botão visível da interface em ({}, {}).",
+                        point[0], point[1]
+                    )),
+                }
+            }
+            Self::Escape if runtime.has_pause_menu() => runtime.toggle_game_pause(),
+            Self::Escape => runtime.log(
+                "Esc: a cena não tem menu de pausa (nenhum objeto usa Ao pausar ou retomar); no \
+                 jogo, Esc abriria a pausa da engine."
+                    .into(),
+            ),
+        }
+    }
+}
+
+/// Inputs planned for a running game: the timed ones, and the clicks and Esc by game time.
+pub type PlannedInputs = (Vec<TimedInput>, Vec<(f64, Direct)>);
+
+/// The object a click names: the ID of an object of any scene of `project`, or the name (any
+/// case) of exactly one. An ID no object has is refused, but for the copies `action.spawn`
+/// makes, which exist only while the game runs ([`random::is_derived_id`]).
+fn clicked(project: &Project, text: &str) -> Result<Id, String> {
+    if random::is_derived_id(text) {
+        return Ok(text.into());
+    }
+    project
+        .find_entity(text, "click")
+        .map(|(_, entity)| entity.id.clone())
+}
+
+/// `inputs` for a game whose clock reads `start`, each `at` counted from it: presses, releases,
+/// movement and look as timed inputs in time order, for an [`InputTimeline`] or
+/// [`Runtime::queue_timed_inputs`], and clicks and Esc, which the host gives the game once its
+/// time comes ([`Direct::apply`]). Actions are found by ID or name, and `"$N"` in `applied`.
+/// Clicks at a point take the game view of `view` pixels; without one they are refused.
+pub fn plan_inputs(
+    project: &Project,
+    inputs: &[InputEvent],
+    applied: &[Applied],
+    start: f64,
+    view: Option<[f32; 2]>,
+) -> Result<PlannedInputs, String> {
+    let mut events = inputs.to_vec();
+    for event in &mut events {
+        match event {
+            InputEvent::Click {
+                entity: Some(entity),
+                point: None,
+                ..
+            } => {
+                *entity = clicked(project, &resolve(entity, applied)?)?;
+            }
+            InputEvent::Click {
+                entity: None,
+                point: Some(point),
+                ..
+            } => {
+                if point.iter().any(|v| !v.is_finite()) {
+                    return Err("click: point precisa de dois números finitos, [x, y]".into());
+                }
+                if view.is_none() {
+                    return Err(
+                        "click: point só vale onde a vista do jogo tem tamanho conhecido \
+                                (oxy_simulate e oxy_screenshot, com width × height); aqui, \
+                                clique pelo objeto (entity)"
+                            .into(),
+                    );
+                }
+            }
+            InputEvent::Click { .. } => {
+                return Err(
+                    "click: informe entity (o objeto) ou point ([x, y] na vista do jogo), um só"
+                        .into(),
+                );
+            }
+            // A name the project does not have would be pressed in vain.
+            InputEvent::Press { action, .. } | InputEvent::Release { action, .. } => {
+                *action = input_actions::find(project, &resolve(action, applied)?)?;
+            }
+            _ => {}
+        }
+    }
+    events.sort_by(|a, b| a.at().total_cmp(&b.at()));
+    if events.iter().any(|e| !e.at().is_finite() || e.at() < 0.) {
+        return Err("Os tempos das entradas precisam ser números a partir de 0".into());
+    }
+    // A number too large for the game, such as 1e39, reads as infinite.
+    if events.iter().any(|e| match e {
+        InputEvent::Movement { value, .. } | InputEvent::Look { value, .. } => {
+            value.iter().any(|v| !v.is_finite())
+        }
+        _ => false,
+    }) {
+        return Err("Os valores de movement e look precisam ser números finitos".into());
+    }
+    let mut timed = Vec::new();
+    let mut directs = Vec::new();
+    for event in events {
+        let (at, change) = match event {
+            InputEvent::Press { at, action } => (at, InputChange::Press(action)),
+            InputEvent::Release { at, action } => (at, InputChange::Release(action)),
+            InputEvent::Movement { at, value } => (at, InputChange::Movement(value)),
+            InputEvent::Look { at, value } => (at, InputChange::Look(value)),
+            InputEvent::Click { at, entity, point } => {
+                let direct = match (entity, point, view) {
+                    (Some(entity), _, _) => Direct::Click(entity),
+                    (None, Some(point), Some(view)) => Direct::ClickAt { point, view },
+                    // Refused above.
+                    _ => continue,
+                };
+                directs.push((start + at, direct));
+                continue;
+            }
+            InputEvent::Escape { at } => {
+                directs.push((start + at, Direct::Escape));
+                continue;
+            }
+        };
+        timed.push(TimedInput {
+            at: start + at,
+            change,
+        });
+    }
+    Ok((timed, directs))
+}
+
+/// The replay check: a second copy of the game, fed the same clicks and inputs in lockstep and
+/// compared after every step until the two differ.
+struct Twin {
+    runtime: Option<Runtime>,
+    check: ReplayCheck,
+}
+impl Twin {
+    fn direct(&mut self, direct: &Direct) {
+        if let Some(twin) = &mut self.runtime {
+            direct.apply(twin);
+        }
+    }
+    fn advance(&mut self, frame: &InputFrame) {
+        if let Some(twin) = &mut self.runtime {
+            twin.advance(FIXED_DT, frame);
+        }
+    }
+    /// Compares the copy with the first, both stepped `steps` times. `lookup` names the
+    /// object that differs.
+    fn compare(&mut self, lookup: Lookup, steps: usize) {
+        let Some(twin) = &mut self.runtime else {
+            return;
+        };
+        // The host's queues, taken as the recorder takes the first copy's.
+        if let Some(recording) = &mut twin.recording {
+            *recording = Recording::default();
+        }
+        twin.scene_starts.clear();
+        twin.logs.clear();
+        twin.traces.clear();
+        twin.sounds.clear();
+        twin.save_requests.clear();
+        self.check.steps = steps;
+        let runtime = lookup.runtime;
+        if runtime.state_hash() == twin.state_hash() {
+            return;
+        }
+        let difference = runtime
+            .state_digest()
+            .first_difference(&twin.state_digest());
+        self.check.identical = false;
+        self.check.first_difference = difference.map(|difference| ReplayDifference {
+            time: rounded(runtime.time),
+            object: difference.object.map(|id| {
+                // An object only the second copy has is named by it.
+                let name = lookup
+                    .name(&id)
+                    .or_else(|| twin.scene().entity(&id).map(|e| e.name.as_str()))
+                    .unwrap_or(&id)
+                    .to_owned();
+                Named { id, name }
+            }),
+            part: difference.part,
+        });
+        self.runtime = None;
+    }
+}
+
+/// The progress a request's `save` describes: each label a persistent variable of `project` by
+/// ID or name (`"$N"` from setup too) and its key, with a value the variable takes.
+fn saved_progress(
+    project: &Project,
+    values: &BTreeMap<String, Value>,
+    applied: &[Applied],
+) -> Result<SaveSlot, String> {
+    let mut slot = SaveSlot {
+        exists: true,
+        ..SaveSlot::default()
+    };
+    let mut keys: HashMap<Id, usize> = HashMap::new();
+    for (label, value) in values {
+        let (variable, key) = variables::split_label(label);
+        let id = variables::find(project, &resolve(variable, applied)?)
+            .map_err(|error| format!("save: {error}"))?;
+        let declared = save::check(project, &id, key, value).map_err(|error| {
+            let hint = if error.contains("não é salva entre partidas") {
+                "; marque-a com update_variable e persistent: true no setup, ou use \
+                 update_variable no setup para mudar só o valor inicial"
+            } else {
+                ""
+            };
+            format!("save: {error}{hint}")
+        })?;
+        if !key.is_empty() {
+            let count = keys.entry(id.clone()).or_default();
+            *count += 1;
+            if *count > variables::MAX_KEYS {
+                return Err(format!(
+                    "save: a variável {} passa de {} chaves",
+                    declared.name,
+                    variables::MAX_KEYS
+                ));
+            }
+        }
+        if slot
+            .values
+            .insert((id, key.to_owned()), value.clone())
+            .is_some()
+        {
+            return Err(format!(
+                "save: {} aparece duas vezes",
+                variables::label(&declared.name, key)
+            ));
+        }
+    }
+    Ok(slot)
+}
+
 /// Runs `request` on a copy of `project`. Nothing in `project` changes.
 pub fn simulate(
     project: &Project,
     request: &SimulationRequest,
 ) -> Result<SimulationReport, String> {
     run(project, request).map(|(report, _)| report)
+}
+
+/// Runs `request` with the replay check on (see [`SimulationRequest::check_replay`]).
+pub fn check_replay(project: &Project, request: &SimulationRequest) -> Result<ReplayCheck, String> {
+    let request = SimulationRequest {
+        check_replay: true,
+        ..request.clone()
+    };
+    let (report, _) = run(project, &request)?;
+    Ok(report.replay.expect("the replay check was asked for"))
 }
 
 /// `simulate`, also returning the runtime at the end, e.g. to render the game view.
@@ -1411,77 +2590,126 @@ pub fn run(
             "Informe uma duração entre 0 e {MAX_SECONDS} segundos"
         ));
     }
-    if request.samples > 120 {
-        return Err("No máximo 120 amostras".into());
+    if request.samples as usize > MAX_SAMPLES {
+        return Err(format!("No máximo {MAX_SAMPLES} amostras"));
     }
-    let view_size = request.view_size.unwrap_or(VIEW_SIZE);
-    if view_size.iter().any(|v| !(16..=4096).contains(v)) {
-        return Err("A vista do jogo deve ter entre 16 e 4096 pixels de lado".into());
+    if request
+        .sample_every
+        .is_some_and(|every| !every.is_finite() || every <= 0.)
+    {
+        return Err("sample_every precisa ser um número de segundos maior que 0".into());
+    }
+    // The final state is one more sample.
+    if request.samples_at.len() >= MAX_SAMPLES {
+        return Err(format!(
+            "samples_at: no máximo {} tempos (com o estado final, {MAX_SAMPLES} amostras)",
+            MAX_SAMPLES - 1
+        ));
+    }
+    if request
+        .samples_at
+        .iter()
+        .any(|at| !at.is_finite() || *at < 0. || *at > request.seconds)
+    {
+        return Err(format!(
+            "samples_at: os tempos precisam ser segundos de 0 a {} (seconds)",
+            request.seconds
+        ));
+    }
+    if request.seed > random::MAX_SEED {
+        return Err(format!(
+            "A semente (seed) deve ser um inteiro de 0 a {}",
+            random::MAX_SEED
+        ));
+    }
+    if request
+        .view_size
+        .iter()
+        .flatten()
+        .any(|side| !(MIN_VIEW..=MAX_VIEW).contains(side))
+    {
+        return Err(format!(
+            "A vista do jogo deve ter entre {MIN_VIEW} e {MAX_VIEW} pixels de lado"
+        ));
     }
     // Setup and spawn change only this copy.
     let mut copy = Cow::Borrowed(project);
-    let default_scene = request
+    let asked = request
         .scene
-        .clone()
-        .unwrap_or_else(|| project.start_scene.clone());
+        .as_deref()
+        .map(|scene| project.find_scene(scene, "scene").map(|s| s.id.clone()))
+        .transpose()?;
+    let default_scene = asked.clone().unwrap_or_else(|| project.start_scene.clone());
     let applied = if request.setup.is_empty() {
         Vec::new()
     } else {
         command::apply(copy.to_mut(), &default_scene, &request.setup)
             .map_err(|e| format!("Preparação (setup): {e}"))?
     };
-    let start = request
-        .scene
-        .clone()
-        .unwrap_or_else(|| copy.start_scene.clone());
+    let start = asked.unwrap_or_else(|| copy.start_scene.clone());
     if copy.scene(&start).is_none() {
         return Err(format!("Cena {start} não existe"));
     }
     if let Some(spawn) = &request.spawn {
-        let entity = resolve(&spawn.entity, &applied)?;
+        let scene = copy.scene(&start).expect("checked above");
+        let entity = scene
+            .find_entity(&resolve(&spawn.entity, &applied)?, "spawn")?
+            .id
+            .clone();
         place(copy.to_mut(), &start, spawn, &entity)?;
     }
     let source: &Project = &copy;
-    let mut events = request.inputs.clone();
-    for event in &mut events {
-        match event {
-            InputEvent::Click { entity, .. } => *entity = resolve(entity, &applied)?,
-            // A name the project does not have would be pressed in vain.
-            InputEvent::Press { action, .. } | InputEvent::Release { action, .. } => {
-                *action = input_actions::find(source, &resolve(action, &applied)?)?;
+    let (window, [width, height]) = (game_view(source), request.view_size);
+    let view_size = [width.unwrap_or(window[0]), height.unwrap_or(window[1])];
+    let bot = request
+        .bot
+        .as_ref()
+        .map(|bot| {
+            let mut bot = bot.clone();
+            let (scene, character) = source.find_entity(&resolve(&bot.entity, &applied)?, "bot")?;
+            bot.entity = character.id.clone();
+            // A point's objects are of the character's scene: a name is looked for there, and
+            // an ID (or a name only another scene has) is left for the check to place.
+            let point_object = |text: &str, what: String| {
+                let text = resolve(text, &applied)?;
+                if source.scenes.iter().any(|s| s.entity(&text).is_some()) {
+                    return Ok(text);
+                }
+                if scene.entities_named(&text).is_empty()
+                    && let Ok((_, elsewhere)) = source.find_entity(&text, &what)
+                {
+                    return Ok(elsewhere.id.clone());
+                }
+                scene.find_entity(&text, &what).map(|e| e.id.clone())
+            };
+            for (index, point) in bot.path.iter_mut().enumerate() {
+                let what = |field: &str| {
+                    format!(
+                        "bot: {field} do ponto {index} do caminho (o {}º)",
+                        index + 1
+                    )
+                };
+                if let Some(object) = &mut point.object {
+                    *object = point_object(object, what("object"))?;
+                }
+                if let Some(wait) = &mut point.wait_for {
+                    wait.object = point_object(&wait.object, what("wait_for.object"))?;
+                }
             }
-            _ => {}
-        }
-    }
-    events.sort_by(|a, b| a.at().total_cmp(&b.at()));
-    if events.iter().any(|e| !e.at().is_finite() || e.at() < 0.) {
-        return Err("Os tempos das entradas precisam ser números a partir de 0".into());
-    }
+            bot.check(source)?;
+            Ok::<_, String>(bot)
+        })
+        .transpose()?;
+    let view = view_size.map(|side| side as f32);
+    let (timed, directs) = plan_inputs(source, &request.inputs, &applied, 0., Some(view))?;
     let mut timeline = InputTimeline::default();
-    let mut clicks = Vec::new();
-    for event in events {
-        let (at, change) = match event {
-            InputEvent::Press { at, action } => (at, InputChange::Press(action)),
-            InputEvent::Release { at, action } => (at, InputChange::Release(action)),
-            InputEvent::Movement { at, value } => (at, InputChange::Movement(value)),
-            InputEvent::Look { at, value } => (at, InputChange::Look(value)),
-            InputEvent::Click { at, entity } => {
-                clicks.push((at, entity));
-                continue;
-            }
-        };
-        timeline.push(TimedInput { at, change }, 0.)?;
-    }
+    timeline.push_all(timed, 0.)?;
     let watches: Vec<(WatchPlan, String)> = request
         .watch
         .iter()
         .map(|watch| {
-            let id = resolve(&watch.id, &applied)?;
-            let entity = source
-                .scenes
-                .iter()
-                .find_map(|s| s.entity(&id))
-                .ok_or_else(|| format!("Objeto observado {id} não existe no projeto"))?;
+            let (_, entity) = source.find_entity(&resolve(&watch.id, &applied)?, "watch")?;
+            let id = entity.id.clone();
             let mut fields: BTreeSet<Field> = watch.fields.as_ref().map_or_else(
                 || [Field::Position, Field::Visible, Field::Attributes].into(),
                 |fields| fields.iter().copied().collect(),
@@ -1518,7 +2746,7 @@ pub fn run(
     let stop = request
         .until
         .as_ref()
-        .map(|until| Stop::new(until, source, &start, &applied))
+        .map(|until| Stop::new(until, source, &start, &applied, bot.as_ref()))
         .transpose()?;
     let filter = &request.actions_filter;
     let objects = filter
@@ -1553,21 +2781,73 @@ pub fn run(
         logs: Recent::default(),
         sounds: Recent::default(),
         events: Recent::default(),
+        saves: Recent::default(),
+        pauses: Recent::default(),
     };
-    let mut runtime = Runtime::recorded(source, &start)?;
+    let save = request
+        .save
+        .as_ref()
+        .map(|values| saved_progress(source, values, &applied))
+        .transpose()?;
+    let options = RuntimeOptions {
+        record: true,
+        seed: request.seed,
+        save,
+    };
+    let mut runtime = Runtime::with_options(source, &start, options.clone())?;
+    let mut bot = bot.map(|bot| BotRun {
+        state: BotState::new(&runtime, &bot),
+        report: BotReport {
+            entity: Named {
+                name: source
+                    .scenes
+                    .iter()
+                    .find_map(|s| s.entity(&bot.entity))
+                    .map_or_else(|| bot.entity.clone(), |e| e.name.clone()),
+                id: bot.entity.clone(),
+            },
+            started_at: None,
+            reached: Vec::new(),
+            done_at: None,
+            stuck: None,
+            held_by: Vec::new(),
+            earlier: Vec::new(),
+        },
+        earlier: Recent::default(),
+        bot,
+    });
+    let mut twin = Twin {
+        runtime: request
+            .check_replay
+            .then(|| Runtime::with_options(source, &start, options))
+            .transpose()?,
+        check: ReplayCheck {
+            identical: true,
+            steps: 0,
+            first_difference: None,
+        },
+    };
     let mut report = SimulationReport {
         seconds: request.seconds,
         start_scene: start.clone(),
         final_scene: start,
+        seed: request.seed,
+        state_hash: String::new(),
+        replay: None,
         stopped_at: None,
+        paused: false,
+        pauses: Vec::new(),
         setup: applied,
         scene_changes: Vec::new(),
         logs: Vec::new(),
         actions: None,
         sounds: Vec::new(),
         events: Vec::new(),
+        bot: None,
         camera: None,
         ui: Vec::new(),
+        cursor_free: None,
+        view_size,
         watched: watches
             .iter()
             .map(|(watch, name)| Watched {
@@ -1576,52 +2856,146 @@ pub fn run(
                 samples: Vec::new(),
             })
             .collect(),
+        variables: BTreeMap::new(),
+        saves: Vec::new(),
+        save: None,
+        audio: None,
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
-    // Sample k of n is taken at the step nearest k/n of the run, the last one being the final
-    // state; with fewer steps than samples, every step has one.
-    let samples = request.samples.max(1) as usize;
-    let due = |k: usize| (k * steps + samples / 2) / samples;
-    let mut next_sample = 1;
-    let mut clicks = clicks.into_iter().peekable();
+    let mut sampler = Sampler::new(request, steps);
+    let take = |sampler: &mut Sampler, step: usize, runtime: &Runtime, recorder: &Recorder| {
+        if !watches.is_empty() {
+            sampler.take(step, || {
+                let lookup = recorder.lookup(runtime);
+                watches
+                    .iter()
+                    .map(|(watch, _)| sample(lookup, watch))
+                    .collect()
+            });
+        }
+    };
+    let mut directs = directs.into_iter().peekable();
+    // Sair do jogo ends the run whatever `until` asks.
+    let quit = |runtime: &Runtime, happened: &Happened| {
+        runtime.quit_requested.then(|| {
+            let node = graph::definition("game.quit").map_or("Sair do jogo", |def| def.label);
+            let asked = happened
+                .quit
+                .as_ref()
+                .map_or("O jogo", |object| object.name.as_str());
+            StoppedAt {
+                time: rounded(runtime.time),
+                reason: "quit",
+                kind: None,
+                object: happened.quit.clone(),
+                detail: format!("{asked} pediu para sair do jogo (nó {node})"),
+                ended_at: None,
+            }
+        })
+    };
+    let most = (MAX_SECONDS / f64::from(FIXED_DT)).round() as usize;
+    // Whether the run ends after `step` (0: the start): Sair do jogo, or an until condition,
+    // `then` steps later when it asks for them. The run lasts `end` steps until then.
+    let settle = |runtime: &Runtime,
+                  happened: &Happened,
+                  step: usize,
+                  stopped: &mut Option<StoppedAt>,
+                  end: &mut usize| {
+        if let Some(held) = stopped {
+            // Going on after the condition: only Sair do jogo ends it sooner.
+            if let Some(quit) = quit(runtime, happened) {
+                held.detail = format!("{}; depois, {}", held.detail, quit.detail);
+                return true;
+            }
+            return step >= *end;
+        }
+        let found = quit(runtime, happened)
+            .or_else(|| stop.as_ref().and_then(|s| s.check(runtime, happened)));
+        let Some(found) = found else {
+            return step >= *end;
+        };
+        let then = stop
+            .as_ref()
+            .and_then(|s| s.then)
+            .filter(|_| found.reason != "quit");
+        *stopped = Some(found);
+        match then {
+            Some(then) => {
+                *end = (step + then).min(most);
+                step >= *end
+            }
+            None => true,
+        }
+    };
+    let mut stopped = None;
+    let mut end = steps;
     // What the scene start logic did happens at time 0.
     let started = recorder.collect(&mut runtime);
-    let mut stopped = stop.as_ref().and_then(|s| s.check(&runtime, &started));
-    if stopped.is_none() {
-        for step in 1..=steps {
-            while clicks.peek().is_some_and(|(at, _)| *at <= runtime.time) {
-                let (_, entity) = clicks.next().unwrap();
-                runtime.click(&entity);
-            }
-            let mut frame = InputFrame::default();
-            timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
-            runtime.advance(FIXED_DT, &frame);
-            let happened = recorder.collect(&mut runtime);
-            stopped = stop.as_ref().and_then(|s| s.check(&runtime, &happened));
-            if stopped.is_some() {
-                break;
-            }
-            while next_sample < samples && due(next_sample) < step {
-                next_sample += 1;
-            }
-            if next_sample < samples && due(next_sample) == step && step != steps {
-                for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
-                    watched
-                        .samples
-                        .push(sample(recorder.lookup(&runtime), watch));
-                }
-            }
+    if let Some(bot) = &mut bot {
+        bot.scenes(&runtime, &started);
+    }
+    twin.compare(recorder.lookup(&runtime), 0);
+    let mut ended = settle(&runtime, &started, 0, &mut stopped, &mut end);
+    sampler.end = end;
+    // Steps run.
+    let mut last = 0;
+    if !ended {
+        take(&mut sampler, 0, &runtime, &recorder);
+    }
+    while !ended {
+        let step = last + 1;
+        last = step;
+        while directs.peek().is_some_and(|(at, _)| *at <= runtime.time) {
+            let (_, direct) = directs.next().unwrap();
+            direct.apply(&mut runtime);
+            twin.direct(&direct);
+        }
+        let mut frame = InputFrame::default();
+        timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
+        let bot_ended = bot
+            .as_mut()
+            .and_then(|bot| bot.steer(recorder.lookup(&runtime), &mut frame));
+        runtime.advance(FIXED_DT, &frame);
+        twin.advance(&frame);
+        let mut happened = recorder.collect(&mut runtime);
+        if let Some(bot) = &mut bot {
+            bot.scenes(&runtime, &happened);
+        }
+        happened.bot = bot_ended.or_else(|| bot.as_mut().and_then(|bot| bot.released(&runtime)));
+        twin.compare(recorder.lookup(&runtime), step);
+        ended = settle(&runtime, &happened, step, &mut stopped, &mut end);
+        sampler.end = end;
+        if !ended {
+            take(&mut sampler, step, &runtime, &recorder);
         }
     }
+    if let Some(stopped) = &mut stopped
+        && stop.as_ref().is_some_and(|s| s.then.is_some())
+        && stopped.reason != "quit"
+    {
+        stopped.ended_at = Some(rounded(runtime.time));
+    }
     report.stopped_at = stopped;
-    for ((watch, _), watched) in watches.iter().zip(&mut report.watched) {
-        watched
-            .samples
-            .push(sample(recorder.lookup(&runtime), watch));
+    report.bot = bot.map(|bot| bot.finish(&mut report.truncated));
+    report.paused = runtime.game_paused();
+    let end = {
+        let lookup = recorder.lookup(&runtime);
+        watches
+            .iter()
+            .map(|(watch, _)| sample(lookup, watch))
+            .collect()
+    };
+    let (lists, dropped) = sampler.finish(last, end);
+    for (watched, samples) in report.watched.iter_mut().zip(lists) {
+        watched.samples = samples;
+    }
+    if dropped > 0 {
+        report.truncated.insert("samples", dropped);
     }
     report.camera = camera(&runtime);
     if request.ui {
+        report.cursor_free = Some(!runtime.wants_relative_mouse());
         report.ui = game_ui::ui_state(
             runtime.project(),
             runtime.scene(),
@@ -1635,7 +3009,23 @@ pub fn run(
         }
     }
     recorder.finish(&mut report);
+    let (variables, left_out) = runtime.variable_values(MAX_ENTRIES);
+    report.variables = variables;
+    if left_out > 0 {
+        report.truncated.insert("variables", left_out);
+    }
+    let slot = runtime.save_slot();
+    if slot.exists {
+        let (save, left_out) = variables::labeled(source, &slot.values, MAX_ENTRIES);
+        report.save = Some(save);
+        if left_out > 0 {
+            report.truncated.insert("save", left_out);
+        }
+    }
+    report.audio = audio_report(&runtime);
     report.final_scene = runtime.scene_id().to_owned();
+    report.state_hash = format!("{:016x}", runtime.state_hash());
+    report.replay = request.check_replay.then_some(twin.check);
     Ok((report, runtime))
 }
 
@@ -1697,6 +3087,80 @@ mod tests {
     }
 
     #[test]
+    fn inputs_for_a_running_game_count_from_its_clock() {
+        let (mut project, door, _) = project();
+        let open = input_actions::create(&mut project, "Abrir porta", "O").unwrap();
+        let inputs: Vec<InputEvent> = serde_json::from_value(serde_json::json!([
+            {"type": "release", "at": 0.5, "action": "abrir porta"},
+            {"type": "click", "at": 0.25, "entity": door},
+            {"type": "press", "at": 0.0, "action": open},
+            {"type": "escape", "at": 0.0},
+            {"type": "movement", "at": 0.5, "value": [0.0, 1.0]},
+        ]))
+        .unwrap();
+        let (timed, directs) = plan_inputs(&project, &inputs, &[], 10., None).unwrap();
+        let timed: Vec<_> = timed
+            .iter()
+            .map(|input| (input.at, format!("{:?}", input.change)))
+            .collect();
+        assert_eq!(
+            timed,
+            [
+                (10., format!("Press({open:?})")),
+                (10.5, format!("Release({open:?})")),
+                (10.5, "Movement([0.0, 1.0])".to_owned()),
+            ],
+            "by name or ID, in time order, equal times as given"
+        );
+        assert_eq!(
+            directs,
+            [(10., Direct::Escape), (10.25, Direct::Click(door.clone()))]
+        );
+        let unknown: Vec<InputEvent> = serde_json::from_value(
+            serde_json::json!([{"type": "press", "at": 0.0, "action": "voar"}]),
+        )
+        .unwrap();
+        let error = plan_inputs(&project, &unknown, &[], 0., None).unwrap_err();
+        assert!(error.contains("\"voar\" não existe"), "{error}");
+        let early: Vec<InputEvent> =
+            serde_json::from_value(serde_json::json!([{"type": "escape", "at": -1.0}])).unwrap();
+        assert!(plan_inputs(&project, &early, &[], 5., None).is_err());
+        let huge: Vec<InputEvent> = serde_json::from_value(
+            serde_json::json!([{"type": "look", "at": 0.0, "value": [1e39, 0.0]}]),
+        )
+        .unwrap();
+        let error = plan_inputs(&project, &huge, &[], 0., None).unwrap_err();
+        assert!(error.contains("números finitos"), "{error}");
+        // A click at a point needs the game view's size; an object or a point, one of them.
+        let at: Vec<InputEvent> = serde_json::from_value(
+            serde_json::json!([{"type": "click", "at": 1.0, "point": [560, 490]}]),
+        )
+        .unwrap();
+        let (_, directs) = plan_inputs(&project, &at, &[], 0., Some([1280., 720.])).unwrap();
+        assert_eq!(
+            directs,
+            [(
+                1.,
+                Direct::ClickAt {
+                    point: [560., 490.],
+                    view: [1280., 720.]
+                }
+            )]
+        );
+        let error = plan_inputs(&project, &at, &[], 0., None).unwrap_err();
+        assert!(error.contains("clique pelo objeto (entity)"), "{error}");
+        for click in [
+            serde_json::json!({"type": "click", "at": 0.0}),
+            serde_json::json!({"type": "click", "at": 0.0, "entity": door, "point": [1, 2]}),
+        ] {
+            let inputs: Vec<InputEvent> =
+                serde_json::from_value(serde_json::json!([click])).unwrap();
+            let error = plan_inputs(&project, &inputs, &[], 0., Some([960., 540.])).unwrap_err();
+            assert!(error.contains("entity (o objeto) ou point"), "{error}");
+        }
+    }
+
+    #[test]
     fn copies_already_removed_keep_their_name_and_node() {
         let (project, _, _) = project();
         let runtime = Runtime::new(&project, &project.start_scene).unwrap();
@@ -1748,6 +3212,119 @@ mod tests {
         );
         assert!(!lines.iter().any(|l| l.text == "Objeto 1 · x"));
         assert_eq!(lines.last().unwrap().text, "Novo · x");
+    }
+
+    #[test]
+    fn the_replay_check_names_where_the_copies_part_and_stops_there() {
+        use crate::graph::Node;
+        // A Dado that writes a draw into its Valor every step.
+        let mut project = Project::new("Dados");
+        let mut die = Entity::new("Dado", None);
+        die.attributes.insert("Valor".into(), Value::Number(0.));
+        die.attributes.insert("Lado".into(), Value::Number(0.));
+        let step = Node::new("event.step", [0.; 2]);
+        let draw = Node::new("random.number", [0.; 2]);
+        let mut keep = Node::new("attribute.set", [0.; 2]);
+        keep.params
+            .insert("attribute".into(), Value::Text("Valor".into()));
+        let edge = |from: &Node, from_port: &str, to: &Node, to_port: &str| Edge {
+            from_node: from.id.clone(),
+            from_port: from_port.into(),
+            to_node: to.id.clone(),
+            to_port: to_port.into(),
+        };
+        die.graph.edges = vec![
+            edge(&step, "exec", &draw, "exec"),
+            edge(&draw, "exec", &keep, "exec"),
+            edge(&draw, "value", &keep, "value"),
+        ];
+        die.graph.nodes = vec![step, draw, keep];
+        let die_id = die.id.clone();
+        project.scenes[0].entities.push(die);
+        let start = |seed| {
+            let options = RuntimeOptions {
+                record: true,
+                seed,
+                ..Default::default()
+            };
+            Runtime::with_options(&project, &project.start_scene, options).unwrap()
+        };
+        let twin = |seed| Twin {
+            runtime: Some(start(seed)),
+            check: ReplayCheck {
+                identical: true,
+                steps: 0,
+                first_difference: None,
+            },
+        };
+        let spawned = HashMap::new();
+        let compare = |twin: &mut Twin, runtime: &Runtime, steps| {
+            let lookup = Lookup {
+                runtime,
+                source: &project,
+                spawned: &spawned,
+            };
+            twin.compare(lookup, steps);
+        };
+        let frame = InputFrame::default();
+
+        // Another seed: the draws part first, before the attribute they write.
+        let mut main = start(0);
+        let mut other = twin(1);
+        main.advance(FIXED_DT, &frame);
+        other.advance(&frame);
+        compare(&mut other, &main, 1);
+        let random = ReplayDifference {
+            time: 0.0167,
+            object: None,
+            part: "random".into(),
+        };
+        assert_eq!(
+            other.check,
+            ReplayCheck {
+                identical: false,
+                steps: 1,
+                first_difference: Some(random),
+            }
+        );
+        assert!(other.runtime.is_none());
+
+        // The same seed, with an attribute the logic leaves alone changed in the copy only:
+        // the object by name, and the part.
+        let mut main = start(0);
+        let mut copy = twin(0);
+        main.advance(FIXED_DT, &frame);
+        copy.advance(&frame);
+        compare(&mut copy, &main, 1);
+        assert_eq!((copy.check.identical, copy.check.steps), (true, 1));
+        main.advance(FIXED_DT, &frame);
+        copy.advance(&frame);
+        let changed = copy.runtime.as_mut().unwrap().scene_mut();
+        changed
+            .entity_mut(&die_id)
+            .unwrap()
+            .attributes
+            .insert("Lado".into(), Value::Number(1.));
+        compare(&mut copy, &main, 2);
+        let parted = ReplayCheck {
+            identical: false,
+            steps: 2,
+            first_difference: Some(ReplayDifference {
+                time: 0.0333,
+                object: Some(Named {
+                    id: die_id,
+                    name: "Dado".into(),
+                }),
+                part: "attributes.Lado".into(),
+            }),
+        };
+        assert_eq!(copy.check, parted);
+        assert!(copy.runtime.is_none());
+        // Nothing more is compared after the first difference.
+        main.advance(FIXED_DT, &frame);
+        copy.advance(&frame);
+        compare(&mut copy, &main, 3);
+        assert_eq!(copy.check, parted);
     }
 
     #[test]

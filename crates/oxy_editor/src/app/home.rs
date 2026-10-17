@@ -29,7 +29,7 @@ impl Home {
             Some(Err(error)) => (Vec::new(), Some(error)),
             None => (Vec::new(), None),
         };
-        let icon = crate::window_icon();
+        let icon = oxy_render::branding::oxy_icon();
         let logo = ctx.load_texture(
             "OXY Engine",
             egui::ColorImage::from_rgba_unmultiplied(
@@ -92,13 +92,36 @@ fn remember(recent: &mut Vec<PathBuf>, path: PathBuf) {
     recent.truncate(RECENT_LIMIT);
 }
 
-pub(super) fn bundled_example(exe: &Path) -> Option<PathBuf> {
+/// An example the portable ZIP carries next to the editor and the home screen opens as a copy.
+#[derive(Clone, Copy)]
+struct Example {
+    /// Its folder next to the executable.
+    folder: &'static str,
+    /// Its folder in the repository, which development builds also find.
+    source: &'static str,
+}
+/// Projeto de exemplo, the player's data too.
+const SAMPLE: Example = Example {
+    folder: "data",
+    source: "examples/validacao",
+};
+const PARKOUR: Example = Example {
+    folder: "parkour",
+    source: "examples/parkour",
+};
+
+fn bundled_example(exe: &Path, example: Example) -> Option<PathBuf> {
     let dir = exe.parent()?;
-    let mut candidates = vec![dir.join("data/project.oxy.json")];
+    let mut candidates = vec![dir.join(example.folder).join(persistence::PROJECT_FILE)];
     // Development-only convenience; release packages use executable-relative data exclusively.
     if cfg!(debug_assertions) {
-        candidates.push(dir.join("../../examples/validacao/project.oxy.json"));
-        candidates.push(dir.join("../../../examples/validacao/project.oxy.json"));
+        for up in ["../..", "../../.."] {
+            candidates.push(
+                dir.join(up)
+                    .join(example.source)
+                    .join(persistence::PROJECT_FILE),
+            );
+        }
     }
     candidates.into_iter().find(|p| p.is_file())
 }
@@ -111,12 +134,15 @@ impl Editor {
         }
     }
 
-    fn open_example(&mut self) {
+    fn open_example(&mut self, example: Example) {
         let source = std::env::current_exe()
             .ok()
-            .and_then(|exe| bundled_example(&exe));
+            .and_then(|exe| bundled_example(&exe, example));
         let Some(source) = source else {
-            self.home.error = Some("Exemplo não encontrado. Extraia o ZIP inteiro, mantendo a pasta data junto do executável.".into());
+            self.home.error = Some(format!(
+                "Exemplo não encontrado. Extraia o ZIP inteiro, mantendo a pasta {} junto do executável.",
+                example.folder
+            ));
             return;
         };
         // Work in an independent temporary bundle from the beginning, so even
@@ -317,8 +343,13 @@ impl Editor {
                 "Laboratório 3D · movimento",
                 "Pista com rampas, gelo, plataformas e checkpoints feitos com nós.",
             ),
+            (
+                Icon::Game,
+                "OXY Parkour",
+                "Parkour em primeira pessoa: pista com checkpoints, plataformas que giram, cronômetro, pausa, recorde salvo e música.",
+            ),
         ];
-        let clicked = |ui: &mut egui::Ui, cards: &[(Icon, &str, &str); 2], first_primary: bool| {
+        let clicked = |ui: &mut egui::Ui, cards: &[(Icon, &str, &str)], first_primary: bool| {
             let mut clicked = None;
             if pairs {
                 let gap = 8.;
@@ -327,15 +358,22 @@ impl Editor {
                     .iter()
                     .map(|(_, _, text)| action_card_height(ui, width, text))
                     .fold(0., f32::max);
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for (i, (icon, title, text)) in cards.iter().enumerate() {
-                        let primary = first_primary && i == 0;
-                        if action_card(ui, *icon, title, text, primary, width, height).clicked() {
-                            clicked = Some(i);
-                        }
+                for (row, pair) in cards.chunks(2).enumerate() {
+                    if row > 0 {
+                        ui.add_space(gap - ui.spacing().item_spacing.y);
                     }
-                });
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for (i, (icon, title, text)) in pair.iter().enumerate() {
+                            let index = 2 * row + i;
+                            let primary = first_primary && index == 0;
+                            if action_card(ui, *icon, title, text, primary, width, height).clicked()
+                            {
+                                clicked = Some(index);
+                            }
+                        }
+                    });
+                }
             } else {
                 let width = ui.available_width();
                 for (i, (icon, title, text)) in cards.iter().enumerate() {
@@ -370,8 +408,9 @@ impl Editor {
         );
         ui.add_space(4.);
         match clicked(ui, &examples, false) {
-            Some(0) => self.open_example(),
-            Some(_) => self.open_laboratory(),
+            Some(0) => self.open_example(SAMPLE),
+            Some(1) => self.open_laboratory(),
+            Some(_) => self.open_example(PARKOUR),
             None => {}
         }
     }
@@ -780,6 +819,29 @@ mod tests {
         persistence::safe_write(&path, b"{}").unwrap();
         assert_eq!(age(&path).as_deref(), Some("hoje"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn bundled_examples_open_from_their_folder_next_to_the_editor() {
+        let root = std::env::temp_dir().join(format!("oxy-bundled-{}", new_id()));
+        // Deep enough that no repository is found above it.
+        let dir = root.join("a/b/c");
+        let exe = dir.join("OXY Engine.exe");
+        let parkour = dir.join("parkour").join(persistence::PROJECT_FILE);
+        persistence::safe_write(&parkour, b"{}").unwrap();
+        assert_eq!(bundled_example(&exe, PARKOUR), Some(parkour));
+        // A ZIP extracted in part, without the data folder.
+        assert_eq!(bundled_example(&exe, SAMPLE), None);
+        std::fs::remove_dir_all(root).unwrap();
+        // Development builds, two folders below the repository, find its examples.
+        let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/oxy-sem-pacote/x.exe");
+        for example in [SAMPLE, PARKOUR] {
+            assert_eq!(
+                bundled_example(&build, example).is_some(),
+                cfg!(debug_assertions),
+                "{}",
+                example.source
+            );
+        }
     }
     #[test]
     fn recent_settings_roundtrip_and_invalid_version() {

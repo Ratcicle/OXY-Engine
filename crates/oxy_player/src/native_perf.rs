@@ -21,6 +21,7 @@ impl eframe::App for FixedPlayer {
 #[test]
 #[ignore = "Opt-in native CPU benchmark; opens an inactive WGPU player"]
 fn native_player_performance() {
+    crate::native_qa::isolate_progress();
     harness::run("OXY — medição do player", |cc, project| {
         let path = std::env::temp_dir().join("oxy-performance-project.oxy.json");
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();

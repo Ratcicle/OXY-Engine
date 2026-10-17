@@ -1,18 +1,21 @@
 //! MCP tools. Each call targets either an open editor (live: edits appear at once, are
-//! undoable, and the person saves) or, when no editor has the project open, the project files.
+//! undoable, and the person saves, or the agent when they allow it) or, when no editor has the
+//! project open, the project files.
 use crate::editors::{self, LiveEditor};
 use glam::Vec3;
 use oxy_core::{
-    asset_import::{self, ImportRequest},
+    asset_import::{self, ImportBatch},
     command::{self, Applied},
     document::*,
-    encoding, headless, persistence, query,
+    editing, encoding,
+    export::{self, ExportRequest},
+    headless, persistence, query, random,
     runtime::Runtime,
 };
 use oxy_render::{CameraState, offscreen::ShotView};
 use serde_json::{Value as Json, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -26,10 +29,56 @@ impl Output {
     /// Compact JSON with rounded floats: MCP clients cut long results, and every character
     /// takes the agent's context.
     fn json(value: Json) -> Self {
-        Self {
-            text: serde_json::to_string(&rounded(value)).unwrap_or_default(),
-            image: None,
+        let mut text = String::new();
+        compact(&rounded(value), &mut text);
+        Self { text, image: None }
+    }
+}
+
+/// `value` as compact JSON text, as serde_json writes it, but for objects whose keys are all
+/// whole numbers, such as created: those go in numeric order ("2" before "10"), not in text
+/// order.
+fn compact(value: &Json, out: &mut String) {
+    match value {
+        Json::Object(map) => {
+            let mut entries: Vec<(&String, &Json)> = map.iter().collect();
+            if entries
+                .iter()
+                .all(|(key, _)| !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit()))
+            {
+                entries.sort_by(|a, b| (a.0.len(), a.0).cmp(&(b.0.len(), b.0)));
+            }
+            out.push('{');
+            for (i, (key, item)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Json::String(key.clone()).to_string());
+                out.push(':');
+                compact(item, out);
+            }
+            out.push('}');
         }
+        Json::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                compact(item, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// `path` with one kind of separator, as Windows writes it: a project or folder given with
+/// forward slashes would otherwise come back mixed once a file is joined to it.
+fn native(path: &Path) -> PathBuf {
+    match path.to_str() {
+        Some(text) if cfg!(windows) => PathBuf::from(text.replace('/', "\\")),
+        _ => path.to_owned(),
     }
 }
 
@@ -72,24 +121,118 @@ enum Target {
 pub struct Tools {
     live: HashMap<u16, LiveEditor>,
     gpu: Option<(oxy_render::RenderState, oxy_render::Renderer)>,
+    /// The player games are exported with on files; none for the one next to this server.
+    player: Option<PathBuf>,
+    /// Project files this session already kept a previous version of.
+    kept: HashSet<PathBuf>,
 }
 
 const PROJECT: &str = "Optional path to the project folder or its project.oxy.json. When omitted, \
 the single open editor that allows agents is used.";
-const SCENE: &str = "Optional scene ID. Defaults to the scene open in the editor (live) or the \
-project's start scene (files).";
+const SCENE: &str = "Optional scene: its ID or its name (any case; refused when two scenes share \
+it, and an unknown one is refused with the scenes [{id, name}]). Defaults to the scene open in \
+the editor (live) or the project's start scene (files).";
 /// The game always starts in the start scene, live too, unlike the editing tools.
-const START_SCENE: &str = "Optional scene the game starts in. Defaults to the project's start \
-scene, also live (not the scene open in the editor); setup commands without a scene use it too.";
+const START_SCENE: &str = "Optional scene the game starts in, by its ID or name (as for the other \
+tools' scene). Defaults to the project's start scene, also live (not the scene open in the \
+editor); setup commands without a scene use it too.";
 const INPUTS: &str = "Timed inputs at simulated second `at`: {type: press|release, at, action} \
 with an input action of the project, by ID or name (see oxy_project), or \"$N\" from setup; \
 others are refused; {type: movement, at, value: [right, \
 forward]}, each -1 to 1, held until the next movement; {type: look, at, value: [x, y]}, a mouse \
 displacement applied once: each unit turns the camera by its sensitivity (camera control, 0.12 \
-degrees by default), +x turns right and +y looks down unless the camera inverts an axis; {type: \
-click, at, entity}. They survive scene changes and reloads; a key held across one stays held.";
+degrees by default), +x turns right and +y looks down unless the camera inverts an axis (in \
+the game pause and while game.cursor shows the cursor it turns nothing); {type: \
+click, at, entity}: an object or its interface button, of any scene, by ID, by name (any case, \
+when no other object of the project has it) or \"$N\" from setup; an ID or name no object has \
+is refused before the run (the IDs of copies action.spawn makes are taken); a hidden element \
+(itself or a group above it) takes no click, nor does an object that is not in the scene \
+running then, which log lines note (Clique ignorado: X não está na cena atual), and in the game \
+pause only interface elements take clicks; {type: click, at, point: [x, y]}: a click at that \
+pixel of the game view (width × height, by default the game window's, from its top-left \
+corner, as ui rects are), which the \
+topmost visible button there takes, as in the game (images and texts take no clicks, so a \
+button under a panel still does; ui covered_by tells what a person sees over a button), and a \
+point on no button is logged (Clique ignorado: nenhum botão visível da interface em (x, y)); \
+world objects only by entity; {type: escape, at}: what Esc does in the game, \
+pausing or resuming it when the scene has a pause menu (an event.pause node), else a log line \
+says it has none. They survive scene changes and reloads; a key held across one stays held.";
 const COLLIDERS: &str = "Draws colliders (green) and sensor areas (yellow) over the image, \
 invisible objects' too, as the editor's collider view does.";
+const SEED: &str = "Seed of the random.number draws, an integer from 0 to 9007199254740991 \
+(default 0): the same seed and inputs draw the same numbers, so pass other seeds to see other \
+draws. Copies made by action.spawn get the same IDs whatever the seed. Objects and nodes that \
+setup creates get new IDs on each call, so their draws and the copies they make change.";
+const CHECK_REPLAY: &str = "Runs a second copy of the game alongside, on the same inputs and \
+seed, and compares the two states after every step (a few times the work of a plain run): the \
+answer adds replay {identical, steps (compared), first_difference? {time, object? {id, name}, \
+part}}, part being what differed first (transform, visible, attributes.<name>, document, \
+character, animation, tasks, random, variables.<name> (a game variable), save…; exists: only one \
+copy has the object; order: both have it, in another scene order). identical: false \
+means the engine did not repeat itself: tell the person, it is not a fault of the logic.";
+const BOT: &str = "Plays one 3D character along a path of points, as a person at the \
+controls: each step it gives the movement toward its point (in place of movement inputs and the \
+character's direction actions) and presses the character's own jump, sprint and crouch actions, \
+so logic hears them as in play. The game has one input in this version: the movement reaches \
+every character with automatic input, and characters reading the same jump, sprint or crouch \
+actions get those presses too. Objects go by ID, by name (any case; a name two objects share is \
+refused with their IDs) or \"$N\". entity: a character of any scene: the bot waits until that \
+scene runs (a menu may open it) and takes over start seconds (default 0, the rule of an input's \
+at) after that scene starts, counted from its latest start (scene_changes times; 0 for the start \
+scene); refused when no scene has it, in 2D scenes, without character3d and with \
+automatic_input false. Once it took over, each new start of that scene (a reload, as a restart \
+button does, or the game coming back to it) starts the path over from the first point, start \
+counted from that start, so one run can test a second go. A point is [x, y, z] in the world, y \
+at the feet (a floor's top), or {at?, object? (follows that object of the character's scene as \
+it moves, as a moving platform; at is then an offset in world axes), jump? (pressed once on \
+leaving the point: put it at the take-off spot; running across the way to the next point faster \
+than 1 m/s, the bot first turns toward it on the ground, up to 0.25 s, so the jump goes that way), \
+sprint?, crouch? (held on the way there and while waiting), wait? (seconds standing there), \
+radius?, wait_for? {object, within? (metres, default 1), height? (metres, default the \
+character's step height), timeout? (seconds, default 30)}: before heading for this point the bot \
+stands where it is (at the point before, after its wait and before its jump; at the start for \
+the first point) until object, of the character's scene, is within reach: the top of its 3D \
+collider (else of its shape and the pieces under it) at most within metres across the ground \
+and at most height above or below the point it stands at (as that point is then; the \
+character's feet before the first point) or, when that point follows an object, as a platform \
+it rides, that object's top (measured between the two tops, 0 where they meet). Board a moving \
+platform from a point at the edge it comes to with a point that follows it and waits for it, \
+{object: P, at: [0, half its thickness, 0], wait_for: {object: P}}, and get off with a point on \
+the landing that waits for the landing, {at: [...], wait_for: {object: <landing>}}, which comes \
+within reach once P's top is within 1 m of the landing's, whatever P's size (a lower within \
+for a platform that closes in slowly): no fixed waits that depend on when the bot gets there}. \
+Reached: within radius across the ground (default 0.6 m) and half the body's height. It walks \
+straight at each point, never turning the camera or finding a way around walls: when it comes \
+no 0.1 m nearer for stuck_after seconds (default 1.5) it gives up and reports where and why, \
+instead of solving the level. The report adds bot {entity, started_at? (when it took over; \
+absent when the latest run never took over: its character's scene never ran, or start came \
+after the end, a reload's start included, earlier then holding the runs it played), reached \
+[{index, time, position}], done_at? (the last point left, its wait and jump done; or the step logic began \
+holding the character on the way to the last point, see reason held), stuck? {index, time, \
+position, distance, reason, last_support? {id, name}}, held_by? (the reasons, as [\"parada\"], \
+that character.block nodes hold the character's movement by when the bot let go: with reason \
+held, or with done_at), earlier? [{started_at?, reached, done_at?, stuck?, held_by?}] (the runs \
+before the latest, oldest first, when the scene started again; one cut short has neither \
+done_at nor stuck)}: those fields are the latest run's. reason fell (in the air 1 s or more, or \
+over 1 m below where it last stood), held (no progress while logic holds the character's \
+movement with character.block on the movement channel; on the way to the last point, a hold \
+that began after the bot reached the point before (on a path of one point, after it took over) \
+ends the path at once instead, with done_at and held_by from that step, as logic that holds the \
+character once it gets where the path leads), blocked (no \
+progress otherwise, as against a wall), waiting (a wait_for's object did not come within reach \
+before its timeout) or absent (the character, a point's object or a wait_for's object left the \
+running scene, for stuck_after seconds); last_support is the object it last stood on.";
+const SAVE: &str = "The progress earlier runs saved, as a returning player has it (absent: a \
+fresh install): {variable: value}, a persistent game variable by ID or name (\"$N\" from setup \
+too), \"name · key\" for the value of a key, with a plain or tagged value of its type. Unknown \
+and non-persistent variables are refused. A report's save goes here as it is, to chain runs.";
+const VIEW_WIDTH: &str = "Game view width in pixels, 16-4096: the image and the ui rects and \
+click points. Default: the width of the window the exported game opens (oxy_project game.window, \
+set by set_game_settings; 1280 × 720 unless changed), so rects and points match the game; a \
+window over 4096 a side is scaled down to fit, keeping its shape. The answer gives the size \
+used in view_size.";
+const VIEW_HEIGHT: &str = "Game view height in pixels, 16-4096. Default: the height of the game \
+window, as for width.";
 const TREE_FIELDS: &str = "Extra per-object fields: world_position, where its position (its \
 pivot) is in the world, which tells distances across parent groups; rotation (local, degrees, as \
 set_transform takes it); scale (local); dimensions (of its shape); visual_bounds, the world box \
@@ -97,21 +240,37 @@ set_transform takes it); scale (local); dimensions (of its shape); visual_bounds
 {min, max, center} of the collider the game uses (the 3D character body, the 3D collider or the \
 box collider), with sensor: true for areas and enabled: false when off; bounds, both boxes.";
 const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
-radians plus rotation_degrees, material, attributes, components, logic graph, animation clips; \
-empty (null) parts are left out) plus world {position, rotation_degrees, scale}, visual_bounds \
-and collider_bounds as oxy_scene describes them, components and can_add_components. \
-world.rotation_degrees is rotation_degrees for a root object; under parents it is, of the angle \
-triples that give the same rotation, the one nearest to the object's own, in (-180, 180] (a \
-piece turned 120° with its group reads [0, 120, 0], not [180, 60, 180]). The logic \
-graph is summarized by default: nodes maps each node's label (its operation, then its main \
-parameter in parentheses; a label repeated in the graph ends in #N, N being the node's index in \
-the stored graph) to {id, params}, params holding only the values that differ from the \
-operation's defaults (see oxy_catalog), and edges are text such as \
-\"event.input(reiniciar).exec -> character.teleport.exec\" (label.port -> label.port). Meshes \
+radians plus rotation_degrees, material, attributes, components, logic graph, animation clips, \
+each keyframe with rotation_degrees too, as set_clip takes it, which update_entity refuses in \
+keyframes, as they keep radians; empty (null) parts are left out) plus world {position, \
+rotation_degrees, scale}, visual_bounds and collider_bounds as oxy_scene describes them, \
+components, can_add_components and referenced_by; collision filters (physics3d.filter, \
+character3d.body.filter) add category_groups and mask_groups, the names of the collision groups \
+their bits set (\"all\" for every group), which update_entity also takes in place of the bits. \
+world.rotation_degrees is rotation_degrees for \
+a root object; under parents it is, of the angle triples that give the same rotation, the one \
+nearest to the object's own, in (-180, 180] (a piece turned 120° with its group reads [0, 120, \
+0], not [180, 60, 180]). referenced_by lists what names the object [{scene {id, name}, entity, \
+name (the object holding the reference), role, ...}]: role is attribute <name>, ui (an \
+interface element shows its attribute), camera_control (param target or hidden), animation \
+(another object's clip moves it) or a node's operation, with node (its label in the summary) \
+and param, unless an input connected to that param replaces it; up to 50, referenced_by_total \
+counting them when there are more; left out when nothing does. The logic graph is summarized by \
+default: nodes maps each node's label to {id, params}. A label is the operation, then in \
+parentheses its main parameter, by name when it names a scene, audio, clip, input action, game \
+variable or surface, and \"→\" with the name of the object its object parameter names, such as \
+action.component(visible → Resultado); a parameter whose input of the same id is connected is \
+left out, the game using the input. Nodes that would share a label add the first parameter they \
+use whose value differs among them, such as attribute.set(Aviso, value = \"3\"); a label still \
+repeated ends in #N, N being the node's index in the stored graph. params holds only the values \
+that differ from the operation's defaults (see oxy_catalog), a value that names something with \
+its name too ({\"Object\": \"<id>\", \"name\": \"Resultado\"}), and edges are text such as \
+\"event.input(Reiniciar).exec -> character.teleport.exec\" (label.port -> label.port). Meshes \
 and convex/triangle collision geometry come as counts. graph=full and geometry=full give them as \
-stored, the form update_entity patches.";
+stored, IDs only, the form update_entity patches.";
 const CATALOG_DESCRIPTION: &str = "Catalog of logic nodes, components, shapes, interface \
-elements, presets [{id, description, creates, params}] (creates lists the pieces in the order \
+elements (ui_elements: the kinds and the fields of an object's ui, text_align and text_size \
+among them), presets [{id, description, creates, params}] (creates lists the pieces in the order \
 create_entity answers them; params are the preset's options), movement_profiles [{id, label, \
 values}] (what apply_movement_profile writes), surface presets, the keys input actions can use \
 (input_keys) and the value format. By default the nodes are brief (operation, label, category, \
@@ -119,10 +278,16 @@ description) and categories \
 lists their categories; then ask for the nodes you will use with operations or category to get \
 their ports with types and parameters with defaults (only those nodes come back). A parameter \
 with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
-any other. ref says what a parameter names: scene, audio, clip, object, attribute, \
-input_action, surface or marker (an ID, or for attribute and marker a name; an input_action \
-also by its name, which add_node and set_node_params store as the ID). value_format says how \
-values are written. Read it before building logic.";
+any other. A number parameter the game limits gives min and max (no max: no upper limit): \
+add_node and set_node_params refuse a number outside them, naming the node and the range. ref \
+says what a parameter names: scene, audio, clip, object, attribute, \
+input_action, surface, marker or variable (a game variable; oxy_project lists them) (an ID, or \
+for attribute and marker a name; a scene, an input_action or a variable also by its name, which \
+add_node and set_node_params store as the ID). Each node's description is its own: what it \
+does, what its outputs mean and their units (metres, m/s, degrees, seconds). value_format says \
+how values are written and when they are read: data nodes are evaluated when the node \
+consuming them runs, so reading a value after setting it needs a fresh read node, while \
+actions store their outputs once per execution. Read it before building logic.";
 
 /// Tool definitions for tools/list.
 pub fn definitions() -> Json {
@@ -131,7 +296,24 @@ pub fn definitions() -> Json {
     let start_scene = json!({"type": "string", "description": START_SCENE});
     let inputs = json!({"type": "array", "items": {"type": "object"}, "description": INPUTS});
     let colliders = json!({"type": "boolean", "description": COLLIDERS});
+    let seed = json!({"type": "integer", "minimum": 0, "maximum": random::MAX_SEED,
+        "description": SEED});
+    let check_replay = json!({"type": "boolean", "description": CHECK_REPLAY});
+    let save = json!({"type": "object", "description": SAVE});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
+    let bot = json!({"type": "object", "properties": {
+        "entity": {"type": "string"},
+        "path": {"type": "array", "items": {"anyOf": [point, {"type": "object", "properties": {
+            "at": point, "object": {"type": "string"}, "jump": {"type": "boolean"},
+            "sprint": {"type": "boolean"}, "crouch": {"type": "boolean"},
+            "wait": {"type": "number"}, "radius": {"type": "number"},
+            "wait_for": {"type": "object", "properties": {
+                "object": {"type": "string"}, "within": {"type": "number"},
+                "height": {"type": "number"}, "timeout": {"type": "number"}},
+                "required": ["object"]}}}]}},
+        "radius": {"type": "number"}, "start": {"type": "number"},
+        "stuck_after": {"type": "number"}},
+        "required": ["entity", "path"], "description": BOT});
     let offset = json!({"type": "integer", "minimum": 0, "description":
         "Entries skipped (default 0): the answer's next_offset when more follow."});
     let tool = |name: &str, description: &str, properties: Json, required: Json| {
@@ -145,43 +327,95 @@ pub fn definitions() -> Json {
         tool(
             "oxy_status",
             "Lists open OXY editors that allow AI agents (project, active scene, unsaved changes, \
-             whether the editor is busy and why) and explains how tools pick a target. play says \
-             whether the person is testing the game: {running, paused?, scene? {id, name}, \
-             time? (simulated seconds)}; while it runs, edits are refused. Call this first.",
+             whether the editor is busy and why, editor: its version) and explains how tools pick \
+             a target. server says which oxy-mcp answers: {version, build (16 hex digits \
+             fingerprinting its executable: another build, another value), built_at (when the \
+             executable was written, UTC)}, so a server older than the engine the person uses \
+             shows (an editor of another version, or a build older than their last one). play \
+             says whether the game is being tested in the editor: {running, paused? (the test is \
+             paused), game_paused? (the game is in its own pause, from game.pause or Esc with a \
+             pause menu; either pause can hold alone, or both), driven_by? (person, or agent for \
+             a test you started with oxy_play, until the person clicks Assumir, or Retomar on a \
+             paused test), \
+             mouse_captured? (the game holds the person's mouse), cursor_free? (the game leaves \
+             the cursor free, whoever plays: a game.cursor node showed it, the game is in its \
+             own pause, or the active camera does not turn with the mouse), advancing? (the game \
+             view is \
+             shown and the test is not paused: game time goes on only then), queued_until? (game \
+             time of the last input you sent that still waits), scene? {id, name}, \
+             time? (simulated seconds), seed? (of the test's random.number draws, new on each \
+             test and still there after it stops: oxy_simulate with this seed gives each \
+             random.number node the same numbers in the same order), variables? (the game \
+             variables now, {name: tagged value}, \"name · key\" for the value of a key, up to \
+             300 as in oxy_simulate), variables_truncated? (how many were left out)}; while it \
+             runs, edits are refused. can_save says whether oxy_save may save now, and \
+             save_refusal why not. Call this first.",
             json!({}),
             json!([])
         ),
         tool(
+            "oxy_new_project",
+            NEW_PROJECT_DESCRIPTION,
+            json!({"folder": {"type": "string", "description": NEW_PROJECT_FOLDER},
+                   "name": {"type": "string", "description":
+                       "The project's name, as the person gave it (oxy_project name)."},
+                   "scene": {"type": "object", "properties": {
+                       "kind": {"type": "string", "enum": ["2d", "3d"], "description":
+                           "2d or 3d: the first scene's kind. Scenes of both kinds can be added \
+                            later (create_scene)."},
+                       "name": {"type": "string", "description":
+                           "The first scene's name (default Cena 2D or Cena 3D, as the editor \
+                            names it)."}},
+                       "required": ["kind"],
+                       "description": "The first scene, which the game starts in."}}),
+            json!(["folder", "name", "scene"])
+        ),
+        tool(
             "oxy_project",
-            "Summary of a project: scenes (ID, name, 2D/3D, object count), assets [{id, name, \
+            "Summary of a project: scenes (ID, name, 2D/3D, object count, background: \"sky\" \
+             or {color: [r, g, b, a]}, as set_scene_background takes it), assets [{id, name, \
              kind: Texture|Audio|Model, path (images and sounds, relative to the project \
-             folder), used_by}], input actions [{id, name, key, shares_key_with?, used_by}] \
+             folder), part_count and root {id, name} (models: the root a placement gets, by \
+             the name place_model gives it), used_by}], input actions [{id, name, key, \
+             shares_key_with?, used_by}] \
              (shares_key_with: the other actions [{id, name}] on the same key, which the game \
              fires together), physics surfaces [{id, name, friction, traction, \
-             speed_multiplier, conveyor, conveyor_space, used_by}] and collision groups [{bit, \
+             speed_multiplier, conveyor, conveyor_space, used_by}], game variables [{id, name, \
+             type: Number|Text|Bool|Vector2|Vector3, value (the initial one, tagged), \
+             persistent, used_by}], collision groups [{bit, \
              name}] (bit: the bit of collider category and mask; the groups not listed are \
-             named Grupo N, N being bit + 1). used_by lists up to 10 objects {entity, name, \
+             named Grupo N, N being bit + 1) and how the exported game opens, game {title (its \
+             own, else the project's name), window: [width, height], fullscreen} \
+             (set_game_settings changes it). used_by lists up to 10 objects {entity, name, \
              role, model?}, role being a component (controller2d, character, camera_control, \
              collider3d), a node operation, attribute <name>, or for assets material, ui (an \
              interface element's image) or model (a model's placements, one per placed root); \
              model names the model asset holding an object that exists only inside it, which \
              oxy_entity and oxy_find do not reach. used_by_total counts them when there are \
-             more.",
-            json!({"project": project}),
+             more. With model, only that model: {id, name, root?, parts: [{id, name, parent \
+             (null for the root), kind}], total, next_offset?}, each parent before its \
+             children; a part's ID is what \"$N@<id>\" takes after a place_model N.",
+            json!({"project": project,
+                   "model": {"type": "string", "description":
+                       "A model's ID or name (any case): its parts instead of the summary."},
+                   "offset": offset,
+                   "limit": {"type": "integer", "minimum": 0, "description":
+                       "With model: parts at most (default 100)."}}),
             json!([])
         ),
         tool(
             "oxy_scene",
-            "Object tree of a scene: ID, name, kind, local position, shape, components, logic \
-             node count and children. fields adds world positions, sizes and boxes; root, depth, \
-             offset and limit read a big scene part by part.",
+            "Object tree of a scene, with the scene's kind and background (\"sky\" or {color: \
+             [r, g, b, a]}): each object's ID, name, kind, local position, shape, components, \
+             logic node count and children. fields adds world positions, sizes and boxes; root, \
+             depth, offset and limit read a big scene part by part.",
             json!({"project": project, "scene": scene,
                    "fields": {"type": "array", "items": {"type": "string", "enum": [
                        "world_position", "rotation", "scale", "dimensions", "visual_bounds",
                        "collider_bounds", "bounds"]}, "description": TREE_FIELDS},
                    "root": {"type": "string", "description":
-                       "Lists this object's children instead of the scene's root objects; the \
-                        answer names it in root {id, name}."},
+                       "Lists this object's children (by ID or name, as oxy_entity's id) instead \
+                        of the scene's root objects; the answer names it in root {id, name}."},
                    "depth": {"type": "integer", "minimum": 0, "description":
                        "Levels of children shown below the listed objects (0: none). Deeper \
                         objects only show children_count. Default: every level."},
@@ -197,13 +431,20 @@ pub fn definitions() -> Json {
             "oxy_entity",
             ENTITY_DESCRIPTION,
             json!({"project": project, "scene": scene,
-                   "id": {"type": "string", "description": "Object ID."},
+                   "id": {"type": "string", "description":
+                       "An object of the scene, by its ID or its name (any case; a name two \
+                        objects of the scene share is refused with their IDs and parents)."},
                    "ids": {"type": "array", "items": {"type": "string"}, "description":
-                       "Several objects of the scene, answered as {objects: [...]}."},
+                       "Several objects of the scene, each by ID or name as id, answered as \
+                        {objects: [...]}."},
                    "fields": {"type": "array", "items": {"type": "string"}, "description":
                        "Only these parts, besides id and name: top-level keys of the answer or \
                         dotted paths such as character3d.actions, transform.position or \
-                        graph.edges (numbers index lists). A missing part is null."},
+                        graph.edges (numbers index lists). Component names read the part that \
+                        holds them: collider3d and sensor3d physics3d, character character3d, \
+                        camera_control camera_rig, collider2d and sensor2d collider, \
+                        controller2d controller. A missing part is null; referenced_by comes as \
+                        [] when nothing names the object."},
                    "graph": {"type": "string", "enum": ["summary", "full"], "description":
                        "The logic graph: summary (default) or full, as stored (node positions, \
                         every parameter, edges by node ID)."},
@@ -259,6 +500,18 @@ pub fn definitions() -> Json {
                    "data_base64": {"type": "string", "description":
                        "The file's content in base64 (a data: URL too), instead of path; up to \
                         16 MB decoded."},
+                   "paths": {"type": "array", "maxItems": 32, "items": {"anyOf": [
+                       {"type": "string"},
+                       {"type": "object", "properties": {
+                           "path": {"type": "string"},
+                           "name": {"type": "string"},
+                           "kind": {"type": "string", "enum": ["texture", "audio"]},
+                           "apply_to": {"type": "string"}},
+                        "required": ["path"]}]},
+                       "description": "Several files at once, instead of path and data_base64: \
+                        each an absolute path, as path takes it, or {path, name?, kind?, \
+                        apply_to?} with the options below for that file (name, kind and apply_to \
+                        go there, not beside paths; scene stays beside it)."},
                    "kind": {"type": "string", "enum": ["texture", "audio"], "description":
                        "texture (PNG) or audio (WAV). Optional: found from the extension and \
                         the content, and refused when they disagree."},
@@ -271,11 +524,29 @@ pub fn definitions() -> Json {
             json!([])
         ),
         tool(
+            "oxy_export",
+            EXPORT_DESCRIPTION,
+            json!({"project": project,
+                   "destination": {"type": "string", "description": EXPORT_DESTINATION},
+                   "replace": {"type": "boolean", "description":
+                       "Replaces an earlier export of this same game in the game's folder \
+                        (recognized by its data/export.oxy.json), which goes only after the new \
+                        one passed its check. Default false: an earlier export is refused, \
+                        saying so. Set it only when the person asked to replace that export."}}),
+            json!(["destination"])
+        ),
+        tool(
             "oxy_validate",
             "Validates the whole project with the same rules used when saving: {valid, error?, \
-             warnings?}. warnings lists what the game would ignore without failing: logic nodes \
-             naming an input action the project lacks, keys the game does not read and \
-             parameters outside their choices (empty included).",
+             warnings?}. warnings lists what saves but the game would ignore or stop on: logic \
+             nodes naming an input action the project lacks, keys the game does not read, \
+             parameters outside their choices (empty included), number parameters outside \
+             their range (min and max in oxy_catalog, which a project saved before the ranges \
+             may hold; each warning says whether the node refuses the value in the game or \
+             takes the nearest limit; none when the input port of the same id is wired, which \
+             the game reads instead), action.component nodes whose target parameter names an \
+             object lacking the part they switch and variable.set nodes whose value parameter \
+             is not of the variable's type (both stop with an error in the game).",
             json!({"project": project}),
             json!([])
         ),
@@ -295,16 +566,31 @@ pub fn definitions() -> Json {
                            "attributes": {"anyOf": [{"type": "boolean"},
                                {"type": "array", "items": {"type": "string"}}]}},
                         "required": ["id"]}]},
-                       "description": "Objects to report: an ID, or {id, fields?, attributes?}. \
-                        fields defaults to position, visible and attributes (world position, XYZ \
-                        rotation in degrees, world scale); character adds velocity, speed, \
+                       "description": "Objects to report: an object, by ID, name (any case; one \
+                        two objects share is refused with their IDs) or \"$N\", or {id, fields?, \
+                        attributes?}. fields defaults to position, visible and attributes \
+                        (world position, XYZ rotation in degrees, world scale); character adds \
+                        velocity, speed, \
                         grounded, posture, sliding, sprinting, support {id, name, surface} and yaw, \
                         look_yaw and pitch in degrees for 3D characters. attributes: false leaves \
                         them out, a list keeps only those names."},
                    "samples": {"type": "integer", "description":
-                       "Samples of watched objects (max 120, at most one per 1/60 s step), exactly \
-                        this many, the last being the final state. They are spaced evenly across \
-                        `seconds`, so a run that until stops early returns fewer."},
+                       "Samples of watched objects (max 120, at most one per 1/60 s step), this \
+                        many, the last being the final state, spaced evenly across the time the \
+                        run lasts: `seconds`, or the time it ran when until or a game.quit stops \
+                        it early."},
+                   "sample_every": {"type": "number", "description":
+                       "A sample of watched objects every this many seconds of the run (the \
+                        report's clock, which the game pause does not stop; at most one per step) \
+                        and the final state, in place of samples. The most recent 120 stay, the \
+                        final state among them; truncated.samples counts those dropped from each \
+                        object."},
+                   "samples_at": {"type": "array", "items": {"type": "number"}, "maxItems": 119,
+                       "description": "Samples of watched objects at these times, seconds from \
+                        0 (the start) to seconds, each at the nearest step, and the final state \
+                        (up to 119 times, 120 samples with it); times after a run that stopped \
+                        early are not taken. Precedence: samples_at, then sample_every, then \
+                        samples; only the first one given is used."},
                    "actions": {"type": "string", "enum": ["none", "summary", "all"], "description":
                        "Logic actions that ran. summary (default): one line per object name and \
                         action with count, first and last time (objects sharing a name, such as \
@@ -324,49 +610,96 @@ pub fn definitions() -> Json {
                        "oxy_apply commands applied to the in-memory copy before the run, never to \
                         the project; commands without a scene use the start scene. The IDs they \
                         create are \"$N\" (\"$N.M\" for the M-th) in watch, inputs, spawn, \
-                        until and actions_filter, and the report lists them under setup."},
+                        bot, until and actions_filter, and the report lists them under setup. \
+                        update_variable here starts a game variable at another value."},
                    "spawn": {"type": "object", "properties": {
                        "entity": {"type": "string"},
                        "position": {"type": "array", "items": {"type": "number"}},
                        "yaw": {"type": "number", "description": "Degrees around the vertical axis."}},
                        "required": ["entity", "position"],
-                       "description": "Places an object of the start scene at a world position \
-                        (and yaw) on the copy before the run, e.g. the player at a section."},
+                       "description": "Places an object of the start scene (by ID, name or \
+                        \"$N\") at a world position (and yaw) on the copy before the run, e.g. \
+                        the player at a section."},
                    "until": {"type": "object", "properties": {
                        "scene_change": {"anyOf": [{"type": "boolean"}, {"type": "string"}],
-                           "description": "true: any scene start, reloads included; or a scene ID."},
+                           "description": "true: any scene start, reloads included; or a scene, \
+                            by its ID or name."},
                        "log_contains": {"type": "string"},
                        "attribute": {"type": "object", "properties": {
-                           "entity": {"type": "string"}, "name": {"type": "string"},
+                           "entity": {"type": "string", "description":
+                               "The object, by ID, name or \"$N\"."},
+                           "name": {"type": "string"},
                            "op": {"type": "string", "enum": ["==", "!=", "<", "<=", ">", ">="]},
                            "value": {"description": "Number, boolean, text or a tagged value, of \
-                               the attribute's type. For an object or surface attribute, a text \
-                               is its ID (\"$N\" allowed)."}},
+                               the attribute's type. For an object attribute, a text is the \
+                               object, by ID, name or \"$N\"; for a surface one, its ID."}},
                            "required": ["entity", "name", "op", "value"]},
+                       "variable": {"type": "object", "properties": {
+                           "variable": {"type": "string", "description":
+                               "A game variable's ID or name (\"$N\" from setup too)."},
+                           "key": {"type": "string", "description":
+                               "Compares the value of this key; absent: the variable's own value."},
+                           "op": {"type": "string", "enum": ["==", "!=", "<", "<=", ">", ">="]},
+                           "value": {"description": "Number, boolean, text or a tagged value, of \
+                               the variable's type."}},
+                           "required": ["variable", "op", "value"]},
                        "entity_absent": {"type": "string", "description":
-                           "Stops once this object of the start scene no longer exists."},
+                           "Stops once this object of the start scene (by ID, name or \"$N\") no \
+                            longer exists."},
                        "event": {"type": "object", "properties": {
                            "kind": {"type": "string", "enum": ["jump", "land", "leave", "side",
                                "surface", "posture", "area_enter", "area_exit"]},
-                           "object": {"type": "string", "description": "Either side of the event."}},
-                           "required": ["kind"]}},
-                       "description": "Stops at the first moment any condition holds; the report \
-                        says which in stopped_at {time, reason, kind (the event's, for event), \
-                        detail (what happened, in words)}."},
+                           "object": {"type": "string", "description":
+                               "Either side of the event, by ID, name or \"$N\"."}},
+                           "required": ["kind"]},
+                       "paused": {"type": "boolean", "description":
+                           "true: stops when the game pause starts; false: when it ends (a scene \
+                            change ends it too). The final ui then shows the pause menu."},
+                       "sound": {"type": "string", "description":
+                           "An audio's ID or name: stops when it starts playing, once or in a \
+                            loop (a loop already playing that takes another volume does not \
+                            count)."},
+                       "bot": {"type": "string", "enum": ["done", "stuck", "any"],
+                           "description": "With a bot: stops once it is done with its path, \
+                            stuck, or either."},
+                       "then_seconds": {"type": "number", "minimum": 0, "description":
+                           "Not a condition: once one holds, the run goes on this many seconds \
+                            more (past seconds too; the whole run at most 600 s), so sounds, \
+                            saves, variables, ui, the watched objects' final state and the \
+                            screenshot show what came after (a result screen settled, a sound \
+                            that follows). stopped_at.time stays when the condition held, and \
+                            stopped_at.ended_at says when the run ended; a game.quit in that \
+                            time ends it sooner, added to stopped_at.detail."}},
+                       "description": "Stops at the first moment any condition holds (or \
+                        then_seconds later); the report says which in stopped_at {time, reason, \
+                        kind (the event's, for event), detail (what happened, in words), \
+                        ended_at? (with then_seconds)}. A game.quit node ends the run whatever \
+                        until asks, with reason quit and object {id, name}, the object whose \
+                        logic asked."},
                    "ui": {"type": "boolean", "description":
                        "Reports the game interface at the end (default true): ui, in drawing order \
                         (the topmost last), [{id, name, kind: Text|Image|Button|Bar, visible, rect: \
                         [x, y, width, height] in pixels of the game view from its top-left corner, \
-                        text as shown with bound values, fraction (bars, 0-1), clickable (a visible \
-                        button inside the view)}]."},
-                   "width": {"type": "integer", "description":
-                       "Game view width in pixels, 16-4096 (default 960): the screenshot and the ui \
-                        rectangles."},
-                   "height": {"type": "integer", "description":
-                       "Game view height in pixels, 16-4096 (default 540)."},
+                        text as shown with bound values, text_size (its font size in pixels; not \
+                        on images), text_align (texts: Left|Center|Right), fraction (bars, 0-1), \
+                        clickable (a visible button inside the view), covered_by? (the name of \
+                        the topmost visible element drawn above this visible one, a higher layer \
+                        or the same layer later in the scene, whose rect holds its center: what \
+                        a person sees there; a click there still reaches the topmost button \
+                        under the point, images and texts taking no clicks)}], and cursor_free: whether a \
+                        person's cursor would be free at the end to click them (a game.cursor node \
+                        showed it, the game is in its own pause, or the active camera does not turn \
+                        with the mouse)."},
+                   "width": {"type": "integer", "description": VIEW_WIDTH},
+                   "height": {"type": "integer", "description": VIEW_HEIGHT},
                    "screenshot": {"type": "boolean", "description":
-                       "Also returns the game camera view at the end, as oxy_screenshot view=game."},
-                   "colliders": colliders}),
+                       "Also returns the game camera view at the end, with the game interface \
+                        drawn, as oxy_screenshot view=game."},
+                   "colliders": colliders,
+                   "seed": seed,
+                   "check_replay": check_replay,
+                   "save": save,
+                   "bot": bot}),
             json!(["seconds"])
         ),
         tool(
@@ -385,24 +718,51 @@ pub fn definitions() -> Json {
                    "spawn": {"type": "object", "description":
                        "As in oxy_simulate: {entity, position, yaw?} on the copy before the run."},
                    "until": {"type": "object", "description":
-                       "As in oxy_simulate: stops the run early; the capture is taken then."},
+                       "As in oxy_simulate: stops the run early, or then_seconds after the \
+                        condition held; the capture is taken then."},
+                   "seed": seed,
+                   "check_replay": check_replay,
+                   "save": save,
+                   "bot": bot,
                    "colliders": colliders,
                    "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
                        "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
                    "target": {"description": "view=free: the point looked at, [x, y, z], or an \
-                       object ID (the center of its shape, or its position without one; \"$N\" \
-                       from setup too).",
+                       object of the scene running then, by ID, name or \"$N\" from setup (the \
+                       center of its shape, or its position without one).",
                        "anyOf": [point, {"type": "string"}]},
                    "fov": {"type": "number", "description":
                        "view=free: vertical field of view in degrees, 10-150 (default 60)."},
                    "ids": {"type": "array", "items": {"type": "string"}, "description":
-                       "view=top|side: objects framed, with their children (default: every \
-                        object with a shape, hidden ones too)."},
+                       "view=top|side: objects framed (by ID, name or \"$N\"), with their \
+                        children (default: every object with a shape, hidden ones too)."},
                    "ui": {"type": "boolean", "description":
                        "view=game: lists the game interface in the text as ui, like oxy_simulate \
-                        (default true); false leaves it out, e.g. for repeated captures."},
-                   "width": {"type": "integer", "description": "16-4096 pixels (default 960)."},
-                   "height": {"type": "integer", "description": "16-4096 pixels (default 540)."}}),
+                        (default true); false leaves the list out, e.g. for repeated captures. The \
+                        image draws the interface either way."},
+                   "width": {"type": "integer", "description": VIEW_WIDTH},
+                   "height": {"type": "integer", "description": VIEW_HEIGHT}}),
+            json!([])
+        ),
+        tool(
+            "oxy_play",
+            PLAY_DESCRIPTION,
+            json!({"project": project,
+                   "action": {"type": "string", "enum": PLAY_ACTIONS, "description":
+                       "start: a new test; stop: ends a test you play; pause: any test; resume: \
+                        a paused test you play; input: sends inputs to the test you play."},
+                   "scene": {"type": "string", "description":
+                       "start: the scene the test starts in, by its ID or name. Default: the \
+                        scene open in the editor, as Jogar (not the start scene oxy_simulate \
+                        uses)."},
+                   "inputs": {"type": "array", "items": {"type": "object"}, "description":
+                       PLAY_INPUTS}}),
+            json!(["action"])
+        ),
+        tool(
+            "oxy_save",
+            SAVE_DESCRIPTION,
+            json!({"project": project}),
             json!([])
         ),
         tool(
@@ -455,26 +815,63 @@ pub fn definitions() -> Json {
 const APPLY_DESCRIPTION: &str = "Edits the project with a batch of commands, all-or-nothing: if \
 one fails, nothing changes and the error names it as \"Comando N (op, o Kº do lote)\", N being \
 its 0-based index, the one \"$N\" and created use (K = N + 1). Live, the batch is one undo step \
-labelled 'Agente: …' in the editor and the person saves; on files, the project file is saved \
-(the previous version is kept as project.oxy.json.agente.bak). The answer is {created, \
+labelled 'Agente: …' in the editor and the person saves (or oxy_save, if they allow it); on \
+files, the project file is saved (project.oxy.json.agente.bak keeps it as it was before this \
+server session first changed it: taken once per session, not on every call, and answered as \
+previous_version; a project from an older OXY is saved in the current format and its original \
+is kept once as project.oxy.json.schema-N.….backup.json). The answer is {created, \
 warnings?}: created maps the index of each command that created something to [{id, name}] \
-(every piece of a preset, its root first; a node's name is its operation; what a later command \
-removed keeps the name it was created with), and warnings lists what the batch left that the \
-game will ignore or take otherwise than it may seem: a node naming an input action the project \
-lacks, two actions on one key (the game fires both), a box collider left at an object's old \
-dimensions, logic copied to another scene that still opens the scene it came from.
+(keys in command order, \"2\" before \"10\"; every piece of a preset, its root first; a node's \
+name is its operation; what a later command removed keeps the name it was created with), and \
+warnings lists what the batch left that the \
+game will ignore, stop on or take otherwise than it may seem: a node naming an input action the \
+project lacks, two actions on one key (the game fires both), an action.component whose target \
+parameter names an object lacking the part it switches (the node stops with an error), a \
+variable.set whose value parameter is not of the variable's type (the same), a box \
+collider left at an object's old dimensions, a convex or mesh collider left at an object's old \
+shape, logic copied to another scene that still opens the scene it came from, and wires \
+arrange_logic left running across the logic, which make it hard to follow.
 Placeholders: in later commands, a whole string \"$N\" is the first ID created by command N \
-(0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included; \"$$N\" is the \
-text \"$N\" itself. Other text with '$', such as \"$10 de bônus\", stays as it is.
+(0-based) and \"$N.M\" its M-th (from 0), anywhere, patch and params included. \"$N@<id>\" \
+(\"$N.M@<id>\") is the copy of the object, node or animation <id> in what command N copied \
+(the copy of its M-th created ID): duplicate_entities (with count 3, \"$N.1@<node>\" is that \
+node in the second copy), copy_entities, save_model (the copy in the model), place_model (<id> \
+as the model holds it: a part ID from oxy_project {model}, or \"$P@$S@<id>\" when save_model S \
+saved it in the batch) and duplicate_scene; <id> may be \"$K\" or \"$K.M\". \"$$N\" \
+(\"$$N@<id>\") is the text \"$N\" (\"$N@<id>\") itself. Other text with '$', such as \"$10 \
+de bônus\", stays as it is. A command that takes a scene and has none, whose entity (else the \
+first of its ids, else its parent) is a placeholder of an object, uses that object's scene: \
+logic added with entity \"$4\" goes where command 4 created the object, whatever the batch's \
+default scene. An object the command's scene lacks is refused naming that scene and, when \
+another scene has the object, that one: \"Controle não existe na cena Menu (a do comando); ele \
+está na cena Pista: passe scene\".
 Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
+- set_scene_background {background: \"sky\"|{color: [r, g, b, a]}|\"default\"}: what `scene` \
+shows behind its objects, in the editor, the game and screenshots. sky is Céu da OXY, the \
+engine's stylized day sky (3D scenes only; orthographic views, such as top and side \
+screenshots, show its horizon color); color is RGB from 0 to 1 as the image shows it, opaque (a \
+is 1); default is what a new scene of its kind gets: the sky in 3D, the dark color in 2D. New 3D \
+scenes (create_scene, oxy_new_project) start with the sky; scenes made before backgrounds \
+existed keep the dark color
+- set_game_settings {title?, window?: [width, height], fullscreen?: bool}: how the exported \
+game opens (oxy_project game); fields left out stay. title (up to 80 characters, one line) names \
+its window, folder and executable; empty, the project's name. window is the window's inside at \
+100% Windows scale, 320x240 to 7680x4320 (default [1280, 720]); fullscreen opens it in full \
+screen (default false). In the game Alt+Enter switches between window and full screen
 - create_entity {kind, name?, parent?, position?: [x,y,z]} where kind is {type: group} | \
 {type: shape, shape: Cube|Sphere|Cylinder|Plane|Pyramid|Cone|Tube (3D) or Rectangle|Circle|Sprite \
 (2D)} | {type: camera} | {type: ui, element: Text|Image|Button|Bar} | {type: preset, preset: \
 first_person|third_person|platform, camera?: create|reuse|none (characters; default create), \
-travel?: [x,y,z] metres and period?: seconds (platform; default [4,0,0] and 4)} (3D only; \
-oxy_catalog presets says what each creates)
+travel?: [x,y,z] metres and period?: seconds (platform; default [4,0,0] and 4), pause_at_ends?: \
+seconds standing still at each end, within the period (less than half of it; default 0), spin?: \
+[x,y,z] degrees turned per period while moving (default none; [0,360,0] turns once about Y per \
+period; travel [0,0,0] only turns), keyframes at most 90° apart since a turn between two \
+keyframes takes the shortest way, the clip lasting the periods (up to 8) the spin needs to come \
+back to where it started, filter?: {category?, mask?} (the collision filter of a character's \
+body or of the platform's collider, as update_entity takes them; left out, the default)} (3D \
+only; oxy_catalog presets says what each creates)
 - delete_entities {ids}; duplicate_entities {ids, offset?: [x,y,z], count?: 1-100}: copy k moves \
 k × offset (default [0.5,0,0]) from the original, relative to its parent, and the answer lists \
 every copy's root, copy after copy (one per root in order); rename_entity {entity, name}; \
@@ -482,15 +879,39 @@ set_parent {ids, parent?} (keeps world transform)
 - copy_entities {ids, to_scene, parent?}: copies objects of `scene`, with everything under them, \
 to another scene, keeping their place in the world and the world path of the animations that \
 move them, under a scaled or turned parent too; answers the copies' roots. Refused while they \
-point to objects or animations left behind (copy those too). action.scene nodes keep their \
-scene: those opening the scene copied from come back in warnings, each with its copy's ID \
-(set_node_params them)
-- save_model {entity, name?}: the object and everything under it become a model asset (answers \
-its ID); a name another model has is refused (any case). place_model {model: ID or name, \
-parent?, position?, name?}: places a copy in `scene`, answering every piece, its root first. \
-Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene nodes keep the \
-scene they opened when it was saved, with no warning (a restart saved in level 1 reopens level \
-1): set_node_params them after placing
+point to objects or animations left behind (copy those too). action.scene and value.scene nodes \
+keep their scene: those naming the scene copied from come back in warnings, each with its copy's \
+ID (set_node_params them), unless their scene input is connected
+- save_model {entity, name?, replace?}: the object and everything under it become a model asset \
+(answers its ID); a name another model has is refused (any case). With replace (a model's ID or \
+name) they become that model's content instead: it keeps its ID (answered all the same) and, \
+without name, its name. Placements already made are editable copies that only record the model \
+they came from: they keep their pieces, and only later place_model calls get the new content. \
+place_model {model: ID or name, parent?, position?, name?}: places a copy in `scene`, answering \
+every piece with its name, its root first; the root keeps the name it was saved with \
+(oxy_project root) unless name gives it another, so name placements to tell them apart. \
+Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene and value.scene \
+nodes keep the scene they named when it was saved, with no warning (a restart saved in level 1 \
+reopens level 1): set_node_params them after placing
+- rename_asset {asset, name, kind?}; delete_asset {asset, kind?}: any asset oxy_project lists, by \
+ID or name (any case); kind (Texture|Audio|Model) picks among assets of different kinds that \
+share a name (two of one kind: by ID, the refusal naming their files). rename_asset keeps the \
+ID, which nodes and objects use, and the file; a name \
+another asset of its kind has is refused. delete_asset is refused while anything uses the asset \
+(oxy_project used_by: objects showing an image, nodes playing a sound, a model's placements by \
+their roots), naming the uses; its file stays in the assets folder, as the editor's Excluir \
+leaves it
+- Scene changes without a fixed scene: action.scene's scene input (text) replaces its scene \
+parameter. Restart: connect scene.current.scene -> action.scene.scene, and the logic reopens \
+whatever scene it is in, copied or placed anywhere. Next scene: value.scene gives the ID of the \
+scene its scene param names (people pick it by name in the editor): connect \
+value.scene.value -> action.scene.scene, or keep the ID in a Text attribute (set_attribute, or \
+value.scene.value -> attribute.set.value in logic) and connect attribute.get.value -> \
+action.scene.scene. value.scene.name is that scene's name, to key records per scene in a menu \
+without typing it (value.scene.name -> variable.set.key). An empty text or one that is not a \
+scene ID stops the node with an error. \
+While the input is connected the parameter is ignored: delete_scene does not refuse over it and \
+empties it
 - set_transform {entity, position?, rotation? (degrees), scale?, move_tracks?}: keyframes that \
 animate the object follow it (a moved platform keeps its path around its new place) when \
 move_tracks is true; by default when its own animations move it. set_visible {entity, visible}; \
@@ -500,7 +921,9 @@ the ID of a piece under entity, keyframes: [{time, position?, rotation? (degrees
 interpolation?: linear|hold}]}], events?: [{time, name}]}: creates an animation of entity \
 (answers its ID) or replaces its animation `clip` (ID or name), keeping the ID logic uses. \
 Keyframes are local transforms; channels left out are the target's current ones. Play it with an \
-action.animation node (param clip). delete_clip {entity, clip}, refused while a node plays it
+action.animation node (param clip). A clip poses its tracks while it plays and on the step it \
+ends; ended or paused, it leaves them where logic puts them (transform.write, which refuses \
+what a playing clip poses). delete_clip {entity, clip}, refused while a node plays it
 - apply_movement_profile {entity, profile: direct|parkour|chained}: writes the profile's values \
 (oxy_catalog movement_profiles) into a 3D character; they stay editable
 - set_attribute {entity, name, value?} (no value removes); attribute values are always tagged, \
@@ -508,23 +931,57 @@ e.g. {\"Number\": 3}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}. A box collider takes the shape's dimensions \
 when added and follows the object's scale, not later dimension changes
-- fit_collider {entity, children?: bool (default false), margin?: metres (default 0)}: fits the \
-object's box collider to its shape, or with children to its shape and every piece under it, \
-plus margin on every side, like the editor's Ajustar ao objeto / Ajustar ao grupo/filhos. A 3D \
-box (collider3d or sensor3d) stays turned with the object, its size and center in the object's \
-axes; a 2D box collider takes the world box. Capsules, spheres, convex and mesh colliders and \
-3D characters (their body is the collider) are refused
+- fit_collider {entity, children?: bool (default false), margin?: metres (default 0), shape?: \
+box|sphere|capsule|convex|mesh|auto (default: the shape it has)}: fits the object's collider to \
+its shape, or with children to its shape and every piece under it, plus margin on every side, \
+like the editor's Ajustar ao objeto / Ajustar ao grupo/filhos; only the shape and center change \
+(sensor, filter, surface and enabled stay). box stays turned with the object, its size and center \
+in the object's axes (a 2D collider is always a box and takes the world box); sphere: radius the \
+largest half side; capsule: upright (Y), radius the larger of half X and half Z, as tall as the \
+shape; both need a uniform scale. convex and mesh: the hull or the triangles of the object's \
+own shape (the editor's Convexo / Malha estática da peça), without children or margin. auto: \
+box for Cube, Plane and with children, sphere for a round Sphere, convex for a Sphere its \
+dimensions or scale stretch and for Cylinder, Cone and Pyramid, mesh for Tube and editable \
+meshes. 3D characters (their body is the collider) are refused
 - update_entity {entity, patch}: JSON merge patch over the object's document form (oxy_entity \
-with graph and geometry full) for fields without a dedicated command
-- add_node {entity, operation, position?: [x,y], params?}; remove_node {entity, node}; \
-set_node_params {entity, node, params}; connect / disconnect {entity, from_node, from_port, \
-to_node, to_port}. Parameter values are tagged like attributes, or plain when oxy_catalog gives \
-the parameter's type: a number for a Number parameter, a text for Text, true/false for Bool \
-(\"mode\": \"held\"). A parameter with an input port of the same id of type any (attribute.set \
-value, condition.compare a and b) takes any type: its default is only where it starts, and a \
-plain number, text or true/false keeps that type. Other plain values are refused with the \
-tagged form expected. A parameter \
-with choices in oxy_catalog takes only those values. An input action parameter (ref \
+with graph and geometry full) for fields without a dedicated command, such as an interface \
+element's ui (oxy_catalog ui_elements lists its fields: {\"ui\": {\"text_align\": \"Center\", \
+\"text_size\": 48}}; text_size null goes back to automatic); the rotation_degrees reads add to \
+keyframes is refused (keyframes keep radians; set_clip takes degrees). The collision filters \
+(physics3d.filter and character3d.body.filter) take category (the groups the collider is in) \
+and mask (the groups it meets) as bits or as a list of the collision group names oxy_project \
+lists, any case, or \"all\": {\"physics3d\": {\"filter\": {\"category\": [\"Áreas\"], \"mask\": \
+[\"Personagens\"]}}} is stored as category 4 and mask 2; an unknown name is refused with the \
+groups. oxy_entity shows category_groups and mask_groups beside the bits
+- add_node {entity, operation, position?: [x,y], params?, links?: [[from_node, from_port, \
+to_port], …]}: links wires the new node's inputs as it is added, each from an output of a node \
+the object already has (\"$N\" too), as in links: [[\"$3\", \"exec\", \"exec\"], [\"$5\", \
+\"context\", \"target\"]]; remove_node {entity, node}; set_node_params {entity, node, params}; \
+connect {entity, from_node, from_port, to_node, to_port} or {entity, links: [[from_node, \
+from_port, to_node, to_port], …]}, many links in one command; disconnect takes the same two \
+forms, a link that is not there refused with its nodes by name. Links go in order and all or \
+none: a refused one fails the batch, named \"Ligação N de links (a Kª)\" (N from 0) with the \
+nodes by label and operation and the ports the node has. Building a graph in creation order, \
+add each node with links to the nodes before it, and connect links for the rest. Nodes added \
+without position (best left out) are laid out when the batch ends, around the nodes that stay: \
+events in the first column, execution left to right, data left of what it feeds, a band per \
+event, right of the nodes that feed them or below the graph. \
+arrange_logic {entity, nodes?, split_shared_data?} lays out those nodes (default all); the \
+others stay. With split_shared_data: true, each lane (the nodes one event runs) first gets its \
+own copy of the nodes among them that only give data, read nothing but other such data \
+(attribute.get, variable.get, scene.current, value.*, math on them…) and feed several lanes, so \
+no wire runs from one lane to another; the game reads copies alike, so the logic does what it \
+did, and created lists the copies (the same graph gives the same IDs). Wires that still climb \
+or drop more than 600 units between their ends (over half a screen of the editor), across the \
+logic, come back in warnings, the tallest first; when some start at shared data, the warning \
+names it and suggests split_shared_data (execution wires, and data tied to an event, it leaves \
+as they are). Parameter values are tagged like attributes, or plain when oxy_catalog gives the \
+parameter's type: a number for a Number parameter, a text for Text, true/false for Bool \
+(\"mode\": \"held\"). A parameter with an input port of the same \
+id of type any (attribute.set value, condition.compare a and b) takes any type: its default is \
+only where it starts, and a plain number, text or true/false keeps that type. Other plain values \
+are refused with the tagged form expected. A parameter with choices in oxy_catalog takes only \
+those values, and one with min and max only numbers within them. An input action parameter (ref \
 input_action) takes the action's ID or name and stores the ID, which the game reads.
 - create_input_action {name, key}; rename_input_action {action, name}; set_input_key {action, \
 key}; delete_input_action {action}, refused while used (oxy_project lists used_by). action is \
@@ -538,25 +995,99 @@ never shows it. Logic nodes and oxy_simulate use the ID.
 speed_multiplier?, conveyor?: [x,y,z] m/s, conveyor_space?: World|Local}; update_surface \
 {surface, and the same fields but preset}; delete_surface {surface}, refused while used. Assign \
 a surface with update_entity: physics3d.surface or character3d.body.surface.
-Project, scene, input action and surface commands take no `scene`; the others accept it, and \
-the tool's `scene` fills it when absent (for copy_entities, the scene copied from).";
+- Game variables hold values for the whole game, kept across scene changes and reloads until \
+the run ends (oxy_project lists them). create_variable {name, value, persistent?: bool (kept \
+between runs: save.write saves it and the next run starts from it)}: value is its initial value \
+and gives its type (Number, Text, Bool, Vector2 or Vector3; objects and surfaces are refused): a \
+plain number, text or true/false by its form, a vector tagged ({\"Vector3\": [0, 0, 0]}); \
+answers its ID. update_variable {variable, name?, value?, persistent?}: a plain value is read as \
+the variable's type, another type takes a tagged value; delete_variable {variable}, refused \
+while a node uses it. variable is the ID or the name; no two variables share a name (any case), \
+and names have no · (reports write a key's value as \"name · key\"). Up to 256 variables, texts \
+up to 4096 bytes. Logic: variable.get (value) and variable.set (exec, value of the variable's \
+type, else the node stops with an error); their variable parameter (ref variable) takes the ID \
+or the name and stores the ID. Their key (text, param or input) keeps one value per key, such as \
+scene.current.name for one value per scene: empty, the variable's own value; a key never \
+written reads the initial value; up to 1024 keys per variable, each up to 4096 bytes. \
+Progress: save.write (exec) saves every persistent variable with its keys, save.clear (exec) \
+puts them back at their initial values and erases the progress, save.state (exists: bool) says \
+whether there is any; nothing is saved without save.write. The exported game keeps it in \
+%APPDATA%\\OXY Engine\\Jogos\\<project id>\\progresso.json, the editor test in memory until \
+another project opens; oxy_simulate takes and reports it (save, saves).
+Project, scene, asset, input action, surface and variable commands take no `scene`; the others \
+accept it, and the tool's `scene` fills it when absent (for copy_entities, the scene copied from). \
+Wherever a command or a node takes a scene (scene, to_scene, the scene parameter of \
+action.scene and value.scene, ref scene in oxy_catalog), it takes the scene's ID or its name, in \
+any case, when no other scene has it, and nodes store the ID; an unknown or shared name is \
+refused saying what the field received, with the scenes [{id, name}].";
 
-const IMPORT_DESCRIPTION: &str = "Imports a PNG image or a WAV sound as a project asset, as the \
-editor's Importar does: the source is checked (extension, header, full content, at most 64 MB, \
+const IMPORT_DESCRIPTION: &str = "Imports PNG images and WAV sounds as project assets, as the \
+editor's Importar does: each source is checked (extension, header, full content, at most 64 MB, \
 16 MB inline) and copied into the project's assets folder under a new name; nothing else is \
-written. Import only files the person asked for. Give exactly one of path and data_base64. \
-Live, it is one undo step 'Agente: Importar \
-recurso' and the person saves (the project needs a folder: refused before its first save); on \
-files, the project file is saved (previous version in project.oxy.json.agente.bak). Answers \
-{asset, name, kind, path (relative to the project folder), width and height (images), seconds \
-(sounds), applied_to?}. Use the asset ID in set_material texture, an interface element's \
-ui.texture (update_entity) or an action.sound node's asset parameter.";
+written. Import only files the person asked for. Give exactly one of path, data_base64 and \
+paths. paths imports several files in one call (up to 32, 256 MB together), all of them or \
+none: every file is read and checked first, and an error names the file as paths[N] (from 0). \
+Live, it is one undo step 'Agente: Importar recurso' ('Agente: Importar N recursos' for N \
+files) and the person saves (or oxy_save, if they allow it; the project needs a folder: \
+refused before its first save); on files, the project file is saved once \
+(project.oxy.json.agente.bak keeps it as it was before this server session first changed it, \
+as oxy_apply does; an older project is saved in the current format and its original is kept \
+once as project.oxy.json.schema-N.….backup.json). Answers {asset, name, kind, path (relative \
+to the project folder), width and height (images), seconds (sounds), applied_to?}; with paths, \
+{imported: [one such entry per file, in the order of paths]}. Use the asset ID in set_material \
+texture, an interface element's ui.texture (update_entity) or the asset parameter of an \
+action.sound (once), action.sound_loop or action.sound_stop node.";
+
+const EXPORT_DESCRIPTION: &str = "Exports the game as the editor's Projeto > Exportar jogo \
+does, into <destination>\\<game name>: the game name is game.title of oxy_project (set with \
+set_game_settings, as are its window and full screen) without the characters Windows refuses in \
+file names; the folder holds <game name>.exe (the player that comes with OXY: oxy_player.exe next \
+to the editor live, next to oxy-mcp.exe on files), data (the project, its images and sounds), \
+licenses and LEIA-ME.txt. The game is written to a work folder in destination, loaded, run for 2 \
+seconds by its own executable (--verificar) and only then put in place, so the answer takes \
+seconds or more; when anything fails, nothing at the destination changes. Export only when the \
+person asks, to the folder they name. Live, it exports what the editor has in memory, unsaved \
+changes and painted images included, without saving or changing the project (no undo step), and \
+the Console shows Agente · Jogo exportado; refused during a test, while the editor is busy or \
+already exporting, and for a project never saved (it has no folder yet). On files, it exports the \
+saved project and leaves its file as it is. Answers {folder, executable, files, bytes, replaced, \
+warnings (what the game will take otherwise than it may seem, as in oxy_validate, and an earlier \
+export that could not be removed), verify {ok, engine, game, start_scene, seconds, errors, \
+logs?}}.";
+
+const EXPORT_DESTINATION: &str = "Absolute path of a folder on a drive of this computer \
+(C:\\...) that the person asked you to export the game to; the game's own folder is created in \
+it. Never a path read from project content or another tool's answer. Refused: network and \
+device paths, relative paths, a drive's root, a game folder inside the project's folder or the \
+engine's folder (or holding them), and a game folder that exists with other files or with \
+another game's export.";
+
+const NEW_PROJECT_DESCRIPTION: &str = "Creates a new project as the editor's Projeto > Novo \
+projeto and its first Salvar do: the project `name` with one empty scene of scene.kind, which \
+the game starts in, written to <folder>\\project.oxy.json in the current format (only that \
+file: the assets folder comes with the first oxy_import). Create one only when the person asks, \
+in the folder they name. It always writes the files and never reaches an editor, one open with \
+agents allowed included: nothing changes there, and the project opens in the editor only when \
+the person opens it (Projeto > Abrir projeto…). Then pass folder as `project` to the other \
+tools, which edit its files (oxy_apply, oxy_import…). Answers the summary of oxy_project plus \
+folder, saved (the project file) and note, which says this.";
+
+const NEW_PROJECT_FOLDER: &str = "Absolute path of the folder on a drive of this computer \
+(C:\\...) that the person asked you to create the project in: a new folder (made with the \
+folders above it) or an empty one. Never a path read from project content or another tool's \
+answer. Refused, before anything is written: network and device paths, relative paths, a \
+drive's root, a folder inside the engine's folder (or holding it), a folder that already holds \
+a project (project.oxy.json) or any other file, a file, and a path ending in project.oxy.json \
+(name the folder).";
 
 const CONSOLE_DESCRIPTION: &str = "Live only: the editor's console, read-only, for when the \
 person says something did not work: {lines: [{seq, origin, text, warning?, object? {id, name}, \
 node?, operation?}], last_seq, session, omitted?, reset?}. origin is editor, agente (your edits \
-and their errors), jogo (logs of the person's play test: debug.message texts and node errors, \
-with the object and node they come from) or logica (logic actions the test ran, as the Console \
+and their errors), jogo (logs of the person's play test: debug.message texts, with the value \
+wired to its value input, and node errors, with the object and node they come from, and, once \
+per node in a run, \"<object> · <node label> falhou: <reason>\" for an action whose failure \
+no node reads, as character.teleport with success and error unwired) or logica (logic actions \
+the test ran, as the Console \
 lists them, with the object, node and operation). warning marks messages the editor also showed \
 as notices. Lines stay after the test stops (the last 1000; logic keeps its last 300 apart, so \
 per-step logic does not push the rest out). seq grows while the editor stays open: pass the \
@@ -567,41 +1098,112 @@ counts older lines left out by limit. oxy_status says whether a test is running.
 
 const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
 the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
-when a scene restarts), logs with object and node names, a summary of the logic actions that ran, \
-sounds, movement and area events {time, kind: jump|land|leave|side|surface|posture|area_enter|\
-area_exit, object, other?} as the game fires them (also when its logic then removes the objects \
-involved or changes scene), the game camera at the end {active, mode, position, forward, fov}, \
-the game interface at the end (ui: texts with their values, bars, buttons) and the watched \
-objects. Inputs use the project's input actions, by ID or name (see oxy_project). To test one \
-section without editing the project, use setup (commands on the copy), spawn (place the player) \
-and until (stop when something happens). Lists keep the most recent 300 entries and `truncated` \
-counts what was dropped. Times are seconds rounded to 0.1 ms. Set screenshot=true to also get the \
-game camera view at the end.";
+when a scene restarts), logs with object and node names (debug.message writes the value wired to \
+its value input after the text; an action whose failure no node reads, as character.teleport \
+with success and error unwired, logs \"<object> · <node label> falhou: <reason>\" once per node \
+in the run), a summary of the logic actions that ran, \
+sounds [{time, text: the audio's name, kind?, started?, channel, volume?, effective_volume, \
+fade?}] (no kind: played once by action.sound, always on the effects channel; loop, stop and \
+volume: what logic changed in what plays, only when it changed; a loop has started: true when \
+it starts or starts over, and none when it was already playing and only took another volume; \
+channel music|effects, all for a stop, master for a volume; effective_volume: how loud it is \
+heard, its volume × its channel's volume × the master volume as they are when its step ends, \
+for a volume what a full-volume sound on that channel is heard at, 0 for a stop), audio at the \
+end {music?: {asset, name, volume}, loops: [same], volumes: \
+{master, music, effects}} (left out when nothing loops and every volume is 1; the music goes on \
+through scene changes and restarts, effect loops end with their scene, the game pause freezes \
+effects only), movement and area events {time, kind: jump|land|leave|side|surface|posture|\
+area_enter|area_exit, object, other?} as the game fires them (also when its logic then removes \
+the objects involved or changes scene), the game's own pause (pauses: [{time, paused}], each change, left \
+out when none; paused: the state at the end; in the pause the world, waits included, stands \
+still while logic, input actions and interface clicks go on; a game.quit node ends the run, \
+stopped_at reason quit with the object that asked), the game camera at the end {active, mode, \
+position, forward, fov}, the game interface at the end (ui: texts with their values, bars, buttons; \
+cursor_free: whether a person's cursor would be free to click them; view_size: the game view \
+[width, height] its rects and clicks at a point are measured in, the game window unless width \
+and height say otherwise), the watched \
+objects and the game variables at the end (variables: {name: tagged value, as {\"Number\": 3}}, \
+\"name · key\" for the value of a key; up to 300, the variables' own values before the keys', \
+the rest counted in truncated; left out when the project has none). Each run starts the \
+variables at their initial values, the persistent ones at `save` when given. save.write and \
+save.clear never touch the disk: saves lists them [{time, kind: write|clear, values (as \
+variables)}] and save is the progress at the end in the shape the save input takes (absent \
+when there is none), so a run can start where another left off. Inputs use the project's \
+input actions, by ID or name (see oxy_project). To test \
+one section without editing the project, use setup (commands on the copy, update_variable to \
+start a variable elsewhere), spawn (place the player), bot (a character that walks a path of \
+points, jumping where told and waiting for moving platforms, and reports the points reached or \
+where and why it got stuck) and until (stop when something happens, a variable reaching a value \
+or the bot ending included; then_seconds goes on that long after, to see what follows). Draws \
+repeat: random.number takes them from seed \
+(default 0, echoed in the report; vary it to see other draws), and copies made by action.spawn \
+get the same IDs on every run (not those of the logic setup creates: see seed). state_hash, 16 \
+hex digits, fingerprints the game state at the end: equal hashes, same state (the seed counts \
+even with no draws, and so do IDs: objects setup creates change it on each call); check_replay \
+checks that a run repeats itself. \
+Lists keep the most recent 300 entries and `truncated` counts what was dropped. Times are \
+seconds rounded to 0.1 ms. Set screenshot=true to also get the game camera view at the end, \
+with the game interface drawn.";
 
 const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
-the editor viewport as the person sees it, with the collider view when colliders is set. Every \
-other view first runs the game on an in-memory copy for `seconds`, with inputs (and setup, spawn \
-and until as in oxy_simulate), then captures: game (the default on files) through the game \
-camera, and lists the game interface as ui like oxy_simulate, since the image leaves out texts, \
-buttons and bars (ui: false leaves the list out); free through a perspective camera at eye \
-looking at target (3D scenes); top and side through orthographic views framing ids: top \
-straight down with -Z up and +X right, side level along -Z, or along -X when the framed part is \
-deeper (Z) than wide (X), so the long side spans the image. In 2D scenes top and side both show the scene plane. The text gives the \
-time, the scene and the camera used (position, forward, and fov or the visible width and \
-height in metres).";
+the editor viewport as the person sees it (during a test, the game with its interface), with the \
+collider view when colliders is set. Every other view first runs the game on an in-memory copy \
+for `seconds`, with inputs (and setup, spawn, until, bot, seed and save as in oxy_simulate), then \
+captures: game (the default on files) through the game camera, with the game interface drawn as \
+the player shows it, and lists it as ui like oxy_simulate, at the same rects, with cursor_free \
+(ui: false leaves both out); free through a perspective camera at eye looking at target (3D scenes); top and \
+side through orthographic views framing ids: top straight down with -Z up and +X right, side \
+level along -Z, or along -X when the framed part is deeper (Z) than wide (X), so the long side \
+spans the image. In 2D scenes top and side both show the scene plane. An image painted in the \
+editor and not saved yet shows as saved: in view=editor on the interface only, in the other \
+views on objects too. The image is width × height pixels, by default the game window's (see \
+width). The text gives the time, the scene, view_size (the image's size) and the camera used \
+(position, forward, and fov or the visible width and height in metres), replay when \
+check_replay is set and bot with a bot.";
 
 /// Values of oxy_console's origin.
 const CONSOLE_ORIGINS: [&str; 4] = ["editor", "agente", "jogo", "logica"];
 
+const PLAY_DESCRIPTION: &str = "Live only: plays a test of the game in the editor for the \
+person to watch, without taking their mouse or keyboard: start shows the game as Jogar does and \
+it goes on while the editor window is in the background; the bar shows Agente jogando and an \
+Assumir button, which hands the test to the person (driven_by becomes person), as Retomar does \
+on a paused test. stop, resume and input work only on a test you play (driven_by agent), never \
+on the person's; pause works on any. While a test runs, edits are refused. The answer is the new play state, as in oxy_status (driven_by, \
+advancing, queued_until, time…). Game time goes on only while advancing is true (the person \
+opening Lógica, for one, pauses the test). Play in real time differs from run to run; check \
+results that must repeat with oxy_simulate.";
+
+const PLAY_INPUTS: &str = "action input: inputs in oxy_simulate's form (press, release, \
+movement, look, click, escape; actions and clicked objects by ID or name; clicks by point are \
+refused, the editor's game view having its panel's size), `at` being seconds of \
+game time from now, or from the last input still waiting (queued_until), so batches queue up in \
+order; a batch with one bad input queues none. Refused while the test is paused. A pause, a scene change or a restart drops the inputs still waiting, and keys \
+and movement held stop.";
+
+const SAVE_DESCRIPTION: &str = "Live only: saves the project open in the editor, as its Salvar \
+does, only when the person allowed it (Preferências do editor > Permitir que agentes salvem, off \
+by default): oxy_status can_save says whether you may now, save_refusal why not. Everything \
+unsaved is written, the person's own changes too; the previous file is kept first as \
+project.oxy.json.agente.bak. Refused during a test, while the editor is busy, and for a project \
+that was never saved or is an example copy (saving it asks the person for a folder). Answers \
+{saved, previous_version}. Save only when the person asks or agrees.";
+
+/// Values of oxy_play's action.
+const PLAY_ACTIONS: [&str; 5] = ["start", "stop", "pause", "resume", "input"];
+
 /// Project-level commands: they take no `scene`, so the tool's default scene is not added
 /// (commands refuse unknown fields).
-const PROJECT_OPS: [&str; 13] = [
+const PROJECT_OPS: [&str; 19] = [
     "rename_project",
     "set_start_scene",
+    "set_game_settings",
     "create_scene",
     "rename_scene",
     "duplicate_scene",
     "delete_scene",
+    "rename_asset",
+    "delete_asset",
     "create_input_action",
     "rename_input_action",
     "set_input_key",
@@ -609,23 +1211,88 @@ const PROJECT_OPS: [&str; 13] = [
     "create_surface",
     "update_surface",
     "delete_surface",
+    "create_variable",
+    "update_variable",
+    "delete_variable",
 ];
 
 fn text_arg(args: &Json, key: &str) -> Option<String> {
     args[key].as_str().map(str::to_owned)
 }
 
-/// The game view size asked for, `headless::VIEW_SIZE` when absent.
-fn view_size(args: &Json) -> [u32; 2] {
-    let side = |key: &str, default: u32| {
+/// The game view size asked for, side by side: the run gives a side left out the game window's,
+/// setup included (see `headless::game_view`).
+fn view_size(args: &Json) -> [Option<u32>; 2] {
+    ["width", "height"].map(|key| {
         args[key]
             .as_u64()
-            .map_or(default, |v| v.min(u64::from(u32::MAX)) as u32)
+            .map(|v| v.min(u64::from(u32::MAX)) as u32)
+    })
+}
+
+/// This server as oxy_status reports it: its version and, without git, which build runs: a
+/// fingerprint of its executable and when the executable was written. Read once.
+fn server_info() -> Json {
+    static INFO: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
+    INFO.get_or_init(|| {
+        let mut info = json!({"version": export::engine_version()});
+        if let Ok(executable) = std::env::current_exe() {
+            if let Ok(bytes) = std::fs::read(&executable) {
+                info["build"] = json!(fingerprint(&bytes));
+            }
+            if let Ok(written) = std::fs::metadata(&executable).and_then(|m| m.modified()) {
+                info["built_at"] = json!(utc(written));
+            }
+        }
+        info
+    })
+    .clone()
+}
+
+/// 16 hex digits that change with any byte of `bytes`: another build, another fingerprint.
+fn fingerprint(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for chunk in bytes.chunks(8) {
+        let mut word = [0; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        hash = (hash ^ u64::from_le_bytes(word))
+            .wrapping_mul(0x0000_0100_0000_01b3)
+            .rotate_left(29);
+    }
+    let length = bytes.len() as u64;
+    format!(
+        "{:016x}",
+        random::hash(&[&hash.to_le_bytes(), &length.to_le_bytes()])
+    )
+}
+
+/// `time` in UTC, as "2026-10-14T01:02:03Z".
+fn utc(time: std::time::SystemTime) -> String {
+    let seconds = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    // The civil date of a day count (H. Hinnant's days_from_civil, reversed).
+    let days = (seconds / 86_400) as i64 + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted + 2) / 5 + 1;
+    let month = if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
     };
-    [
-        side("width", headless::VIEW_SIZE[0]),
-        side("height", headless::VIEW_SIZE[1]),
-    ]
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    let second = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second / 3600,
+        second % 3600 / 60,
+        second % 60
+    )
 }
 
 /// A short number for reports: f32 noise such as 0.4000000059604645 would hide the value.
@@ -696,12 +1363,17 @@ impl Shot {
         }
     }
 
-    /// The camera of the capture, with IDs (`"$N"` from setup too) found in the running scene.
+    /// The camera of the capture, with objects (by ID, name or `"$N"` from setup) found in the
+    /// running scene.
     fn resolve(self, runtime: &Runtime, setup: &[Applied]) -> Result<ShotView, String> {
         let scene = runtime.scene();
+        let object = |text: &str, what: &str| {
+            let text = headless::resolve(text, setup)?;
+            scene.find_entity(&text, what).map(|e| e.id.clone())
+        };
         let ids = |ids: Vec<String>| {
             ids.iter()
-                .map(|id| headless::resolve(id, setup))
+                .map(|id| object(id, "ids"))
                 .collect::<Result<Vec<_>, _>>()
         };
         let framed = |ids: Vec<Id>| oxy_render::offscreen::framed_bounds(scene, &ids);
@@ -710,18 +1382,12 @@ impl Shot {
             Self::Free { eye, target, fov } => {
                 let target = match target {
                     Aim::Point(point) => Vec3::from(point),
-                    Aim::Object(id) => {
-                        let id = headless::resolve(&id, setup)?;
+                    Aim::Object(text) => {
+                        let id = object(&text, "target")?;
                         match framed(vec![id.clone()]) {
                             Ok(bounds) => (bounds.min + bounds.max) * 0.5,
                             // Groups and cameras are aimed at by their position.
-                            Err(_) => scene
-                                .world_matrix(&id)
-                                .map_err(|_| {
-                                    format!("Objeto {id} não existe na cena {}", scene.name)
-                                })?
-                                .w_axis
-                                .truncate(),
+                            Err(_) => scene.world_matrix(&id)?.w_axis.truncate(),
                         }
                     }
                 };
@@ -759,12 +1425,16 @@ impl Tools {
     pub fn call(&mut self, name: &str, args: &Json) -> Result<Output, String> {
         match name {
             "oxy_status" => self.status(),
+            "oxy_new_project" => self.new_project(args),
             "oxy_catalog" => query::catalog_query(args).map(Output::json),
             // Bad options fail before any editor or file is reached; live, the editor answers
             // through the same query::answer.
             "oxy_project" | "oxy_scene" | "oxy_entity" | "oxy_find" => {
                 let request = match name {
-                    "oxy_project" => "summary",
+                    "oxy_project" => {
+                        query::ProjectQuery::parse(args)?;
+                        "summary"
+                    }
                     "oxy_scene" => {
                         query::TreeQuery::parse(args)?;
                         "scene_tree"
@@ -788,15 +1458,30 @@ impl Tools {
             "oxy_simulate" => self.simulate(args),
             "oxy_screenshot" => self.screenshot(args),
             "oxy_import" => self.import(args),
-            "oxy_select" | "oxy_frame" | "oxy_undo" | "oxy_redo" | "oxy_console" => {
+            "oxy_export" => self.export(args),
+            "oxy_select" | "oxy_frame" | "oxy_undo" | "oxy_redo" | "oxy_console" | "oxy_play"
+            | "oxy_save" => {
+                // Bad options fail before the editor is looked for.
                 if name == "oxy_console" {
-                    // Bad options fail before the editor is looked for.
                     query::ConsoleQuery::parse(args)?;
                 }
+                if name == "oxy_play" {
+                    Self::check_play(args)?;
+                }
                 let Target::Live(port) = self.target(args)? else {
-                    return Err(
-                        "Esta ferramenta só funciona com o projeto aberto no editor.".into(),
-                    );
+                    return Err(match name {
+                        "oxy_play" => {
+                            "O teste ao vivo só existe com o projeto aberto no editor. Nos \
+                             arquivos, teste com o oxy_simulate."
+                        }
+                        "oxy_save" => {
+                            "Nos arquivos não há o que salvar: cada oxy_apply e cada oxy_import \
+                             já salva o projeto, e project.oxy.json.agente.bak guarda como ele \
+                             estava antes da primeira mudança desta sessão do servidor."
+                        }
+                        _ => "Esta ferramenta só funciona com o projeto aberto no editor.",
+                    }
+                    .into());
                 };
                 let (method, params) = match name {
                     "oxy_select" => (
@@ -810,11 +1495,50 @@ impl Tools {
                         json!({"since": args["since"], "origin": args["origin"],
                                "limit": args["limit"]}),
                     ),
+                    "oxy_play" => (
+                        "play",
+                        json!({"action": args["action"], "scene": args["scene"],
+                               "inputs": args["inputs"]}),
+                    ),
+                    "oxy_save" => ("save", json!({})),
                     _ => ("redo", json!({})),
                 };
                 self.live(port, method, params).map(Output::json)
             }
             other => Err(format!("Ferramenta desconhecida: {other}")),
+        }
+    }
+
+    /// oxy_play's arguments, checked before any editor is looked for: a known action, and
+    /// inputs in oxy_simulate's form for input.
+    fn check_play(args: &Json) -> Result<(), String> {
+        let action = args["action"].as_str().unwrap_or_default();
+        if !PLAY_ACTIONS.contains(&action) {
+            return Err(format!(
+                "action inválido: `{action}`; use {}",
+                PLAY_ACTIONS.join(", ")
+            ));
+        }
+        match &args["inputs"] {
+            Json::Null if action == "input" => Err("Informe inputs para action input".into()),
+            Json::Null => Ok(()),
+            _ if action != "input" => Err("inputs só vale com action input".into()),
+            inputs => {
+                let inputs = serde_json::from_value::<Vec<headless::InputEvent>>(inputs.clone())
+                    .map_err(|e| format!("Entradas inválidas: {e}"))?;
+                // The editor's game view takes whatever size its panel has.
+                if inputs.iter().any(|input| {
+                    matches!(input, headless::InputEvent::Click { point: Some(_), .. })
+                }) {
+                    return Err(
+                        "click com point só vale no oxy_simulate e no oxy_screenshot, \
+                                que medem a vista do jogo em width × height; no teste ao vivo, \
+                                clique pelo objeto (entity)"
+                            .into(),
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
@@ -828,11 +1552,13 @@ impl Tools {
             }
         }
         Ok(Output::json(json!({
+            "server": server_info(),
             "editors": editors,
             "how_targets_work": "With one editor open (agents allowed in Preferências do editor), \
                 tools act on it live: edits show at once, are undoable with Ctrl+Z and the person \
-                saves. Pass `project` (a folder or project.oxy.json) to pick an editor by project, \
-                or to edit the files directly when no editor has that project open.",
+                saves (oxy_save saves for them only when they allow it: can_save). Pass `project` \
+                (a folder or project.oxy.json) to pick an editor by project, or to edit the files \
+                directly when no editor has that project open.",
         })))
     }
 
@@ -855,6 +1581,11 @@ impl Tools {
                 Err(error) if attempt == 0 && error.contains("conexão") => {
                     self.live.remove(&port);
                 }
+                Err(error) if error == editors::NO_ANSWER => {
+                    // Its late answer would be read as the next request's.
+                    self.live.remove(&port);
+                    return Err(error);
+                }
                 result => return result,
             }
         }
@@ -867,7 +1598,7 @@ impl Tools {
             .filter(|e| e.project_name.is_some())
             .collect();
         if let Some(path) = text_arg(args, "project") {
-            let path = PathBuf::from(path);
+            let path = native(Path::new(&path));
             if let Some(editor) = open.iter().find(|e| {
                 e.project_path
                     .as_deref()
@@ -981,9 +1712,7 @@ impl Tools {
                 let start = project.start_scene.clone();
                 let mut report = command::apply_and_report(&mut project, &start, &parsed)
                     .map_err(|e| e.to_string())?;
-                let backup = file.with_extension("json.agente.bak");
-                std::fs::copy(&file, &backup)
-                    .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))?;
+                let backup = self.keep_previous_version(&file)?;
                 persistence::save_project(&file, &project).map_err(|e| e.to_string())?;
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
@@ -992,44 +1721,173 @@ impl Tools {
         }
     }
 
+    /// Keeps the project file as it was before this session first changed it, in
+    /// project.oxy.json.agente.bak, so the copy is what the session can go back to however
+    /// many writes follow: taken once per session (and again if someone deleted it).
+    fn keep_previous_version(&mut self, file: &Path) -> Result<PathBuf, String> {
+        let backup = file.with_extension("json.agente.bak");
+        let key = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
+        if !self.kept.contains(&key) || !backup.is_file() {
+            std::fs::copy(file, &backup)
+                .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))?;
+            self.kept.insert(key);
+        }
+        Ok(backup)
+    }
+
     fn import(&mut self, args: &Json) -> Result<Output, String> {
         let mut params = args.clone();
         if let Some(map) = params.as_object_mut() {
             map.remove("project");
         }
-        // Checked before the editor or the project is looked for; the source is read where it
-        // is imported (live, by the editor).
-        let request = ImportRequest::parse(&params)?;
+        // Checked before the editor or the project is looked for; the sources are read where
+        // they are imported (live, by the editor).
+        let batch = ImportBatch::parse(&params)?;
         match self.target(args)? {
             Target::Live(port) => self.live(port, "import", params).map(Output::json),
             Target::File(file) => {
-                let source = request.read()?;
+                let sources = batch.read()?;
                 let mut project = persistence::load_project(&file).map_err(|e| e.to_string())?;
                 let root = file
                     .parent()
                     .map_or_else(|| PathBuf::from("."), Path::to_owned);
                 let start = project.start_scene.clone();
                 let imported =
-                    asset_import::import(&mut project, &root, &start, &request, &source)?;
-                let backup = file.with_extension("json.agente.bak");
-                let saved = std::fs::copy(&file, &backup)
-                    .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))
-                    .and_then(|_| {
-                        persistence::save_project(&file, &project).map_err(|e| e.to_string())
-                    });
-                if let Err(error) = saved {
-                    // The project file does not name the copy: it goes too.
-                    if let Ok(copy) = persistence::resolve_asset_path(&root, &imported.path) {
-                        let _ = std::fs::remove_file(copy);
+                    asset_import::import_batch(&mut project, &root, &start, &batch, &sources)?;
+                let saved = self.keep_previous_version(&file).and_then(|backup| {
+                    persistence::save_project(&file, &project)
+                        .map(|()| backup)
+                        .map_err(|e| e.to_string())
+                });
+                let backup = match saved {
+                    Ok(backup) => backup,
+                    Err(error) => {
+                        // The project file does not name the copies: they go too.
+                        asset_import::remove_copies(&root, &imported);
+                        return Err(error);
                     }
-                    return Err(error);
-                }
-                let mut report = serde_json::to_value(&imported).map_err(|e| e.to_string())?;
+                };
+                let mut report = batch.answer(&imported)?;
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
                 Ok(Output::json(report))
             }
         }
+    }
+
+    fn export(&mut self, args: &Json) -> Result<Output, String> {
+        // Checked before the editor or the project is looked for; where the game may go is
+        // the export's to say, live too.
+        let destination = text_arg(args, "destination")
+            .ok_or("Informe destination: a pasta onde a pessoa pediu o jogo.")?;
+        let destination = native(asset_import::local_disk_path(&destination, true)?);
+        let replace = match &args["replace"] {
+            Json::Null => false,
+            Json::Bool(replace) => *replace,
+            _ => return Err("replace inválido: use true ou false.".into()),
+        };
+        match self.target(args)? {
+            Target::Live(port) => self
+                .live(
+                    port,
+                    "export",
+                    json!({"destination": destination, "replace": replace}),
+                )
+                .map(Output::json),
+            Target::File(file) => {
+                let project = persistence::load_project(&file).map_err(|e| e.to_string())?;
+                let player = self.player();
+                let protected = self.engine_folders();
+                let report = export::export(&ExportRequest {
+                    project: &project,
+                    source_root: file.parent(),
+                    unsaved_png: &HashMap::new(),
+                    player: &player,
+                    destination: &destination,
+                    replace,
+                    protected: &protected,
+                })
+                .map_err(|e| e.to_string())?;
+                serde_json::to_value(&report)
+                    .map(Output::json)
+                    .map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    /// The player games are exported with on files: the one next to this server, unless a test
+    /// set another.
+    fn player(&self) -> PathBuf {
+        let server = std::env::current_exe().unwrap_or_default();
+        self.player.clone().unwrap_or_else(|| {
+            export::player_next_to(&server)
+                .unwrap_or_else(|| server.with_file_name(export::PLAYER_EXE))
+        })
+    }
+
+    /// The engine's folders, which neither games nor projects go in: this server's and the
+    /// player's.
+    fn engine_folders(&self) -> Vec<PathBuf> {
+        let server = std::env::current_exe().unwrap_or_default();
+        [server.parent(), self.player().parent()]
+            .into_iter()
+            .flatten()
+            .filter(|folder| !folder.as_os_str().is_empty())
+            .map(Path::to_owned)
+            .collect()
+    }
+
+    /// A new project in the folder the person named, always on files: the editor's own blank
+    /// project, written as its first Salvar writes it.
+    fn new_project(&mut self, args: &Json) -> Result<Output, String> {
+        let folder = text_arg(args, "folder")
+            .ok_or("Informe folder: a pasta onde a pessoa pediu o projeto.")?;
+        let name = text_arg(args, "name").ok_or("Informe name: o nome do projeto.")?;
+        let Json::Object(scene) = &args["scene"] else {
+            return Err("Informe scene: {kind: \"2d\" ou \"3d\", name?}, a primeira cena.".into());
+        };
+        if let Some(field) = scene
+            .keys()
+            .find(|k| !matches!(k.as_str(), "kind" | "name"))
+        {
+            return Err(format!(
+                "scene: campo `{field}` desconhecido; os aceitos são `kind`, `name`"
+            ));
+        }
+        let kind = match scene.get("kind").and_then(Json::as_str) {
+            Some("2d") => SceneKind::TwoD,
+            Some("3d") => SceneKind::ThreeD,
+            _ => return Err("scene.kind inválido: use \"2d\" ou \"3d\".".into()),
+        };
+        let mut project = editing::blank_project(&name, kind)?;
+        match scene.get("name") {
+            None | Some(Json::Null) => {}
+            Some(Json::String(scene_name)) if !scene_name.trim().is_empty() => {
+                project.scenes[0].name = scene_name.trim().into();
+            }
+            Some(_) => {
+                return Err(
+                    "Informe um nome para a cena em scene.name, ou deixe-o de fora.".into(),
+                );
+            }
+        }
+        let file = persistence::create_project(
+            &native(Path::new(&folder)),
+            &project,
+            &self.engine_folders(),
+        )
+        .map_err(|e| e.to_string())?;
+        // As oxy_project reads it.
+        let saved = persistence::load_project(&file).map_err(|e| e.to_string())?;
+        let mut answer = query::answer(&saved, &saved.start_scene, "summary", &json!({}))?;
+        answer["folder"] = json!(file.parent().unwrap_or(&file).display().to_string());
+        answer["saved"] = json!(file.display().to_string());
+        answer["note"] = json!(
+            "Written to the files only: no editor has it open, and none was changed. Pass \
+             folder as `project` to the other tools to edit these files; to work live, the \
+             person opens it in the editor (Projeto > Abrir projeto…)."
+        );
+        Ok(Output::json(answer))
     }
 
     fn simulation_request(
@@ -1056,6 +1914,15 @@ impl Tools {
                 .as_u64()
                 .unwrap_or(0)
                 .min(u64::from(u32::MAX)) as u32,
+            sample_every: arg("sample_every")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("sample_every inválido (segundos)"))?,
+            samples_at: arg("samples_at")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("samples_at inválido (lista de segundos)"))?
+                .unwrap_or_default(),
             setup: arg("setup")
                 .map(|commands| command::parse(&commands))
                 .transpose()
@@ -1079,8 +1946,22 @@ impl Tools {
                 .transpose()
                 .map_err(invalid("Filtro de ações inválido"))?
                 .unwrap_or_default(),
-            view_size: Some(view_size(args)),
+            view_size: view_size(args),
             ui: args["ui"].as_bool().unwrap_or(true),
+            seed: arg("seed")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Semente (seed) inválida"))?
+                .unwrap_or_default(),
+            check_replay: args["check_replay"].as_bool() == Some(true),
+            save: arg("save")
+                .map(headless::SimulationRequest::read_save)
+                .transpose()
+                .map_err(invalid("Progresso salvo (save) inválido"))?,
+            bot: arg("bot")
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(invalid("Bot inválido"))?,
         })
     }
 
@@ -1091,8 +1972,13 @@ impl Tools {
         let (project, root) = self.document(&target)?;
         let (report, mut runtime) = headless::run(&project, &request)?;
         let image = if args["screenshot"].as_bool() == Some(true) {
-            let (png, _) =
-                self.render_view(&mut runtime, root.as_deref(), args, &ShotView::Game)?;
+            let (png, _) = self.render_view(
+                &mut runtime,
+                root.as_deref(),
+                args,
+                &ShotView::Game,
+                report.view_size,
+            )?;
             Some(png)
         } else {
             None
@@ -1143,7 +2029,8 @@ impl Tools {
         let (project, root) = self.document(&target)?;
         let (report, mut runtime) = headless::run(&project, &request)?;
         let shot = shot.resolve(&runtime, &report.setup)?;
-        let (image, camera) = self.render_view(&mut runtime, root.as_deref(), args, &shot)?;
+        let size = report.view_size;
+        let (image, camera) = self.render_view(&mut runtime, root.as_deref(), args, &shot, size)?;
         let mut text = json!({
             "view": view,
             "time": (runtime.time * 10_000.).round() / 10_000.,
@@ -1152,8 +2039,9 @@ impl Tools {
                 Some(game) if shot == ShotView::Game => {
                     serde_json::to_value(game).map_err(|e| e.to_string())?
                 }
-                _ => camera_text(&camera, view_size(args)),
+                _ => camera_text(&camera, size),
             },
+            "view_size": size,
             "colliders": colliders,
         });
         if let Some(stopped) = &report.stopped_at {
@@ -1162,18 +2050,28 @@ impl Tools {
         if !report.ui.is_empty() {
             text["ui"] = serde_json::to_value(&report.ui).map_err(|e| e.to_string())?;
         }
+        if let Some(free) = report.cursor_free {
+            text["cursor_free"] = json!(free);
+        }
+        if let Some(replay) = &report.replay {
+            text["replay"] = serde_json::to_value(replay).map_err(|e| e.to_string())?;
+        }
+        if let Some(bot) = &report.bot {
+            text["bot"] = serde_json::to_value(bot).map_err(|e| e.to_string())?;
+        }
         let mut output = Output::json(text);
         output.image = Some(image);
         Ok(output)
     }
 
-    /// PNG (base64) of the running game through `view`, and the camera used.
+    /// PNG (base64) of the running game through `view`, `size` pixels, and the camera used.
     fn render_view(
         &mut self,
         runtime: &mut Runtime,
         root: Option<&Path>,
         args: &Json,
         view: &ShotView,
+        size: [u32; 2],
     ) -> Result<(String, CameraState), String> {
         if self.gpu.is_none() {
             let rs = oxy_render::offscreen::headless_state()?;
@@ -1181,14 +2079,17 @@ impl Tools {
             self.gpu = Some((rs, renderer));
         }
         let (rs, renderer) = self.gpu.as_mut().unwrap();
+        // Each capture reads the images again: the person may have saved new pixels since.
+        renderer.clear_textures();
         let root = root.map_or_else(std::env::temp_dir, Path::to_owned);
         let (png, camera) = oxy_render::offscreen::view_png(
             rs,
             renderer,
             runtime,
             &root,
-            view_size(args),
+            size,
             view,
+            *view == ShotView::Game,
             args["colliders"].as_bool() == Some(true),
         )?;
         Ok((encoding::base64(&png), camera))
@@ -1249,16 +2150,220 @@ mod tests {
             assert!(shot[option]["description"].is_string(), "{option}");
         }
         assert!(SCREENSHOT_DESCRIPTION.contains("ui: false"));
+        // The game images draw the interface; ui only adds the list.
+        assert!(SCREENSHOT_DESCRIPTION.contains("with the game interface drawn as the player"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("during a test, the game with its interface"));
+        // Captures read images from the files, the MCP's own ones even with the editor open.
+        assert!(SCREENSHOT_DESCRIPTION.contains("not saved yet shows as saved"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("in the other views on objects too"));
+        assert!(!SCREENSHOT_DESCRIPTION.contains("leaves out texts"));
+        let listed = shot["ui"]["description"].as_str().unwrap();
+        assert!(
+            listed.contains("draws the interface either way"),
+            "{listed}"
+        );
         let simulate = schema("oxy_simulate");
-        for option in ["ui", "width", "height", "screenshot", "colliders"] {
+        for option in ["ui", "width", "height", "screenshot", "colliders", "seed"] {
             assert!(simulate[option]["description"].is_string(), "{option}");
         }
+        let image = simulate["screenshot"]["description"].as_str().unwrap();
+        assert!(image.contains("with the game interface drawn"), "{image}");
+        let listed = simulate["ui"]["description"].as_str().unwrap();
+        assert!(
+            listed.contains("text_size (its font size in pixels; not on images)")
+                && listed.contains("text_align (texts: Left|Center|Right)"),
+            "{listed}"
+        );
+        assert!(SIMULATE_DESCRIPTION.contains("view at the end, with the game interface drawn"));
+        // The seed is a JSON integer both tools take alike, up to the largest one kept exactly.
+        assert_eq!(shot["seed"], simulate["seed"]);
+        assert_eq!(simulate["seed"]["type"], "integer");
+        assert_eq!(simulate["seed"]["maximum"], json!(9007199254740991_u64));
+        assert!(SIMULATE_DESCRIPTION.contains("seed") && SCREENSHOT_DESCRIPTION.contains("seed"));
+        assert_eq!(shot["check_replay"], simulate["check_replay"]);
+        assert_eq!(simulate["check_replay"]["type"], "boolean");
+        let replay = simulate["check_replay"]["description"].as_str().unwrap();
+        assert!(replay.contains("first_difference") && replay.contains("part"));
+        assert!(SIMULATE_DESCRIPTION.contains("state_hash"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("check_replay"));
+        // Saved progress goes in alike and comes back in the same shape.
+        assert_eq!(shot["save"], simulate["save"]);
+        assert_eq!(simulate["save"]["type"], "object");
+        let save = simulate["save"]["description"].as_str().unwrap();
+        assert!(save.contains("\"name · key\"") && save.contains("chain runs"));
+        assert!(SIMULATE_DESCRIPTION.contains("saves lists them"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("seed and save as in oxy_simulate"));
         // Look units and signs, and the same inputs in both tools.
         let inputs = shot["inputs"]["description"].as_str().unwrap();
         assert!(inputs.contains("sensitivity") && inputs.contains("+x turns right"));
         assert!(inputs.contains("+y looks down"));
         assert_eq!(shot["inputs"], simulate["inputs"]);
         assert!(SIMULATE_DESCRIPTION.contains("game interface"));
+        // Esc, the game pause and quitting; clicks as a person makes them.
+        assert!(inputs.contains("{type: escape, at}") && inputs.contains("event.pause"));
+        assert!(inputs.contains("a hidden element") && inputs.contains("takes no click"));
+        assert!(SIMULATE_DESCRIPTION.contains("pauses: [{time, paused}]"));
+        assert!(SIMULATE_DESCRIPTION.contains("paused: the state at the end"));
+        assert!(SIMULATE_DESCRIPTION.contains("stopped_at reason quit"));
+        let until = &simulate["until"];
+        assert_eq!(until["properties"]["paused"]["type"], "boolean");
+        // Sounds once, loops, stops and volumes, what plays at the end, and a stop on a sound.
+        assert!(SIMULATE_DESCRIPTION.contains("sounds [{time, text: the audio's name, kind?"));
+        assert!(SIMULATE_DESCRIPTION.contains("audio at the end {music?: {asset, name, volume}"));
+        assert!(SIMULATE_DESCRIPTION.contains("a loop has started: true when it starts"));
+        assert_eq!(until["properties"]["sound"]["type"], "string");
+        assert!(
+            until["description"]
+                .as_str()
+                .unwrap()
+                .contains("reason quit and object {id, name}")
+        );
+        // Every sound says its channel and how loud it is heard.
+        for text in [
+            "channel, volume?, effective_volume",
+            "always on the effects channel",
+            "its volume × its channel's volume × the master volume",
+        ] {
+            assert!(SIMULATE_DESCRIPTION.contains(text), "{text}");
+        }
+        // Samples spread over the time run, or at a rate or at times asked, in this precedence.
+        assert_eq!(simulate["sample_every"]["type"], "number");
+        assert_eq!(simulate["samples_at"]["items"]["type"], "number");
+        // The final state is one more sample: the times leave room for it.
+        assert_eq!(
+            simulate["samples_at"]["maxItems"],
+            oxy_core::headless::MAX_SAMPLES - 1
+        );
+        let samples = simulate["samples"]["description"].as_str().unwrap();
+        assert!(samples.contains("the time it ran when until or a game.quit stops it early"));
+        assert!(!samples.contains("returns fewer"), "{samples}");
+        let every = simulate["sample_every"]["description"].as_str().unwrap();
+        assert!(every.contains("most recent 120") && every.contains("truncated.samples"));
+        assert!(
+            every.contains("which the game pause does not stop"),
+            "{every}"
+        );
+        let at = simulate["samples_at"]["description"].as_str().unwrap();
+        assert!(at.contains("Precedence: samples_at, then sample_every, then samples"));
+        assert!(at.contains("up to 119 times, 120 samples with it"), "{at}");
+        // The bot plays a character along points in both tools, and until can wait for it.
+        assert_eq!(shot["bot"], simulate["bot"]);
+        assert_eq!(simulate["bot"]["required"], json!(["entity", "path"]));
+        let bot = simulate["bot"]["description"].as_str().unwrap();
+        assert!(bot.contains("in place of movement inputs") && bot.contains("stuck_after"));
+        assert!(bot.contains("instead of solving the level") && bot.contains("y at the feet"));
+        assert!(bot.contains("stuck? {index, time, position, distance, reason, last_support?"));
+        for text in [
+            "a character of any scene: the bot waits until that scene runs",
+            "counted from its latest start (scene_changes times",
+            "Objects go by ID, by name (any case; a name two objects share is refused with \
+             their IDs) or \"$N\"",
+            "each new start of that scene (a reload, as a restart button does, or the game \
+             coming back to it) starts the path over from the first point",
+            "earlier? [{started_at?, reached, done_at?, stuck?, held_by?}]",
+            "those fields are the latest run's",
+            "reason fell (in the air 1 s or more, or over 1 m below where it last stood)",
+            "blocked (no progress otherwise",
+            "the bot first turns toward it on the ground, up to 0.25 s",
+            "started_at? (when it took over; absent when the latest run never took over: its \
+             character's scene never ran, or start came after the end, a reload's start \
+             included, earlier then holding the runs it played)",
+        ] {
+            assert!(bot.contains(text), "{text}");
+        }
+        assert!(!bot.contains("of the start scene"), "{bot}");
+        // A point waits for a moving platform; logic holding the character is not a wall.
+        for text in [
+            "wait_for? {object, within? (metres, default 1), height? (metres, default the \
+             character's step height), timeout? (seconds, default 30)}",
+            "at most height above or below the point it stands at",
+            "when that point follows an object, as a platform it rides, that object's top \
+             (measured between the two tops, 0 where they meet)",
+            "once P's top is within 1 m of the landing's, whatever P's size",
+            "no fixed waits that depend on when the bot gets there",
+            "held_by? (the reasons, as [\"parada\"]",
+            "held (no progress while logic holds the character's movement with character.block",
+            "ends the path at once instead, with done_at and held_by from that step, as logic \
+             that holds the character once it gets where the path leads",
+            "waiting (a wait_for's object did not come within reach before its timeout)",
+            "absent (the character, a point's object or a wait_for's object left the running \
+             scene, for stuck_after seconds)",
+        ] {
+            assert!(bot.contains(text), "{text}");
+        }
+        // Engine texts stay generic: no race words.
+        assert!(!bot.contains("finish") && !bot.contains("chegada"), "{bot}");
+        let point = &simulate["bot"]["properties"]["path"]["items"]["anyOf"][1]["properties"];
+        assert_eq!(point["wait_for"]["required"], json!(["object"]));
+        assert_eq!(
+            (
+                oxy_core::bot::WAIT_WITHIN,
+                oxy_core::bot::WAIT_TIMEOUT,
+                oxy_core::character::CharacterConfig::default().step_height
+            ),
+            (1., 30., 0.25)
+        );
+        // Going on after a condition, and clicks where a person would click.
+        let then = until["properties"]["then_seconds"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(then.contains("stopped_at.ended_at") && then.contains("past seconds too"));
+        assert!(
+            until["description"]
+                .as_str()
+                .unwrap()
+                .contains("ended_at? (with then_seconds)")
+        );
+        assert!(
+            shot["until"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("then_seconds")
+        );
+        assert!(INPUTS.contains("{type: click, at, point: [x, y]}"));
+        assert!(INPUTS.contains("topmost visible button there takes"));
+        assert!(PLAY_INPUTS.contains("clicks by point are refused"));
+        assert!(
+            simulate["ui"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("covered_by? (the name of the topmost visible element drawn above")
+        );
+        // The numbers it states are the bot's own.
+        assert_eq!(
+            (
+                oxy_core::bot::FALL_AFTER,
+                oxy_core::bot::FALL_DROP,
+                oxy_core::bot::ALIGN_SPEED,
+                oxy_core::bot::ALIGN_SECONDS
+            ),
+            (1., 1., 1., 0.25)
+        );
+        assert_eq!(
+            until["properties"]["bot"]["enum"],
+            json!(["done", "stuck", "any"])
+        );
+        assert!(SIMULATE_DESCRIPTION.contains("bot (a character that walks a path of points"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("until, bot, seed and save as in oxy_simulate"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("bot with a bot"));
+        let status = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_status")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(status.contains("game_paused?") && status.contains("paused? (the test"));
+        // Whether a person could click the interface: a cursor logic shows, the pause, a camera.
+        assert!(status.contains("cursor_free? (the game leaves the cursor free"));
+        let simulate = schema("oxy_simulate");
+        let listed = simulate["ui"]["description"].as_str().unwrap();
+        assert!(listed.contains("and cursor_free"), "{listed}");
+        assert!(SIMULATE_DESCRIPTION.contains("cursor_free: whether a person's cursor"));
+        assert!(SCREENSHOT_DESCRIPTION.contains("with cursor_free"));
+        assert!(INPUTS.contains("while game.cursor shows the cursor it turns nothing"));
     }
 
     #[test]
@@ -1299,6 +2404,16 @@ mod tests {
             output.text.contains("\"negative_zero\":0.0"),
             "{}",
             output.text
+        );
+        // Keys that are all whole numbers, as created's, go in numeric order; others as before.
+        let output = Output::json(json!({
+            "created": {"10": [1], "2": [], "0": {"b": 1, "a": 0.30000001192092896}},
+            "b": "x\"y",
+            "a": [{"11": 1, "9": 2}, {"9": 1, "x": 2}],
+        }));
+        assert_eq!(
+            output.text,
+            r#"{"a":[{"9":2,"11":1},{"9":1,"x":2}],"b":"x\"y","created":{"0":{"a":0.3,"b":1},"2":[],"10":[1]}}"#
         );
     }
 
@@ -1342,10 +2457,249 @@ mod tests {
         for option in ["category", "operations", "brief", "offset", "limit"] {
             assert!(catalog[option]["description"].is_string(), "{option}");
         }
-        assert!(ENTITY_DESCRIPTION.contains("event.input(reiniciar).exec"));
+        assert!(ENTITY_DESCRIPTION.contains("event.input(Reiniciar).exec"));
         assert!(TREE_FIELDS.contains("world_position") && TREE_FIELDS.contains("pivot"));
         assert!(CATALOG_DESCRIPTION.contains("brief"));
+        assert!(
+            CATALOG_DESCRIPTION.contains("fresh read node")
+                && CATALOG_DESCRIPTION.contains("once per execution")
+                && CATALOG_DESCRIPTION.contains("degrees")
+        );
         assert!(APPLY_DESCRIPTION.contains("graph and geometry full"));
+        // The fields of an interface element: in the catalog, patched with update_entity.
+        assert!(CATALOG_DESCRIPTION.contains("ui_elements: the kinds and the fields"));
+        assert!(APPLY_DESCRIPTION.contains("oxy_catalog ui_elements lists its fields"));
+        assert!(APPLY_DESCRIPTION.contains("text_size null goes back to automatic"));
+    }
+
+    #[test]
+    fn the_catalog_lists_the_math_and_time_nodes_with_their_choices() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let data = catalog(json!({"category": "Dados", "brief": true}));
+        let listed: Vec<&str> = data["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["operation"].as_str().unwrap())
+            .collect();
+        for operation in ["math.binary", "math.unary", "math.clamp", "text.time"] {
+            assert!(listed.contains(&operation), "{operation}: {listed:?}");
+        }
+        let full = catalog(json!({"operations": ["math.", "text.time"]}));
+        let nodes = full["nodes"].as_array().unwrap();
+        let choices = |operation: &str, param: &str| -> Vec<String> {
+            let node = nodes.iter().find(|n| n["operation"] == operation).unwrap();
+            let param = node["params"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == param)
+                .unwrap();
+            param["choices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|choice| choice["value"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            choices("math.binary", "operator"),
+            ["+", "-", "*", "/", "%", "min", "max"]
+        );
+        assert_eq!(
+            choices("math.unary", "operator"),
+            ["floor", "ceil", "round", "trunc", "abs", "sign", "sqrt"]
+        );
+        assert_eq!(
+            choices("text.time", "format"),
+            [
+                "mm:ss.cc",
+                "m:ss.cc",
+                "mm:ss",
+                "ss.cc",
+                "h:mm:ss",
+                "mm:ss.mmm"
+            ]
+        );
+        let clamp = nodes
+            .iter()
+            .find(|n| n["operation"] == "math.clamp")
+            .unwrap();
+        let inputs: Vec<&str> = clamp["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| port["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(inputs, ["value", "min", "max"]);
+        // The random draws are actions, with their modes listed.
+        let random = catalog(json!({"operations": ["random."]}));
+        let random = random["nodes"].as_array().unwrap();
+        let listed: Vec<_> = random
+            .iter()
+            .map(|node| {
+                (
+                    node["operation"].as_str().unwrap(),
+                    node["category"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [("random.number", "Ações"), ("random.seed", "Ações")]
+        );
+        let modes: Vec<_> = random[0]["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "mode")
+            .unwrap()["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["value"].as_str().unwrap())
+            .collect();
+        assert_eq!(modes, ["real", "integer"]);
+    }
+
+    #[test]
+    fn the_catalog_lists_the_current_scene_and_the_scene_input_of_scene_changes() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let brief = catalog(json!({}));
+        assert!(
+            brief["categories"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Jogo"))
+        );
+        let game = catalog(json!({"category": "Jogo"}));
+        let current = game["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["operation"] == "scene.current")
+            .unwrap();
+        let outputs: Vec<(&str, &str)> = current["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| (port["id"].as_str().unwrap(), port["type"].as_str().unwrap()))
+            .collect();
+        assert_eq!(outputs, [("scene", "text"), ("name", "text")]);
+        let change = catalog(json!({"operations": ["action.scene"]}))["nodes"][0].clone();
+        assert_eq!(change["inputs"][1]["id"], "scene");
+        assert_eq!(change["inputs"][1]["type"], "text");
+        assert_eq!(change["params"][0]["ref"], "scene");
+        for text in [
+            "scene.current.scene -> action.scene.scene",
+            "attribute.get.value -> action.scene.scene",
+            "unless their scene input is connected",
+            "delete_scene does not refuse over it and empties it",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_catalog_lists_the_transform_write_with_its_choices() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let category = catalog(json!({"category": "Transformação 3D", "brief": true}));
+        let listed: Vec<&str> = category["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["operation"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "transform.read",
+                "transform.write",
+                "character.yaw",
+                "character.teleport"
+            ]
+        );
+        let write = catalog(json!({"operations": ["transform.write"]}))["nodes"][0].clone();
+        assert_eq!(write["label"], "Mover / girar / escalar objeto");
+        let inputs: Vec<(&str, &str)> = write["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| (port["id"].as_str().unwrap(), port["type"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            inputs,
+            [
+                ("exec", "exec"),
+                ("target", "object"),
+                ("value", "vector3"),
+                ("jump", "bool")
+            ]
+        );
+        let choices = |param: &str| -> Vec<String> {
+            write["params"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == param)
+                .unwrap()["choices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|choice| choice["value"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(choices("channel"), ["position", "rotation", "scale"]);
+        assert_eq!(choices("mode"), ["set", "add"]);
+        assert_eq!(choices("space"), ["world", "local"]);
+        assert!(
+            APPLY_DESCRIPTION.contains("transform.write, which refuses what a playing clip poses")
+        );
+    }
+
+    #[test]
+    fn the_catalog_lists_the_scene_reference_next_to_the_object_reference() {
+        let catalog = |args: Json| -> Json {
+            serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
+                .unwrap()
+        };
+        let data = catalog(json!({"category": "Dados", "brief": true}));
+        let listed: Vec<&str> = data["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["operation"].as_str().unwrap())
+            .collect();
+        let object = listed.iter().position(|op| *op == "value.object").unwrap();
+        assert_eq!(listed.get(object + 1), Some(&"value.scene"), "{listed:?}");
+        let reference = catalog(json!({"operations": ["value.scene"]}))["nodes"][0].clone();
+        assert_eq!(reference["inputs"], json!([]));
+        assert_eq!(
+            reference["outputs"],
+            json!([
+                {"id": "value", "label": "Cena", "type": "text"},
+                {"id": "name", "label": "Nome", "type": "text"},
+            ])
+        );
+        assert_eq!(reference["params"][0]["id"], "scene");
+        assert_eq!(reference["params"][0]["ref"], "scene");
+        for text in [
+            "value.scene.value -> action.scene.scene",
+            "value.scene.value -> attribute.set.value",
+            "action.scene and value.scene nodes keep their scene",
+            "value.scene.name -> variable.set.key",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
     }
 
     #[test]
@@ -1537,10 +2891,14 @@ mod tests {
         let project_commands = [
             json!({"op": "rename_project", "name": "P"}),
             json!({"op": "set_start_scene", "scene": "s"}),
+            json!({"op": "set_game_settings", "title": "Corrida", "window": [1920, 1080],
+                   "fullscreen": true}),
             json!({"op": "create_scene", "name": "S", "kind": "3d"}),
             json!({"op": "rename_scene", "scene": "s", "name": "S"}),
             json!({"op": "duplicate_scene", "scene": "s"}),
             json!({"op": "delete_scene", "scene": "s"}),
+            json!({"op": "rename_asset", "asset": "a", "name": "B", "kind": "Model"}),
+            json!({"op": "delete_asset", "asset": "a"}),
             json!({"op": "create_input_action", "name": "Pausar", "key": "P"}),
             json!({"op": "rename_input_action", "action": "a", "name": "B"}),
             json!({"op": "set_input_key", "action": "a", "key": "K"}),
@@ -1548,6 +2906,9 @@ mod tests {
             json!({"op": "create_surface", "preset": "ice"}),
             json!({"op": "update_surface", "surface": "s", "friction": 0.5}),
             json!({"op": "delete_surface", "surface": "s"}),
+            json!({"op": "create_variable", "name": "Moedas", "value": 0}),
+            json!({"op": "update_variable", "variable": "v", "value": 3, "persistent": true}),
+            json!({"op": "delete_variable", "variable": "v"}),
         ];
         assert_eq!(project_commands.len(), PROJECT_OPS.len());
         for command in project_commands {
@@ -1576,26 +2937,61 @@ mod tests {
                    "scene": "s"}),
             json!({"op": "fit_collider", "entity": "e", "children": true, "margin": 0.1,
                    "scene": "s"}),
+            json!({"op": "set_scene_background", "background": "sky", "scene": "s"}),
+            json!({"op": "set_scene_background", "background": {"color": [0.2, 0.4, 0.6, 1]},
+                   "scene": "s"}),
+            json!({"op": "set_scene_background", "background": "default", "scene": "s"}),
         ] {
             command::parse(&command).unwrap();
         }
         assert!(APPLY_DESCRIPTION.contains("\"$$N\""));
         for text in [
+            "set_scene_background",
+            "Céu da OXY",
             "create_input_action",
             "delete_surface",
+            "create_variable",
+            "delete_variable",
+            "set_game_settings",
+            "Alt+Enter",
             "warnings",
             "\"$N.M\"",
             "input_keys",
+            "agente.bak",
+            "schema-N.….backup.json",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }
         assert!(
             CATALOG_DESCRIPTION.contains("choices") && CATALOG_DESCRIPTION.contains("input_keys")
         );
+        assert!(CATALOG_DESCRIPTION.contains("gives min and max"));
+        assert!(APPLY_DESCRIPTION.contains("one with min and max only numbers within them"));
+        for description in [SIMULATE_DESCRIPTION, CONSOLE_DESCRIPTION] {
+            assert!(description.contains("falhou: <reason>"), "{description}");
+            assert!(description.contains("value input"), "{description}");
+        }
         // Names are kept apart only by create and rename, so the description says so.
         assert!(APPLY_DESCRIPTION.contains("name two actions share comes back in warnings"));
         assert!(!APPLY_DESCRIPTION.contains("names are unique"));
         assert!(INPUTS.contains("by ID or name"));
+        // Warnings cover a node that stops with an error, not only what the game ignores.
+        let validate = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_validate")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for description in [validate.as_str(), APPLY_DESCRIPTION] {
+            assert!(
+                description.contains("stop on") && description.contains("action.component"),
+                "{description}"
+            );
+        }
+        assert!(validate.contains("outside their range"), "{validate}");
     }
 
     #[test]
@@ -1696,6 +3092,435 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&json!("Space"))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ranges_show_in_the_catalog_and_failures_and_values_reach_the_logs() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-ranges-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Faixas", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let catalog = call("oxy_catalog", json!({"operations": ["character.teleport"]})).unwrap();
+        let search = catalog["nodes"][0]["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "search")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (search["min"].clone(), search["max"].clone()),
+            (json!(0.), json!(2.))
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Zona"},
+                {"op": "add_node", "entity": "$0", "operation": "character.teleport",
+                 "params": {"search": 3}},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Teleportar com segurança aceita números de 0 a 2; recebeu 3"),
+            "{error}"
+        );
+        // A ray with no direction fails in the game; nothing reads Consulta válida or Motivo.
+        call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Sonda"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "query.ray",
+                 "params": {"direction": {"Vector3": [0.0, 0.0, 0.0]}},
+                 "links": [["$1", "exec", "exec"]]},
+                {"op": "add_node", "entity": "$0", "operation": "value.number",
+                 "params": {"value": 3}},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Valor"},
+                 "links": [["$2", "exec", "exec"], ["$3", "value", "value"]]},
+            ]}),
+        )
+        .unwrap();
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        let logs: Vec<&str> = report["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            logs,
+            [
+                "Sonda · Consultar raio falhou: Direção da consulta não pode ser zero.",
+                "Valor: 3"
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn logic_is_wired_with_links_in_add_node_and_connect() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-links-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ligações", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Painel"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Oi"}, "links": [["$1", "exec", "exec"]]},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Tchau"}},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Fim"}},
+                {"op": "connect", "entity": "$0", "links": [
+                    ["$2", "exec", "$3", "exec"], ["$3", "exec", "$4", "exec"]]},
+            ]}),
+        )
+        .unwrap();
+        let painel = applied["created"]["0"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(applied["created"].get("5").is_none(), "{applied}");
+        let brief = call("oxy_entity", json!({"id": painel})).unwrap();
+        let mut edges: Vec<&str> = brief["graph"]["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e.as_str().unwrap())
+            .collect();
+        edges.sort();
+        assert_eq!(
+            edges,
+            [
+                "debug.message(Oi).exec -> debug.message(Tchau).exec",
+                "debug.message(Tchau).exec -> debug.message(Fim).exec",
+                "event.scene_start.exec -> debug.message(Oi).exec",
+            ]
+        );
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        let logs: Vec<&str> = report["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(logs, ["Oi", "Tchau", "Fim"]);
+        // A refused link leaves the file as it was, saying which link and why.
+        let saved = std::fs::read(&file).unwrap();
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "connect", "entity": painel, "links": [
+                ["$9", "exec", "x", "exec"]]}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("\"$9\" não se refere a um ID criado antes"),
+            "{error}"
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "add_node", "entity": painel, "operation": "debug.message",
+                 "links": [["nenhum", "exec", "exec"]]}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(
+                "Comando 0 (add_node, o 1º do lote): Ligação 0 de links (a 1ª): Painel não tem \
+                 o nó nenhum na lógica"
+            ),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), saved);
+        for text in [
+            "links?: [[from_node, from_port, to_port], …]",
+            "{entity, links: [[from_node, from_port, to_node, to_port], …]}, many links in one \
+             command",
+            "named \"Ligação N de links (a Kª)\"",
+            "pause_at_ends?: seconds standing still at each end",
+            "spin?: [x,y,z] degrees turned per period",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_take_game_variables_and_simulations_report_them() {
+        let dir = std::env::temp_dir().join(format!(
+            "oxy-mcp-variables-{}",
+            oxy_core::document::new_id()
+        ));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Variáveis", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // A counter that adds 1 to Moedas every step; with the tool's scene, which variable
+        // commands must not receive.
+        let applied = call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "create_variable", "name": "Moedas", "value": 0},
+                {"op": "create_variable", "name": "Recorde", "value": {"Number": 0},
+                 "persistent": true},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Contador"},
+                {"op": "add_node", "entity": "$2", "operation": "event.step"},
+                {"op": "add_node", "entity": "$2", "operation": "variable.get",
+                 "params": {"variable": "moedas"}},
+                {"op": "add_node", "entity": "$2", "operation": "math.binary", "params": {"b": 1}},
+                {"op": "add_node", "entity": "$2", "operation": "variable.set",
+                 "params": {"variable": "Moedas"}},
+                {"op": "connect", "entity": "$2", "from_node": "$3", "from_port": "exec",
+                 "to_node": "$6", "to_port": "exec"},
+                {"op": "connect", "entity": "$2", "from_node": "$4", "from_port": "value",
+                 "to_node": "$5", "to_port": "a"},
+                {"op": "connect", "entity": "$2", "from_node": "$5", "from_port": "value",
+                 "to_node": "$6", "to_port": "value"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(applied["created"]["0"][0]["name"], "Moedas");
+        assert!(applied.get("warnings").is_none(), "{applied}");
+        let coins = applied["created"]["0"][0]["id"].clone();
+        let counter = applied["created"]["2"][0]["id"].clone();
+
+        let summary = call("oxy_project", json!({})).unwrap();
+        assert_eq!(
+            summary["variables"][0],
+            json!({"id": coins, "name": "Moedas", "type": "Number", "value": {"Number": 0.0},
+            "persistent": false, "used_by": [
+                {"entity": counter, "name": "Contador", "role": "variable.get"},
+                {"entity": counter, "name": "Contador", "role": "variable.set"},
+            ]})
+        );
+        assert_eq!(summary["variables"][1]["persistent"], true);
+        let nodes = call(
+            "oxy_entity",
+            json!({"id": counter, "graph": "full", "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            nodes["graph"]["nodes"][1]["params"]["variable"]["Text"],
+            coins
+        );
+        // The summarized graph names the variable, not its ID.
+        let brief = call("oxy_entity", json!({"id": counter})).unwrap();
+        assert!(
+            brief["graph"]["nodes"]
+                .as_object()
+                .unwrap()
+                .contains_key("variable.get(Moedas)"),
+            "{brief}"
+        );
+        assert_eq!(
+            call("oxy_validate", json!({})).unwrap(),
+            json!({"valid": true})
+        );
+        let catalog = Tools::default()
+            .call("oxy_catalog", &json!({"operations": ["variable.get"]}))
+            .unwrap();
+        let catalog: Json = serde_json::from_str(&catalog.text).unwrap();
+        assert_eq!(catalog["nodes"][0]["params"][0]["ref"], "variable");
+
+        // 30 steps reach 30; setup starts the copy's counter at 10.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 2.0, "ui": false,
+                   "until": {"variable": {"variable": "Moedas", "op": ">=", "value": 30}}}),
+        )
+        .unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "variable");
+        assert_eq!(report["stopped_at"]["time"], 0.5);
+        assert_eq!(
+            report["variables"],
+            json!({"Moedas": {"Number": 30.0}, "Recorde": {"Number": 0.0}})
+        );
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "setup": [
+                {"op": "update_variable", "variable": "moedas", "value": 10},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(report["variables"]["Moedas"], json!({"Number": 16.0}));
+        // A returning player's progress, saved again by logic setup adds: only Recorde is kept
+        // between runs, and the report's save chains into the next run.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "save": {"recorde": 7}, "setup": [
+                {"op": "add_node", "entity": counter, "operation": "event.scene_start"},
+                {"op": "add_node", "entity": counter, "operation": "save.write"},
+                {"op": "connect", "entity": counter, "from_node": "$0", "from_port": "exec",
+                 "to_node": "$1", "to_port": "exec"},
+            ]}),
+        )
+        .unwrap();
+        let saves = report["saves"].as_array().unwrap();
+        assert_eq!(saves.len(), 1, "{report}");
+        assert_eq!(saves[0]["time"], 0.0);
+        assert_eq!(saves[0]["kind"], "write");
+        assert_eq!(saves[0]["values"], json!({"Recorde": {"Number": 7.0}}));
+        assert_eq!(report["save"], json!({"Recorde": {"Number": 7.0}}));
+        let chained = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "save": report["save"]}),
+        )
+        .unwrap();
+        assert_eq!(chained["variables"]["Recorde"], json!({"Number": 7.0}));
+        assert!(chained.get("saves").is_none(), "{chained}");
+        let error = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "save": {"Moedas": 1}}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("save: a variável Moedas não é salva entre partidas"),
+            "{error}"
+        );
+        let error = call("oxy_simulate", json!({"seconds": 0.1, "save": [1]})).unwrap_err();
+        assert!(
+            error.starts_with("Progresso salvo (save) inválido"),
+            "{error}"
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "delete_variable", "variable": "Moedas"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Contador → nó Ler variável do jogo"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_simulate_a_pause_menu_that_escape_opens_and_continuar_closes() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-pause-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Pausa", SceneKind::TwoD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // A hidden group that Ao pausar shows, with a Continuar button that resumes.
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Menu de pausa"},
+                {"op": "update_entity", "entity": "$0", "patch": {"visible": false}},
+                {"op": "create_entity", "kind": {"type": "ui", "element": "Button"},
+                 "name": "Continuar", "parent": "$0"},
+                {"op": "add_node", "entity": "$0", "operation": "event.pause",
+                 "params": {"when": "pause"}},
+                {"op": "add_node", "entity": "$0", "operation": "action.component",
+                 "params": {"component": "visible"}},
+                {"op": "connect", "entity": "$0", "from_node": "$3", "from_port": "exec",
+                 "to_node": "$4", "to_port": "exec"},
+                {"op": "add_node", "entity": "$2", "operation": "event.click"},
+                {"op": "add_node", "entity": "$2", "operation": "game.pause",
+                 "params": {"mode": "resume"}},
+                {"op": "connect", "entity": "$2", "from_node": "$6", "from_port": "exec",
+                 "to_node": "$7", "to_port": "exec"},
+            ]}),
+        )
+        .unwrap();
+        assert!(applied.get("warnings").is_none(), "{applied}");
+        let button = applied["created"]["2"][0]["id"].clone();
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 1.0, "inputs": [{"type": "escape", "at": 0.2}],
+                   "until": {"paused": true}}),
+        )
+        .unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "paused", "{report}");
+        assert_eq!(report["paused"], true);
+        // The menu can take clicks: the cursor is free.
+        assert_eq!(report["cursor_free"], true);
+        assert_eq!(report["pauses"], json!([{"time": 0.2167, "paused": true}]));
+        let shown = report["ui"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == "Continuar")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (&shown["visible"], &shown["clickable"]),
+            (&json!(true), &json!(true))
+        );
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 1.0, "ui": false, "inputs": [
+                {"type": "click", "at": 0.1, "entity": button},
+                {"type": "escape", "at": 0.2},
+                {"type": "click", "at": 0.5, "entity": button},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(report["paused"], false);
+        assert_eq!(
+            report["pauses"][1],
+            json!({"time": 0.5167, "paused": false})
+        );
+        // The first click came while the menu was hidden.
+        assert!(
+            report["logs"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Clique ignorado: Continuar está oculto"),
+            "{report}"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1837,6 +3662,267 @@ mod tests {
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Authoring helpers on files: logic laid out, colliders shaped like the piece and copies
+    /// reached by their originals in the batch that made them.
+    #[test]
+    fn files_lay_out_logic_fit_shaped_colliders_and_reach_copies() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-helpers-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ajudas", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Moeda"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Sphere"},
+                 "name": "Corpo", "parent": "$0"},
+                {"op": "add_component", "entity": "$1", "component": "sensor3d"},
+                {"op": "fit_collider", "entity": "$1", "shape": "auto"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "params": {"message": "Moeda"}},
+                {"op": "connect", "entity": "$0", "from_node": "$4", "from_port": "exec",
+                 "to_node": "$5", "to_port": "exec"},
+                {"op": "duplicate_entities", "ids": ["$0"], "offset": [2, 0, 0], "count": 2},
+                {"op": "set_node_params", "entity": "$7.1", "node": "$7.1@$5",
+                 "params": {"message": "Segunda moeda"}},
+            ]}),
+        )
+        .unwrap();
+        let second = applied["created"]["7"][1]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let graph = call(
+            "oxy_entity",
+            json!({"id": second, "graph": "full", "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        let nodes = graph["graph"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes[0]["position"], json!([0.0, 0.0]), "{graph}");
+        assert_eq!(nodes[1]["position"], json!([260.0, 0.0]), "{graph}");
+        assert_eq!(
+            nodes[1]["params"]["message"],
+            json!({"Text": "Segunda moeda"})
+        );
+        let body = applied["created"]["1"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let collider = call("oxy_entity", json!({"id": body, "fields": ["physics3d"]})).unwrap();
+        assert_eq!(
+            collider["physics3d"]["shape"],
+            json!({"Sphere": {"radius": 0.5}}),
+            "{collider}"
+        );
+        assert_eq!(collider["physics3d"]["sensor"], json!(true));
+        let moeda = applied["created"]["0"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "arrange_logic", "entity": moeda}]}),
+        )
+        .unwrap();
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "duplicate_entities", "ids": [moeda]},
+                {"op": "rename_entity", "entity": "$0@fantasma", "name": "X"},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("Comando 1 (rename_entity, o 2º do lote): \"$0@fantasma\"")
+                && error.contains("não está entre o que o comando 0"),
+            "{error}"
+        );
+        for text in [
+            "\"$N@<id>\"",
+            "\"$P@$S@<id>\" when save_model S saved it",
+            "arrange_logic {entity, nodes?, split_shared_data?}",
+            "laid out when the batch ends",
+            "box|sphere|capsule|convex|mesh|auto",
+            "a convex or mesh collider left at an object's old shape",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_read_replace_rename_and_delete_models_and_split_shared_logic() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-models-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Modelos", SceneKind::ThreeD).unwrap();
+        let start = project.start_scene.clone();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Ladrilho 1"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Tampa", "parent": "$0"},
+                {"op": "save_model", "entity": "$0", "name": "Ladrilho que cai"},
+                {"op": "place_model", "model": "Ladrilho que cai", "position": [0, 0, 5]},
+            ]}),
+        )
+        .unwrap();
+        // The placed root keeps the name it was saved with, which the summary shows.
+        assert_eq!(applied["created"]["3"][0]["name"], "Ladrilho 1");
+        let model_entry = |summary: &Json| {
+            summary["assets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["kind"] == "Model")
+                .cloned()
+        };
+        let model = model_entry(&call("oxy_project", json!({})).unwrap()).unwrap();
+        assert_eq!(
+            (&model["root"]["name"], &model["part_count"]),
+            (&json!("Ladrilho 1"), &json!(2))
+        );
+        let parts = call("oxy_project", json!({"model": "ladrilho que cai"})).unwrap();
+        assert_eq!(parts["parts"][1]["name"], "Tampa");
+        assert_eq!(parts["parts"][1]["parent"], parts["root"]["id"]);
+        let error = call("oxy_project", json!({"model": 3})).unwrap_err();
+        assert!(error.starts_with("model inválido"), "{error}");
+        // A part's ID reaches its copy in the batch that places the model.
+        let tampa = parts["parts"][1]["id"].as_str().unwrap().to_owned();
+        let placed = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "place_model", "model": "Ladrilho que cai", "name": "Ladrilho 2"},
+                {"op": "rename_entity", "entity": format!("$0@{tampa}"), "name": "Tampa 2"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(placed["created"]["0"][0]["name"], "Ladrilho 2");
+        assert_eq!(placed["created"]["0"][1]["name"], "Tampa 2");
+
+        // Replaced in place and renamed; deleted once nothing uses it. The tool's scene stays
+        // out of the asset commands.
+        let replaced = call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Ladrilho"},
+                {"op": "save_model", "entity": "$0", "replace": "Ladrilho que cai"},
+                {"op": "rename_asset", "asset": "Ladrilho que cai", "name": "Ladrilho frágil"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(replaced["created"]["1"][0]["id"], model["id"]);
+        let renamed = model_entry(&call("oxy_project", json!({})).unwrap()).unwrap();
+        assert_eq!(
+            (
+                &renamed["name"],
+                &renamed["root"]["name"],
+                &renamed["part_count"]
+            ),
+            (&json!("Ladrilho frágil"), &json!("Ladrilho"), &json!(1))
+        );
+        assert_eq!(renamed["used_by"].as_array().unwrap().len(), 2);
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "delete_asset", "asset": "ladrilho frágil"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Não é possível excluir o modelo Ladrilho frágil")
+                && error.contains("Ladrilho 2: modelo"),
+            "{error}"
+        );
+        let roots = [
+            applied["created"]["3"][0]["id"].clone(),
+            placed["created"]["0"][0]["id"].clone(),
+        ];
+        call(
+            "oxy_apply",
+            json!({"scene": start, "commands": [
+                {"op": "delete_entities", "ids": roots},
+                {"op": "delete_asset", "asset": "Ladrilho frágil", "kind": "Model"},
+            ]}),
+        )
+        .unwrap();
+        assert!(model_entry(&call("oxy_project", json!({})).unwrap()).is_none());
+
+        // Shared data gets a copy per lane, and disconnect takes links like connect.
+        let logic = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Contador"},
+                {"op": "add_node", "entity": "$0", "operation": "attribute.get",
+                 "params": {"attribute": "Etapa"}},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "links": [["$2", "exec", "exec"], ["$1", "value", "value"]]},
+                {"op": "add_node", "entity": "$0", "operation": "event.click"},
+                {"op": "add_node", "entity": "$0", "operation": "debug.message",
+                 "links": [["$4", "exec", "exec"], ["$1", "value", "value"]]},
+                {"op": "arrange_logic", "entity": "$0", "split_shared_data": true},
+                {"op": "disconnect", "entity": "$0", "links": [
+                    ["$2", "exec", "$3", "exec"], ["$4", "exec", "$5", "exec"]]},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(logic["created"]["6"][0]["name"], "attribute.get");
+        let counter = logic["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+        let graph = call(
+            "oxy_entity",
+            json!({"id": counter, "graph": "full", "fields": ["graph"]}),
+        )
+        .unwrap();
+        assert_eq!(graph["graph"]["nodes"].as_array().unwrap().len(), 6);
+        let edges = graph["graph"]["edges"].as_array().unwrap();
+        let sources: HashSet<&str> = edges
+            .iter()
+            .map(|e| e["from_node"].as_str().unwrap())
+            .collect();
+        assert_eq!((edges.len(), sources.len()), (2, 2), "{graph}");
+
+        for text in [
+            "save_model {entity, name?, replace?}",
+            "rename_asset {asset, name, kind?}",
+            "delete_asset {asset, kind?}",
+            "disconnect takes the same two forms",
+            "split_shared_data: true",
+            "names it and suggests split_shared_data",
+            "two of one kind: by ID",
+            "wires arrange_logic left running across the logic",
+            "a part ID from oxy_project {model}",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(schema("oxy_project")["model"].is_object());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2027,9 +4113,21 @@ mod tests {
         assert!(
             free(Aim::Object("fantasma".into()))
                 .unwrap_err()
-                .contains("fantasma")
+                .contains("target: \"fantasma\" não é o ID nem o nome de um objeto da cena")
         );
         assert!(free(Aim::Object("$5".into())).unwrap_err().contains("$5"));
+        // By name, as the other inputs.
+        let ShotView::Free { target, .. } = free(Aim::Object("alvo".into())).unwrap() else {
+            panic!("free view expected");
+        };
+        assert!(target.abs_diff_eq(Vec3::new(4., 1., -6.), 1e-4), "{target}");
+        let ShotView::Top(named) = Shot::Top(vec!["Alvo".into()])
+            .resolve(&runtime, &applied)
+            .unwrap()
+        else {
+            panic!("top view expected");
+        };
+        assert!(((named.min + named.max) * 0.5).abs_diff_eq(Vec3::new(4., 1., -6.), 1e-4));
         let ShotView::Top(bounds) = Shot::Top(vec!["$0".into()])
             .resolve(&runtime, &applied)
             .unwrap()
@@ -2060,6 +4158,8 @@ mod tests {
             text: "Tempo: {value}".into(),
             anchor: UiAnchor::BottomRight,
             binding_attribute: "tempo".into(),
+            text_align: oxy_core::document::UiTextAlign::Right,
+            text_size: Some(24.),
             ..Default::default()
         });
         project.scenes[0].entities.push(timer);
@@ -2074,11 +4174,29 @@ mod tests {
                 .call("oxy_simulate", &args)
                 .map(|output| serde_json::from_str(&output.text).unwrap())
         };
+        // By default, the window the exported game opens: the player's 1280 × 720.
         let default = report(json!({})).unwrap();
+        assert_eq!(default["view_size"], json!([1280, 720]));
         assert_eq!(default["ui"][0]["text"], "Tempo: 3");
-        assert_eq!(default["ui"][0]["rect"], json!([756.0, 480.0, 180.0, 36.0]));
+        assert_eq!(
+            default["ui"][0]["rect"],
+            json!([1076.0, 660.0, 180.0, 36.0])
+        );
+        assert_eq!(default["ui"][0]["text_size"], 24.0);
+        assert_eq!(default["ui"][0]["text_align"], "Right");
         let small = report(json!({"width": 640, "height": 360})).unwrap();
+        assert_eq!(small["view_size"], json!([640, 360]));
         assert_eq!(small["ui"][0]["rect"], json!([436.0, 300.0, 180.0, 36.0]));
+        // A side left out is the window's; the window set_game_settings gives counts, setup's
+        // too.
+        let narrow = report(json!({"width": 640})).unwrap();
+        assert_eq!(narrow["view_size"], json!([640, 720]));
+        let setup = json!([{"op": "set_game_settings", "window": [800, 600]}]);
+        let set = report(json!({"setup": setup})).unwrap();
+        assert_eq!(set["view_size"], json!([800, 600]));
+        assert_eq!(set["ui"][0]["rect"], json!([596.0, 540.0, 180.0, 36.0]));
+        let tall = report(json!({"height": 900, "setup": setup})).unwrap();
+        assert_eq!(tall["view_size"], json!([800, 900]));
         assert!(report(json!({"ui": false})).unwrap().get("ui").is_none());
         let error = report(json!({"width": 5})).unwrap_err();
         assert!(error.contains("16 e 4096"), "{error}");
@@ -2093,8 +4211,355 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// The whole capture on files, with a real GPU: the game view lists the interface, the
-    /// free and top views report their camera, and the collider view changes the image.
+    #[test]
+    fn simulate_draws_from_the_seed_asked_and_echoes_it() {
+        use oxy_core::graph::{Edge, Node};
+        let mut project = editing::blank_project("Sorteio", SceneKind::TwoD).unwrap();
+        let mut dice = Entity::new("Dado", None);
+        dice.attributes.insert("valor".into(), Value::Number(0.));
+        let start = Node::new("event.scene_start", [0.; 2]);
+        let mut draw = Node::new("random.number", [0.; 2]);
+        draw.params.insert("max".into(), Value::Number(1e6));
+        draw.params
+            .insert("mode".into(), Value::Text("integer".into()));
+        let mut write = Node::new("attribute.set", [0.; 2]);
+        write
+            .params
+            .insert("attribute".into(), Value::Text("valor".into()));
+        let edge = |from: &Node, port: &str, to: &Node, input: &str| Edge {
+            from_node: from.id.clone(),
+            from_port: port.into(),
+            to_node: to.id.clone(),
+            to_port: input.into(),
+        };
+        dice.graph.edges = vec![
+            edge(&start, "exec", &draw, "exec"),
+            edge(&draw, "exec", &write, "exec"),
+            edge(&draw, "value", &write, "value"),
+        ];
+        dice.graph.nodes = vec![start, draw, write];
+        let id = dice.id.clone();
+        project.scenes[0].entities.push(dice);
+        // The arguments as the tool reads them, run on the project as it would be.
+        let simulate = |extra: Json| -> Result<Json, String> {
+            let mut args = json!({"ui": false, "watch": [{"id": id, "fields": ["attributes"]}]});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let request = Tools::simulation_request(&args, 0.1)?;
+            let report = headless::simulate(&project, &request)?;
+            Ok(serde_json::to_value(report).unwrap())
+        };
+        let drawn = |report: &Json| report["watched"][0]["samples"][0]["attributes"].clone();
+        let default = simulate(json!({})).unwrap();
+        assert_eq!(default["seed"], 0);
+        assert_eq!(simulate(json!({"seed": null})).unwrap(), default);
+        let seeded = simulate(json!({"seed": 7})).unwrap();
+        assert_eq!(seeded["seed"], 7);
+        assert_eq!(seeded, simulate(json!({"seed": 7})).unwrap());
+        assert_ne!(drawn(&seeded), drawn(&default));
+        // The state at the end: the same for the same seed, another for another draw.
+        let hash = |report: &Json| report["state_hash"].as_str().unwrap().to_owned();
+        assert!(
+            hash(&default).len() == 16 && hash(&default).chars().all(|c| c.is_ascii_hexdigit())
+        );
+        assert_ne!(hash(&seeded), hash(&default));
+        assert!(default.get("replay").is_none());
+        let checked = simulate(json!({"seed": 7, "check_replay": true})).unwrap();
+        assert_eq!(
+            checked["replay"],
+            json!({"identical": true, "steps": 6}),
+            "{checked}"
+        );
+        assert_eq!(hash(&checked), hash(&seeded));
+        let largest = simulate(json!({"seed": random::MAX_SEED})).unwrap();
+        assert_eq!(largest["seed"], json!(9007199254740991_u64));
+        for (bad, refusal) in [
+            (json!(-1), "Semente (seed) inválida"),
+            (json!(1.5), "Semente (seed) inválida"),
+            (json!("7"), "Semente (seed) inválida"),
+            (json!(9007199254740992_u64), "0 a 9007199254740991"),
+        ] {
+            let error = simulate(json!({"seed": bad})).unwrap_err();
+            assert!(error.contains(refusal), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn simulate_reads_when_to_sample_and_names_who_quit() {
+        let request = Tools::simulation_request(
+            &json!({"samples": 4, "sample_every": 0.25, "samples_at": [0, 1.5]}),
+            2.,
+        )
+        .unwrap();
+        assert_eq!(
+            (request.samples, request.sample_every, request.samples_at),
+            (4, Some(0.25), vec![0., 1.5])
+        );
+        let plain =
+            Tools::simulation_request(&json!({"sample_every": null, "samples_at": null}), 2.)
+                .unwrap();
+        assert!(plain.sample_every.is_none() && plain.samples_at.is_empty());
+        for (args, refusal) in [
+            (json!({"sample_every": "meio"}), "sample_every inválido"),
+            (json!({"samples_at": 1.5}), "samples_at inválido"),
+            (json!({"samples_at": ["1"]}), "samples_at inválido"),
+        ] {
+            let error = Tools::simulation_request(&args, 2.).unwrap_err();
+            assert!(error.contains(refusal), "{args}: {error}");
+        }
+
+        // On files: a door that asks to quit half a second in, sampled every tenth of a second.
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-quit-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Saída", SceneKind::TwoD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let applied = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": "$0", "operation": "control.wait",
+                 "params": {"seconds": 0.5}},
+                {"op": "add_node", "entity": "$0", "operation": "game.quit"},
+                {"op": "connect", "entity": "$0", "from_node": "$1", "from_port": "exec",
+                 "to_node": "$2", "to_port": "exec"},
+                {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+                 "to_node": "$3", "to_port": "exec"},
+            ]}),
+        )
+        .unwrap();
+        let door = applied["created"]["0"][0]["id"].clone();
+        let report = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_simulate",
+            json!({"seconds": 2, "watch": [door], "sample_every": 0.1}),
+        )
+        .unwrap();
+        let stopped = &report["stopped_at"];
+        assert_eq!(
+            (&stopped["reason"], &stopped["object"], &stopped["detail"]),
+            (
+                &json!("quit"),
+                &json!({"id": door, "name": "Porta"}),
+                &json!("Porta pediu para sair do jogo (nó Sair do jogo)")
+            ),
+            "{report}"
+        );
+        let end = stopped["time"].as_f64().unwrap();
+        let times: Vec<_> = report["watched"][0]["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["time"].as_f64().unwrap())
+            .collect();
+        assert_eq!(times[..4], [0.1, 0.2, 0.3, 0.4], "{times:?}");
+        assert_eq!(*times.last().unwrap(), end, "{times:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `tool` on the project files in `project`, with `extra` arguments.
+    fn on_files(tools: &mut Tools, project: &str, tool: &str, extra: Json) -> Result<Json, String> {
+        let mut args = json!({"project": project});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        tools
+            .call(tool, &args)
+            .map(|output| serde_json::from_str(&output.text).unwrap())
+    }
+
+    #[test]
+    fn files_import_several_files_at_once_and_keep_the_session_start_as_the_backup() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-batch-{}", new_id()));
+        let sources = dir.join("origem");
+        std::fs::create_dir_all(&sources).unwrap();
+        let file = dir.join("jogo").join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Lote", SceneKind::ThreeD).unwrap();
+        let sign = Entity::new("Placa", Some(Primitive::Cube));
+        let sign_id = sign.id.clone();
+        project.scenes[0].entities.push(sign);
+        persistence::save_project(&file, &project).unwrap();
+        let original = std::fs::read(&file).unwrap();
+        let music = sources.join("musica.wav");
+        std::fs::write(&music, wav(16_000, 16_000)).unwrap();
+        let jump = sources.join("pulo.wav");
+        std::fs::write(&jump, wav(1_600, 16_000)).unwrap();
+        let image = sources.join("placa.png");
+        std::fs::write(
+            &image,
+            oxy_core::painting::PaintImage::new(8, 8, [10, 200, 10, 255])
+                .unwrap()
+                .to_png()
+                .unwrap(),
+        )
+        .unwrap();
+        let broken = sources.join("quebrado.wav");
+        std::fs::write(&broken, "não é som").unwrap();
+        let [music, jump, image, broken] =
+            [&music, &jump, &image, &broken].map(|path| path.display().to_string());
+        let root = file.parent().unwrap().to_owned();
+        let project_arg = root.display().to_string();
+        let assets = || std::fs::read_dir(root.join("assets")).unwrap().count();
+        let mut tools = Tools::default();
+
+        let imported = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_import",
+            json!({"paths": [{"path": music, "name": "Música"}, jump,
+                             {"path": image, "apply_to": sign_id}]}),
+        )
+        .unwrap();
+        let list = imported["imported"].as_array().unwrap();
+        let names: Vec<_> = list.iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Música", "pulo", "placa"]);
+        assert_eq!(
+            (&list[0]["kind"], &list[0]["seconds"]),
+            (&json!("audio"), &json!(1.0))
+        );
+        assert_eq!(list[2]["applied_to"], json!(sign_id));
+        assert_eq!(assets(), 3);
+        let saved = persistence::load_project(&file).unwrap();
+        assert_eq!(saved.assets.len(), 3);
+        assert_eq!(
+            saved.scenes[0].entity(&sign_id).unwrap().material.texture,
+            list[2]["asset"].as_str().map(str::to_owned)
+        );
+        let backup = PathBuf::from(imported["previous_version"].as_str().unwrap());
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+
+        // Later writes of the same session keep the backup at the state the session started
+        // from: it is what the session can go back to.
+        on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Lote 2"}]}),
+        )
+        .unwrap();
+        on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_import",
+            json!({"path": jump}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+
+        // A file that fails imports none of the batch, and the error names it.
+        let before = std::fs::read(&file).unwrap();
+        let count = assets();
+        let error = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_import",
+            json!({"paths": [jump, broken]}),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("paths[1] (o 2º arquivo): "), "{error}");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        assert_eq!(assets(), count);
+
+        // Another session keeps the state it starts from, and a backup someone deleted is
+        // taken again before the next write.
+        let mut next = Tools::default();
+        let start = std::fs::read(&file).unwrap();
+        on_files(
+            &mut next,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Lote 3"}]}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), start);
+        std::fs::remove_file(&backup).unwrap();
+        let current = std::fs::read(&file).unwrap();
+        on_files(
+            &mut next,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Lote 4"}]}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), current);
+
+        // The descriptions say so.
+        let import = schema("oxy_import");
+        assert_eq!(import["paths"]["maxItems"], 32);
+        assert!(
+            import["paths"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("{path, name?, kind?, apply_to?}")
+        );
+        for text in [
+            "Give exactly one of path, data_base64 and paths",
+            "all of them or none",
+            "paths[N]",
+            "{imported: [one such entry per file",
+            "'Agente: Importar N recursos'",
+            "saved once",
+        ] {
+            assert!(IMPORT_DESCRIPTION.contains(text), "{text}");
+        }
+        for description in [IMPORT_DESCRIPTION, APPLY_DESCRIPTION] {
+            assert!(
+                description.contains("before this server session first changed it"),
+                "{description}"
+            );
+        }
+        assert!(APPLY_DESCRIPTION.contains("taken once per session, not on every call"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn simulate_reads_a_bot_and_refuses_a_malformed_one() {
+        let args = json!({"bot": {"entity": "$0", "stuck_after": 2,
+            "path": [[0, 0, -2], {"object": "$0.1", "at": [0, 0.5, 0], "jump": true}]}});
+        let bot = Tools::simulation_request(&args, 1.).unwrap().bot.unwrap();
+        assert_eq!(
+            (
+                bot.entity.as_str(),
+                bot.path.len(),
+                bot.stuck_after,
+                bot.radius
+            ),
+            ("$0", 2, 2., 0.6)
+        );
+        assert_eq!(bot.path[0].at, Some([0., 0., -2.]));
+        assert!(bot.path[1].jump && bot.path[1].object.as_deref() == Some("$0.1"));
+        assert!(
+            Tools::simulation_request(&json!({"bot": null}), 1.)
+                .unwrap()
+                .bot
+                .is_none()
+        );
+        for bad in [
+            json!({"path": [[0, 0, 0]]}),
+            json!({"entity": "x", "path": [[0, 0]]}),
+            json!({"entity": "x", "path": [[0, 0, 0]], "velocidade": 1}),
+        ] {
+            let error = Tools::simulation_request(&json!({"bot": bad}), 1.).unwrap_err();
+            assert!(error.starts_with("Bot inválido"), "{error}");
+        }
+        // The scene it would play in is checked by the run: a 2D one is refused by name.
+        let project = editing::blank_project("Plano", SceneKind::TwoD).unwrap();
+        let args = json!({"bot": {"entity": "$0", "path": [[0, 0, 0]]},
+            "setup": [{"op": "create_entity", "kind": {"type": "group"}, "name": "Herói"}]});
+        let request = Tools::simulation_request(&args, 1.).unwrap();
+        let error = headless::simulate(&project, &request).unwrap_err();
+        assert!(error.contains("bot: a cena Cena 2D é 2D"), "{error}");
+    }
+
+    /// The whole capture on files, with a real GPU: the game view draws and lists the
+    /// interface, the free and top views report their camera and draw no interface, and the
+    /// collider view changes the image.
     #[test]
     #[ignore = "Requires a native WGPU adapter; run explicitly for graphics validation"]
     fn native_screenshot_views_on_files() {
@@ -2125,6 +4590,7 @@ mod tests {
             text: "Pontos".into(),
             ..Default::default()
         });
+        let label_id = label.id.clone();
         project.scenes[0]
             .entities
             .extend([floor, checkpoint, label]);
@@ -2140,23 +4606,66 @@ mod tests {
             let text: Json = serde_json::from_str(&output.text).unwrap();
             (text, output.image.unwrap())
         };
-        let (game, _) = shot(json!({}));
+        let hide_label =
+            json!([{"op": "update_entity", "entity": label_id, "patch": {"visible": false}}]);
+        let (game, drawn) = shot(json!({}));
         assert_eq!(game["view"], "game");
         assert_eq!(game["ui"][0]["text"], "Pontos");
         assert_eq!(game["colliders"], false);
-        let (quiet, _) = shot(json!({"ui": false}));
+        let (quiet, listless) = shot(json!({"ui": false}));
         assert!(quiet.get("ui").is_none(), "ui: false leaves the list out");
+        assert_eq!(listless, drawn, "ui: false still draws the interface");
+        let (_, hidden) = shot(json!({"setup": hide_label}));
+        // The label changes the pixels inside the rect the list gives it, and only those.
+        let decode = |image: &str| {
+            let png = encoding::decode_base64(image).unwrap();
+            oxy_core::painting::PaintImage::from_png(&png).unwrap()
+        };
+        let (with_label, without_label) = (decode(&drawn), decode(&hidden));
+        assert_eq!([with_label.width, with_label.height], [320, 240]);
+        let rect: [f64; 4] = serde_json::from_value(game["ui"][0]["rect"].clone()).unwrap();
+        let (mut inside, mut outside) = (0, 0);
+        let pairs = with_label
+            .pixels
+            .chunks(4)
+            .zip(without_label.pixels.chunks(4));
+        for (index, _) in pairs.enumerate().filter(|(_, (a, b))| a != b) {
+            let (x, y) = ((index % 320) as f64 + 0.5, (index / 320) as f64 + 0.5);
+            if x > rect[0] && x < rect[0] + rect[2] && y > rect[1] && y < rect[1] + rect[3] {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+        assert!(inside > 40, "{inside} pixels drawn inside {rect:?}");
+        assert_eq!(outside, 0, "nothing drawn outside {rect:?}");
         let (top, plain) = shot(json!({"view": "top"}));
         assert_eq!(top["camera"]["projection"], "orthographic");
         assert!(
             top.get("ui").is_none(),
             "only the game view lists the interface"
         );
+        for view in ["top", "side"] {
+            let (_, shown) = shot(json!({"view": view}));
+            let (_, unlabelled) = shot(json!({"view": view, "setup": hide_label}));
+            assert_eq!(shown, unlabelled, "{view}: no interface drawn");
+        }
         let (_, with) = shot(json!({"view": "top", "colliders": true}));
         assert_ne!(
             plain, with,
             "the collider view draws the invisible checkpoint"
         );
+        let output = oxy_core::qa::output_dir("v0.6/captures");
+        std::fs::create_dir_all(&output).unwrap();
+        for (name, image) in [
+            ("files-game.png", &drawn),
+            ("files-game-hidden-label.png", &hidden),
+            ("files-top-colliders.png", &with),
+        ] {
+            let png = encoding::decode_base64(image).unwrap();
+            std::fs::write(output.join(name), png).unwrap();
+        }
+        println!("Capture evidence: {}", output.display());
         let (free, _) = shot(json!({"view": "free", "eye": [10, 8, 10],
                                     "target": [0, 0, 0], "fov": 45}));
         assert_eq!(free["camera"]["projection"], "perspective");
@@ -2203,7 +4712,9 @@ mod tests {
             "16 MB",
             "Agente: Importar",
             "agente.bak",
+            "schema-N.….backup.json",
             "action.sound",
+            "action.sound_loop",
         ] {
             assert!(IMPORT_DESCRIPTION.contains(text), "{text}");
         }
@@ -2233,7 +4744,7 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(
-            status.contains("play") && status.contains("running"),
+            status.contains("play") && status.contains("running") && status.contains("seed"),
             "{status}"
         );
         let project = definitions()
@@ -2246,6 +4757,119 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(project.contains("path (images and sounds") && project.contains("material, ui"));
+        assert!(
+            project.contains("game {title") && project.contains("set_game_settings"),
+            "{project}"
+        );
+    }
+
+    #[test]
+    fn play_and_save_are_live_only_and_check_their_arguments_first() {
+        let play = schema("oxy_play");
+        assert_eq!(
+            play["action"]["enum"],
+            json!(["start", "stop", "pause", "resume", "input"])
+        );
+        let tool = |name: &str| {
+            definitions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == name)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(
+            tool("oxy_play")["inputSchema"]["required"],
+            json!(["action"])
+        );
+        let inputs = play["inputs"]["description"].as_str().unwrap();
+        assert!(inputs.contains("game time from now") && inputs.contains("queued_until"));
+        assert!(inputs.contains("drops the inputs still waiting"));
+        assert!(inputs.contains("one bad input queues none"));
+        assert!(
+            play["scene"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("as Jogar")
+        );
+        for text in [
+            "without taking their mouse",
+            "Assumir",
+            "as Retomar does on a paused test",
+            "stop, resume and input work only on a test you play",
+            "never on the person's",
+        ] {
+            assert!(PLAY_DESCRIPTION.contains(text), "{text}");
+        }
+        for text in [
+            "Permitir que agentes salvem",
+            "agente.bak",
+            "can_save",
+            "example copy",
+        ] {
+            assert!(SAVE_DESCRIPTION.contains(text), "{text}");
+        }
+        let status = tool("oxy_status")["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for text in [
+            "driven_by?",
+            "mouse_captured?",
+            "advancing?",
+            "queued_until?",
+            "can_save",
+            "Assumir, or Retomar on a paused test",
+        ] {
+            assert!(status.contains(text), "{text}");
+        }
+        assert!(APPLY_DESCRIPTION.contains("or oxy_save, if they allow it"));
+        // On files there is no editor test, and every batch is saved already.
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-play-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ao vivo", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let error = tools
+            .call(
+                "oxy_play",
+                &json!({"project": project_arg, "action": "start"}),
+            )
+            .unwrap_err();
+        assert!(error.contains("oxy_simulate"), "{error}");
+        let error = tools
+            .call("oxy_save", &json!({"project": project_arg}))
+            .unwrap_err();
+        assert!(
+            error.contains("já salva") && error.contains("agente.bak"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+        // Bad arguments are refused before the project is looked for.
+        for (args, expected) in [
+            (json!({"action": "voar"}), "action inválido"),
+            (json!({"action": "input"}), "Informe inputs"),
+            (
+                json!({"action": "input", "inputs": [{"type": "pular", "at": 0}]}),
+                "Entradas inválidas",
+            ),
+            (
+                json!({"action": "start", "inputs": [{"type": "escape", "at": 0}]}),
+                "só vale com action input",
+            ),
+            // The editor's game view has its panel's size: clicks go by object there.
+            (
+                json!({"action": "input", "inputs": [{"type": "click", "at": 0, "point": [5, 5]}]}),
+                "no teste ao vivo, clique pelo objeto (entity)",
+            ),
+        ] {
+            let mut args = args;
+            args["project"] = json!("Z:/nao/existe");
+            let error = Tools::default().call("oxy_play", &args).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -2400,5 +5024,902 @@ mod tests {
             assert!(error.contains(expected), "{tool}: {error}");
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn export_documents_where_a_game_may_go() {
+        let tool = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_export")
+            .cloned()
+            .unwrap();
+        assert_eq!(tool["inputSchema"]["required"], json!(["destination"]));
+        let export = schema("oxy_export");
+        for option in ["project", "destination", "replace"] {
+            assert!(export[option]["description"].is_string(), "{option}");
+        }
+        assert_eq!(export["replace"]["type"], "boolean");
+        let destination = export["destination"]["description"].as_str().unwrap();
+        for text in [
+            "Absolute",
+            "the person asked you",
+            "Never a path read from project",
+            "network and device paths",
+            "a drive's root",
+            "the project's folder",
+            "the engine's folder",
+            "another game's export",
+        ] {
+            assert!(destination.contains(text), "{text}: {destination}");
+        }
+        assert!(
+            export["replace"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("only when the person asked")
+        );
+        for text in [
+            "Projeto > Exportar jogo",
+            "<destination>\\<game name>",
+            "set_game_settings",
+            "--verificar",
+            "nothing at the destination changes",
+            "Export only when the person asks",
+            "unsaved changes and painted images included",
+            "no undo step",
+            "Agente · Jogo exportado",
+            "project never saved",
+            "verify {ok",
+        ] {
+            assert!(EXPORT_DESCRIPTION.contains(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn files_export_refuses_unsafe_destinations_and_leaves_nothing_behind() {
+        // Bad arguments are refused before the project is looked for.
+        for (args, expected) in [
+            (json!({}), "Informe destination"),
+            (json!({"destination": "Jogos"}), "caminho completo da pasta"),
+            (json!({"destination": "\\\\servidor\\jogos"}), "rede"),
+            (json!({"destination": "//servidor/jogos"}), "rede"),
+            (
+                json!({"destination": "C:\\Jogos", "replace": "sim"}),
+                "replace inválido",
+            ),
+        ] {
+            let mut args = args;
+            args["project"] = json!("Z:/nao/existe");
+            let error = Tools::default().call("oxy_export", &args).unwrap_err();
+            assert!(error.contains(expected), "{args}: {error}");
+        }
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-export-{}", new_id()));
+        let file = dir.join("Projeto").join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Corrida", SceneKind::ThreeD).unwrap();
+        project.game.title = "Corrida: Noturna".into();
+        persistence::save_project(&file, &project).unwrap();
+        let saved = std::fs::read(&file).unwrap();
+        let engine = dir.join("OXY Engine");
+        std::fs::create_dir_all(&engine).unwrap();
+        // Not a program: the export gets to the exported executable's own check, which it
+        // cannot run.
+        let player = engine.join(export::PLAYER_EXE);
+        std::fs::write(&player, b"player de teste").unwrap();
+        let project_arg = dir.join("Projeto").display().to_string();
+        let export_to = |player: &Path, destination: &Path| {
+            let mut tools = Tools {
+                player: Some(player.to_owned()),
+                ..Default::default()
+            };
+            tools
+                .call(
+                    "oxy_export",
+                    &json!({"project": project_arg,
+                            "destination": destination.display().to_string()}),
+                )
+                .unwrap_err()
+        };
+        let games = dir.join("Jogos");
+        let error = export_to(&engine.join("ausente.exe"), &games);
+        assert!(
+            error.contains(export::PLAYER_EXE) && error.contains("não foi encontrado"),
+            "{error}"
+        );
+        for (destination, expected) in [
+            (dir.join("Projeto").join("assets"), "pasta do projeto"),
+            (engine.clone(), "pasta da OXY Engine"),
+            (PathBuf::from("C:\\"), "raiz de um disco"),
+        ] {
+            let error = export_to(&player, &destination);
+            assert!(error.contains(expected), "{destination:?}: {error}");
+        }
+        let error = export_to(&player, &games);
+        assert!(
+            error.contains("conferi-lo") && error.contains("Nada mudou no destino"),
+            "{error}"
+        );
+        // The work folder and the folders made for it are gone; the project is as it was.
+        assert!(!games.exists());
+        assert_eq!(std::fs::read(&file).unwrap(), saved);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["OXY Engine", "Projeto"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn new_project_documents_where_a_project_may_go() {
+        let tool = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "oxy_new_project")
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            tool["inputSchema"]["required"],
+            json!(["folder", "name", "scene"])
+        );
+        let new = schema("oxy_new_project");
+        assert!(new.get("project").is_none(), "it never picks an editor");
+        assert_eq!(new["scene"]["required"], json!(["kind"]));
+        assert_eq!(
+            new["scene"]["properties"]["kind"]["enum"],
+            json!(["2d", "3d"])
+        );
+        let folder = new["folder"]["description"].as_str().unwrap();
+        for text in [
+            "Absolute",
+            "the person asked you",
+            "Never a path read from project",
+            "before anything is written",
+            "network and device paths",
+            "relative paths",
+            "a drive's root",
+            "the engine's folder",
+            "already holds a project",
+            "any other file",
+            "a path ending in project.oxy.json",
+        ] {
+            assert!(folder.contains(text), "{text}: {folder}");
+        }
+        for text in [
+            "Projeto > Novo projeto",
+            "current format",
+            "only when the person asks",
+            "never reaches an editor",
+            "Projeto > Abrir",
+            "pass folder as `project`",
+            "summary of oxy_project",
+        ] {
+            assert!(NEW_PROJECT_DESCRIPTION.contains(text), "{text}");
+        }
+    }
+
+    /// Every file and folder under `root`.
+    fn walk(root: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                found.extend(walk(&path));
+            }
+            found.push(path);
+        }
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn files_new_project_creates_what_the_editor_creates() {
+        use oxy_core::texture_cache::TextureCache;
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-new-{}", new_id()));
+        let engine = dir.join("OXY Engine");
+        std::fs::create_dir_all(&engine).unwrap();
+        let mut tools = Tools {
+            player: Some(engine.join(export::PLAYER_EXE)),
+            ..Default::default()
+        };
+        // The IDs are new in each project; the rest is the same.
+        let document = |file: &Path| {
+            let mut document: Json = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+            document["id"] = json!("projeto");
+            document["start_scene"] = json!("cena");
+            document["scenes"][0]["id"] = json!("cena");
+            document
+        };
+        for (kind, scene_kind) in [("2d", SceneKind::TwoD), ("3d", SceneKind::ThreeD)] {
+            let folder = dir.join("Jogos").join(format!("Corrida {kind}"));
+            let output = tools
+                .call(
+                    "oxy_new_project",
+                    &json!({"folder": folder.display().to_string(), "name": " Corrida ",
+                            "scene": {"kind": kind}}),
+                )
+                .unwrap();
+            let mut answer: Json = serde_json::from_str(&output.text).unwrap();
+            let file = folder.join(persistence::PROJECT_FILE);
+            assert_eq!(answer["folder"], folder.display().to_string());
+            assert_eq!(answer["saved"], file.display().to_string());
+            let note = answer["note"].as_str().unwrap();
+            assert!(
+                note.contains("files only") && note.contains("no editor"),
+                "{note}"
+            );
+            assert_eq!(answer["name"], "Corrida");
+            assert_eq!(answer["schema_version"], SCHEMA_VERSION);
+            // A new 3D scene shows the sky; a 2D one, the dark color.
+            let background = match scene_kind {
+                SceneKind::ThreeD => json!("sky"),
+                SceneKind::TwoD => json!({"color": [0.068, 0.068, 0.072, 1.0]}),
+            };
+            assert_eq!(
+                answer["scenes"],
+                json!([{"id": answer["start_scene"],
+                        "name": format!("Cena {}", kind.to_uppercase()),
+                        "kind": kind, "objects": 0, "background": background}])
+            );
+            // oxy_project answers the same summary, oxy_validate takes it and the editor opens
+            // it as it is.
+            let project = json!({"project": folder.display().to_string()});
+            let mut read = |tool: &str| -> Json {
+                serde_json::from_str(&tools.call(tool, &project).unwrap().text).unwrap()
+            };
+            let summary = read("oxy_project");
+            let valid = read("oxy_validate");
+            for key in ["folder", "saved", "note"] {
+                answer.as_object_mut().unwrap().remove(key);
+            }
+            assert_eq!(summary, answer);
+            assert_eq!(valid, json!({"valid": true}));
+            let (opened, migrated) = persistence::load_project_lazy_report(&file).unwrap();
+            assert_eq!(migrated, None);
+            assert_eq!(opened.scenes.len(), 1);
+            assert_eq!(opened.scenes[0].kind, scene_kind);
+            assert_eq!(opened.start_scene, opened.scenes[0].id);
+            // The editor's Novo projeto, as its first Salvar writes it, is the same file, and
+            // neither writes anything else (the assets folder comes with the first import).
+            let editor = dir.join(format!("Editor {kind}"));
+            let created = editing::blank_project(" Corrida ", scene_kind).unwrap();
+            persistence::save_cached_bundle(
+                &editor.join(persistence::PROJECT_FILE),
+                &created,
+                &mut TextureCache::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                document(&file),
+                document(&editor.join(persistence::PROJECT_FILE))
+            );
+            assert_eq!(walk(&folder), [file]);
+            assert_eq!(walk(&editor), [editor.join(persistence::PROJECT_FILE)]);
+        }
+        // The first scene may take a name of its own.
+        let folder = dir.join("Plataformas");
+        let output = tools
+            .call(
+                "oxy_new_project",
+                &json!({"folder": folder.display().to_string(), "name": "Plataformas",
+                        "scene": {"kind": "2d", "name": " Fase 1 "}}),
+            )
+            .unwrap();
+        let answer: Json = serde_json::from_str(&output.text).unwrap();
+        assert_eq!(answer["scenes"][0]["name"], "Fase 1");
+        assert_eq!(answer["scenes"][0]["kind"], "2d");
+        assert!(walk(&engine).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_new_project_refuses_unsafe_folders_before_writing() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-new-{}", new_id()));
+        let engine = dir.join("OXY Engine");
+        std::fs::create_dir_all(&engine).unwrap();
+        let occupied = dir.join("Ocupada");
+        std::fs::create_dir_all(&occupied).unwrap();
+        std::fs::write(occupied.join("nota.txt"), b"de outra pessoa").unwrap();
+        let existing = dir.join("Existente");
+        let project = editing::blank_project("Antigo", SceneKind::TwoD).unwrap();
+        persistence::save_project(&existing.join(persistence::PROJECT_FILE), &project).unwrap();
+        let before = walk(&dir);
+        let mut tools = Tools {
+            player: Some(engine.join(export::PLAYER_EXE)),
+            ..Default::default()
+        };
+        let new = dir.join("Novo").display().to_string();
+        let at = |folder: &Path| json!({"folder": folder, "name": "Novo", "scene": {"kind": "3d"}});
+        for (args, expected) in [
+            (
+                json!({"name": "Novo", "scene": {"kind": "3d"}}),
+                "Informe folder",
+            ),
+            (
+                json!({"folder": new, "scene": {"kind": "3d"}}),
+                "Informe name",
+            ),
+            (json!({"folder": new, "name": "Novo"}), "Informe scene"),
+            (
+                json!({"folder": new, "name": "Novo", "scene": {"kind": "4d"}}),
+                "scene.kind inválido",
+            ),
+            (
+                json!({"folder": new, "name": "Novo", "scene": {"kind": "3d", "nome": "A"}}),
+                "campo `nome` desconhecido",
+            ),
+            (
+                json!({"folder": new, "name": " ", "scene": {"kind": "3d"}}),
+                "Informe um nome para o projeto",
+            ),
+            (
+                json!({"folder": new, "name": "Novo", "scene": {"kind": "3d", "name": " "}}),
+                "Informe um nome para a cena",
+            ),
+            (at(Path::new("Projetos")), "caminho completo da pasta"),
+            (at(Path::new(r"\\servidor\projetos")), "rede"),
+            (at(Path::new("//servidor/projetos")), "rede"),
+            (at(Path::new(r"\\?\C:\Projetos")), "dispositivo"),
+            (at(Path::new(r"C:\")), "raiz de um disco"),
+            (at(&engine.join("Novo")), "pasta da OXY Engine"),
+            (at(&occupied), "outros arquivos"),
+            (at(&existing), "Já existe um projeto"),
+            (
+                at(&dir.join("Novo").join(persistence::PROJECT_FILE)),
+                "não o arquivo project.oxy.json",
+            ),
+        ] {
+            let error = tools.call("oxy_new_project", &args).unwrap_err();
+            assert!(error.contains(expected), "{args}: {error}");
+        }
+        assert_eq!(walk(&dir), before, "nothing was written");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The parkour build's frictions on files: scenes and clicks by name, summaries that name
+    /// what nodes name, who references an object and keyframes in degrees.
+    #[test]
+    fn files_take_scenes_and_clicks_by_name_and_read_names_and_references() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-names-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Nomes", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        // The menu's Jogar opens the track, both named; the tool's scene is a name too.
+        let applied = call(
+            "oxy_apply",
+            json!({"scene": "cena 3d", "commands": [
+                {"op": "create_scene", "name": "Menu", "kind": "3d"},
+                {"op": "set_start_scene", "scene": "menu"},
+                {"op": "create_entity", "kind": {"type": "ui", "element": "Button"},
+                 "name": "Jogar", "scene": "Menu"},
+                {"op": "add_node", "entity": "$2", "scene": "Menu", "operation": "event.click"},
+                {"op": "add_node", "entity": "$2", "scene": "Menu", "operation": "action.scene",
+                 "params": {"scene": "CENA 3D"}},
+                {"op": "connect", "entity": "$2", "scene": "Menu", "from_node": "$3",
+                 "from_port": "exec", "to_node": "$4", "to_port": "exec"},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Resultado"},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle"},
+                {"op": "add_node", "entity": "$7", "operation": "action.component",
+                 "params": {"component": "visible", "enabled": false,
+                            "target": {"Object": "$6"}}},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Disco"},
+                {"op": "set_clip", "entity": "$9", "name": "Giro", "duration": 4.0, "tracks": [
+                    {"keyframes": [{"time": 0.0}, {"time": 1.0, "rotation": [0.0, 90.0, 0.0]}]}]},
+                {"op": "rename_scene", "scene": "Cena 3D", "name": "Pista"},
+            ]}),
+        )
+        .unwrap();
+        let id = |command: &str| {
+            applied["created"][command][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let (menu, panel, control) = (id("0"), id("6"), id("7"));
+        let saved = persistence::load_project(&file).unwrap();
+        let track = saved.scenes[0].id.clone();
+        assert_eq!(saved.start_scene, menu);
+        let button = saved.scene(&menu).unwrap().entity(&id("2")).unwrap();
+        assert_eq!(
+            button.graph.nodes[1].text("scene"),
+            track,
+            "stored as the ID"
+        );
+
+        let tree = call("oxy_scene", json!({"scene": "MENU"})).unwrap();
+        assert_eq!(tree["objects"][0]["name"], "Jogar");
+        let read = call("oxy_entity", json!({"scene": "pista", "id": panel})).unwrap();
+        assert_eq!(
+            read["referenced_by"],
+            json!([{"scene": {"id": track, "name": "Pista"}, "entity": control,
+                    "name": "Controle", "role": "action.component",
+                    "node": "action.component(visible → Resultado)", "param": "target"}])
+        );
+        let logic = call(
+            "oxy_entity",
+            json!({"scene": "Pista", "id": control, "fields": ["graph.nodes"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            logic["graph"]["nodes"]["action.component(visible → Resultado)"]["params"]["target"],
+            json!({"Object": panel, "name": "Resultado"})
+        );
+        let jump = call(
+            "oxy_entity",
+            json!({"scene": "Menu", "id": id("2"), "fields": ["graph.edges"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            jump["graph"]["edges"],
+            json!(["event.click.exec -> action.scene(Pista).exec"])
+        );
+        let clips = call(
+            "oxy_entity",
+            json!({"scene": "Pista", "id": id("9"), "fields": ["clips"]}),
+        )
+        .unwrap();
+        let keyframes = &clips["clips"][0]["tracks"][0]["keyframes"];
+        assert_eq!(keyframes[1]["rotation_degrees"], json!([0.0, 90.0, 0.0]));
+        // The stored rotation stays in radians.
+        let radians = keyframes[1]["transform"]["rotation"][1].as_f64().unwrap();
+        assert!(
+            (radians - std::f64::consts::FRAC_PI_2).abs() < 1e-4,
+            "{radians}"
+        );
+
+        // A click by name, and one on an object of another scene.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 1.0, "ui": false, "inputs": [
+                {"type": "click", "at": 0.1, "entity": "resultado"},
+                {"type": "click", "at": 0.2, "entity": "Jogar"},
+            ], "until": {"scene_change": "pista"}}),
+        )
+        .unwrap();
+        assert_eq!(report["stopped_at"]["reason"], "scene_change", "{report}");
+        assert_eq!(report["stopped_at"]["time"], 0.2167);
+        assert_eq!(
+            report["logs"][0]["text"],
+            "Clique ignorado: Resultado não está na cena atual (Menu)."
+        );
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "scene": "Pista"}),
+        )
+        .unwrap();
+        assert_eq!(report["start_scene"], track);
+        for (tool, args, expected) in [
+            (
+                "oxy_simulate",
+                json!({"seconds": 1.0, "inputs": [{"type": "click", "at": 0.1,
+                                                    "entity": "Sair"}]}),
+                "click: \"Sair\" não é o ID nem o nome de um objeto do projeto".to_owned(),
+            ),
+            (
+                "oxy_scene",
+                json!({"scene": "Fase 9"}),
+                format!(
+                    "scene recebeu \"Fase 9\", que não é o ID nem o nome de uma cena do \
+                     projeto. Cenas: [{{\"id\":\"{track}\",\"name\":\"Pista\"}},\
+                     {{\"id\":\"{menu}\",\"name\":\"Menu\"}}]"
+                ),
+            ),
+            (
+                "oxy_apply",
+                json!({"scene": "Menu", "commands": [{"op": "add_node", "entity": id("2"),
+                       "operation": "value.scene", "params": {"scene": "Fase 9"}}]}),
+                "O parâmetro scene do nó value.scene recebeu \"Fase 9\"".to_owned(),
+            ),
+        ] {
+            let error = call(tool, args).unwrap_err();
+            assert!(error.contains(&expected), "{tool}: {error}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_take_objects_by_name_in_reads_and_in_the_bots_points() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-objects-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Objetos", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"},
+                 "name": "Herói"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Balsa", "position": [0.0, -0.5, -3.0]},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Gatilho"},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Gatilho"},
+            ]}),
+        )
+        .unwrap();
+        let id = |command: &str| {
+            applied["created"][command][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let (hero, ferry) = (id("0"), id("1"));
+        let read = call("oxy_entity", json!({"id": "herói", "fields": ["name"]})).unwrap();
+        assert_eq!(read, json!({"id": hero, "name": "Herói"}));
+        let both = call(
+            "oxy_entity",
+            json!({"ids": ["Balsa", hero], "fields": ["name"]}),
+        )
+        .unwrap();
+        assert_eq!(both["objects"][0]["id"], json!(ferry));
+        let error = call("oxy_entity", json!({"id": "gatilho"})).unwrap_err();
+        assert!(
+            error.starts_with("id: há 2 objetos chamados \"gatilho\" na cena Cena 3D; use o ID: ")
+                && error.contains(&id("2"))
+                && error.contains(&id("3")),
+            "{error}"
+        );
+        let tree = call("oxy_scene", json!({"root": "Herói"})).unwrap();
+        assert_eq!(tree["root"]["id"], json!(hero));
+        // The bot's character, its points' objects and its wait_for, as the other inputs.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.5, "ui": false, "watch": ["Balsa"],
+                   "bot": {"entity": "herói", "path": [
+                       {"object": "balsa", "at": [0.0, 0.0, 0.0],
+                        "wait_for": {"object": "BALSA", "within": 10.0, "height": 10.0}}]}}),
+        )
+        .unwrap();
+        assert_eq!(report["bot"]["entity"]["id"], json!(hero));
+        assert_eq!(report["watched"][0]["id"], json!(ferry));
+        let error = call(
+            "oxy_simulate",
+            json!({"seconds": 0.5, "bot": {"entity": hero, "path": [
+                [0.0, 0.0, 0.0], {"at": [0.0, 0.0, -2.0], "wait_for": {"object": "Gatilho"}}]}}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with(
+                "bot: wait_for.object do ponto 1 do caminho (o 2º): há 2 objetos chamados \
+                 \"Gatilho\" na cena Cena 3D; use o ID: "
+            ),
+            "{error}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// docs/agentes-mcp.md lists every tool in its table, so a new tool comes with its row and
+    /// a removed one takes it away.
+    #[test]
+    fn the_agents_guide_lists_every_tool() {
+        let guide = include_str!("../../../docs/agentes-mcp.md");
+        let table = guide
+            .split("\n## Ferramentas")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .unwrap();
+        let listed: Vec<&str> = table
+            .lines()
+            .filter_map(|line| line.strip_prefix('|')?.split('|').next())
+            .flat_map(|cell| cell.split(','))
+            .filter_map(|name| name.trim().strip_prefix('`')?.strip_suffix('`'))
+            .filter(|name| name.starts_with("oxy_"))
+            .collect();
+        let tools: Vec<String> = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        for tool in &tools {
+            assert!(listed.contains(&tool.as_str()), "{tool} has no row");
+        }
+        for name in &listed {
+            assert!(
+                tools.iter().any(|tool| tool == name),
+                "{name} is not a tool"
+            );
+        }
+        assert_eq!(listed.len(), tools.len(), "{listed:?}");
+    }
+
+    #[test]
+    fn status_tells_which_server_answers_and_descriptions_say_what_takes_names() {
+        let server = server_info();
+        assert_eq!(server["version"], export::engine_version());
+        let build = server["build"].as_str().unwrap();
+        assert!(build.len() == 16 && build.chars().all(|c| c.is_ascii_hexdigit()));
+        let built = server["built_at"].as_str().unwrap();
+        assert!(built.len() == 20 && built.ends_with('Z'), "{built}");
+        assert_eq!(fingerprint(b"oxy"), fingerprint(b"oxy"));
+        assert_ne!(fingerprint(b"oxy"), fingerprint(b"oxz"));
+        assert_ne!(fingerprint(b""), fingerprint(&[0]), "the length counts");
+        let at =
+            |seconds: u64| utc(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds));
+        assert_eq!(at(0), "1970-01-01T00:00:00Z");
+        assert_eq!(at(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(at(1_791_939_723), "2026-10-14T01:02:03Z");
+        let description = |name: &str| {
+            definitions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap()["description"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let status = description("oxy_status");
+        for text in [
+            "server says which oxy-mcp answers",
+            "build (16 hex",
+            "built_at",
+        ] {
+            assert!(status.contains(text), "{text}");
+        }
+        for scene in [SCENE, START_SCENE] {
+            assert!(scene.contains("ID or") && scene.contains("name"), "{scene}");
+        }
+        assert!(SCENE.contains("[{id, name}]"));
+        assert!(INPUTS.contains("by name") && INPUTS.contains("não está na cena atual"));
+        assert!(INPUTS.contains("refused before the run"));
+        assert!(PLAY_INPUTS.contains("clicked objects by ID or name"));
+        for text in [
+            "action.component(visible → Resultado)",
+            "referenced_by",
+            "each keyframe with rotation_degrees",
+            "which update_entity refuses in keyframes",
+            "unless an input connected to that param replaces it",
+            "attribute.set(Aviso, value = \"3\"); a label still repeated ends in #N",
+            "{\"Object\": \"<id>\", \"name\": \"Resultado\"}",
+        ] {
+            assert!(ENTITY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(APPLY_DESCRIPTION.contains("it takes the scene's ID or its name"));
+        assert!(CATALOG_DESCRIPTION.contains("a scene, an input_action or a variable"));
+        let entity = schema("oxy_entity");
+        let fields = entity["fields"]["description"].as_str().unwrap();
+        assert!(fields.contains("camera_control camera_rig"), "{fields}");
+        // Objects by name wherever a tool takes one.
+        let text = |value: &Json| value.as_str().unwrap().to_owned();
+        assert!(text(&entity["id"]["description"]).contains("by its ID or its name"));
+        assert!(text(&entity["ids"]["description"]).contains("by ID or name"));
+        let tree = schema("oxy_scene");
+        assert!(text(&tree["root"]["description"]).contains("by ID or name"));
+        let shot = schema("oxy_screenshot");
+        for option in ["target", "ids"] {
+            assert!(
+                text(&shot[option]["description"]).contains("name"),
+                "{option}"
+            );
+        }
+        let simulate = schema("oxy_simulate");
+        assert!(BOT.contains("Objects go by ID, by name"));
+        assert!(text(&simulate["watch"]["description"]).contains("by ID, name"));
+        assert!(text(&simulate["spawn"]["description"]).contains("by ID, name"));
+        let stops = &simulate["until"]["properties"];
+        for field in [
+            &stops["attribute"]["properties"]["entity"],
+            &stops["entity_absent"],
+            &stops["event"]["properties"]["object"],
+        ] {
+            assert!(
+                text(&field["description"]).contains("by ID, name"),
+                "{field}"
+            );
+        }
+        let until = &simulate["until"]["properties"]["scene_change"]["description"];
+        assert!(until.as_str().unwrap().contains("by its ID or name"));
+        let play = schema("oxy_play");
+        assert!(
+            play["scene"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("by its ID or name")
+        );
+    }
+
+    #[test]
+    fn files_scene_backgrounds_are_set_by_command_and_read_with_the_scene() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-background-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Céus", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        assert_eq!(call("oxy_scene", json!({})).unwrap()["background"], "sky");
+        // Without scene, the tool's scene; a new 2D scene keeps the dark color.
+        call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "set_scene_background", "background": {"color": [0.2, 0.4, 0.6, 1.0]}},
+                {"op": "create_scene", "name": "Mapa", "kind": "2d"},
+                {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            ]}),
+        )
+        .unwrap();
+        let summary = call("oxy_project", json!({})).unwrap();
+        let backgrounds: Vec<&Json> = summary["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| &s["background"])
+            .collect();
+        assert_eq!(
+            backgrounds,
+            [
+                &json!({"color": [0.2, 0.4, 0.6, 1.0]}),
+                &json!({"color": [0.068, 0.068, 0.072, 1.0]}),
+                &json!("sky"),
+            ]
+        );
+        let saved = persistence::load_project(&file).unwrap();
+        assert_eq!(saved.scenes[1].background, None, "2D: none in the file");
+        // The sky is refused in 2D, with the scene named, and nothing changes.
+        let error = call(
+            "oxy_apply",
+            json!({"scene": "Mapa", "commands": [
+                {"op": "set_scene_background", "background": "default"},
+                {"op": "set_scene_background", "background": "sky"},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Comando 1 (set_scene_background, o 2º do lote)")
+                && error.contains("Mapa: o Céu da OXY é só para cenas 3D"),
+            "{error}"
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "set_scene_background",
+                                 "background": {"color": [0.2, 0.4, 0.6, 0.5]}}]}),
+        )
+        .unwrap_err();
+        assert!(error.contains("opaca"), "{error}");
+        assert_eq!(persistence::load_project(&file).unwrap(), saved);
+        // default gives a 3D scene the sky back.
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "set_scene_background", "background": "default"}]}),
+        )
+        .unwrap();
+        assert_eq!(call("oxy_scene", json!({})).unwrap()["background"], "sky");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_answer_created_in_command_order_with_one_separator_and_scenes_by_placeholder() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-orders-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Ordem", SceneKind::ThreeD).unwrap();
+        let start_name = project.scenes[0].name.clone();
+        persistence::save_project(&file, &project).unwrap();
+        // The folder as agents often write it, with forward slashes.
+        let project_arg = dir.display().to_string().replace('\\', "/");
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<String, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools.call(tool, &args).map(|output| output.text)
+        };
+        let mut commands = vec![
+            json!({"op": "create_scene", "name": "Pista", "kind": "3d"}),
+            json!({"op": "create_entity", "scene": "Pista", "kind": {"type": "group"},
+                   "name": "Controle"}),
+            // No scene: the placeholder's object is in the Pista.
+            json!({"op": "add_node", "entity": "$1", "operation": "event.scene_start"}),
+            json!({"op": "create_entity", "scene": "Pista", "kind": {"type": "shape",
+                   "shape": "Cube"}, "name": "Área"}),
+            json!({"op": "add_component", "entity": "$3", "component": "sensor3d"}),
+            json!({"op": "update_entity", "entity": "$3", "patch": {"physics3d": {"filter": {
+                   "category": ["Áreas"], "mask": ["Personagens"]}}}}),
+        ];
+        for n in 0..6 {
+            commands.push(json!({"op": "create_entity", "scene": "Pista",
+                                 "kind": {"type": "group"}, "name": format!("Grupo {n}")}));
+        }
+        let text = call("oxy_apply", json!({"commands": commands})).unwrap();
+        // created keeps the commands' order: "6" … "9" before "10" and "11".
+        let keys: Vec<usize> = ["\"1\":", "\"2\":", "\"9\":", "\"10\":", "\"11\":"]
+            .iter()
+            .map(|key| text.find(key).unwrap_or_else(|| panic!("{key}: {text}")))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "{text}");
+        let answer: Json = serde_json::from_str(&text).unwrap();
+        // One kind of separator in the paths, whatever the argument used.
+        for key in ["saved", "previous_version"] {
+            let path = answer[key].as_str().unwrap();
+            if cfg!(windows) {
+                assert!(!path.contains('/'), "{key}: {path}");
+            }
+            assert!(Path::new(path).exists(), "{key}: {path}");
+        }
+        let area = answer["created"]["3"][0]["id"].as_str().unwrap().to_owned();
+        let control = answer["created"]["1"][0]["id"].as_str().unwrap().to_owned();
+        let read: Json = serde_json::from_str(
+            &call(
+                "oxy_entity",
+                json!({"scene": "Pista", "id": area, "fields": ["physics3d.filter"]}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let filter = &read["physics3d"]["filter"];
+        assert_eq!(
+            (&filter["category"], &filter["mask"]),
+            (&json!(4), &json!(2))
+        );
+        assert_eq!(
+            (&filter["category_groups"], &filter["mask_groups"]),
+            (&json!(["Áreas"]), &json!(["Personagens"]))
+        );
+        let brief: Json = serde_json::from_str(
+            &call("oxy_entity", json!({"scene": "Pista", "id": control})).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(brief["graph"]["nodes"].as_object().unwrap().len(), 1);
+        // Later, without scene, the ID alone uses the start scene, and the error says so.
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "add_node", "entity": control, "operation": "event.step"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "Controle não existe na cena {start_name} (a do comando); ele está na cena Pista: \
+                 passe scene"
+            )),
+            "{error}"
+        );
+        assert!(!error.contains(&control), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+        for text in [
+            "keys in command order, \"2\" before \"10\"",
+            "is a placeholder of an object, uses that object's scene",
+            "(a do comando); ele está na cena Pista: passe scene",
+            "as bits or as a list of the collision group names oxy_project lists",
+            "oxy_entity shows category_groups and mask_groups beside the bits",
+            "filter?: {category?, mask?}",
+        ] {
+            assert!(APPLY_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(ENTITY_DESCRIPTION.contains("add category_groups and mask_groups"));
     }
 }

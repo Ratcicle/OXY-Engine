@@ -35,8 +35,11 @@ fn connect(e: &mut Entity, a: &Node, output: &str, b: &Node, input: &str) {
         to_port: input.into(),
     });
 }
+/// The course for `mode`: a movement fixture, or "turntable", the platforms course whose
+/// plank its logic turns 30° a second about its centre, where the character starts.
 pub fn project(mode: &str) -> Project {
-    let mut p = movement::fixture(1, mode);
+    let turntable = mode == "turntable";
+    let mut p = movement::fixture(1, if turntable { "platforms" } else { mode });
     p.scenes[0].entities.retain(|e| {
         e.id == movement::id(0)
             || e.id == movement::id(1000)
@@ -72,7 +75,15 @@ pub fn project(mode: &str) -> Project {
     teleport.id = movement::id(7101);
     teleport.params.insert(
         "position".into(),
-        Value::Vector3([-0.8, if mode == "platforms" { 0.52 } else { 0.02 }, 0.]),
+        Value::Vector3([
+            -0.8,
+            if mode == "platforms" || turntable {
+                0.52
+            } else {
+                0.02
+            },
+            0.,
+        ]),
     );
     teleport
         .params
@@ -82,6 +93,22 @@ pub fn project(mode: &str) -> Project {
         .insert("look".into(), Value::Vector2([0., 0.]));
     connect(body, &event, "exec", &teleport, "exec");
     body.graph.nodes.extend([event, teleport]);
+    if turntable {
+        let plank = p.scenes[0].entity_mut(&movement::id(2000)).unwrap();
+        let platform = plank.platform.as_mut().unwrap();
+        platform.mode = oxy_core::surface::PlatformMode::Animation;
+        let mut step = Node::new("event.step", [0.; 2]);
+        step.id = movement::id(7200);
+        let mut turn = Node::new("transform.write", [0.; 2]);
+        turn.id = movement::id(7201);
+        turn.params
+            .insert("channel".into(), Value::Text("rotation".into()));
+        turn.params.insert("mode".into(), Value::Text("add".into()));
+        turn.params
+            .insert("value".into(), Value::Vector3([0., 0.5, 0.]));
+        connect(plank, &step, "exec", &turn, "exec");
+        plank.graph.nodes.extend([step, turn]);
+    }
     validate_project(&p).unwrap();
     p
 }

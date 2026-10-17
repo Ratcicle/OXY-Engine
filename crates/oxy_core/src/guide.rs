@@ -2,6 +2,8 @@
 use crate::{document::Project, graph::OperationDef};
 pub const FIRST_BEHAVIOR: &str = "1. Crie um objeto; ele será o responsável pelo comportamento. Selecione-o e abra Lógica.\n2. Em Ações de entrada, crie Mostrar mensagem e escolha K.\n3. Adicione Ação de entrada. Escolha Mostrar mensagem e Pressionar.\n4. Adicione Mensagem de diagnóstico e escreva Minha primeira ação funciona!\n5. Conecte a saída de execução do evento à entrada de execução da mensagem.\n6. Use Jogar e pressione K. Abra Console manualmente para ler o resultado. Parar descarta o teste.\nA receita abaixo contém exatamente esses objetos e conexões, editáveis como qualquer projeto.";
 pub const FOUNDATIONS: &str = "Execução (conexões brancas) decide quando uma ação acontece. Dados carregam números, textos, booleanos e referências; os tipos devem ser compatíveis. Ler um atributo consulta o valor atual, inclusive depois de outra ação o alterar.\nParâmetros são valores padrão. Uma porta de dados conectada fornece o valor usado no lugar do parâmetro correspondente.\nPróprio / nenhum como alvo usa o objeto responsável pelo grafo. A saída Objeto de um evento pode fornecer outro objeto: numa área, é quem entrou. Conecte essa referência explicitamente quando quiser agir sobre ele.\nAtributos são os mesmos do painel. Criar Vida não cria regras de morte. O controlador pronto oferece movimento e gravidade sem exigir montar todos os cálculos por nós.\nSequência dispara seus ramos em ordem, mas não aguarda terminar um ramo antes do seguinte. Esperar adia somente a continuação daquele ramo. Não há junção automática.\nO runtime limita o trabalho e cancela tarefas ao remover seu responsável, parar o teste ou mudar de cena. Ciclos de execução sem suporte são recusados. O Console mostra objeto/nó e a trilha recente; uma recusa comum não abre o painel automaticamente.\nLua, nós personalizados, junções de ramos e scripts avançados não estão disponíveis nesta versão.";
+/// The purpose of an operation no help covers yet; the registry contract test refuses it.
+pub const UNDOCUMENTED: &str = "Operação ainda sem documentação pedagógica.";
 pub struct Topic {
     pub operation: &'static OperationDef,
     pub purpose: &'static str,
@@ -26,6 +28,9 @@ impl Topic {
             id if id.starts_with("query.") => {
                 "Use numa cena 3D, com origem e direção em coordenadas mundiais. Conecte Executar e verifique Consulta válida antes de usar o contato. Limite de 256 consultas explícitas por passo."
             }
+            "transform.write" => {
+                "Escolha o que muda, como e em que espaço, e forneça o Valor (Vetor3) pelo parâmetro ou pela entrada. Alvo vazio usa o responsável; a raiz de um personagem 3D é recusada. Conecte uma saída de execução à entrada Executar."
+            }
             "surface.get" | "surface.apply" => {
                 "O alvo precisa de Colisor 3D. Crie a superfície física no inspetor e vincule seu ID; Aplicar exige entrada Executar."
             }
@@ -41,20 +46,68 @@ impl Topic {
             "event.click" => {
                 "Escolha um objeto visual clicável ou adicione um botão de interface ao responsável pelo grafo."
             }
+            "event.pause" => {
+                "Escolha Ao pausar ou Ao retomar e ligue Executar às ações que mostram ou escondem o menu. O evento dispara a cada mudança da pausa do jogo."
+            }
+            "game.pause" => {
+                "Escolha a Ação (Pausar, Retomar ou Alternar) e conecte uma saída de execução à entrada Executar."
+            }
+            "game.read" => {
+                "Não precisa de configuração. Ligue Pausado a uma entrada booleana, como a Condição de Se / Senão; sozinho, o nó não inicia um comportamento."
+            }
+            "game.quit" => {
+                "Conecte uma saída de execução à entrada Executar, como o Ao clicar de um botão Sair."
+            }
+            "game.cursor" => {
+                "Escolha a Ação (Mostrar ou Esconder) e conecte uma saída de execução à entrada Executar."
+            }
             "attribute.get" | "attribute.set" | "action.damage" => {
                 "Crie o atributo no painel do objeto correto e escreva o mesmo nome no nó. Dano exige um atributo numérico. Forneça o alvo pela porta ou por referência explícita; vazio usa o responsável."
             }
             "action.animation" => {
                 "Crie o clip no Estúdio do modelo e escolha o nome no nó. O alvo deve possuir esse clip."
             }
-            "action.sound" => {
+            "action.sound" | "action.sound_loop" => {
                 "Importe um WAV válido na Biblioteca e escolha esse recurso no nó. A reprodução requer um dispositivo de áudio disponível."
+            }
+            "action.sound_stop" => {
+                "Escolha o canal e, para parar um só áudio, o recurso; vazio para todos os sons do canal. Conecte uma saída de execução à entrada Executar."
+            }
+            "action.volume" => {
+                "Escolha o canal e forneça o Volume, de 0 a 1, pelo parâmetro ou pela entrada. Conecte uma saída de execução à entrada Executar."
+            }
+            "audio.read" => {
+                "Não precisa de configuração. Ligue Geral, Música ou Efeitos a uma entrada numérica; sozinho, o nó não inicia um comportamento."
             }
             "action.spawn" | "action.remove" | "action.component" => {
                 "Indique um objeto existente ou conecte uma referência de objeto. Confirme qual componente ou hierarquia será afetado."
             }
-            "action.scene" => "Crie a cena de destino no projeto e escolha-a no parâmetro do nó.",
-            "condition.branch" | "control.sequence" | "control.wait" | "debug.message" => {
+            "action.scene" => {
+                "Crie a cena de destino no projeto e escolha-a no parâmetro do nó. Para reiniciar a cena em que o objeto está, ligue a saída Cena de Cena atual à entrada Cena; para abrir a cena guardada num atributo de texto, ligue Ler atributo à entrada Cena."
+            }
+            "variable.get" => {
+                "Crie a variável em Variáveis do jogo, na barra da Lógica, e escolha-a no nó. Ligue Valor a uma entrada do tipo da variável; sozinho, o nó não inicia um comportamento."
+            }
+            "variable.set" => {
+                "Crie a variável em Variáveis do jogo, na barra da Lógica, e escolha-a no nó. Conecte uma saída de execução à entrada Executar e forneça um Novo valor do tipo da variável."
+            }
+            "save.write" | "save.clear" => {
+                "Marque as variáveis com Salva entre partidas em Variáveis do jogo, na barra da Lógica. Conecte uma saída de execução à entrada Executar."
+            }
+            "save.state" => {
+                "Não precisa de configuração. Ligue Existe a uma entrada booleana, como a Condição de Se / Senão; sozinho, o nó não inicia um comportamento."
+            }
+            "scene.current" => {
+                "Não precisa de configuração. Ligue Cena à entrada Cena de Mudar de cena, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
+            }
+            "value.scene" => {
+                "Escolha uma cena do projeto no parâmetro Cena. Ligue a saída Cena à entrada Cena de Mudar de cena ou ao Novo valor de Alterar atributo, ou Nome a uma entrada de texto; sozinho, o nó não inicia um comportamento."
+            }
+            "random.number" => {
+                "Conecte uma saída de execução à entrada Executar. Quem lê Valor precisa ser executado depois deste nó, no mesmo fluxo."
+            }
+            "condition.branch" | "control.sequence" | "control.wait" | "debug.message"
+            | "random.seed" => {
                 "Conecte uma saída de execução à entrada Executar. Forneça os dados pedidos por portas conectadas ou pelos parâmetros do painel."
             }
             "event.scene_start" => {
@@ -71,31 +124,32 @@ pub fn topics() -> &'static [Topic] {
     TOPICS.get_or_init(||crate::graph::registry().iter().map(|operation| {
         let (purpose,example,caution)=match operation.id {
             "event.scene_start"=>("Inicia um fluxo quando esta cena começa.","Conecte a uma mensagem para verificar que o objeto está na cena.","O evento acontece novamente ao iniciar outra instância da cena; não a cada atualização."),
-            "event.input"=>("Inicia um fluxo ao pressionar, manter ou soltar uma ação configurada na Lógica.","Escolha Mostrar mensagem, tecla K, modo Pressionar; conecte a Mensagem de diagnóstico.","Pressionar e Soltar são transições únicas. Manter executa uma vez por passo fixo; é adequado para ações contínuas. Pausa e campos de texto não recebem controles do jogo."),
+            "event.input"=>("Inicia um fluxo ao pressionar, manter ou soltar uma ação configurada na Lógica.","Escolha Mostrar mensagem, tecla K, modo Pressionar; conecte a Mensagem de diagnóstico.","Pressionar e Soltar são transições únicas. Manter executa uma vez por passo fixo; é adequado para ações contínuas. A pausa da engine e campos de texto não recebem controles do jogo; na pausa do jogo, as ações continuam disparando (use Ler estado do jogo para ignorá-las)."),
             "event.click"=>("Inicia o comportamento ao clicar no objeto ou em seu botão de interface.","Um botão de carta inicia uma condição de energia antes de aplicar o efeito.","O grafo precisa pertencer ao objeto clicado; uma referência visual não cria uma ligação de clique."),
             "event.area_enter"=>("Detecta entrada em uma área e fornece o objeto que entrou.","Ligue Objeto à leitura do atributo Chave do visitante.","Adicione um colisor ativo marcado como área ao responsável. Não procure o visitante por um nome fixo."),
             "event.area_exit"=>("Executa quando o visitante sai de uma área e fornece esse objeto.","Use a referência do visitante para desativar um efeito temporário ao sair.","Um corpo de movimento 3D rápido pode entrar e sair no mesmo passo, nessa ordem. Desativar ou remover uma área cancela a ocupação; não simula uma travessia. Objetos legados usam a sobreposição entre passos."),
             "event.animation"=>("Inicia um fluxo quando a reprodução atravessa um marcador de animação.","Use Impacto para ativar a área do golpe.","O marcador precisa existir no clip reproduzido pelo responsável. Ficar parado perto do instante não repete o evento."),
+            "event.pause"=>("Inicia um fluxo quando o jogo pausa ou retoma, qualquer que seja a causa: o nó Pausar / retomar jogo ou a tecla Esc.","Num grupo de interface Menu de pausa, oculto ao começar, Ao pausar mostra o grupo com Ativar / desativar componente (Visibilidade) e Ao retomar o esconde.","Uma cena com este evento tem menu de pausa: Esc pausa e retoma o jogo em vez de pausar a engine. Ao mudar de cena, a pausa termina sem o evento: a cena nova começa sem pausa. Na pausa do jogo, o mundo para, mas a lógica, as ações de entrada e os cliques na interface continuam; botões ocultos não recebem cliques."),
             "value.number"=>("Fornece um número constante.","Use 2 como custo de uma carta.","Conecte a uma entrada numérica; textos não viram números automaticamente."),
             "value.text"=>("Fornece um texto constante.","Defina uma mensagem ou conteúdo textual para um atributo.","O texto não procura objetos pelo nome; use referências de objeto."),
             "value.bool"=>("Fornece verdadeiro ou falso.","Use verdadeiro ao registrar que uma chave foi coletada.","Uma condição espera um booleano, não o texto verdadeiro."),
             "value.object"=>("Fornece a referência de um objeto da cena.","Escolha o alvo de um efeito de carta.","Se o objeto for removido durante o teste, a referência deixa de resolver; verifique o diagnóstico."),
+            "value.scene"=>("Fornece a cena escolhida pelo nome: o identificador, para Mudar de cena, e o nome, para chaves e textos.","Ligue Cena à entrada Cena de Mudar de cena para abrir a cena seguinte, ou ao Novo valor de Alterar atributo para guardá-la num atributo de texto que outra lógica lê. Ligue Nome à Chave de Ler ou Alterar variável do jogo para guardar um valor por cena num menu, sem escrever o nome à mão.","Cena é o identificador, que não muda ao renomear a cena: é o que Mudar de cena espera. Nome é o texto mostrado, que muda ao renomear a cena: use-o em textos e chaves, não como destino. Sem cena escolhida, o comportamento que lê o nó é interrompido com erro. A cena escolhida não pode ser excluída enquanto o nó a nomeia, e uma cópia da lógica levada para outra cena continua fornecendo a mesma cena."),
             "attribute.get"=>("Lê o atributo do objeto informado.","Ligue o visitante de uma área ao alvo e escolha Chave.","Sem alvo conectado ou explícito, lê o responsável. O nome do atributo deve corresponder ao valor que você criou."),
             "attribute.set"=>("Altera um atributo usando o valor fornecido.","Depois de verificar energia suficiente, grave Energia menos Custo.","Nada associa automaticamente Vida à morte. Monte as condições e ações desejadas."),
-            "math.binary"=>("Soma, subtrai, multiplica ou divide A e B.","Energia menos Custo fornece a nova energia.","Dividir por zero gera diagnóstico. Confira a ordem A e B ao subtrair ou dividir."),
             "condition.compare"=>("Compara A e B e fornece um booleano.","Energia maior ou igual a Custo permite jogar a carta.","Comparar fornece dados; conecte o resultado à Condição para escolher um fluxo de execução."),
             "condition.branch"=>("Escolhe somente a saída Verdadeiro ou Falso.","Verdadeiro desconta energia e aplica dano; Falso mostra uma mensagem.","A porta de execução inicia a decisão; conectar somente o dado não executa ações."),
             "action.damage"=>("Subtrai dano de um atributo numérico configurável do alvo.","A área de um golpe aplica 25 ao atributo Vida do objeto que entrou.","Uma vez por ativação e alvo evita repetição do golpe, inclusive após uma espera. Ativações distintas podem causar novo dano."),
             "action.animation"=>("Reproduz um clip de animação do objeto escolhido.","A ação de entrada inicia Ataque; seu marcador Impacto inicia o acerto.","O clip deve existir nesse objeto. Não confunda a peça de uma trilha com o modelo que contém o clip."),
-            "action.sound"=>("Solicita reprodução de um WAV importado, com volume configurável.","O marcador Passo pode acionar um som do projeto.","Importe o WAV na Biblioteca. Arquivo ou dispositivo inválido é diagnosticado; não há áudio espacial ou mixer avançado."),
+            "action.sound"=>("Toca um WAV importado uma vez, no canal de efeitos, com volume configurável.","O marcador Passo pode acionar um som do projeto.","Importe o WAV na Biblioteca. Arquivo ou dispositivo inválido é diagnosticado. O som é ouvido no volume geral vezes o dos efeitos vezes o do nó (veja Volume do canal); a pausa do jogo o congela. Para um som contínuo, como música ou vento, use Tocar em loop. Não há áudio espacial."),
             "action.spawn"=>("Cria uma cópia da hierarquia indicada durante o jogo.","Crie uma cópia de um objeto de efeito e use a saída Objeto para configurar sua continuação.","É uma instância do runtime. Parar descarta as criações; referências internas da hierarquia são remapeadas."),
             "action.remove"=>("Remove um objeto e seus descendentes do jogo.","Após registrar Chave no visitante, remova o coletável.","As tarefas do objeto removido são canceladas. A alteração não apaga o documento de edição."),
-            "action.component"=>("Ativa ou desativa o componente escolhido.","Ative a colisão da área de ataque, espere sua duração e desative-a.","Visibilidade, comportamento, controlador, animação e colisão são estados distintos. Ocultar a peça não desativa seu colisor."),
-            "action.scene"=>("Encerra a cena atual e abre o destino configurado.","Uma passagem usa a área para iniciar a segunda cena.","Escolha uma cena existente. Tarefas e ativações da cena anterior são canceladas."),
+            "action.component"=>("Ativa ou desativa o componente escolhido: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel.","Ative a colisão da área de ataque, espere sua duração e desative-a.","Visibilidade, comportamento, controlador, animação, colisão e plataforma são estados distintos: ocultar a peça não desativa seu colisor. Desativar uma área encerra a ocupação sem gerar saída; ao reativá-la, quem estiver dentro entra de novo. Desativar a plataforma móvel para o movimento por velocidade; numa plataforma animada, só deixa de carregar quem está em cima, e a animação continua: pause-a com Reprodução da animação."),
+            "action.scene"=>("Encerra a cena atual e abre a cena de destino: a escolhida no parâmetro ou a que a entrada Cena receber.","Uma passagem usa a área para iniciar a segunda cena. Com Cena atual ligada à entrada Cena, o mesmo nó reinicia a cena em que está, em qualquer cena para onde a lógica for copiada.","Conectada, a entrada Cena substitui a cena escolhida, que fica ignorada. Ela espera o identificador de uma cena, não o nome: um texto vazio, um nome ou um identificador que o projeto não tem interrompe o comportamento com erro. Para seguir para outra cena, escolha-a no parâmetro em cada cópia da lógica ou ligue à entrada Cena uma Referência de cena. Um atributo de texto lido por Ler atributo também serve, com o identificador da cena: grave-o com Alterar atributo a partir de uma Referência de cena. Tarefas e ativações da cena anterior são canceladas."),
             "control.sequence"=>("Dispara as saídas 1, 2 e 3 nessa ordem.","Inicie som e animação a partir do mesmo evento.","Não aguarda que um ramo termine. Para esperar antes da próxima ação, conecte-as em um mesmo ramo através de Esperar."),
-            "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é da simulação: pausar o jogo suspende a espera. Remover o responsável, Parar ou mudar de cena cancela a tarefa."),
-            "debug.message"=>("Registra uma mensagem no Console durante o teste.","Ligue à ação K para verificar seu primeiro fluxo.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução."),
-            _=>crate::graph::movement_help(operation.id).unwrap_or(("Operação ainda sem documentação pedagógica.","Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
+            "control.wait"=>("Suspende somente a continuação por um tempo, sem bloquear a simulação.","Após ativar uma área, espere 0,15 segundo e desative-a.","O tempo é o do jogo: a pausa da engine e a pausa do jogo suspendem a espera, e uma espera iniciada durante a pausa do jogo só termina depois de retomar. Remover o responsável, Parar ou mudar de cena cancela a tarefa; teleportar um personagem não."),
+            "debug.message"=>("Registra uma mensagem no Console durante o teste; com a entrada Valor ligada, escreve depois dela o valor recebido.","Ligue à ação K para verificar seu primeiro fluxo; ligue o Motivo de recusa de Teleportar com segurança ao Valor para ver por que ele falhou.","Abra Console manualmente. O nó não abre painéis nem produz uma notificação por execução. Sem Valor ligado, escreve só a mensagem."),
+            _=>crate::graph::game_help(operation.id).or_else(||crate::graph::audio_help(operation.id)).or_else(||crate::graph::math_help(operation.id)).or_else(||crate::graph::movement_help(operation.id)).unwrap_or((UNDOCUMENTED,"Consulte as portas e os parâmetros disponíveis.","Relate esta lacuna antes de usar a operação em um projeto importante.")),
         };Topic {operation,purpose,example,caution}
     }).collect())
 }
@@ -108,7 +162,7 @@ mod tests {
     #[test]
     fn every_registered_operation_has_help_and_first_recipe_runs_as_data() {
         assert_eq!(topics().len(), crate::graph::registry().len());
-        assert!(topics().iter().all(|t| !t.purpose.contains("ainda sem")));
+        assert!(topics().iter().all(|t| t.purpose != UNDOCUMENTED));
         let project = first_recipe().unwrap();
         let before = project.clone();
         let action = project.input_bindings.keys().next().unwrap().clone();

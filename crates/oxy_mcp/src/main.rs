@@ -16,17 +16,21 @@ const INSTRUCTIONS: &str = "OXY Engine is a desktop game editor (Rust). A projec
 (2D or 3D); a scene is a flat list of objects with parent links; objects have a transform, an \
 optional shape, material, attributes, components (colliders, character, platform, camera \
 control, 2D movement), a logic graph of nodes and animation clips. Start with oxy_status, then \
-oxy_project and oxy_scene. Read oxy_catalog before building logic. Reads are compact JSON with \
-floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long \
-lists come in pages (limit, offset, next_offset), oxy_entity \
+oxy_project and oxy_scene; when the person wants a new game, oxy_new_project creates its project \
+(on files) in the folder they name. Read oxy_catalog before building logic. Reads are compact \
+JSON with floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): \
+long lists come in pages (limit, offset, next_offset), oxy_entity \
 summarizes logic and geometry unless asked in full, and world positions and boxes (oxy_scene \
 fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
 (atomic batches, validated with the editor's own rules) and oxy_import (PNG and WAV files the \
 person points you to). When the project is open in the editor your edits appear live and the \
-person can undo them; you never save there, the person does. After changes, check them with \
-oxy_simulate and oxy_screenshot; when the person tested the game in the editor, oxy_console has \
-what that test logged. Messages from the engine are in Portuguese; answer the person in their \
-language.";
+person can undo them; the person saves there, and you never save unless they enabled it (Permitir \
+que agentes salvem: oxy_status can_save) and ask or agree, then with oxy_save. After changes, \
+check them with oxy_simulate and oxy_screenshot; oxy_play runs a test in the editor for the \
+person to watch, without taking their mouse. Export the game (oxy_export) only when the person \
+asks, to the folder they name. When the person tested the game in the editor, oxy_console has \
+what that test logged. Messages from the engine are in Portuguese; answer the \
+person in their language.";
 
 fn handle(tools: &mut tools::Tools, request: &Json) -> Option<Json> {
     let id = request.get("id").cloned()?;
@@ -139,9 +143,17 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(
-            names.contains(&"oxy_apply".to_owned()) && names.len() == 16,
+            names.contains(&"oxy_apply".to_owned()) && names.len() == 20,
             "{names:?}"
         );
+        assert!(names.contains(&"oxy_play".to_owned()) && names.contains(&"oxy_save".to_owned()));
+        assert!(names.contains(&"oxy_new_project".to_owned()));
+        // Saving live is the person's choice.
+        let instructions = init["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("never save unless they enabled it"));
+        assert!(instructions.contains("can_save") && instructions.contains("oxy_play"));
+        assert!(instructions.contains("oxy_export) only when the person asks"));
+        assert!(instructions.contains("oxy_new_project creates its project"));
         let call = handle(
             &mut tools,
             &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -261,6 +273,64 @@ mod tests {
             import["params"],
             json!({"path": image, "apply_to": "e", "scene": "cena-1"})
         );
+        // Several files go to the editor as one request, for one undo step.
+        let files = json!([image, {"path": image, "name": "Placa", "apply_to": "e"}]);
+        let batch = echo(
+            "oxy_import",
+            json!({"project": "C:/ao-vivo/project.oxy.json", "paths": files, "scene": "cena-1"}),
+        );
+        assert_eq!(
+            (&batch["method"], &batch["params"]),
+            (
+                &json!("import"),
+                &json!({"paths": files, "scene": "cena-1"})
+            )
+        );
+        // The test and saving reach the editor, which plays and saves; input times stay
+        // relative, for the editor to count from its game clock.
+        let start = echo("oxy_play", json!({"action": "start", "scene": "cena-2"}));
+        assert_eq!(start["method"], "play");
+        assert_eq!(
+            start["params"],
+            json!({"action": "start", "scene": "cena-2", "inputs": null})
+        );
+        let inputs = json!([{"type": "press", "at": 0.0, "action": "Pular"},
+                            {"type": "release", "at": 0.25, "action": "Pular"}]);
+        let input = echo("oxy_play", json!({"action": "input", "inputs": inputs}));
+        assert_eq!(
+            input["params"],
+            json!({"action": "input", "scene": null, "inputs": inputs})
+        );
+        let save = echo(
+            "oxy_save",
+            json!({"project": "C:/ao-vivo/project.oxy.json"}),
+        );
+        assert_eq!(
+            (&save["method"], &save["params"]),
+            (&json!("save"), &json!({}))
+        );
+        // The editor exports what it has in memory; where the game may go is checked first.
+        let games = std::env::temp_dir().join("Jogos").display().to_string();
+        let export = echo("oxy_export", json!({"destination": games, "replace": true}));
+        assert_eq!(export["method"], "export");
+        assert_eq!(
+            export["params"],
+            json!({"destination": games, "replace": true})
+        );
+        let export = echo("oxy_export", json!({"destination": games}));
+        assert_eq!(export["params"]["replace"], false);
+        // A new project goes to the files with an editor open too, and never reaches it.
+        let created = dir.join("Novo jogo");
+        let new = echo(
+            "oxy_new_project",
+            json!({"folder": created, "name": "Novo jogo", "scene": {"kind": "2d"}}),
+        );
+        assert_eq!(new["name"], "Novo jogo");
+        assert!(created.join("project.oxy.json").is_file());
+        let error = tools
+            .call("oxy_export", &json!({"destination": "Jogos"}))
+            .unwrap_err();
+        assert!(error.contains("caminho completo"), "{error}");
         let error = tools
             .call("oxy_entity", &json!({"id": "a", "geometry": "toda"}))
             .unwrap_err();
@@ -277,6 +347,21 @@ mod tests {
         drop(tools);
         let methods = server.join().unwrap();
         assert!(methods.contains(&"status".to_owned()) && methods.contains(&"apply".to_owned()));
+        assert_eq!(
+            methods.iter().filter(|m| *m == "play").count(),
+            2,
+            "{methods:?}"
+        );
+        assert!(methods.contains(&"save".to_owned()), "{methods:?}");
+        assert!(
+            !methods.iter().any(|m| m == "summary" || m == "document"),
+            "{methods:?}"
+        );
+        assert_eq!(
+            methods.iter().filter(|m| *m == "export").count(),
+            2,
+            "{methods:?}"
+        );
         assert_eq!(
             methods.iter().filter(|m| *m == "entity").count(),
             1,
@@ -335,6 +420,44 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("Nada foi alterado"), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn file_mode_saves_an_older_project_in_the_current_format_with_both_backups() {
+        use oxy_core::{
+            document::{SCHEMA_VERSION, SceneKind},
+            editing, persistence,
+        };
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Antigo", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let mut older: Json = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        older["schema_version"] = 4.into();
+        let original = serde_json::to_vec_pretty(&older).unwrap();
+        std::fs::write(&file, &original).unwrap();
+        let mut tools = tools::Tools::default();
+        tools
+            .call(
+                "oxy_apply",
+                &json!({"project": dir.display().to_string(), "commands": [
+                    {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Caixa"},
+                ]}),
+            )
+            .unwrap();
+        let saved: Json = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["schema_version"], SCHEMA_VERSION);
+        assert_eq!(
+            std::fs::read(file.with_extension("json.agente.bak")).unwrap(),
+            original
+        );
+        let backup = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.to_string_lossy().contains(".schema-4."))
+            .unwrap();
+        assert_eq!(std::fs::read(backup).unwrap(), original);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

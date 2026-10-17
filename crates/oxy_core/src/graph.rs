@@ -3,7 +3,15 @@
 use crate::document::{Value, new_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+mod audio;
+mod game;
+pub mod layout;
+mod math;
 mod movement;
+pub use audio::{SOUND_CHANNELS, STOP_CHANNELS, VOLUME_CHANNELS, audio_choices, audio_help};
+pub use game::{game_choices, game_help};
+pub use layout::{arrange, node_extent};
+pub use math::{ARITHMETIC, math_choices, math_help};
 pub use movement::{movement_choices, movement_help};
 
 /// When an input event fires: value stored and label shown.
@@ -12,19 +20,16 @@ pub const INPUT_MODES: [(&str, &str); 3] = [
     ("held", "Manter"),
     ("released", "Soltar"),
 ];
+/// Which change of the game pause Ao pausar ou retomar answers.
+pub const PAUSE_CHANGES: [(&str, &str); 2] = [("pause", "Ao pausar"), ("resume", "Ao retomar")];
 /// Parts of an object that Ativar / desativar componente switches.
-pub const COMPONENTS: [(&str, &str); 5] = [
-    ("collider", "Colisão / área"),
+pub const COMPONENTS: [(&str, &str); 6] = [
+    ("collider", "Colisão / área (2D e 3D)"),
     ("controller", "Controlador de movimento"),
     ("visible", "Visibilidade"),
     ("behavior", "Comportamento visual"),
     ("animation", "Reprodução da animação"),
-];
-pub const ARITHMETIC: [(&str, &str); 4] = [
-    ("+", "Somar · A + B"),
-    ("-", "Subtrair · A − B"),
-    ("*", "Multiplicar · A × B"),
-    ("/", "Dividir · A ÷ B"),
+    ("platform", "Plataforma móvel"),
 ];
 pub const COMPARISONS: [(&str, &str); 6] = [
     ("==", "Igual · A = B"),
@@ -41,13 +46,17 @@ pub fn choices(
     operation: &str,
     parameter: &str,
 ) -> Option<&'static [(&'static str, &'static str)]> {
-    movement_choices(operation, parameter).or(match (operation, parameter) {
-        ("event.input", "mode") => Some(&INPUT_MODES),
-        ("action.component", "component") => Some(&COMPONENTS),
-        ("math.binary", "operator") => Some(&ARITHMETIC),
-        ("condition.compare", "operator") => Some(&COMPARISONS),
-        _ => None,
-    })
+    movement_choices(operation, parameter)
+        .or_else(|| math_choices(operation, parameter))
+        .or_else(|| game_choices(operation, parameter))
+        .or_else(|| audio_choices(operation, parameter))
+        .or(match (operation, parameter) {
+            ("event.input", "mode") => Some(&INPUT_MODES),
+            ("event.pause", "when") => Some(&PAUSE_CHANGES),
+            ("action.component", "component") => Some(&COMPONENTS),
+            ("condition.compare", "operator") => Some(&COMPARISONS),
+            _ => None,
+        })
 }
 
 /// Checks the fixed choices of `params` given to a node of `operation`.
@@ -93,6 +102,8 @@ pub enum Reference {
     Surface,
     /// The name of a marker in an animation clip.
     Marker,
+    /// The ID of a game variable (Variáveis do jogo).
+    Variable,
 }
 
 /// What the parameter `param` of `operation` refers to, if anything.
@@ -100,14 +111,55 @@ pub fn reference(operation: &str, param: &ParamDef) -> Option<Reference> {
     Some(match (operation, param.id, &param.default) {
         (_, _, Value::Object(_)) => Reference::Object,
         (_, _, Value::Surface(_)) => Reference::Surface,
-        ("action.scene", "scene", _) => Reference::Scene,
-        ("action.sound", "asset", _) => Reference::Audio,
+        ("action.scene" | "value.scene", "scene", _) => Reference::Scene,
+        ("action.sound" | "action.sound_loop" | "action.sound_stop", "asset", _) => {
+            Reference::Audio
+        }
         ("action.animation", "clip", _) => Reference::Clip,
         ("event.input" | "input.read", "action", _) => Reference::InputAction,
         ("event.animation", "marker", _) => Reference::Marker,
+        ("variable.get" | "variable.set", "variable", _) => Reference::Variable,
         (_, "attribute", Value::Text(_)) => Reference::Attribute,
         _ => return None,
     })
+}
+
+/// What an empty value of a parameter that names something of the project ([`reference`])
+/// stands for, when it is a choice of its own: Parar som's audio stops every loop of the
+/// channel. Other empty references are left unset.
+pub fn empty_choice(operation: &str, parameter: &str) -> Option<&'static str> {
+    match (operation, parameter) {
+        ("action.sound_stop", "asset") => Some("Todos os sons do canal"),
+        _ => None,
+    }
+}
+
+/// The parameters of `node` that name something of the project ([`reference`]), in registry
+/// order, with what they name. Integrity checks go through here, so a new node that names a
+/// scene, an audio, a clip, an input action or a game variable needs only its line in
+/// [`reference`].
+pub fn node_references(
+    node: &Node,
+) -> impl Iterator<Item = (&'static ParamDef, Reference, &Value)> {
+    definition(&node.operation)
+        .into_iter()
+        .flat_map(|def| def.params.iter().map(move |param| (def.id, param)))
+        .filter_map(move |(operation, param)| {
+            Some((
+                param,
+                reference(operation, param)?,
+                node.params.get(param.id)?,
+            ))
+        })
+}
+
+/// The registry entry of `operation`.
+pub fn definition(operation: &str) -> Option<&'static OperationDef> {
+    static INDEX: std::sync::OnceLock<HashMap<&str, &OperationDef>> = std::sync::OnceLock::new();
+    INDEX
+        .get_or_init(|| registry().iter().map(|def| (def.id, def)).collect())
+        .get(operation)
+        .copied()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +201,120 @@ pub struct ParamDef {
     pub id: &'static str,
     pub label: &'static str,
     pub default: Value,
+    /// The numbers the game takes, for a number parameter whose runtime has limits.
+    pub range: Option<NumberRange>,
+}
+impl ParamDef {
+    /// The game refuses numbers outside `min..=max` (no `max`: no upper limit).
+    fn within(mut self, min: f64, max: impl Into<Option<f64>>) -> Self {
+        self.range = Some(NumberRange {
+            min,
+            max: max.into(),
+            clamped: false,
+        });
+        self
+    }
+    /// The game takes numbers outside `min..=max` as the nearest limit.
+    fn clamped(mut self, min: f64, max: f64) -> Self {
+        self.range = Some(NumberRange {
+            min,
+            max: Some(max),
+            clamped: true,
+        });
+        self
+    }
+}
+/// The numbers a parameter can hold, limits included. They live in the registry, not in the
+/// project: an older project keeps whatever it holds, which validation then points out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NumberRange {
+    pub min: f64,
+    /// None: no upper limit.
+    pub max: Option<f64>,
+    /// The game takes a number outside as the nearest limit; otherwise the node refuses it.
+    pub clamped: bool,
+}
+impl NumberRange {
+    pub fn contains(&self, value: f64) -> bool {
+        value >= self.min && self.max.is_none_or(|max| value <= max)
+    }
+    /// "de 0 a 2", or "de 0 em diante" without an upper limit.
+    pub fn describe(&self) -> String {
+        match self.max {
+            Some(max) => format!("de {} a {max}", self.min),
+            None => format!("de {} em diante", self.min),
+        }
+    }
+}
+
+/// Checks the numbers of `params` given to a node of `operation` against their ranges, which
+/// agents may not leave: the first one outside, named by the node's label, with its range.
+pub fn check_ranges<'a>(
+    operation: &str,
+    params: impl IntoIterator<Item = (&'a String, &'a Value)>,
+) -> Result<(), String> {
+    let Some(def) = definition(operation) else {
+        return Ok(());
+    };
+    for (key, value) in params {
+        let Some(param) = def.params.iter().find(|p| p.id == key) else {
+            continue;
+        };
+        if let (Some(range), Value::Number(number)) = (param.range, value)
+            && !range.contains(*number)
+        {
+            return Err(format!(
+                "O parâmetro {key} ({}) de {} aceita números {}; recebeu {number}",
+                param.label,
+                def.label,
+                range.describe()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The number parameters of `node` in `graph` holding a value outside their range, in registry
+/// order. One whose input port of the same id is connected is left out: the game reads the port.
+pub fn out_of_range(
+    graph: &Graph,
+    node: &Node,
+) -> impl Iterator<Item = (&'static ParamDef, NumberRange, f64)> {
+    definition(&node.operation)
+        .into_iter()
+        .flat_map(|def| &def.params)
+        .filter(|param| !graph.input_connected(&node.id, param.id))
+        .filter_map(|param| match (param.range, node.params.get(param.id)) {
+            (Some(range), Some(Value::Number(value))) if !range.contains(*value) => {
+                Some((param, range, *value))
+            }
+            _ => None,
+        })
+}
+
+/// What the game does with `value`, outside the `range` of `param` of a node of `operation`.
+pub fn range_problem(operation: &str, param: &ParamDef, range: NumberRange, value: f64) -> String {
+    let label = |port: &str| {
+        definition(operation)
+            .and_then(|def| def.outputs.iter().find(|p| p.id == port))
+            .map(|p| p.label)
+    };
+    let outcome = if range.clamped {
+        "no jogo, vale o limite mais próximo".to_owned()
+    } else if let Some(success) = label("success") {
+        format!(
+            "no jogo, o nó recusa: a saída {success} fica falsa, com o motivo em {}",
+            label("error").unwrap_or("Motivo de recusa")
+        )
+    } else {
+        "no jogo, o nó para com erro".to_owned()
+    };
+    format!(
+        "o parâmetro {} ({}) vale {value}, fora da faixa {}; {outcome}",
+        param.id,
+        param.label,
+        range.describe()
+    )
 }
 #[derive(Clone, Debug)]
 pub struct OperationDef {
@@ -165,7 +331,7 @@ pub fn description(operation: &str) -> &'static str {
     match operation {
         "event.scene_start" => "Executa quando a cena começa.",
         "event.input" => {
-            "Executa ao pressionar, manter ou soltar uma ação configurada em Ações de entrada."
+            "Executa ao pressionar, manter ou soltar uma ação configurada em Ações de entrada, em todo objeto que tem o nó, inclusive num personagem 3D com as ações automáticas desligadas: nesta versão, a entrada é uma só para o jogo inteiro."
         }
         "event.click" => "Executa ao clicar neste objeto ou em seu botão de interface.",
         "event.area_enter" => {
@@ -176,23 +342,40 @@ pub fn description(operation: &str) -> &'static str {
         "value.text" => "Fornece um texto definido no painel de parâmetros.",
         "value.bool" => "Fornece um valor verdadeiro ou falso.",
         "value.object" => "Fornece a referência de um objeto da cena.",
+        "value.scene" => {
+            "Fornece a cena escolhida: Cena, o identificador, para Mudar de cena e atributos de texto, e Nome, o nome dela, para chaves e textos."
+        }
         "attribute.get" => "Lê o atributo escolhido do objeto informado.",
         "attribute.set" => "Altera o atributo escolhido do objeto informado.",
-        "math.binary" => "Soma, subtrai, multiplica ou divide os números A e B.",
+        "math.binary" => {
+            "Soma, subtrai, multiplica, divide, tira o resto ou escolhe o menor ou o maior entre os números A e B."
+        }
         "condition.compare" => "Compara A e B e fornece verdadeiro ou falso.",
         "condition.branch" => "Segue a saída Verdadeiro ou Falso conforme a condição.",
         "action.damage" => {
             "Reduz o atributo numérico configurado no alvo. Pode limitar a um acerto por ativação."
         }
         "action.animation" => "Reproduz uma animação do objeto escolhido.",
-        "action.sound" => "Reproduz um áudio WAV do projeto no volume configurado.",
-        "action.spawn" => "Cria uma cópia da hierarquia do objeto durante o jogo.",
+        "action.sound" => {
+            "Toca um áudio WAV do projeto uma vez, no canal de efeitos, no volume configurado, de 0 a 1."
+        }
+        "action.spawn" => {
+            "Cria uma cópia da hierarquia do objeto durante o jogo, deslocada de X, Y e Z (metros no 3D) em relação ao original, e fornece a cópia em Objeto criado."
+        }
         "action.remove" => "Remove o objeto e seus descendentes durante o jogo.",
-        "action.component" => "Ativa ou desativa o componente escolhido do objeto.",
-        "action.scene" => "Encerra a cena atual e abre a cena de destino no jogo.",
+        "action.component" => {
+            "Ativa ou desativa o componente escolhido do objeto: colisor ou área (2D e 3D), controlador, visibilidade, comportamento, animação ou plataforma móvel."
+        }
+        "action.scene" => {
+            "Encerra a cena atual e abre a cena de destino, ou a que a entrada Cena receber: ligada a Cena atual, reinicia a cena."
+        }
         "control.sequence" => "Executa as saídas 1, 2 e 3 nessa ordem.",
-        "control.wait" => "Continua após o tempo indicado, sem interromper o jogo ou o editor.",
-        "debug.message" => "Exibe uma mensagem no diagnóstico durante a execução.",
+        "control.wait" => {
+            "Continua após os segundos indicados, em tempo de jogo, sem interromper o jogo ou o editor. Um teleporte não cancela a espera, nem a de um fluxo que o personagem teleportado iniciou, como a entrada numa área."
+        }
+        "debug.message" => {
+            "Exibe uma mensagem no diagnóstico durante a execução e, com a entrada Valor ligada, o valor recebido depois dela (números com todas as casas decimais, objetos e superfícies pelo nome)."
+        }
         // The guide documents every registered operation, movement nodes included.
         _ => crate::guide::topics()
             .iter()
@@ -268,13 +451,57 @@ fn port(id: &'static str, label: &'static str, kind: PortType) -> PortDef {
     PortDef { id, label, kind }
 }
 fn param(id: &'static str, label: &'static str, default: Value) -> ParamDef {
-    ParamDef { id, label, default }
+    ParamDef {
+        id,
+        label,
+        default,
+        range: None,
+    }
 }
 fn text(id: &'static str, label: &'static str, value: &str) -> ParamDef {
     param(id, label, Value::Text(value.into()))
 }
 fn number(id: &'static str, label: &'static str, value: f64) -> ParamDef {
     param(id, label, Value::Number(value))
+}
+fn v3(id: &'static str, label: &'static str, value: [f32; 3]) -> ParamDef {
+    param(id, label, Value::Vector3(value))
+}
+fn flag(id: &'static str, label: &'static str, value: bool) -> ParamDef {
+    param(id, label, Value::Bool(value))
+}
+/// The object a node acts on or reads (empty: the node's own object).
+fn target() -> ParamDef {
+    param("target", "Objeto", Value::Object(None))
+}
+/// An operation whose non-text parameters are also input ports of the same ID; an action
+/// gets the Executar input and the Continuar output first.
+fn op(
+    id: &'static str,
+    label: &'static str,
+    category: &'static str,
+    action: bool,
+    params: Vec<ParamDef>,
+    outputs: Vec<PortDef>,
+) -> OperationDef {
+    let mut inputs: Vec<_> = params
+        .iter()
+        .filter(|p| !matches!(p.default, Value::Text(_)))
+        .map(|p| port(p.id, p.label, value_type(&p.default)))
+        .collect();
+    let mut outputs = outputs;
+    if action {
+        inputs.insert(0, port("exec", "Executar", PortType::Exec));
+        outputs.insert(0, port("exec", "Continuar", PortType::Exec));
+    }
+    OperationDef {
+        id,
+        label,
+        category,
+        inputs,
+        outputs,
+        params,
+    }
 }
 
 pub fn registry() -> &'static [OperationDef] {
@@ -301,6 +528,11 @@ fn build_registry() -> Vec<OperationDef> {
             "event.animation",
             "Marcador de animação",
             vec![text("marker", "Marcador", "Impacto")],
+        ),
+        (
+            "event.pause",
+            "Ao pausar ou retomar",
+            vec![text("when", "Quando", "pause")],
         ),
     ] {
         result.push(OperationDef {
@@ -336,29 +568,25 @@ fn build_registry() -> Vec<OperationDef> {
             params: vec![param("value", "Valor", default)],
         });
     }
+    // A scene picked by name in the editor, given as the ID that Mudar de cena takes, and its
+    // name for keys and texts.
+    result.push(OperationDef {
+        id: "value.scene",
+        label: "Referência de cena",
+        category: "Dados",
+        inputs: vec![],
+        outputs: vec![port("value", "Cena", Text), port("name", "Nome", Text)],
+        params: vec![text("scene", "Cena", "")],
+    });
     result.push(OperationDef {
         id: "attribute.get",
         label: "Ler atributo",
         category: "Dados",
         inputs: vec![port("target", "Objeto (vazio = este)", Object)],
         outputs: vec![port("value", "Valor", Any)],
-        params: vec![
-            param("target", "Objeto", Value::Object(None)),
-            text("attribute", "Atributo", "Vida"),
-        ],
+        params: vec![target(), text("attribute", "Atributo", "Vida")],
     });
-    result.push(OperationDef {
-        id: "math.binary",
-        label: "Operação aritmética",
-        category: "Dados",
-        inputs: vec![port("a", "A", Number), port("b", "B", Number)],
-        outputs: vec![port("value", "Resultado", Number)],
-        params: vec![
-            number("a", "A", 0.0),
-            number("b", "B", 1.0),
-            text("operator", "Operação (+ - * /)", "+"),
-        ],
-    });
+    result.extend(math::definitions());
     result.push(OperationDef {
         id: "condition.compare",
         label: "Comparar",
@@ -392,7 +620,6 @@ fn build_registry() -> Vec<OperationDef> {
             port("target", "Objeto (vazio = este)", Object),
         ]
     };
-    let self_param = || param("target", "Objeto", Value::Object(None));
     result.push(OperationDef {
         id: "attribute.set",
         label: "Alterar atributo",
@@ -404,7 +631,7 @@ fn build_registry() -> Vec<OperationDef> {
         },
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("attribute", "Atributo", "Vida"),
             number("value", "Novo valor", 100.0),
         ],
@@ -420,9 +647,9 @@ fn build_registry() -> Vec<OperationDef> {
         },
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("attribute", "Atributo numérico", "Vida"),
-            number("amount", "Quantidade", 10.0),
+            number("amount", "Quantidade", 10.0).within(0., None),
             param("once", "Uma vez por ativação/alvo", Value::Bool(true)),
         ],
     });
@@ -433,20 +660,9 @@ fn build_registry() -> Vec<OperationDef> {
         inputs: exec_target(),
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("clip", "Animação", ""),
             param("restart", "Reiniciar", Value::Bool(true)),
-        ],
-    });
-    result.push(OperationDef {
-        id: "action.sound",
-        label: "Reproduzir WAV",
-        category: "Ações",
-        inputs: exec(),
-        outputs: exec(),
-        params: vec![
-            text("asset", "Áudio", ""),
-            number("volume", "Volume (0 a 1)", 1.0),
         ],
     });
     result.push(OperationDef {
@@ -459,7 +675,7 @@ fn build_registry() -> Vec<OperationDef> {
             port("created", "Objeto criado", Object),
         ],
         params: vec![
-            self_param(),
+            target(),
             number("x", "Deslocamento X", 0.0),
             number("y", "Deslocamento Y", 0.0),
             number("z", "Deslocamento Z", 0.0),
@@ -471,7 +687,7 @@ fn build_registry() -> Vec<OperationDef> {
         category: "Ações",
         inputs: exec_target(),
         outputs: exec(),
-        params: vec![self_param()],
+        params: vec![target()],
     });
     result.push(OperationDef {
         id: "action.component",
@@ -480,7 +696,7 @@ fn build_registry() -> Vec<OperationDef> {
         inputs: exec_target(),
         outputs: exec(),
         params: vec![
-            self_param(),
+            target(),
             text("component", "Componente", "collider"),
             param("enabled", "Ativo", Value::Bool(true)),
         ],
@@ -489,10 +705,14 @@ fn build_registry() -> Vec<OperationDef> {
         id: "action.scene",
         label: "Mudar de cena",
         category: "Ações",
-        inputs: exec(),
+        // A connected Cena replaces the parameter, which keeps the scene it names.
+        inputs: vec![port("exec", "Executar", Exec), port("scene", "Cena", Text)],
         outputs: vec![],
         params: vec![text("scene", "Cena de destino", "")],
     });
+    result.extend(math::actions());
+    result.extend(game::definitions());
+    result.extend(audio::definitions());
     result.push(OperationDef {
         id: "control.sequence",
         label: "Sequência",
@@ -515,13 +735,14 @@ fn build_registry() -> Vec<OperationDef> {
             inputs
         },
         outputs: exec(),
-        params: vec![number("seconds", "Segundos", 0.5)],
+        params: vec![number("seconds", "Segundos", 0.5).within(0., crate::runtime::MAX_WAIT)],
     });
     result.push(OperationDef {
         id: "debug.message",
         label: "Mensagem de diagnóstico",
         category: "Controle",
-        inputs: exec(),
+        // Valor has no parameter: left unconnected, the message is written alone, as before.
+        inputs: vec![port("exec", "Executar", Exec), port("value", "Valor", Any)],
         outputs: exec(),
         params: vec![text("message", "Mensagem", "Ação executada")],
     });
@@ -532,6 +753,13 @@ fn build_registry() -> Vec<OperationDef> {
 impl Graph {
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|node| node.id == id)
+    }
+    /// Whether a connection reaches the input `port` of `node`, which then gives the value in
+    /// place of the parameter of the same id.
+    pub fn input_connected(&self, node: &str, port: &str) -> bool {
+        self.edges
+            .iter()
+            .any(|edge| edge.to_node == node && edge.to_port == port)
     }
     pub fn connect(&mut self, edge: &Edge, object_ids: &HashSet<String>) -> Result<(), String> {
         let mut draft = self.clone();

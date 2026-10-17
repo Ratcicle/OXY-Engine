@@ -1,18 +1,31 @@
-OXY Engine — dependências de consultas físicas adicionadas na 0.3.0
+OXY Engine — dependências adicionadas na 0.3.0 (consultas físicas) e na 0.6.0 (saída de áudio e céu)
 
 Rapier 3D 0.35.3 e Parry 3D 0.30.2, Dimforge / Sébastien Crozet.
 Licença Apache-2.0. Os textos originais, sem alterações, estão nesta pasta.
 Rapier fornece consultas e resolução cinemática; OXY mantém o motor próprio.
 
+cpal 0.18.2, RustAudio. Licença Apache-2.0; o texto original, sem alterações,
+está em cpal-0.18.2.txt. cpal abre o dispositivo de som; a mixagem é da OXY.
+No Windows ele usa dasp_sample e as bibliotecas windows (Microsoft), sob
+MIT OR Apache-2.0, nas versões do Cargo.lock.
+
 Fontes das licenças, fixadas nas mesmas versões do Cargo.lock:
 https://github.com/dimforge/rapier/blob/v0.35.3/LICENSE
 https://github.com/dimforge/parry/blob/v0.30.2/LICENSE
+https://github.com/RustAudio/cpal/blob/v0.18.2/LICENSE
 
 Fontes embutidas na interface do editor e do player: IBM Plex Sans (Regular e Medium) e
 IBM Plex Mono (Regular), IBM Corp. Licença SIL Open Font License 1.1; o texto
 original, sem alterações, está em ibm-plex-ofl-1.1.txt. Arquivos sem modificação,
 obtidos de https://github.com/IBM/plex (packages/plex-sans e packages/plex-mono).
 
+Céu da OXY, o céu padrão das cenas 3D novas: o céu de dia do pacote Skyboxes
+(1.0), de Kenney (www.kenney.nl). Licença CC0 (domínio público); o texto
+original, com a página de onde veio, está em kenney-skyboxes-cc0.txt. A imagem
+skybox-day.png foi reduzida de 4096×2048 para 2048×1024 e vai embutida no
+editor, no player (os jogos exportados) e no servidor MCP (oxy-mcp), que faz
+as capturas. Fonte: https://opengameart.org/content/skyboxes-1
+
 Demais dependências e versões: Cargo.lock no código-fonte da OXY Engine.
-Esta relação documenta a adição da 0.3.0; não é uma auditoria jurídica de
-todas as bibliotecas do workspace.
+Esta relação documenta as adições da 0.3.0 e da 0.6.0; não é uma auditoria
+jurídica de todas as bibliotecas do workspace.

@@ -5,11 +5,12 @@
 use crate::{
     authoring::{self, ComponentKind},
     collision::Aabb,
+    command,
     document::*,
-    graph::{self, Graph, Node, PortType},
+    graph::{self, Graph, Node, OperationDef, ParamDef, PortType, Reference},
     input_actions,
     scene_view::SceneView,
-    spatial, surface,
+    spatial, surface, variables,
 };
 use glam::{EulerRot, Quat, Vec3};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -21,6 +22,14 @@ fn kind_name(kind: SceneKind) -> &'static str {
         SceneKind::TwoD => "2d",
         SceneKind::ThreeD => "3d",
     }
+}
+
+/// What a scene shows behind its objects, as set_scene_background takes it: "sky" or
+/// {"color": [r, g, b, a]}, the dark color for a scene without a background of its own.
+fn background(scene: &Scene) -> Json {
+    json!(crate::command::BackgroundSpec::shown(
+        scene.shown_background()
+    ))
 }
 
 /// Components present on an object, by their command names.
@@ -67,7 +76,13 @@ pub fn entity_kind(e: &Entity) -> &'static str {
 /// "catalog") with the tool's arguments. `scene` is the scene the request defaults to.
 pub fn answer(project: &Project, scene: &str, request: &str, args: &Json) -> Result<Json, String> {
     match request {
-        "summary" => Ok(project_summary(project)),
+        "summary" => match ProjectQuery::parse(args)? {
+            ProjectQuery {
+                model: Some(model),
+                page,
+            } => model_parts(project, &model, page),
+            _ => Ok(project_summary(project)),
+        },
         "scene_tree" => scene_tree(project, scene, &TreeQuery::parse(args)?),
         "entity" => entities(project, scene, &EntityQuery::parse(args)?),
         "find" => {
@@ -127,7 +142,8 @@ impl Page {
     }
 }
 
-/// Uses of an input action, surface or asset listed in the summary; more are only counted.
+/// Uses of an input action, surface, game variable or asset listed in the summary; more are
+/// only counted.
 const USES_LISTED: usize = 10;
 
 /// `used_by` with the first uses, plus `used_by_total` when some are left out.
@@ -178,6 +194,21 @@ pub fn project_summary(project: &Project) -> Json {
             surface
         })
         .collect();
+    let variables: Vec<Json> = project
+        .variables
+        .iter()
+        .map(|v| {
+            let mut variable = json!({
+                "id": v.id,
+                "name": v.name,
+                "type": variables::type_name(&v.value),
+                "value": v.value,
+                "persistent": v.persistent,
+            });
+            uses_json(&mut variable, variables::uses(project, &v.id));
+            variable
+        })
+        .collect();
     // The three groups named by default and the ones the project names; the others read
     // "Grupo N", N being the bit plus 1.
     let groups: Vec<Json> = (0..32_u8)
@@ -193,6 +224,7 @@ pub fn project_summary(project: &Project) -> Json {
             "name": s.name,
             "kind": kind_name(s.kind),
             "objects": s.entities.len(),
+            "background": background(s),
         })).collect::<Vec<_>>(),
         "assets": project.assets.iter().map(|a| {
             let mut asset = json!({
@@ -204,17 +236,98 @@ pub fn project_summary(project: &Project) -> Json {
             if !a.path.is_empty() {
                 asset["path"] = json!(a.path);
             }
+            if let Some(pieces) = &a.model {
+                asset["part_count"] = json!(pieces.len());
+                // The root a placement gets, by the name place_model gives it.
+                if let [root] = model_roots(pieces).as_slice() {
+                    asset["root"] = json!({"id": root.id, "name": root.name});
+                }
+            }
             uses_json(&mut asset, crate::editing::asset_uses(project, &a.id));
             asset
         }).collect::<Vec<_>>(),
         "input_actions": actions,
         "surfaces": surfaces,
+        "variables": variables,
         "collision_groups": groups,
+        "game": {
+            "title": project.game_title(),
+            "window": project.game.window,
+            "fullscreen": project.game.fullscreen,
+        },
     })
 }
 
+/// What the summary request asks: the whole summary, or one model's parts (`model`, by its ID
+/// or name), `offset` and `limit` paging them (default [`TREE_LIMIT`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectQuery {
+    pub model: Option<String>,
+    pub page: Page,
+}
+impl ProjectQuery {
+    pub fn parse(args: &Json) -> Result<Self, String> {
+        Ok(Self {
+            model: arg(args, "model")?,
+            page: Page::parse(args, TREE_LIMIT)?,
+        })
+    }
+}
+
+/// The pieces of a model without a parent in it: one for the models save_model makes.
+fn model_roots(pieces: &[Entity]) -> Vec<&Entity> {
+    pieces
+        .iter()
+        .filter(|e| {
+            e.parent
+                .as_ref()
+                .is_none_or(|p| !pieces.iter().any(|o| o.id == *p))
+        })
+        .collect()
+}
+
+/// The model `model` (its ID or name, as place_model takes it) and its parts: {id, name, root?,
+/// parts: [{id, name, parent, kind}], total, next_offset?}: a page of the parts, each parent
+/// before its children (a root's parent null). Their IDs, as the model keeps them, are the ones
+/// `"$N@<id>"` takes after a place_model.
+pub fn model_parts(project: &Project, model: &str, page: Page) -> Result<Json, String> {
+    let id = command::find_model(project, model)?;
+    let asset = project.asset(&id).expect("found");
+    let pieces = asset.model.as_deref().unwrap_or_default();
+    let mut ordered: Vec<&Entity> = Vec::with_capacity(pieces.len());
+    let mut pending = model_roots(pieces);
+    pending.reverse();
+    while let Some(e) = pending.pop() {
+        ordered.push(e);
+        let children = pieces
+            .iter()
+            .rev()
+            .filter(|child| child.parent.as_deref() == Some(e.id.as_str()));
+        pending.extend(children);
+    }
+    let parts: Vec<Json> = ordered
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "name": e.name,
+                "parent": e.parent.as_ref().filter(|p| pieces.iter().any(|o| o.id == **p)),
+                "kind": entity_kind(e),
+            })
+        })
+        .collect();
+    let (parts, about) = page.cut(parts);
+    let mut answer = json!({"id": asset.id, "name": asset.name});
+    if let [root] = model_roots(pieces).as_slice() {
+        answer["root"] = json!({"id": root.id, "name": root.name});
+    }
+    answer["parts"] = json!(parts);
+    answer.as_object_mut().unwrap().extend(about);
+    Ok(answer)
+}
+
 /// The project checked with the rules of saving: `valid`, the `error` that blocks saving when
-/// there is one, and `warnings` when the game would ignore something (see
+/// there is one, and `warnings` when the game would ignore or stop on something (see
 /// [`crate::command::warnings`]).
 pub fn validation(project: &Project) -> Json {
     let mut result = match validate_project(project) {
@@ -261,7 +374,7 @@ pub const FIND_LIMIT: usize = 50;
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeQuery {
     pub fields: BTreeSet<TreeField>,
-    /// Lists this object's children instead of the scene's root objects.
+    /// Lists this object's children (by ID or name) instead of the scene's root objects.
     pub root: Option<Id>,
     /// Levels of children shown below the listed objects; deeper children are only counted.
     pub depth: Option<usize>,
@@ -384,15 +497,9 @@ fn collider_box(view: &SceneView, e: &Entity) -> Option<Json> {
 /// logic size, the fields asked for and its children. The answer holds at most `limit`
 /// objects: children that no longer fit are only counted, and then `truncated` is true.
 pub fn scene_tree(project: &Project, scene: &str, query: &TreeQuery) -> Result<Json, String> {
-    let scene = project
-        .scene(scene)
-        .ok_or_else(|| format!("Cena {scene} não existe"))?;
+    let scene = project.find_scene(scene, "scene")?;
     let root = match &query.root {
-        Some(id) => Some(
-            scene
-                .entity(id)
-                .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))?,
-        ),
+        Some(text) => Some(scene.find_entity(text, "root")?),
         None => None,
     };
     let mut children: HashMap<Option<&str>, Vec<&Entity>> = HashMap::new();
@@ -416,6 +523,7 @@ pub fn scene_tree(project: &Project, scene: &str, query: &TreeQuery) -> Result<J
         "id": scene.id,
         "name": scene.name,
         "kind": kind_name(scene.kind),
+        "background": background(scene),
         "objects": listed.into_iter().map(|e| tree.node(e)).collect::<Vec<_>>(),
     });
     if let Some(root) = root {
@@ -545,6 +653,7 @@ pub enum Detail {
 /// Options of `entities`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityQuery {
+    /// Objects of the scene, each by ID or name (see [`Scene::find_entity`]).
     pub ids: Vec<Id>,
     /// Only these parts, besides ID and name: top-level keys or dotted paths such as
     /// "character3d.actions" (numbers index lists).
@@ -564,13 +673,27 @@ impl EntityQuery {
         if ids.is_empty() {
             return Err("Informe id ou ids".into());
         }
-        let fields: Vec<String> = arg(args, "fields")?.unwrap_or_default();
-        for field in &fields {
-            let top = field.split('.').next().unwrap_or_default();
+        let mut fields: Vec<String> = arg(args, "fields")?.unwrap_or_default();
+        for field in &mut fields {
+            let (top, rest) = field.split_once('.').unwrap_or((field.as_str(), ""));
+            if let Some((_, part)) = FIELD_ALIASES.iter().find(|(alias, _)| *alias == top) {
+                *field = if rest.is_empty() {
+                    (*part).to_owned()
+                } else {
+                    format!("{part}.{rest}")
+                };
+                continue;
+            }
             if !ENTITY_FIELDS.contains(&top) {
                 return Err(format!(
-                    "Campo desconhecido: {field}. Campos: {}",
-                    ENTITY_FIELDS.join(", ")
+                    "Campo desconhecido: {field}. Campos: {}; os nomes dos componentes também \
+                     valem, pela parte que os guarda ({})",
+                    ENTITY_FIELDS.join(", "),
+                    FIELD_ALIASES
+                        .iter()
+                        .map(|(alias, part)| format!("{alias} → {part}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
         }
@@ -584,8 +707,20 @@ impl EntityQuery {
     }
 }
 
+/// Component names, as `oxy_scene` and the catalog give them, that `fields` takes for the part
+/// of the document holding the component.
+pub const FIELD_ALIASES: [(&str, &str); 7] = [
+    ("collider3d", "physics3d"),
+    ("sensor3d", "physics3d"),
+    ("character", "character3d"),
+    ("camera_control", "camera_rig"),
+    ("collider2d", "collider"),
+    ("sensor2d", "collider"),
+    ("controller2d", "controller"),
+];
+
 /// Top-level parts of `entities`' answer: the object's document form, then what it adds.
-pub const ENTITY_FIELDS: [&str; 30] = [
+pub const ENTITY_FIELDS: [&str; 32] = [
     "id",
     "name",
     "parent",
@@ -616,18 +751,22 @@ pub const ENTITY_FIELDS: [&str; 30] = [
     "collider_bounds",
     "can_add_components",
     "components",
+    "referenced_by",
+    "referenced_by_total",
 ];
 
 /// One object (`id`) or several (`ids`, listed under `objects`), as `query` asks.
 pub fn entities(project: &Project, scene: &str, query: &EntityQuery) -> Result<Json, String> {
-    let scene = project
-        .scene(scene)
-        .ok_or_else(|| format!("Cena {scene} não existe"))?;
+    let scene = project.find_scene(scene, "scene")?;
     let view = SceneView::new(scene);
+    let what = if query.list { "ids" } else { "id" };
     let mut objects = query
         .ids
         .iter()
-        .map(|id| entity_view(project, scene, &view, id, query))
+        .map(|text| {
+            let e = scene.find_entity(text, what)?;
+            entity_view(project, scene, &view, e, query)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(if query.list {
         json!({"objects": objects})
@@ -658,19 +797,18 @@ fn entity_view(
     project: &Project,
     scene: &Scene,
     view: &SceneView,
-    id: &str,
+    e: &Entity,
     query: &EntityQuery,
 ) -> Result<Json, String> {
-    let e = scene
-        .entity(id)
-        .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))?;
+    let id = e.id.as_str();
     let mut value = serde_json::to_value(e).map_err(|e| e.to_string())?;
+    name_groups(project, &mut value);
     let map = value
         .as_object_mut()
         .ok_or("Objeto sem forma de documento")?;
     map.retain(|_, part| !part.is_null());
     if query.graph == Detail::Summary {
-        map.insert("graph".into(), graph_summary(project, &e.graph));
+        map.insert("graph".into(), graph_summary(project, scene, &e.graph));
     }
     if query.geometry == Detail::Summary {
         for part in map.values_mut() {
@@ -681,6 +819,38 @@ fn entity_view(
         "rotation_degrees".into(),
         json!(e.transform.rotation.map(f32::to_degrees)),
     );
+    // Keyframes in degrees too, as set_clip takes them.
+    if let Some(Json::Array(clips)) = map.get_mut("clips") {
+        let keyframes = e
+            .clips
+            .iter()
+            .flat_map(|clip| &clip.tracks)
+            .flat_map(|track| &track.keyframes);
+        let written = clips
+            .iter_mut()
+            .filter_map(|clip| clip["tracks"].as_array_mut())
+            .flatten()
+            .filter_map(|track| track["keyframes"].as_array_mut())
+            .flatten();
+        for (written, keyframe) in written.zip(keyframes) {
+            written["rotation_degrees"] = json!(keyframe.transform.rotation.map(f32::to_degrees));
+        }
+    }
+    let references = referenced_by(project, scene, id);
+    if !references.is_empty() || query.fields.iter().any(|f| f.starts_with("referenced_by")) {
+        if references.len() > REFERENCES_LISTED {
+            map.insert("referenced_by_total".into(), json!(references.len()));
+        }
+        map.insert(
+            "referenced_by".into(),
+            json!(
+                references
+                    .into_iter()
+                    .take(REFERENCES_LISTED)
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
     if let Ok(world) = view.world_matrix(id)
         && world.is_finite()
     {
@@ -733,6 +903,31 @@ fn entity_view(
     Ok(picked)
 }
 
+/// Adds to the collision filters of an object's document form the names of their groups:
+/// category_groups and mask_groups, "all" when every bit is set, as update_entity takes them.
+fn name_groups(project: &Project, value: &mut Json) {
+    for path in command::FILTERS {
+        let Some(filter) = path
+            .iter()
+            .try_fold(&mut *value, |part, key| part.get_mut(*key))
+            .and_then(Json::as_object_mut)
+        else {
+            continue;
+        };
+        for key in ["category", "mask"] {
+            let Some(bits) = filter.get(key).and_then(Json::as_u64) else {
+                continue;
+            };
+            let names = if bits == u64::from(u32::MAX) {
+                json!("all")
+            } else {
+                json!(project.collision_group_names(bits as u32))
+            };
+            filter.insert(format!("{key}_groups"), names);
+        }
+    }
+}
+
 /// Puts `part` at `path` inside `into`, creating the objects on the way; a path inside a part
 /// already placed whole changes nothing.
 fn place(into: &mut Json, path: &[&str], part: Json) {
@@ -774,61 +969,204 @@ fn summarize_geometry(part: &mut Json) {
     }
 }
 
-/// A node in a few characters: its operation and, in parentheses, its first non-empty text
-/// parameter (the name of the scene or asset it names, shortened), or its only parameter.
-fn node_label(project: &Project, node: &Node) -> String {
-    let Some(definition) = graph::registry().iter().find(|d| d.id == node.operation) else {
-        return node.operation.clone();
-    };
-    let shown = |value: &Value| match value {
-        Value::Text(text) if !text.is_empty() => {
-            let named = project
-                .scene(text)
-                .map(|s| s.name.as_str())
-                .or_else(|| project.asset(text).map(|a| a.name.as_str()))
-                .unwrap_or(text.as_str());
-            Some(if named.chars().count() > 24 {
-                format!("{}…", named.chars().take(23).collect::<String>())
-            } else {
-                named.to_owned()
-            })
+/// The name of what `value`, a parameter that names something of the project (`reference`),
+/// names in `scene`: a scene, an audio, a clip, an input action, a game variable, an object or
+/// a surface. None when it names nothing there.
+fn reference_name(
+    project: &Project,
+    scene: &Scene,
+    reference: Reference,
+    value: &Value,
+) -> Option<String> {
+    let text = match value {
+        Value::Object(Some(id)) if reference == Reference::Object => {
+            return scene.entity(id).map(|e| e.name.clone());
         }
-        _ => None,
+        Value::Surface(Some(id)) if reference == Reference::Surface => {
+            return project
+                .surfaces
+                .iter()
+                .find(|s| s.id == *id)
+                .map(|s| s.name.clone());
+        }
+        Value::Text(text) if !text.is_empty() => text,
+        _ => return None,
     };
-    let detail = definition
-        .params
-        .iter()
-        .find_map(|p| node.params.get(p.id).and_then(&shown))
-        .or_else(|| match definition.params.as_slice() {
-            [only] => match node.params.get(only.id) {
-                Some(Value::Number(n)) => Some(n.to_string()),
-                Some(Value::Bool(b)) => Some(b.to_string()),
-                _ => None,
-            },
-            _ => None,
-        });
-    match detail {
-        Some(detail) => format!("{}({detail})", node.operation),
-        None => node.operation.clone(),
+    match reference {
+        Reference::Scene => project.scene(text).map(|s| s.name.clone()),
+        Reference::Audio => project.asset(text).map(|a| a.name.clone()),
+        Reference::Clip => scene
+            .entities
+            .iter()
+            .flat_map(|e| &e.clips)
+            .find(|clip| clip.id == *text)
+            .map(|clip| clip.name.clone()),
+        Reference::InputAction => project
+            .input_bindings
+            .contains_key(text)
+            .then(|| input_actions::label(project, text).into_owned()),
+        Reference::Variable => variables::get(project, text).map(|v| v.name.clone()),
+        _ => None,
     }
 }
 
-/// A logic graph in few lines: `nodes` maps each node's label (its operation and main
-/// parameter) to its ID and the parameters that differ from the operation's defaults, and
-/// `edges` are text, such as "event.input(reiniciar).exec -> character.teleport.exec". A
-/// label repeated in the graph ends in #N, N being the node's index in the stored graph.
-pub fn graph_summary(project: &Project, graph: &Graph) -> Json {
+/// A name or text cut to 24 characters, for labels.
+fn shortened(text: &str) -> String {
+    if text.chars().count() > 24 {
+        format!("{}…", text.chars().take(23).collect::<String>())
+    } else {
+        text.to_owned()
+    }
+}
+
+/// What a node's label shows in parentheses after its operation: its first non-empty text or
+/// surface parameter (by the name of the scene, audio, clip, input action, game variable or
+/// surface it names), or its only parameter, then "→" and the object its first object
+/// parameter names, as in "action.component(visible → Resultado)". A parameter whose input of
+/// the same id is connected is left out: the game uses the input.
+fn label_detail(project: &Project, scene: &Scene, graph: &Graph, node: &Node) -> Option<String> {
+    let definition = graph::definition(&node.operation)?;
+    let used: Vec<(&ParamDef, &Value)> = definition
+        .params
+        .iter()
+        .filter(|param| !graph.input_connected(&node.id, param.id))
+        .filter_map(|param| Some((param, node.params.get(param.id)?)))
+        .collect();
+    let named = |param: &ParamDef, value: &Value| {
+        graph::reference(definition.id, param)
+            .and_then(|reference| reference_name(project, scene, reference, value))
+    };
+    // A text that is the ID of a scene, an asset or a game variable, such as a scene kept for
+    // a scene change, reads by that name too.
+    let identified = |text: &str| {
+        project
+            .scene(text)
+            .map(|s| s.name.clone())
+            .or_else(|| project.asset(text).map(|a| a.name.clone()))
+            .or_else(|| variables::get(project, text).map(|v| v.name.clone()))
+    };
+    let detail = used
+        .iter()
+        .find_map(|(param, value)| match value {
+            Value::Text(text) if !text.is_empty() => Some(
+                named(param, value)
+                    .or_else(|| identified(text))
+                    .unwrap_or_else(|| text.clone()),
+            ),
+            Value::Surface(Some(_)) => named(param, value),
+            _ => None,
+        })
+        .or_else(|| match (definition.params.as_slice(), used.as_slice()) {
+            ([_], [(_, Value::Number(n))]) => Some(n.to_string()),
+            ([_], [(_, Value::Bool(b))]) => Some(b.to_string()),
+            _ => None,
+        });
+    let object = used.iter().find_map(|(param, value)| {
+        value
+            .object()
+            .map(|_| named(param, value).unwrap_or_else(|| "objeto ausente".into()))
+    });
+    match (detail, object) {
+        (Some(detail), Some(object)) => {
+            Some(format!("{} → {}", shortened(&detail), shortened(&object)))
+        }
+        (None, Some(object)) => Some(format!("→ {}", shortened(&object))),
+        (Some(detail), None) => Some(shortened(&detail)),
+        (None, None) => None,
+    }
+}
+
+/// A parameter's value in a label: the name of what it names, a text in quotes.
+fn value_text(
+    project: &Project,
+    scene: &Scene,
+    definition: &OperationDef,
+    param: &ParamDef,
+    value: &Value,
+) -> String {
+    if let Some(name) = graph::reference(definition.id, param)
+        .and_then(|reference| reference_name(project, scene, reference, value))
+    {
+        return shortened(&name);
+    }
+    let numbers = |values: &[f32]| {
+        let numbers: Vec<String> = values.iter().map(f32::to_string).collect();
+        format!("[{}]", numbers.join(", "))
+    };
+    match value {
+        Value::Number(n) => n.to_string(),
+        Value::Text(text) => format!("\"{}\"", shortened(text)),
+        Value::Bool(b) => b.to_string(),
+        Value::Object(None) => "este objeto".into(),
+        Value::Object(Some(_)) => "objeto ausente".into(),
+        Value::Surface(None) => "nenhuma".into(),
+        Value::Surface(Some(_)) => "superfície ausente".into(),
+        Value::Vector2(v) => numbers(v),
+        Value::Vector3(v) => numbers(v),
+    }
+}
+
+/// The labels of `graph`'s nodes, in its order: the operation and, in parentheses, the detail
+/// [`label_detail`] gives. Nodes that would share a label add the first parameter they use
+/// whose value differs among them, as in "attribute.set(Aviso, value = \"3\")"; a label still
+/// repeated in the graph ends in #N, N being the node's index in the stored graph.
+pub(crate) fn node_labels(project: &Project, scene: &Scene, graph: &Graph) -> Vec<String> {
+    let mut details: Vec<Option<String>> = graph
+        .nodes
+        .iter()
+        .map(|node| label_detail(project, scene, graph, node))
+        .collect();
+    let label = |node: &Node, detail: &Option<String>| match detail {
+        Some(detail) => format!("{}({detail})", node.operation),
+        None => node.operation.clone(),
+    };
+    let mut shared: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, node) in graph.nodes.iter().enumerate() {
+        shared.entry(label(node, &details[i])).or_default().push(i);
+    }
+    for nodes in shared.into_values().filter(|nodes| nodes.len() > 1) {
+        let Some(definition) = graph::definition(&graph.nodes[nodes[0]].operation) else {
+            continue;
+        };
+        let value = |i: usize, param: &'static ParamDef| {
+            graph.nodes[i]
+                .params
+                .get(param.id)
+                .unwrap_or(&param.default)
+        };
+        let Some(param) = definition.params.iter().find(|&param| {
+            nodes
+                .iter()
+                .all(|&i| !graph.input_connected(&graph.nodes[i].id, param.id))
+                && nodes
+                    .iter()
+                    .any(|&i| value(i, param) != value(nodes[0], param))
+        }) else {
+            continue;
+        };
+        for &i in &nodes {
+            let differs = format!(
+                "{} = {}",
+                param.id,
+                value_text(project, scene, definition, param, value(i, param))
+            );
+            details[i] = Some(match details[i].take() {
+                Some(detail) => format!("{detail}, {differs}"),
+                None => differs,
+            });
+        }
+    }
     let base: Vec<String> = graph
         .nodes
         .iter()
-        .map(|node| node_label(project, node))
+        .zip(&details)
+        .map(|(node, detail)| label(node, detail))
         .collect();
     let mut repeated: HashMap<&str, usize> = HashMap::new();
     for label in &base {
         *repeated.entry(label).or_default() += 1;
     }
-    let labels: Vec<String> = base
-        .iter()
+    base.iter()
         .enumerate()
         .map(|(i, label)| {
             if repeated[label.as_str()] > 1 {
@@ -837,7 +1175,16 @@ pub fn graph_summary(project: &Project, graph: &Graph) -> Json {
                 label.clone()
             }
         })
-        .collect();
+        .collect()
+}
+
+/// A logic graph of an object of `scene` in few lines: `nodes` maps each node's label (its
+/// operation and main parameter, with the names of what it names) to its ID and the parameters
+/// that differ from the operation's defaults, a value that names something with its name, and
+/// `edges` are text, such as "event.input(Reiniciar).exec -> character.teleport.exec". Labels
+/// that would repeat tell their nodes apart as [`node_labels`] says.
+pub fn graph_summary(project: &Project, scene: &Scene, graph: &Graph) -> Json {
+    let labels = node_labels(project, scene, graph);
     // An edge to a node that is not there shows its raw ID.
     let label_of = |id: &str| {
         graph
@@ -851,21 +1198,25 @@ pub fn graph_summary(project: &Project, graph: &Graph) -> Json {
         .iter()
         .zip(&labels)
         .map(|(node, label)| {
-            let defaults = graph::registry()
-                .iter()
-                .find(|d| d.id == node.operation)
-                .map(|d| d.params.as_slice())
-                .unwrap_or_default();
+            let definition = graph::definition(&node.operation);
+            let defaults = definition.map(|d| d.params.as_slice()).unwrap_or_default();
             let changed: Map<String, Json> = node
                 .params
                 .iter()
-                .filter(|(key, value)| {
-                    defaults
-                        .iter()
-                        .find(|p| p.id == key.as_str())
-                        .is_none_or(|p| p.default != **value)
+                .filter_map(|(key, value)| {
+                    let param = defaults.iter().find(|p| p.id == key.as_str());
+                    if param.is_some_and(|p| p.default == *value) {
+                        return None;
+                    }
+                    let mut shown = json!(value);
+                    if let (Some(definition), Some(param)) = (definition, param)
+                        && let Some(name) = graph::reference(definition.id, param)
+                            .and_then(|reference| reference_name(project, scene, reference, value))
+                    {
+                        shown["name"] = json!(name);
+                    }
+                    Some((key.clone(), shown))
                 })
-                .map(|(key, value)| (key.clone(), json!(value)))
                 .collect();
             let mut entry = json!({"id": node.id});
             if !changed.is_empty() {
@@ -888,6 +1239,67 @@ pub fn graph_summary(project: &Project, graph: &Graph) -> Json {
         })
         .collect();
     json!({"nodes": nodes, "edges": edges})
+}
+
+/// References an object's `referenced_by` lists; more are only counted.
+const REFERENCES_LISTED: usize = 50;
+
+/// What names the object `id` in `scene`, each as {scene: {id, name}, entity, name, role, …}
+/// (entity and name are the object that holds the reference): role is `attribute <name>`, `ui`
+/// (the interface element shows its attribute), `camera_control` (with param `target` or
+/// `hidden`), `animation` (another object's, with clip, moves it) or the operation of a logic
+/// node, with node (its label in the graph summary) and param, unless an input connected to
+/// the param replaces it.
+fn referenced_by(project: &Project, scene: &Scene, id: &str) -> Vec<Json> {
+    let mut found = Vec::new();
+    let place = json!({"id": scene.id, "name": scene.name});
+    for e in &scene.entities {
+        let entry = |role: &str, extra: Json| {
+            let mut entry = json!({"scene": place, "entity": e.id, "name": e.name, "role": role});
+            if let (Some(entry), Json::Object(extra)) = (entry.as_object_mut(), extra) {
+                entry.extend(extra);
+            }
+            entry
+        };
+        for (key, value) in &e.attributes {
+            if value.object() == Some(id) {
+                found.push(entry(&format!("attribute {key}"), Json::Null));
+            }
+        }
+        if e.ui.as_ref().and_then(|ui| ui.binding_object.as_deref()) == Some(id) {
+            found.push(entry("ui", Json::Null));
+        }
+        if let Some(rig) = &e.camera_rig {
+            if rig.target.as_deref() == Some(id) {
+                found.push(entry("camera_control", json!({"param": "target"})));
+            }
+            if rig.hidden.iter().any(|hidden| hidden == id) {
+                found.push(entry("camera_control", json!({"param": "hidden"})));
+            }
+        }
+        // An object's own animations move it by its own ID.
+        if e.id != id {
+            for clip in &e.clips {
+                if clip.tracks.iter().any(|track| track.target == id) {
+                    found.push(entry("animation", json!({"clip": clip.name})));
+                }
+            }
+        }
+        let mut labels = None;
+        for (index, node) in e.graph.nodes.iter().enumerate() {
+            for (key, value) in &node.params {
+                if value.object() == Some(id) && !e.graph.input_connected(&node.id, key) {
+                    let labels =
+                        labels.get_or_insert_with(|| node_labels(project, scene, &e.graph));
+                    found.push(entry(
+                        &node.operation,
+                        json!({"node": labels[index], "param": key}),
+                    ));
+                }
+            }
+        }
+    }
+    found
 }
 
 /// Objects whose name contains `text` (case-insensitive), in every scene, as `objects`, with
@@ -957,6 +1369,12 @@ pub fn catalog() -> Json {
                     if let Some(reference) = graph::reference(op.id, p) {
                         param["ref"] = json!(reference);
                     }
+                    if let Some(range) = p.range {
+                        param["min"] = json!(range.min);
+                        if let Some(max) = range.max {
+                            param["max"] = json!(max);
+                        }
+                    }
                     param
                 }).collect::<Vec<_>>(),
             })
@@ -979,12 +1397,15 @@ pub fn catalog() -> Json {
             "2d": ["Rectangle", "Circle", "Sprite"],
             "3d": ["Cube", "Sphere", "Cylinder", "Plane", "Pyramid", "Cone", "Tube"],
         },
-        "ui_elements": ["Text", "Image", "Button", "Bar"],
+        "ui_elements": {
+            "kinds": ["Text", "Image", "Button", "Bar"],
+            "fields": "An interface element is the object's ui, which update_entity patches: kind; anchor (TopLeft, TopRight, BottomLeft, BottomRight or Center), position [x, y] (the offset from that corner) and size [width, height], in pixels of the game view; text, where {value} or {valor} shows the bound attribute; color [r, g, b, a] from 0 to 1 (an Image without texture is a panel in it); texture (an image asset ID); binding_object (left out, the object itself) and binding_attribute; max_value (a Bar's full value). text_align (Left, the default, Center or Right) places each line of a Text across its width. text_size is the font size in pixels, 10 to 96, of a Text or a Button label; left out (null in a patch) it is automatic: half the height from 12 to 32 on a Text, 16 on a Button (15 on one with an image). Both stay out of the document while left at the default.",
+        },
         "presets": presets(),
         "movement_profiles": movement_profiles(),
         "surface_presets": ["common", "ice", "mud", "conveyor"],
         "input_keys": input_actions::keys().collect::<Vec<_>>(),
-        "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}. A node parameter may also be plain when its default above has the type: a number for Number, a text for Text, true or false for Bool. A parameter with an input of the same id of type any (attribute.set value, condition.compare a and b) takes any type: its default is only where it starts, and a plain number, text or true/false keeps that type.",
+        "value_format": "Attribute and node parameter values are tagged: {\"Number\": 1.0}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\" or null}, {\"Vector2\": [x, y]}, {\"Vector3\": [x, y, z]}, {\"Surface\": \"<id>\" or null}. A node parameter may also be plain when its default above has the type: a number for Number, a text for Text, true or false for Bool. A parameter with an input of the same id of type any (attribute.set value, condition.compare a and b) takes any type: its default is only where it starts, and a plain number, text or true/false keeps that type. Data nodes (no exec input) are evaluated when the node that consumes them runs, each time, not once per event: a data chain wired to two nodes is computed twice, and after an action changes what it reads it gives the new value (attribute.get Tempo plus dt wired to attribute.set Tempo and then to text.time adds dt twice). To use a value right after setting it, read it with a fresh attribute.get or variable.get instead of reusing the expression that computed it. Events and actions store their outputs once per execution (event.step time, random.number value, query.* hit, character.teleport success, action.spawn created): the nodes after them in the same flow read those stored values.",
     })
 }
 
@@ -1017,15 +1438,21 @@ fn presets() -> Json {
         (
             "platform",
             MovementPreset::Platform,
-            "Plataforma móvel (não é um personagem): um bloco sólido de 3 × 0,4 × 3 m que vai e volta sem parar a partir de onde é posto, levando junto o que estiver em cima. O percurso é uma animação comum, editável com set_clip; set_transform move a plataforma com o percurso.",
+            "Plataforma móvel (não é um personagem): um bloco sólido de 3 × 0,4 × 3 m que vai e volta a partir de onde é posto, sem parar ou parando nas pontas, e pode girar, levando junto o que estiver em cima. O percurso é uma animação comum, editável com set_clip; set_transform move a plataforma com o percurso.",
             json!({
-                "travel": {"default": [4., 0., 0.], "description": "Quanto a plataforma anda a partir de onde é posta, em metros, antes de voltar."},
-                "period": {"default": 4., "description": "Segundos da ida e da volta."},
+                "travel": {"default": [4., 0., 0.], "description": "Quanto a plataforma anda a partir de onde é posta, em metros, antes de voltar. [0, 0, 0] com spin faz uma plataforma que só gira (a animação se chama Giro)."},
+                "period": {"default": 4., "description": "Segundos da ida e da volta, com as paradas."},
+                "pause_at_ends": {"default": 0., "description": "Segundos que a plataforma fica parada em cada ponta (posição e giro), dentro do período: menos que metade dele. Ela sai andando no começo da cena, para na ponta de lá e, na volta, no lugar onde foi posta; os quadros-chave das pontas seguram a pose (hold)."},
+                "spin": {"default": [0., 0., 0.], "description": "Graus que a plataforma gira em X, Y e Z por período, enquanto anda, levando junto e girando quem está em cima: [0, 360, 0] dá uma volta em Y a cada período, [0, -180, 0] meia volta para o outro lado. Cada ida e cada volta ganham um quadro-chave a cada 90° no máximo (somando os eixos), porque entre dois quadros-chave o giro vai pelo caminho mais curto. Para recomeçar sem salto, a animação dura os períodos que o giro leva para voltar ao começo, com voltas inteiras em todos os eixos: 1 com 360° por período, 2 com 180°, 4 com 90°, 8 com 45°. Um giro que precisaria de mais de 8 períodos, ou que passa de 3600° por período somando os eixos, é recusado."},
             }),
         ),
     ]
     .into_iter()
-    .map(|(id, preset, description, params)| {
+    .map(|(id, preset, description, mut params)| {
+        params["filter"] = json!({
+            "default": {"category": ["Cenário padrão"], "mask": "all"},
+            "description": "O filtro de colisão do corpo do personagem (jogadores) ou do colisor da plataforma: category (os grupos em que ele está) e mask (os grupos que ele encontra), cada um como número (os bits) ou como lista de nomes dos grupos de colisão do oxy_project, \"all\" para todos. O que ficar de fora mantém o padrão.",
+        });
         let mut project = crate::editing::blank_project("Catálogo", SceneKind::ThreeD)
             .expect("project name is not empty");
         let scene = project.start_scene.clone();

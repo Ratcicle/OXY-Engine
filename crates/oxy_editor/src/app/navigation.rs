@@ -232,6 +232,7 @@ impl Editor {
             || self.asset_ui.delete.is_some()
             || self.spatial.fit.is_some()
             || self.logic_ui.inputs
+            || self.logic_ui.variables_open()
             || self.logic_ui.guide
             || crate::graph_ui::text_input_active(ctx)
             || egui::Popup::is_any_open(ctx)

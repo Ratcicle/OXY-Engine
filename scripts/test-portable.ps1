@@ -30,6 +30,23 @@ if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).Pr
 if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).ProductVersion) -ge [version]'0.5.0') {
     if (!(Test-Path -LiteralPath (Join-Path $package 'oxy-mcp.exe') -PathType Leaf)) { throw 'Arquivo da 0.5.0 ausente: oxy-mcp.exe' }
 }
+if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).ProductVersion) -ge [version]'0.6.0') {
+    foreach ($file in @('licenses/cpal-0.18.2.txt','licenses/kenney-skyboxes-cc0.txt','parkour/project.oxy.json')) {
+        if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo da 0.6.0 ausente: $file" }
+    }
+    # OXY Parkour, opened from the home screen as a copy, needs every file its assets name.
+    $parkour = [IO.Path]::GetFullPath((Join-Path $package 'parkour'))
+    $parkourManifest = Get-Content -LiteralPath (Join-Path $parkour 'project.oxy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($parkourManifest.schema_version -ne 5 -or $parkourManifest.scenes.Count -lt 2) { throw 'O parkour deve ter o menu e a pista, no schema 5.' }
+    foreach ($asset in $parkourManifest.assets) {
+        if ($asset.kind -eq 'Model') { continue }
+        $assetPath = [IO.Path]::GetFullPath((Join-Path $parkour $asset.path))
+        if (!$assetPath.StartsWith($parkour + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Asset do parkour inválido/ausente: $($asset.path)" }
+    }
+    # Backups an agent or a schema conversion leaves next to a project never ship.
+    $backups = @(Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object { $_.Name -like '*.agente.bak' -or $_.Name -like '*.backup.json' })
+    if ($backups.Count) { throw "Backups de projeto no pacote: $($backups.Name -join ', ')" }
+}
 if (Get-ChildItem -LiteralPath $package -Filter '*.cmd') { throw 'O pacote portátil não deve depender de launchers .cmd.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName)
 if ($version.ProductName -ne 'OXY Engine' -or $version.OriginalFilename -ne 'OXY Engine.exe' -or !$version.ProductVersion) { throw 'Metadados do editor inválidos.' }
@@ -78,12 +95,34 @@ function Assert-PortablePe([string]$Path) {
 }
 Get-ChildItem -LiteralPath $package -File | Where-Object Extension -In '.exe','.dll' | ForEach-Object { Assert-PortablePe $_.FullName }
 $manifest = Get-Content -LiteralPath (Join-Path $package 'data/project.oxy.json') -Raw | ConvertFrom-Json
-if ($manifest.schema_version -notin @(1,2,3,4) -or $manifest.scenes.Count -lt 3) { throw 'As cenas de exemplo devem estar presentes em formato suportado (schema 1, 2, 3 ou 4).' }
+if ($manifest.schema_version -notin @(1,2,3,4,5) -or $manifest.scenes.Count -lt 3) { throw 'As cenas de exemplo devem estar presentes em formato suportado (schema 1 a 5).' }
 foreach ($asset in $manifest.assets) {
     if ($asset.kind -eq 'Model') { continue }
     $data = [IO.Path]::GetFullPath((Join-Path $package 'data'))
     $assetPath = [IO.Path]::GetFullPath((Join-Path $data $asset.path))
     if (!$assetPath.StartsWith($data + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Asset inválido/ausente: $($asset.path)" }
+}
+# The player checks the packaged data itself, as an exported game does: no window, so CI runs it too.
+if ([version]$version.ProductVersion -ge [version]'0.6.0') {
+    $verifyReport = Join-Path $testRoot 'verificar.json'
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = Join-Path $package 'oxy_player.exe'
+    $start.Arguments = "--verificar `"$verifyReport`""
+    $start.WorkingDirectory = $testRoot
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.EnvironmentVariables['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+    $player = [Diagnostics.Process]::Start($start)
+    try {
+        if (!$player.WaitForExit(120000)) { $player.Kill(); throw 'oxy_player.exe --verificar não terminou em 120 s.' }
+        if (!(Test-Path -LiteralPath $verifyReport -PathType Leaf)) { throw "oxy_player.exe --verificar não gravou o relatório (código $($player.ExitCode))." }
+        $verified = Get-Content -LiteralPath $verifyReport -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($player.ExitCode -ne 0 -or !$verified.ok) { throw "oxy_player.exe --verificar falhou: $($verified.errors -join ' ')" }
+        if ($verified.engine -ne $version.ProductVersion) { throw "oxy_player.exe é da OXY Engine $($verified.engine), e o editor é $($version.ProductVersion)." }
+        Write-Host "Player conferiu os dados do pacote: $($verified.game), cena inicial $($verified.start_scene)."
+    } finally {
+        $player.Dispose()
+    }
 }
 if (!$ContentOnly) {
     $start = [Diagnostics.ProcessStartInfo]::new()

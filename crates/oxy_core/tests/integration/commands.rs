@@ -1,0 +1,4223 @@
+use oxy_core::{
+    command::{self, Command},
+    document::*,
+    editing, graph,
+    history::CommandHistory,
+    input_actions,
+    physics3d::CollisionShape,
+    query, surface,
+    texture_cache::TextureCache,
+};
+use serde_json::json;
+
+fn project(kind: SceneKind) -> (Project, Id) {
+    let project = editing::blank_project("Teste", kind).unwrap();
+    let scene = project.start_scene.clone();
+    (project, scene)
+}
+
+fn batch(value: serde_json::Value) -> Vec<Command> {
+    command::parse(&value).unwrap()
+}
+
+#[test]
+fn a_batch_builds_objects_components_and_logic_with_placeholders() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta"},
+        {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "parent": "$0",
+         "position": [0.0, 1.0, 0.0]},
+        {"op": "add_component", "entity": "$1", "component": "collider3d"},
+        {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+        {"op": "add_node", "entity": "$0", "operation": "debug.message",
+         "params": {"message": {"Text": "Olá"}}},
+        {"op": "connect", "entity": "$0", "from_node": "$3", "from_port": "exec",
+         "to_node": "$4", "to_port": "exec"},
+    ]));
+    let applied = command::apply(&mut project, &scene, &commands).unwrap();
+    assert_eq!(applied.len(), 6);
+    let group = &applied[0].created[0];
+    let cube = &applied[1].created[0];
+    let scene = project.scene(&scene).unwrap();
+    assert_eq!(scene.entity(cube).unwrap().parent.as_ref(), Some(group));
+    assert!(scene.entity(cube).unwrap().physics3d.is_some());
+    let graph = &scene.entity(group).unwrap().graph;
+    assert_eq!(graph.nodes.len(), 2);
+    assert_eq!(graph.edges.len(), 1);
+    assert_eq!(graph.nodes[1].text("message"), "Olá");
+    assert!(validate_project(&project).is_ok());
+}
+
+#[test]
+fn a_failing_command_leaves_the_project_untouched() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let before = project.clone();
+    let commands = batch(json!([
+        {"op": "create_entity", "kind": {"type": "group"}},
+        {"op": "rename_entity", "entity": "inexistente", "name": "X"},
+    ]));
+    let error = command::apply(&mut project, &scene, &commands).unwrap_err();
+    assert_eq!(error.index, 1);
+    assert_eq!(error.op, "rename_entity");
+    // Counted from 0, as "$1" and created name it, and in words for the reader.
+    assert!(
+        error
+            .to_string()
+            .starts_with("Comando 1 (rename_entity, o 2º do lote): Objeto inexistente"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("Nada foi alterado"));
+    assert_eq!(project, before);
+    // Parsing counts the same way.
+    let error = command::parse(&json!([
+        {"op": "create_entity", "kind": {"type": "group"}},
+        {"op": "voar"},
+    ]))
+    .unwrap_err();
+    assert!(
+        error.starts_with("Comando 1 (voar, o 2º do lote) não reconhecido: valor `voar`"),
+        "{error}"
+    );
+    // A message that ends a sentence gets no second period.
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "duplicate_entities", "ids": ["$0"], "count": 0},
+        ])),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.ends_with("entre 1 e 100. Nada foi alterado.") && !error.contains(".."),
+        "{error}"
+    );
+}
+
+#[test]
+fn unknown_fields_and_wrong_scene_shapes_are_refused() {
+    assert!(command::parse(&json!({"op": "rename_project", "nome": "X"})).is_err());
+    assert!(command::parse(&json!({"op": "fly"})).is_err());
+    let (mut project, scene) = project(SceneKind::TwoD);
+    let cube = batch(json!({"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}}));
+    let error = command::apply(&mut project, &scene, &cube).unwrap_err();
+    assert!(error.message.contains("2D"), "{error}");
+    let rectangle =
+        batch(json!({"op": "create_entity", "kind": {"type": "shape", "shape": "Rectangle"}}));
+    command::apply(&mut project, &scene, &rectangle).unwrap();
+}
+
+#[test]
+fn update_entity_patches_fields_but_never_the_id() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "create_entity", "kind": {"type": "shape", "shape": "Sphere"}})),
+    )
+    .unwrap();
+    let id = created[0].created[0].clone();
+    let patch = batch(json!({"op": "update_entity", "entity": id,
+        "patch": {"name": "Bola", "dimensions": [2.0, 2.0, 2.0], "layer": 3}}));
+    command::apply(&mut project, &scene, &patch).unwrap();
+    let e = project.scene(&scene).unwrap().entity(&id).unwrap();
+    assert_eq!(
+        (e.name.as_str(), e.dimensions, e.layer),
+        ("Bola", [2.; 3], 3)
+    );
+    for patch in [json!({"id": "outro"}), json!({"campo_inexistente": 1})] {
+        let commands = batch(json!({"op": "update_entity", "entity": id, "patch": patch}));
+        assert!(command::apply(&mut project, &scene, &commands).is_err());
+    }
+}
+
+#[test]
+fn update_entity_sets_and_clears_the_alignment_and_size_of_an_interface_text() {
+    let (mut project, scene) = project(SceneKind::TwoD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "create_entity", "name": "Título",
+            "kind": {"type": "ui", "element": "Text"}})),
+    )
+    .unwrap();
+    let id = created[0].created[0].clone();
+    let ui = |project: &Project| {
+        let element = project
+            .scene(&scene)
+            .unwrap()
+            .entity(&id)
+            .unwrap()
+            .ui
+            .clone();
+        let element = element.unwrap();
+        (element.text_align, element.text_size)
+    };
+    assert_eq!(ui(&project), (UiTextAlign::Left, None));
+    let patch = |patch: serde_json::Value| {
+        batch(json!({"op": "update_entity", "entity": id, "patch": {"ui": patch}}))
+    };
+    command::apply(
+        &mut project,
+        &scene,
+        &patch(json!({"text_align": "Center", "text_size": 48})),
+    )
+    .unwrap();
+    assert_eq!(ui(&project), (UiTextAlign::Center, Some(48.)));
+    // The read gives them as stored, the form the patch takes.
+    let read = query::entity(&project, &scene, &id).unwrap();
+    let element = &read["ui"];
+    assert_eq!(
+        (&element["text_align"], &element["text_size"]),
+        (&json!("Center"), &json!(48.0)),
+        "{read}"
+    );
+    // Outside 10 to 96 px nothing changes; null goes back to automatic.
+    let before = project.clone();
+    let error = command::apply(&mut project, &scene, &patch(json!({"text_size": 120})))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Tamanho do texto de Título deve ficar entre 10 e 96 px; recebeu 120"),
+        "{error}"
+    );
+    assert_eq!(project, before);
+    command::apply(
+        &mut project,
+        &scene,
+        &patch(json!({"text_size": null, "text_align": "Right"})),
+    )
+    .unwrap();
+    assert_eq!(ui(&project), (UiTextAlign::Right, None));
+    assert!(
+        command::apply(
+            &mut project,
+            &scene,
+            &patch(json!({"text_align": "Justify"}))
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn components_follow_the_editor_dependency_rules() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}},
+        {"op": "add_component", "entity": "$0", "component": "platform"},
+    ]));
+    let id = command::apply(&mut project, &scene, &commands).unwrap()[0].created[0].clone();
+    let remove_shape =
+        batch(json!({"op": "remove_component", "entity": id, "component": "collider3d"}));
+    let error = command::apply(&mut project, &scene, &remove_shape).unwrap_err();
+    assert!(error.message.contains("Plataforma"), "{error}");
+    let both = batch(json!([
+        {"op": "remove_component", "entity": id, "component": "platform"},
+        {"op": "remove_component", "entity": id, "component": "collider3d"},
+    ]));
+    command::apply(&mut project, &scene, &both).unwrap();
+    let e = project.scene(&scene).unwrap().entity(&id).unwrap();
+    assert!(e.platform.is_none() && e.physics3d.is_none());
+}
+
+#[test]
+fn a_batch_is_one_undo_step_in_the_command_history() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let mut images = TextureCache::default();
+    let before = project.clone();
+    let mut history = CommandHistory::new();
+    history.begin("Agente: 2 comandos", &project, &images);
+    let commands = batch(json!([
+        {"op": "create_entity", "kind": {"type": "camera"}},
+        {"op": "set_transform", "entity": "$0", "position": [0.0, 2.0, 5.0],
+         "rotation": [-15.0, 0.0, 0.0]},
+    ]));
+    let id = command::apply(&mut project, &scene, &commands).unwrap()[0].created[0].clone();
+    let camera = project.scene(&scene).unwrap().entity(&id).unwrap();
+    assert!((camera.transform.rotation[0] - (-15f32).to_radians()).abs() < 1e-6);
+    history.commit(&project, &mut images).unwrap();
+    assert_eq!(history.undo_label(), Some("Agente: 2 comandos"));
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, before);
+}
+
+#[test]
+fn scenes_can_be_created_renamed_started_and_deleted() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_scene", "name": "Fase 2", "kind": "2d"},
+        {"op": "rename_scene", "scene": "$0", "name": "Fase dois"},
+        {"op": "set_start_scene", "scene": "$0"},
+    ]));
+    let second = command::apply(&mut project, &first, &commands).unwrap()[0].created[0].clone();
+    assert_eq!(project.start_scene, second);
+    assert_eq!(project.scene(&second).unwrap().kind, SceneKind::TwoD);
+    let delete_start = batch(json!({"op": "delete_scene", "scene": second}));
+    assert!(command::apply(&mut project, &first, &delete_start).is_err());
+    let delete_first = batch(json!({"op": "delete_scene", "scene": first}));
+    command::apply(&mut project, &second, &delete_first).unwrap();
+    assert_eq!(project.scenes.len(), 1);
+}
+
+#[test]
+fn new_scenes_take_their_kinds_background_and_commands_change_it_in_the_history() {
+    // New projects and scenes: the sky in 3D, none (the dark color) in 2D.
+    let (mut project, first) = project(SceneKind::ThreeD);
+    assert_eq!(project.scenes[0].background, Some(Background::Sky));
+    let flat = editing::blank_project("Plano", SceneKind::TwoD).unwrap();
+    assert_eq!(flat.scenes[0].background, None);
+    assert_eq!(
+        flat.scenes[0].shown_background(),
+        Background::Color(Background::DARK)
+    );
+    let created = command::apply(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Mapa", "kind": "2d"},
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "duplicate_scene", "scene": "$1"},
+        ])),
+    )
+    .unwrap();
+    let [map, level, copy] = [0, 1, 2].map(|i| created[i].created[0].clone());
+    assert_eq!(project.scene(&map).unwrap().background, None);
+    assert_eq!(
+        project.scene(&level).unwrap().background,
+        Some(Background::Sky)
+    );
+    assert_eq!(
+        project.scene(&copy).unwrap().background,
+        Some(Background::Sky)
+    );
+
+    // A color, the default of each kind, and a batch that is undone as one step.
+    let before = project.clone();
+    let mut history = CommandHistory::new();
+    let mut images = TextureCache::default();
+    history.begin("Agente: fundos", &project, &images);
+    command::apply(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "set_scene_background", "background": {"color": [0.2, 0.4, 0.6, 1.0]}},
+            {"op": "set_scene_background", "scene": "mapa", "background": {"color": [1, 1, 1, 1]}},
+        ])),
+    )
+    .unwrap();
+    history.commit(&project, &mut images).unwrap();
+    assert_eq!(
+        project.scene(&first).unwrap().background,
+        Some(Background::Color([0.2, 0.4, 0.6, 1.]))
+    );
+    assert_eq!(
+        project.scene(&map).unwrap().background,
+        Some(Background::Color([1.; 4]))
+    );
+    let changed = project.clone();
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, before);
+    history.redo(&mut project, &mut images).unwrap();
+    assert_eq!(project, changed);
+    command::apply(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "set_scene_background", "background": "default"},
+            {"op": "set_scene_background", "scene": "Mapa", "background": "default"},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(
+        project.scene(&first).unwrap().background,
+        Some(Background::Sky)
+    );
+    assert_eq!(project.scene(&map).unwrap().background, None);
+
+    // Refused, and nothing changes: the sky in 2D, colors out of range or see-through, and
+    // misspelled forms.
+    let unchanged = project.clone();
+    for (commands, expected) in [
+        (
+            json!({"op": "set_scene_background", "scene": "Mapa", "background": "sky"}),
+            "Mapa: o Céu da OXY é só para cenas 3D",
+        ),
+        (
+            json!({"op": "set_scene_background", "background": {"color": [2, 0, 0, 1]}}),
+            "de 0 a 1",
+        ),
+        (
+            json!({"op": "set_scene_background", "background": {"color": [0, 0, 0, 0]}}),
+            "opaca",
+        ),
+    ] {
+        let error = command::apply(&mut project, &first, &batch(commands))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(project, unchanged);
+    }
+    for (commands, expected) in [
+        (
+            json!({"op": "set_scene_background", "background": "Sky"}),
+            "escreva `sky`",
+        ),
+        (
+            json!({"op": "set_scene_background", "background": {"color": [0, 0, 0]}}),
+            "tamanho errado: 3 itens, esperava uma lista de 4 itens",
+        ),
+    ] {
+        let error = command::parse(&commands).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+
+    // Reads give it as the command takes it.
+    let summary = query::project_summary(&project);
+    assert_eq!(summary["scenes"][0]["background"], "sky");
+    let tree = query::scene_tree(&project, &map, &Default::default()).unwrap();
+    assert_eq!(
+        serde_json::from_value::<command::BackgroundSpec>(tree["background"].clone()).unwrap(),
+        command::BackgroundSpec::Color(Background::DARK)
+    );
+}
+
+#[test]
+fn game_settings_are_set_by_command_and_listed_in_the_summary() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let summary = query::project_summary(&project);
+    assert_eq!(
+        summary["game"],
+        json!({"title": "Teste", "window": [1280, 720], "fullscreen": false})
+    );
+    let commands = batch(json!([
+        {"op": "set_game_settings", "title": "  Corrida Noturna  ", "window": [1920, 1080]},
+        {"op": "set_game_settings", "fullscreen": true},
+    ]));
+    assert_eq!(commands[0].label(), "Configurar jogo exportado");
+    command::apply(&mut project, &scene, &commands).unwrap();
+    assert_eq!(
+        project.game,
+        GameSettings {
+            title: "Corrida Noturna".into(),
+            window: [1920, 1080],
+            fullscreen: true,
+        }
+    );
+    assert_eq!(
+        query::project_summary(&project)["game"],
+        json!({"title": "Corrida Noturna", "window": [1920, 1080], "fullscreen": true})
+    );
+    // An empty title goes back to the project's name; renaming the project renames the game.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "set_game_settings", "title": " "},
+            {"op": "rename_project", "name": "Corrida"},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(project.game.title, "");
+    assert_eq!(query::project_summary(&project)["game"]["title"], "Corrida");
+    // Limits are refused and the batch changes nothing.
+    for (command, expected) in [
+        (
+            json!({"op": "set_game_settings", "window": [100, 100]}),
+            "de 320×240 a 7680×4320 pixels; recebeu 100×100",
+        ),
+        (
+            json!({"op": "set_game_settings", "title": "x".repeat(81)}),
+            "mais de 80 caracteres",
+        ),
+        (
+            json!({"op": "set_game_settings", "title": "Duas\nlinhas"}),
+            "quebras de linha",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(
+            &mut project,
+            &scene,
+            &batch(json!([{"op": "set_game_settings", "fullscreen": false}, command])),
+        )
+        .unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(error.index, 1);
+        assert_eq!(project, before);
+    }
+    // It takes no scene, like the other project commands.
+    assert!(
+        command::parse(&json!({"op": "set_game_settings", "title": "A", "scene": scene})).is_err()
+    );
+    assert!(command::parse(&json!({"op": "set_game_settings", "icon": "x"})).is_err());
+}
+
+#[test]
+fn queries_describe_the_project_for_agents() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_entity", "kind": {"type": "preset", "preset": "third_person"},
+         "name": "Herói"},
+    ]));
+    let hero = command::apply(&mut project, &scene, &commands).unwrap()[0].created[0].clone();
+    let summary = query::project_summary(&project);
+    assert_eq!(summary["scenes"][0]["kind"], "3d");
+    let tree = query::scene_tree(&project, &scene, &query::TreeQuery::default()).unwrap();
+    let names: Vec<_> = tree["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(names.contains(&"Herói".to_owned()), "{names:?}");
+    let entity = query::entity(&project, &scene, &hero).unwrap();
+    assert_eq!(entity["id"], hero.as_str());
+    assert_eq!(
+        query::find(&project, "herói", query::Page::ALL)["objects"][0]["id"],
+        hero.as_str()
+    );
+    let catalog = query::catalog();
+    let nodes = catalog["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), oxy_core::graph::registry().len());
+    assert!(
+        nodes
+            .iter()
+            .all(|n| !n["description"].as_str().unwrap().is_empty())
+    );
+}
+
+#[test]
+fn headless_simulation_reports_logs_actions_and_watched_objects() {
+    use oxy_core::headless::{self, SimulationRequest};
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Caixa",
+         "position": [1.0, 2.0, 3.0]},
+        {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+        {"op": "add_node", "entity": "$0", "operation": "debug.message",
+         "params": {"message": {"Text": "Olá do teste"}}},
+        {"op": "connect", "entity": "$0", "from_node": "$1", "from_port": "exec",
+         "to_node": "$2", "to_port": "exec"},
+        {"op": "create_input_action", "name": "Pular", "key": "Space"},
+    ]));
+    let cube = command::apply(&mut project, &scene, &commands).unwrap()[0].created[0].clone();
+    let before = project.clone();
+    // An action by its name; the project has no other.
+    let request: SimulationRequest = serde_json::from_value(json!({
+        "seconds": 1.0, "watch": [cube], "samples": 4,
+        "inputs": [{"type": "press", "at": 0.2, "action": "Pular"},
+                   {"type": "release", "at": 0.4, "action": "pular"}],
+    }))
+    .unwrap();
+    let report = headless::simulate(&project, &request).unwrap();
+    assert_eq!(project, before, "the simulation runs on a copy");
+    assert!(
+        report.logs.iter().any(|l| l.text.contains("Olá do teste")),
+        "{:?}",
+        report.logs
+    );
+    let Some(headless::Actions::Summary(actions)) = &report.actions else {
+        panic!("actions are summarized by default: {:?}", report.actions);
+    };
+    assert!(actions.iter().any(|a| a.text.starts_with("Caixa · ")));
+    let samples = &report.watched[0].samples;
+    assert_eq!(samples.len(), 4);
+    assert_eq!(samples.last().unwrap().position, Some([1., 2., 3.]));
+    assert_eq!(report.final_scene, scene);
+    let too_long = SimulationRequest {
+        seconds: 9999.,
+        ..request
+    };
+    assert!(headless::simulate(&project, &too_long).is_err());
+}
+
+#[test]
+fn number_ranges_are_refused_by_node_warned_in_older_projects_and_listed_in_the_catalog() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let before = project.clone();
+    for (operation, key, value, range) in [
+        ("character.teleport", "search", 3., "de 0 a 2"),
+        ("action.sound", "volume", 1.5, "de 0 a 1"),
+        ("control.wait", "seconds", -1., "de 0 a 86400"),
+        ("camera.activate", "seconds", -0.5, "de 0 em diante"),
+        ("query.ray", "mask", 4294967296., "de 0 a 4294967295"),
+        ("random.seed", "seed", -1., "de 0 a 9007199254740991"),
+    ] {
+        let commands = batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": operation, "params": {key: value}},
+        ]));
+        let error = command::apply(&mut project, &scene, &commands).unwrap_err();
+        let label = graph::definition(operation).unwrap().label;
+        assert_eq!(error.index, 1);
+        for part in [label, range, &format!("recebeu {value}")] {
+            assert!(error.message.contains(part), "{part}: {error}");
+        }
+        assert_eq!(project, before);
+    }
+    // set_node_params checks them too; the limits themselves pass.
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Zona de queda"},
+            {"op": "add_node", "entity": "$0", "operation": "character.teleport",
+             "params": {"search": 2}},
+            {"op": "add_node", "entity": "$0", "operation": "action.sound",
+             "params": {"volume": 0}},
+            {"op": "add_node", "entity": "$0", "operation": "control.wait"},
+            {"op": "add_node", "entity": "$0", "operation": "value.number",
+             "params": {"value": 1}},
+            {"op": "add_node", "entity": "$0", "operation": "control.wait",
+             "links": [["$4", "value", "seconds"]]},
+            {"op": "add_node", "entity": "$0", "operation": "query.ray"},
+        ])),
+    )
+    .unwrap();
+    let entity = created[0].created[0].clone();
+    let [teleport, sound, wait, _, wired, ray] =
+        [1, 2, 3, 4, 5, 6].map(|i| created[i].created[0].clone());
+    let set = |node: &str, key: &str, value: f64| {
+        batch(
+            json!({"op": "set_node_params", "entity": entity, "node": node,
+                     "params": {key: value}}),
+        )
+    };
+    let error = command::apply(&mut project, &scene, &set(&teleport, "search", 2.5)).unwrap_err();
+    assert!(
+        error.message.contains("Teleportar com segurança"),
+        "{error}"
+    );
+    command::apply(&mut project, &scene, &set(&teleport, "search", 0.)).unwrap();
+    // A project saved before the ranges keeps its values: it loads and saves, and validation
+    // says, by name, what the game does with each. A value whose port is wired is not read.
+    let logic = &mut project
+        .scene_mut(&scene)
+        .unwrap()
+        .entity_mut(&entity)
+        .unwrap()
+        .graph;
+    for (node, key, value) in [
+        (&teleport, "search", 3.),
+        (&sound, "volume", 2.),
+        (&wait, "seconds", 90000.),
+        (&wired, "seconds", 99999.),
+        (&ray, "distance", -1.),
+    ] {
+        logic
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == *node)
+            .unwrap()
+            .params
+            .insert(key.into(), Value::Number(value));
+    }
+    validate_project(&project).unwrap();
+    let validation = query::validation(&project);
+    assert_eq!(validation["valid"], true);
+    let warnings: Vec<&str> = validation["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    for expected in [
+        "Zona de queda → Teleportar com segurança: o parâmetro search \
+         (Busca local máxima (m; 0 recusa ocupado)) vale 3, fora da faixa de 0 a 2; no jogo, \
+         o nó recusa: a saída Sucesso fica falsa, com o motivo em Motivo de recusa",
+        "Zona de queda → Consultar raio: o parâmetro distance (Distância (m)) vale -1, fora da \
+         faixa de 0 em diante; no jogo, o nó recusa: a saída Consulta válida fica falsa, com o \
+         motivo em Motivo de recusa",
+        "Zona de queda → Reproduzir WAV: o parâmetro volume (Volume (0 a 1)) vale 2, fora da \
+         faixa de 0 a 1; no jogo, vale o limite mais próximo",
+        "Zona de queda → Esperar sem bloquear: o parâmetro seconds (Segundos) vale 90000, fora \
+         da faixa de 0 a 86400; no jogo, o nó para com erro",
+    ] {
+        assert!(
+            warnings.iter().any(|w| w.ends_with(expected)),
+            "{expected}: {warnings:?}"
+        );
+    }
+    assert!(
+        !warnings.iter().any(|w| w.contains("99999")),
+        "{warnings:?}"
+    );
+    for node in [&teleport, &sound, &wait, &wired, &ray] {
+        assert!(
+            !warnings.iter().any(|w| w.contains(node.as_str())),
+            "{warnings:?}"
+        );
+    }
+    let catalog = query::catalog();
+    let param = |operation: &str, key: &str| {
+        catalog["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["operation"] == operation)
+            .unwrap()["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == key)
+            .unwrap()
+            .clone()
+    };
+    let search = param("character.teleport", "search");
+    assert_eq!(
+        (search["min"].clone(), search["max"].clone()),
+        (json!(0.), json!(2.))
+    );
+    let seconds = param("camera.activate", "seconds");
+    assert_eq!(seconds["min"], json!(0.));
+    assert!(seconds.get("max").is_none());
+    assert!(param("character.teleport", "yaw").get("min").is_none());
+}
+
+#[test]
+fn node_choices_are_refused_outside_their_values_and_listed_in_the_catalog() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let before = project.clone();
+    for (operation, key, value) in [
+        ("event.input", "mode", "segurando"),
+        ("action.component", "component", "colisor"),
+        ("math.binary", "operator", "^"),
+        ("math.unary", "operator", "log"),
+        ("text.time", "format", "hh:mm"),
+        ("random.number", "mode", "inteiro"),
+        ("condition.compare", "operator", "=>"),
+        ("event.character", "kind", "pulo"),
+        ("event.pause", "when", "pausar"),
+        ("game.pause", "mode", "parar"),
+        ("transform.write", "channel", "posição"),
+        ("transform.write", "mode", "multiplicar"),
+        ("transform.write", "space", "pai"),
+    ] {
+        let commands = batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": operation,
+             "params": {key: {"Text": value}}},
+        ]));
+        let error = command::apply(&mut project, &scene, &commands).unwrap_err();
+        assert_eq!(error.index, 1);
+        assert!(
+            error.message.contains(&format!("recebeu \"{value}\"")),
+            "{error}"
+        );
+        assert_eq!(project, before);
+    }
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": "x", "operation": "event.input",
+                      "params": {"mode": {"Text": "segurando"}}}),
+        ),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("pressed (Pressionar), held (Manter), released (Soltar)"),
+        "the error lists the values: {error}"
+    );
+    // set_node_params checks them too; the allowed ones pass.
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": "math.binary",
+             "params": {"operator": {"Text": "*"}}},
+        ])),
+    )
+    .unwrap();
+    let (entity, node) = (&created[0].created[0], &created[1].created[0]);
+    let set = |value: &str| {
+        batch(
+            json!({"op": "set_node_params", "entity": entity, "node": node,
+                     "params": {"operator": {"Text": value}}}),
+        )
+    };
+    assert!(command::apply(&mut project, &scene, &set("**")).is_err());
+    for allowed in ["/", "%", "min", "max"] {
+        command::apply(&mut project, &scene, &set(allowed)).unwrap();
+    }
+    // Logic switches moving platforms too.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": entity, "operation": "action.component",
+                     "params": {"component": {"Text": "platform"}}}),
+        ),
+    )
+    .unwrap();
+    // The game pause's nodes take their values, plain ones too.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": entity, "operation": "event.pause",
+             "params": {"when": "resume"}},
+            {"op": "add_node", "entity": entity, "operation": "game.pause",
+             "params": {"mode": "pause"}},
+            {"op": "add_node", "entity": entity, "operation": "game.read"},
+            {"op": "add_node", "entity": entity, "operation": "game.quit"},
+            {"op": "add_node", "entity": entity, "operation": "transform.write",
+             "params": {"channel": "rotation", "mode": "set", "space": "world"}},
+        ])),
+    )
+    .unwrap();
+
+    // The editor reads the same lists from the core.
+    assert_eq!(
+        graph::choices("event.input", "mode"),
+        Some(&graph::INPUT_MODES[..])
+    );
+    assert_eq!(
+        graph::choices("condition.compare", "operator"),
+        Some(&graph::COMPARISONS[..])
+    );
+    assert_eq!(
+        graph::choices("math.binary", "operator"),
+        Some(&graph::ARITHMETIC[..])
+    );
+    assert!(graph::choices("character.posture", "command").is_some());
+    assert!(graph::choices("debug.message", "message").is_none());
+
+    let catalog = query::catalog();
+    let param = |operation: &str, id: &str| {
+        let node = catalog["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["operation"] == operation)
+            .unwrap();
+        node["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        param("event.input", "mode")["choices"][1],
+        json!({"value": "held", "label": "Manter"})
+    );
+    assert_eq!(
+        param("action.component", "component")["choices"][0],
+        json!({"value": "collider", "label": "Colisão / área (2D e 3D)"})
+    );
+    assert_eq!(
+        param("action.component", "component")["choices"][5],
+        json!({"value": "platform", "label": "Plataforma móvel"})
+    );
+    assert_eq!(
+        param("event.pause", "when")["choices"],
+        json!([
+            {"value": "pause", "label": "Ao pausar"},
+            {"value": "resume", "label": "Ao retomar"},
+        ])
+    );
+    assert_eq!(
+        param("game.pause", "mode")["choices"],
+        json!([
+            {"value": "pause", "label": "Pausar"},
+            {"value": "resume", "label": "Retomar"},
+            {"value": "toggle", "label": "Alternar"},
+        ])
+    );
+    assert_eq!(param("event.input", "action")["ref"], "input_action");
+    assert!(param("event.input", "action").get("choices").is_none());
+    for (operation, id, reference) in [
+        ("input.read", "action", "input_action"),
+        ("action.scene", "scene", "scene"),
+        ("action.sound", "asset", "audio"),
+        ("action.animation", "clip", "clip"),
+        ("action.animation", "target", "object"),
+        ("attribute.set", "attribute", "attribute"),
+        ("event.animation", "marker", "marker"),
+        ("surface.apply", "surface", "surface"),
+    ] {
+        assert_eq!(param(operation, id)["ref"], reference, "{operation}.{id}");
+    }
+    assert!(param("debug.message", "message").get("ref").is_none());
+    let keys = catalog["input_keys"].as_array().unwrap();
+    assert!(keys.contains(&json!("Space")) && keys.contains(&json!("MouseLeft")));
+    assert!(!keys.contains(&json!("Escape")) && !keys.contains(&json!("F3")));
+    assert_eq!(catalog["surface_presets"][1], "ice");
+}
+
+#[test]
+fn input_actions_are_created_renamed_rebound_and_deleted_by_command() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": " Reiniciar ", "key": "r"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle"},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": {"Text": "$0"}}},
+        ])),
+    )
+    .unwrap();
+    let action = created[0].created[0].clone();
+    let (entity, node) = (created[1].created[0].clone(), created[2].created[0].clone());
+    assert_eq!(
+        project.input_bindings[&action], "R",
+        "keys are stored as the game names them"
+    );
+    assert_eq!(input_actions::label(&project, &action), "Reiniciar");
+
+    for (command, expected) in [
+        (
+            json!({"op": "create_input_action", "name": "reiniciar", "key": "K"}),
+            "Já existe",
+        ),
+        (
+            json!({"op": "create_input_action", "name": "Pausar", "key": "Escape"}),
+            "reservada",
+        ),
+        (
+            json!({"op": "create_input_action", "name": "Pausar", "key": "F3"}),
+            "reservada",
+        ),
+        (
+            json!({"op": "create_input_action", "name": "Pausar", "key": "Ctrl"}),
+            "Tecla desconhecida",
+        ),
+        (
+            json!({"op": "create_input_action", "name": " ", "key": "P"}),
+            "nome",
+        ),
+        (
+            json!({"op": "set_input_key", "action": "Inexistente", "key": "P"}),
+            "não existe",
+        ),
+        (
+            json!({"op": "delete_input_action", "action": action}),
+            "nó Ação de entrada",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+
+    // By name or by ID; renaming to its own name in other case is fine.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "rename_input_action", "action": "reiniciar", "name": "REINICIAR"},
+            {"op": "set_input_key", "action": action, "key": "ArrowUp"},
+            {"op": "rename_input_action", "action": action, "name": "Recomeçar"},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(project.input_bindings[&action], "Up");
+    assert_eq!(input_actions::label(&project, &action), "Recomeçar");
+
+    let summary = query::project_summary(&project);
+    let listed = summary["input_actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == action.as_str())
+        .unwrap();
+    assert_eq!(listed["name"], "Recomeçar");
+    assert_eq!(listed["key"], "Up");
+    assert_eq!(
+        listed["used_by"],
+        json!([{"entity": entity, "name": "Controle", "role": "event.input"}])
+    );
+
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "remove_node", "entity": entity, "node": node},
+            {"op": "delete_input_action", "action": "recomeçar"},
+        ])),
+    )
+    .unwrap();
+    assert!(!project.input_bindings.contains_key(&action));
+    assert!(!project.input_labels.contains_key(&action));
+    assert!(validate_project(&project).is_ok());
+}
+
+#[test]
+fn an_input_action_name_never_stands_for_another_action() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    // Older projects keep readable IDs, which commands and simulations take before names.
+    for (id, key) in [("atacar", "J"), ("interagir", "E")] {
+        project.input_bindings.insert(id.into(), key.into());
+    }
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "rename_input_action", "action": "atacar", "name": "Golpear"})),
+    )
+    .unwrap();
+    for (command, expected) in [
+        (
+            json!({"op": "create_input_action", "name": "Atacar", "key": "K"}),
+            "é o ID da ação de entrada Golpear",
+        ),
+        (
+            json!({"op": "rename_input_action", "action": "interagir", "name": "atacar"}),
+            "é o ID da ação de entrada Golpear",
+        ),
+        (
+            json!({"op": "rename_input_action", "action": "interagir", "name": "GOLPEAR"}),
+            "Já existe uma ação de entrada chamada \"GOLPEAR\" (atacar)",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+    // An action may take its own ID back as its name.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "rename_input_action", "action": "Golpear", "name": "Atacar"})),
+    )
+    .unwrap();
+    assert_eq!(input_actions::label(&project, "atacar"), "Atacar");
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+
+    // Presets and components add their default actions without that check, so the batch
+    // that leaves a name to two actions warns, and by name commands refuse it.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Pular", "key": "Space"},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"}},
+        ])),
+    )
+    .unwrap();
+    let created = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(input_actions::label(&project, "pular"), "Pular");
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2, "the name and the key: {warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("2 ações de entrada atendem pelo nome \"pular\"")
+            && warning.contains(&format!("{created} (Pular)"))
+            && warning.contains("pular (Pular)"),
+        "{warning}"
+    );
+    assert!(
+        warnings[1]
+            .as_str()
+            .unwrap()
+            .starts_with("A tecla Space é de 2 ações de entrada"),
+        "{warnings:?}"
+    );
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "set_input_key", "action": "Pular", "key": "K"})),
+    )
+    .unwrap_err();
+    assert!(error.message.contains("Há 2 ações"), "{error}");
+    // The game tells them apart, and projects may share a name on purpose (one label for
+    // keys 1, 2 and 3), so validation leaves it out and a later batch does not repeat it.
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+    assert_eq!(
+        command::apply_and_report(
+            &mut project,
+            &scene,
+            &batch(json!({"op": "set_input_key", "action": created, "key": "K"})),
+        )
+        .unwrap(),
+        json!({"created": {}})
+    );
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "rename_input_action", "action": created, "name": "Saltar"})),
+    )
+    .unwrap();
+    assert_eq!(
+        command::batch_warnings(&project),
+        command::warnings(&project)
+    );
+}
+
+#[test]
+fn sound_nodes_take_their_channels_and_the_catalog_lists_them_under_som() {
+    let (mut project, scene) = project(SceneKind::TwoD);
+    let music = new_id();
+    project.assets.push(Asset {
+        id: music.clone(),
+        name: "Trilha".into(),
+        path: "assets/trilha.wav".into(),
+        kind: AssetKind::Audio,
+        model: None,
+    });
+    let before = project.clone();
+    for (operation, value) in [
+        ("action.sound_loop", "musica"),
+        ("action.sound_stop", "tudo"),
+        ("action.volume", "geral"),
+    ] {
+        let commands = batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": operation,
+             "params": {"channel": value}},
+        ]));
+        let error = command::apply(&mut project, &scene, &commands).unwrap_err();
+        assert!(
+            error.message.contains(&format!("recebeu \"{value}\"")),
+            "{error}"
+        );
+        assert_eq!(project, before);
+    }
+    // Plain values; Parar som's empty audio stops every loop of the channel.
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Rádio"},
+            {"op": "add_node", "entity": "$0", "operation": "action.sound_loop",
+             "params": {"asset": music, "channel": "effects", "volume": 0.5, "fade": 1}},
+            {"op": "add_node", "entity": "$0", "operation": "action.sound_stop"},
+            {"op": "add_node", "entity": "$0", "operation": "action.volume",
+             "params": {"channel": "music", "volume": 0.3}},
+            {"op": "add_node", "entity": "$0", "operation": "audio.read"},
+        ])),
+    )
+    .unwrap();
+    assert!(applied.iter().all(|a| a.warnings.is_empty()), "{applied:?}");
+    let radio = &applied[0].created[0];
+    let graph = &project.scene(&scene).unwrap().entity(radio).unwrap().graph;
+    let looped = &graph.nodes[0];
+    assert_eq!(looped.text("asset"), music);
+    assert_eq!(looped.text("channel"), "effects");
+    assert_eq!(looped.number("volume", 0.), 0.5);
+    assert_eq!(looped.number("fade", 0.), 1.);
+    let stop = &graph.nodes[1];
+    assert_eq!((stop.text("asset"), stop.text("channel")), ("", "all"));
+    assert_eq!(graph.nodes[2].text("channel"), "music");
+    validate_project(&project).unwrap();
+    assert!(command::warnings(&project).is_empty());
+    // The audio is used by the loop, not by the stop that names none.
+    let summary = query::project_summary(&project);
+    assert_eq!(
+        summary["assets"][0]["used_by"],
+        json!([{"entity": radio, "name": "Rádio", "role": "action.sound_loop"}])
+    );
+    assert_eq!(
+        graph::empty_choice("action.sound_stop", "asset"),
+        Some("Todos os sons do canal")
+    );
+    assert_eq!(graph::empty_choice("action.sound_loop", "asset"), None);
+
+    let catalog = query::catalog_query(&json!({"category": "Som"})).unwrap();
+    let nodes = catalog["nodes"].as_array().unwrap();
+    let listed: Vec<_> = nodes
+        .iter()
+        .map(|n| n["operation"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            "action.sound",
+            "action.sound_loop",
+            "action.sound_stop",
+            "action.volume",
+            "audio.read"
+        ]
+    );
+    let param = |operation: &str, id: &str| {
+        let node = nodes.iter().find(|n| n["operation"] == operation).unwrap();
+        node["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let values = |operation: &str| -> Vec<String> {
+        param(operation, "channel")["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["value"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(values("action.sound_loop"), ["music", "effects"]);
+    assert_eq!(values("action.sound_stop"), ["music", "effects", "all"]);
+    assert_eq!(values("action.volume"), ["master", "music", "effects"]);
+    assert_eq!(
+        param("action.volume", "channel")["choices"][0],
+        json!({"value": "master", "label": "Geral"})
+    );
+    for operation in ["action.sound", "action.sound_loop", "action.sound_stop"] {
+        assert_eq!(param(operation, "asset")["ref"], "audio", "{operation}");
+    }
+    // Volume takes an input; Ler volumes gives the three.
+    let ports = |operation: &str, side: &str| -> Vec<String> {
+        let node = nodes.iter().find(|n| n["operation"] == operation).unwrap();
+        node[side]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| port["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // Reproduzir WAV moved here as it was.
+    let sound = nodes
+        .iter()
+        .find(|n| n["operation"] == "action.sound")
+        .unwrap();
+    assert_eq!(sound["outputs"][0]["label"], "Executar");
+    assert_eq!(ports("action.sound_loop", "inputs"), ["exec", "volume"]);
+    assert_eq!(ports("action.volume", "inputs"), ["exec", "volume"]);
+    assert_eq!(
+        ports("audio.read", "outputs"),
+        ["master", "music", "effects"]
+    );
+}
+
+#[test]
+fn empty_choices_are_warned_but_an_unset_input_mode_reads_as_pressed() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Pular", "key": "Space"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Lógica"},
+            {"op": "add_node", "entity": "$1", "operation": "event.character"},
+            {"op": "add_node", "entity": "$1", "operation": "math.binary"},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": {"Text": "$0"}}},
+        ])),
+    )
+    .unwrap();
+    let entity = created[1].created[0].clone();
+    // add_node refuses the empty value, as any other one outside the choices.
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": entity, "operation": "event.character",
+                      "params": {"kind": {"Text": ""}}}),
+        ),
+    )
+    .unwrap_err();
+    assert!(error.message.contains("recebeu \"\""), "{error}");
+
+    // update_entity lets it through, so the batch warns: the game never matches it.
+    let nodes = &project
+        .scene(&scene)
+        .unwrap()
+        .entity(&entity)
+        .unwrap()
+        .graph
+        .nodes;
+    let mut nodes = serde_json::to_value(nodes).unwrap();
+    for (index, key) in [(0, "kind"), (1, "operator"), (2, "mode")] {
+        nodes[index]["params"][key] = json!({"Text": ""});
+    }
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "update_entity", "entity": entity,
+                      "patch": {"graph": {"nodes": nodes}}})),
+    )
+    .unwrap();
+    let warnings: Vec<&str> = report["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    for operation in ["event.character", "math.binary"] {
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains(&format!("nó {operation} ")) && w.contains("recebeu \"\"")),
+            "{operation}: {warnings:?}"
+        );
+    }
+    // The empty mode of an event.input is one never set, which the game reads as pressed.
+    assert!(
+        !warnings.iter().any(|w| w.contains("event.input")),
+        "{warnings:?}"
+    );
+    let validation = query::validation(&project);
+    assert_eq!(validation["valid"], true);
+    assert_eq!(validation["warnings"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn an_empty_batch_changes_nothing_and_repeats_no_warning() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}},
+            {"op": "add_node", "entity": "$0", "operation": "event.input",
+             "params": {"action": {"Text": "nada"}}},
+        ])),
+    )
+    .unwrap();
+    // One label for two keys, as some examples do.
+    for (id, key) in [("1", "1"), ("2", "2")] {
+        project.input_bindings.insert(id.into(), key.into());
+        project
+            .input_labels
+            .insert(id.into(), "Escolher perfil".into());
+    }
+    assert_eq!(command::warnings(&project).len(), 1);
+    assert_eq!(command::batch_warnings(&project).len(), 2);
+    let before = project.clone();
+    let answer = command::apply_and_report(&mut project, &scene, &[]).unwrap();
+    assert_eq!(answer, json!({"created": {}}));
+    assert_eq!(project, before);
+    // The editor answers an empty batch without an undo step, from the same warnings.
+    assert_eq!(
+        command::report(&project, &[], &command::batch_warnings(&project)),
+        answer
+    );
+}
+
+#[test]
+fn surfaces_are_created_assigned_through_patches_and_deleted_when_unused() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_surface", "preset": "ice", "name": "Gelo fino", "friction": 0.01},
+            {"op": "create_surface"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Pista"},
+            {"op": "add_component", "entity": "$2", "component": "collider3d"},
+            // "$0" inside a patch is the surface created above.
+            {"op": "update_entity", "entity": "$2", "patch": {"physics3d": {"surface": "$0"}}},
+        ])),
+    )
+    .unwrap();
+    let (ice, common, track) = (
+        created[0].created[0].clone(),
+        created[1].created[0].clone(),
+        created[2].created[0].clone(),
+    );
+    fn surface(project: &Project, id: &str) -> surface::SurfaceMaterial {
+        project
+            .surfaces
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .clone()
+    }
+    let thin = surface(&project, &ice);
+    assert_eq!(
+        (thin.name.as_str(), thin.friction, thin.traction),
+        ("Gelo fino", 0.01, 0.15),
+        "the preset's values, then the ones given"
+    );
+    assert_eq!(surface(&project, &common).name, "Comum");
+    let entity = project.scene(&scene).unwrap().entity(&track).unwrap();
+    assert_eq!(
+        entity.physics3d.as_ref().unwrap().surface.as_deref(),
+        Some(ice.as_str())
+    );
+
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "update_surface", "surface": common, "name": "Esteira lenta",
+                      "conveyor": [1.0, 0.0, 0.0], "conveyor_space": "World",
+                      "speed_multiplier": 0.8}),
+        ),
+    )
+    .unwrap();
+    let slow = surface(&project, &common);
+    assert_eq!(slow.conveyor, [1., 0., 0.]);
+    assert_eq!(slow.conveyor_space, surface::VelocitySpace::World);
+    assert_eq!((slow.friction, slow.speed_multiplier), (1., 0.8));
+
+    for (command, expected) in [
+        (
+            json!({"op": "update_surface", "surface": common, "friction": -1.0}),
+            "negativos",
+        ),
+        (
+            json!({"op": "update_surface", "surface": common, "name": ""}),
+            "nome",
+        ),
+        (
+            json!({"op": "update_surface", "surface": "nenhuma", "traction": 1.0}),
+            "não existe",
+        ),
+        (json!({"op": "delete_surface", "surface": ice}), "em uso"),
+        (json!({"op": "create_surface", "preset": "areia"}), ""),
+    ] {
+        let before = project.clone();
+        let result = command::parse(&command)
+            .map_err(|e| e.to_string())
+            .and_then(|c| command::apply(&mut project, &scene, &c).map_err(|e| e.to_string()));
+        let error = result.unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+
+    let summary = query::project_summary(&project);
+    let listed = summary["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == ice.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(listed["name"], "Gelo fino");
+    assert_eq!(listed["conveyor_space"], "Local");
+    assert_eq!(
+        listed["used_by"],
+        json!([{"entity": track, "name": "Pista", "role": "collider3d"}])
+    );
+    assert_eq!(
+        summary["collision_groups"],
+        json!([{"bit": 0, "name": "Cenário padrão"}, {"bit": 1, "name": "Personagens"},
+               {"bit": 2, "name": "Áreas"}])
+    );
+    project.collision_groups.insert(5, "Inimigos".into());
+    assert_eq!(
+        query::project_summary(&project)["collision_groups"][3],
+        json!({"bit": 5, "name": "Inimigos"})
+    );
+
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "update_entity", "entity": track, "patch": {"physics3d": {"surface": null}}},
+            {"op": "delete_surface", "surface": ice},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(project.surfaces.len(), 1);
+}
+
+#[test]
+fn placeholders_reach_every_created_id_patches_included_and_dollars_can_be_escaped() {
+    use command::Placeholder;
+    assert_eq!(
+        Placeholder::parse("$3"),
+        Some(Placeholder::Created { command: 3, nth: 0 })
+    );
+    assert_eq!(
+        Placeholder::parse("$0.2"),
+        Some(Placeholder::Created { command: 0, nth: 2 })
+    );
+    assert_eq!(
+        Placeholder::parse("$$1.4"),
+        Some(Placeholder::Escaped("$1.4"))
+    );
+    assert_eq!(
+        Placeholder::parse("$5.1@abc"),
+        Some(Placeholder::Copied {
+            command: 5,
+            nth: 1,
+            original: "abc"
+        })
+    );
+    assert_eq!(
+        Placeholder::parse("$2@$0.1"),
+        Some(Placeholder::Copied {
+            command: 2,
+            nth: 0,
+            original: "$0.1"
+        })
+    );
+    assert_eq!(
+        Placeholder::parse("$$2@x"),
+        Some(Placeholder::Escaped("$2@x"))
+    );
+    for text in [
+        "$",
+        "$$",
+        "$x",
+        "$1a",
+        "$0.",
+        "$.1",
+        "$$$1",
+        "$10 de bônus",
+        "1",
+        "a$1",
+        "$2@",
+        "$@x",
+        "$2.@x",
+        "a$2@x",
+    ] {
+        assert_eq!(Placeholder::parse(text), None, "{text}");
+    }
+
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let created = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"},
+             "name": "Corredor"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "A"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "B"},
+            {"op": "duplicate_entities", "ids": ["$1", "$2"]},
+            // The second copy and the preset's camera, by "$N.M".
+            {"op": "rename_entity", "entity": "$3.1", "name": "Segunda cópia"},
+            {"op": "rename_entity", "entity": "$0.2", "name": "Câmera do corredor"},
+            {"op": "update_entity", "entity": "$1",
+             "patch": {"attributes": {"alvo": {"Object": "$2"}, "preço": {"Text": "$$5"},
+                                      "aviso": {"Text": "$10 de bônus"}}}},
+            {"op": "set_attribute", "entity": "$2", "name": "rótulo", "value": {"Text": "$$0.1"}},
+        ])),
+    )
+    .unwrap();
+    let pieces = &created[0].created;
+    let scene_ref = project.scene(&scene).unwrap();
+    assert_eq!(pieces.len(), 9, "root, look, camera and six body parts");
+    assert!(
+        scene_ref.entity(&pieces[0]).unwrap().character3d.is_some(),
+        "root first"
+    );
+    assert_eq!(scene_ref.entity(&pieces[0]).unwrap().name, "Corredor");
+    assert_eq!(
+        scene_ref.entity(&pieces[2]).unwrap().name,
+        "Câmera do corredor"
+    );
+    let copies = &created[3].created;
+    assert_eq!(copies.len(), 2);
+    assert_eq!(scene_ref.entity(&copies[1]).unwrap().name, "Segunda cópia");
+    let a = scene_ref.entity(&created[1].created[0]).unwrap();
+    assert_eq!(
+        a.attributes["alvo"],
+        Value::Object(Some(created[2].created[0].clone()))
+    );
+    assert_eq!(a.attributes["preço"], Value::Text("$5".into()));
+    assert_eq!(a.attributes["aviso"], Value::Text("$10 de bônus".into()));
+    let b = scene_ref.entity(&created[2].created[0]).unwrap();
+    assert_eq!(b.attributes["rótulo"], Value::Text("$0.1".into()));
+
+    let before = project.clone();
+    for (commands, wrong) in [
+        // A command cannot name itself or a later one, the first one included.
+        (
+            json!([{"op": "rename_entity", "entity": "$0", "name": "X"}]),
+            "\"$0\"",
+        ),
+        (
+            json!([{"op": "create_entity", "kind": {"type": "group"}},
+                   {"op": "update_entity", "entity": "$0", "patch": {"name": "$7"}}]),
+            "\"$$7\"",
+        ),
+        (
+            json!([{"op": "create_entity", "kind": {"type": "group"}},
+                   {"op": "rename_entity", "entity": "$0.1", "name": "X"}]),
+            "\"$0.1\"",
+        ),
+    ] {
+        let error = command::apply(&mut project, &scene, &batch(commands)).unwrap_err();
+        assert!(error.message.contains(wrong), "{error}");
+        assert_eq!(project, before);
+    }
+}
+
+#[test]
+fn the_report_names_what_each_command_created_and_the_warnings_it_added() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta"},
+            {"op": "set_attribute", "entity": "$0", "name": "aberta", "value": {"Bool": false}},
+            {"op": "add_node", "entity": "$0", "operation": "event.input",
+             "params": {"action": {"Text": "abrir"}}},
+            {"op": "create_input_action", "name": "Abrir", "key": "E"},
+            {"op": "create_surface", "preset": "mud"},
+        ])),
+    )
+    .unwrap();
+    let created = report["created"].as_object().unwrap();
+    assert_eq!(
+        created.keys().collect::<Vec<_>>(),
+        ["0", "2", "3", "4"],
+        "only the commands that created something"
+    );
+    assert_eq!(report["created"]["0"][0]["name"], "Porta");
+    assert_eq!(report["created"]["2"][0]["name"], "event.input");
+    assert_eq!(report["created"]["3"][0]["name"], "Abrir");
+    assert_eq!(report["created"]["4"][0]["name"], "Lama");
+    // Named before the action existed, the node keeps the name, which the game never presses.
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("\"abrir\" é o nome da ação de entrada"),
+        "{warnings:?}"
+    );
+    let door = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let node = report["created"]["2"][0]["id"].as_str().unwrap().to_owned();
+    let action = report["created"]["3"][0]["id"].as_str().unwrap().to_owned();
+
+    // The warning stays in the project until fixed, but a later batch does not repeat it.
+    let later = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "rename_entity", "entity": door, "name": "Portão"})),
+    )
+    .unwrap();
+    assert_eq!(later, json!({"created": {}}));
+    assert_eq!(
+        query::validation(&project)["warnings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "set_node_params", "entity": door, "node": node,
+                      "params": {"action": {"Text": action}}}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+
+    // Values the game ignores, left by update_entity or by hand, are warned about too.
+    project
+        .input_bindings
+        .insert("pausar".into(), "Escape".into());
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "update_entity", "entity": door, "patch": {"graph": {"nodes": [
+            {"id": node, "operation": "event.input", "position": [0.0, 0.0],
+             "params": {"action": {"Text": action}, "mode": {"Text": "sempre"}}}]}}}),
+        ),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "the key was there before: {warnings:?}");
+    assert!(warnings[0].as_str().unwrap().contains("recebeu \"sempre\""));
+    let validation = query::validation(&project);
+    assert_eq!(validation["valid"], true);
+    assert!(
+        validation["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("Escape é reservada")),
+        "{validation}"
+    );
+}
+
+#[test]
+fn a_component_switch_aimed_at_an_object_without_it_is_warned() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Alavanca"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Ponte"},
+            {"op": "add_node", "entity": "$0", "operation": "action.component",
+             "params": {"target": {"Object": "$1"}, "component": "collider"}},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("Alavanca → nó action.component")
+            && warning.contains("Ponte não tem colisor nem área"),
+        "{warning}"
+    );
+    let lever = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let bridge = report["created"]["1"][0]["id"].as_str().unwrap().to_owned();
+    let node = report["created"]["2"][0]["id"].as_str().unwrap().to_owned();
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "set_node_params", "entity": lever, "node": node,
+                      "params": {"component": "platform"}}),
+        ),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("Ponte não tem plataforma móvel"),
+        "{warnings:?}"
+    );
+    // A moving platform brings its 3D collider, so both choices find what they switch.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "add_component", "entity": bridge, "component": "platform"})),
+    )
+    .unwrap();
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "set_node_params", "entity": lever, "node": node,
+                      "params": {"component": "collider"}}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+
+    // A target that comes through the port is only known in the game.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "set_node_params", "entity": lever, "node": node,
+             "params": {"component": "controller"}},
+            {"op": "add_node", "entity": lever, "operation": "value.object",
+             "params": {"value": {"Object": bridge}}},
+            {"op": "connect", "entity": lever, "from_node": "$1", "from_port": "value",
+             "to_node": node, "to_port": "target"},
+        ])),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
+}
+
+#[test]
+fn simulations_press_only_actions_the_project_has() {
+    use oxy_core::headless::{self, SimulationRequest};
+    let (mut project, _) = project(SceneKind::ThreeD);
+    input_actions::create(&mut project, "Pular alto", "Space").unwrap();
+    let run = |inputs: serde_json::Value, setup: serde_json::Value| {
+        let request: SimulationRequest = serde_json::from_value(json!({
+            "seconds": 0.2, "inputs": inputs, "setup": setup,
+        }))
+        .unwrap();
+        headless::simulate(&project, &request)
+    };
+    let press = |action: &str| json!([{"type": "press", "at": 0.0, "action": action}]);
+    run(press("pular alto"), json!([])).expect("by name, in any case");
+    let error = run(press("voar"), json!([])).unwrap_err();
+    assert!(
+        error.contains("\"voar\" não existe") && error.contains("Pular alto"),
+        "the error lists the actions: {error}"
+    );
+    // An action created by setup, by "$N" or by name.
+    let setup = json!([{"op": "create_input_action", "name": "Voar", "key": "V"}]);
+    run(press("$0"), setup.clone()).unwrap();
+    run(press("Voar"), setup).unwrap();
+}
+
+fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4)
+}
+
+fn box_of(project: &Project, scene: &str, id: &str) -> ([f32; 3], [f32; 3]) {
+    let collider = project
+        .scene(scene)
+        .unwrap()
+        .entity(id)
+        .unwrap()
+        .physics3d
+        .clone()
+        .unwrap();
+    match collider.shape {
+        CollisionShape::Box { size } => (size, collider.center),
+        other => panic!("box expected: {other:?}"),
+    }
+}
+
+#[test]
+fn fit_collider_wraps_the_shape_or_its_pieces_and_a_box_left_behind_is_warned() {
+    use glam::Vec3;
+    use oxy_core::spatial;
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    // The collider was added before the dimensions changed: it keeps the old box.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+             "name": "Pouso", "position": [0.0, 0.7, -93.5]},
+            {"op": "add_component", "entity": "$0", "component": "collider3d"},
+            {"op": "update_entity", "entity": "$0", "patch": {"dimensions": [9.0, 0.4, 7.0]}},
+        ])),
+    )
+    .unwrap();
+    let pad = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.starts_with("Comando 2 (update_entity, o 3º do lote): Pouso")
+            && warning.contains("[9, 0.4, 7]")
+            && warning.contains("[1, 1, 1]")
+            && warning.contains(&format!("fit_collider {{\"entity\": \"{pad}\"}}")),
+        "{warning}"
+    );
+    let fitted = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "fit_collider", "entity": pad})),
+    )
+    .unwrap();
+    assert_eq!(fitted, json!({"created": {}}), "nothing left to warn");
+    assert_eq!(box_of(&project, &scene, &pad), ([9., 0.4, 7.], [0.; 3]));
+
+    // A fit later in the batch settles it, and a scale change needs none: the box follows it.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}},
+            {"op": "add_component", "entity": "$0", "component": "collider3d"},
+            {"op": "update_entity", "entity": "$0", "patch": {"dimensions": [2.0, 3.0, 4.0]}},
+            {"op": "fit_collider", "entity": "$0", "margin": 0.5},
+            {"op": "set_transform", "entity": pad, "scale": [2.0, 1.0, 1.0]},
+        ])),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
+    let cube = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(box_of(&project, &scene, &cube).0, [3., 4., 5.]);
+
+    // A fitted box is followed too: a plane's, as thin as allowed, and one with a margin.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Plane"}, "name": "Piso"},
+            {"op": "add_component", "entity": "$0", "component": "collider3d"},
+            {"op": "fit_collider", "entity": "$0"},
+        ])),
+    )
+    .unwrap();
+    let floor = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    assert!(near(box_of(&project, &scene, &floor).0, [1., 0.001, 1.]));
+    for entity in [&floor, &cube] {
+        let report = command::apply_and_report(
+            &mut project,
+            &scene,
+            &batch(json!({"op": "update_entity", "entity": entity,
+                          "patch": {"dimensions": [20.0, 1.0, 20.0]}})),
+        )
+        .unwrap();
+        let warning = report["warnings"][0].as_str().unwrap_or_default();
+        assert!(
+            warning.contains(&format!("({entity}) agora mede [20, 1, 20]"))
+                && warning.contains("fit_collider"),
+            "{report}"
+        );
+    }
+
+    // With children: the pieces of a turned and scaled group, in the group's own axes.
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Seção",
+             "position": [10.0, 0.0, 0.0]},
+            {"op": "set_transform", "entity": "$0", "rotation": [0.0, 90.0, 0.0],
+             "scale": [2.0, 2.0, 2.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "parent": "$0",
+             "position": [-2.0, 0.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "parent": "$0",
+             "position": [3.0, 0.0, 0.0]},
+            {"op": "add_component", "entity": "$0", "component": "sensor3d"},
+            {"op": "fit_collider", "entity": "$0", "children": true, "margin": 0.2},
+        ])),
+    )
+    .unwrap();
+    let group = applied[0].created[0].clone();
+    let (size, center) = box_of(&project, &scene, &group);
+    // From -2.5 to 3.5 along the group's X, plus 0.2 m (0.1 at scale 2) on every side.
+    assert!(near(size, [6.2, 1.2, 1.2]), "{size:?}");
+    assert!(near(center, [0.5, 0., 0.]), "{center:?}");
+    let level = project.scene(&scene).unwrap();
+    let collider = level.entity(&group).unwrap().physics3d.as_ref().unwrap();
+    assert!(collider.sensor, "a sensor stays a sensor");
+    let (bounds, _) =
+        spatial::collider3d_bounds(collider, level.world_matrix(&group).unwrap()).unwrap();
+    let shown = spatial::visual_bounds(level, &level.descendants(&group)).unwrap();
+    assert!(
+        bounds.min.abs_diff_eq(shown.min - Vec3::splat(0.2), 1e-4)
+            && bounds.max.abs_diff_eq(shown.max + Vec3::splat(0.2), 1e-4),
+        "{bounds:?} / {shown:?}"
+    );
+
+    // What it cannot fit is refused, saying why.
+    let others = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Sphere"}, "name": "Bola"},
+            {"op": "add_component", "entity": "$0", "component": "collider3d"},
+            {"op": "update_entity", "entity": "$0",
+             "patch": {"physics3d": {"shape": {"Box": null, "Sphere": {"radius": 0.5}}}}},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Solta"},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"},
+             "name": "Jogador"},
+        ])),
+    )
+    .unwrap();
+    let (ball, loose, player) = (
+        others[0].created[0].clone(),
+        others[3].created[0].clone(),
+        others[4].created[0].clone(),
+    );
+    for (command, expected) in [
+        (
+            json!({"op": "fit_collider", "entity": group}),
+            "Seção não tem forma própria; com children: true",
+        ),
+        (
+            json!({"op": "fit_collider", "entity": ball, "shape": "convex", "children": true}),
+            "O colisor convex usa a forma do próprio Bola, sem as peças dentro dele",
+        ),
+        (
+            json!({"op": "fit_collider", "entity": loose}),
+            "Solta não tem colisor",
+        ),
+        (
+            json!({"op": "fit_collider", "entity": player}),
+            "Personagem 3D",
+        ),
+        (
+            json!({"op": "fit_collider", "entity": pad, "margin": -1.0}),
+            "margin",
+        ),
+        (
+            json!({"op": "fit_collider", "entity": "fantasma"}),
+            "Objeto fantasma não existe",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+
+    // The 2D box collider takes the world box, as the editor's Ajustar ao objeto does.
+    let (mut flat, plane) = self::project(SceneKind::TwoD);
+    let report = command::apply_and_report(
+        &mut flat,
+        &plane,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Rectangle"},
+             "name": "Chão", "position": [1.0, 2.0, 0.0]},
+            {"op": "add_component", "entity": "$0", "component": "collider2d"},
+            {"op": "update_entity", "entity": "$0", "patch": {"dimensions": [4.0, 2.0, 1.0]}},
+        ])),
+    )
+    .unwrap();
+    assert!(
+        report["warnings"][0].as_str().unwrap().contains("Chão"),
+        "{report}"
+    );
+    let floor = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    command::apply(
+        &mut flat,
+        &plane,
+        &batch(json!({"op": "fit_collider", "entity": floor, "margin": 0.5})),
+    )
+    .unwrap();
+    let level = flat.scene(&plane).unwrap();
+    let bounds = spatial::collider_bounds(level, &floor).unwrap();
+    let shown = spatial::visual_bounds(level, std::slice::from_ref(&floor)).unwrap();
+    for axis in 0..2 {
+        assert!(
+            (bounds.min[axis] - (shown.min[axis] - 0.5)).abs() < 1e-4,
+            "{bounds:?}"
+        );
+        assert!(
+            (bounds.max[axis] - (shown.max[axis] + 0.5)).abs() < 1e-4,
+            "{bounds:?}"
+        );
+    }
+    // Fitted, it is still followed.
+    let report = command::apply_and_report(
+        &mut flat,
+        &plane,
+        &batch(json!({"op": "update_entity", "entity": floor,
+                      "patch": {"dimensions": [8.0, 2.0, 1.0]}})),
+    )
+    .unwrap();
+    assert!(
+        report["warnings"][0]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Chão"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_input_parameter_takes_the_action_name_and_keeps_its_id() {
+    use oxy_core::headless::{self, SimulationRequest};
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Pausar", "key": "P"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle"},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": {"Text": "pausar"}}},
+            {"op": "add_node", "entity": "$1", "operation": "input.read",
+             "params": {"action": "Pausar"}},
+            {"op": "add_node", "entity": "$1", "operation": "debug.message",
+             "params": {"message": {"Text": "Pausado"}}},
+            {"op": "connect", "entity": "$1", "from_node": "$2", "from_port": "exec",
+             "to_node": "$4", "to_port": "exec"},
+        ])),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
+    let action = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let control = report["created"]["1"][0]["id"].as_str().unwrap().to_owned();
+    let nodes = |project: &Project| {
+        project
+            .scene(&scene)
+            .unwrap()
+            .entity(&control)
+            .unwrap()
+            .graph
+            .nodes
+            .clone()
+    };
+    assert_eq!(
+        nodes(&project)[0].text("action"),
+        action,
+        "the ID, as the game reads"
+    );
+    assert_eq!(nodes(&project)[1].text("action"), action);
+    // So the game fires it.
+    let request: SimulationRequest = serde_json::from_value(json!({
+        "seconds": 0.3, "inputs": [{"type": "press", "at": 0.1, "action": "Pausar"}],
+    }))
+    .unwrap();
+    let simulated = headless::simulate(&project, &request).unwrap();
+    assert!(
+        simulated.logs.iter().any(|l| l.text.contains("Pausado")),
+        "{:?}",
+        simulated.logs
+    );
+
+    // set_node_params too; an action the project lacks stays, warned, and a name two actions
+    // share is refused, as by the input action commands.
+    let node = nodes(&project)[0].id.clone();
+    let set = |action: &str| {
+        batch(
+            json!({"op": "set_node_params", "entity": control, "node": node,
+                     "params": {"action": {"Text": action}}}),
+        )
+    };
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "create_input_action", "name": "Pular alto", "key": "Space"})),
+    )
+    .unwrap();
+    command::apply(&mut project, &scene, &set("PULAR ALTO")).unwrap();
+    let jump = input_actions::find(&project, "Pular alto").unwrap();
+    assert_eq!(nodes(&project)[0].text("action"), jump);
+    let report = command::apply_and_report(&mut project, &scene, &set("voar")).unwrap();
+    assert_eq!(nodes(&project)[0].text("action"), "voar");
+    assert!(
+        report["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("a ação de entrada \"voar\" não existe"),
+        "{report}"
+    );
+    project
+        .input_bindings
+        .insert("pausa_antiga".into(), "O".into());
+    project
+        .input_labels
+        .insert("pausa_antiga".into(), "Pausar".into());
+    let before = project.clone();
+    let error = command::apply(&mut project, &scene, &set("Pausar")).unwrap_err();
+    assert!(error.message.contains("Há 2 ações de entrada"), "{error}");
+    assert_eq!(project, before);
+
+    // A node that keeps a name, as nodes added before did, is warned for what it is.
+    let mut old = project.clone();
+    old.scene_mut(&scene)
+        .unwrap()
+        .entity_mut(&control)
+        .unwrap()
+        .graph
+        .nodes[0]
+        .params
+        .insert("action".into(), Value::Text("Pular alto".into()));
+    let warnings = command::warnings(&old);
+    assert!(
+        warnings.iter().any(|w| w
+            .message
+            .contains(&format!("é o nome da ação de entrada {jump}"))),
+        "{warnings:?}"
+    );
+    // A name two actions share: they exist, and the warning says so.
+    old.scene_mut(&scene)
+        .unwrap()
+        .entity_mut(&control)
+        .unwrap()
+        .graph
+        .nodes[0]
+        .params
+        .insert("action".into(), Value::Text("Pausar".into()));
+    let warnings: Vec<String> = command::warnings(&old)
+        .into_iter()
+        .map(|w| w.message)
+        .collect();
+    let shared = warnings
+        .iter()
+        .find(|w| w.contains("\"Pausar\""))
+        .unwrap_or_else(|| panic!("{warnings:?}"));
+    assert!(
+        shared.contains("\"Pausar\" é o nome de 2 ações de entrada (")
+            && shared.contains(&action)
+            && shared.contains("pausa_antiga")
+            && !shared.contains("não existe"),
+        "{shared}"
+    );
+}
+
+#[test]
+fn a_key_bound_to_two_actions_is_warned_by_the_batch_and_listed_in_the_summary() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let mut run = |command: serde_json::Value| {
+        command::apply_and_report(&mut project, &scene, &batch(command)).unwrap()
+    };
+    let back = run(
+        json!({"op": "create_input_action", "name": "Voltar ao checkpoint",
+                          "key": "R"}),
+    );
+    assert!(back.get("warnings").is_none(), "{back}");
+    let back = back["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    // "r" is the key R.
+    let report = run(json!({"op": "create_input_action", "name": "Reiniciar fase", "key": "r"}));
+    let restart = report["created"]["0"][0]["id"].as_str().unwrap().to_owned();
+    let warning = report["warnings"][0].as_str().unwrap().to_owned();
+    assert!(
+        warning.starts_with("A tecla R é de 2 ações de entrada")
+            && warning.contains(&format!("{back} (Voltar ao checkpoint)"))
+            && warning.contains(&format!("{restart} (Reiniciar fase)"))
+            && warning.contains("set_input_key"),
+        "{warning}"
+    );
+    let summary = query::project_summary(&project);
+    let listed = |summary: &serde_json::Value, id: &str| {
+        summary["input_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        listed(&summary, &restart)["shares_key_with"],
+        json!([{"id": back, "name": "Voltar ao checkpoint"}])
+    );
+    // Projects may share a key on purpose: validation leaves it out.
+    assert_eq!(query::validation(&project), json!({"valid": true}));
+    let mut run = |command: serde_json::Value| {
+        command::apply_and_report(&mut project, &scene, &batch(command)).unwrap()
+    };
+    assert_eq!(
+        run(json!({"op": "set_input_key", "action": "Reiniciar fase", "key": "K"})),
+        json!({"created": {}})
+    );
+    // set_input_key warns the same way.
+    let report = run(json!({"op": "set_input_key", "action": back, "key": "K"}));
+    assert!(
+        report["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("A tecla K é de 2 ações de entrada"),
+        "{report}"
+    );
+    run(json!({"op": "set_input_key", "action": back, "key": "R"}));
+    let summary = query::project_summary(&project);
+    assert!(listed(&summary, &restart).get("shares_key_with").is_none());
+
+    // Only a batch that adds an action to a shared key warns, not one that takes one away.
+    let mut run = |command: serde_json::Value| {
+        command::apply_and_report(&mut project, &scene, &batch(command)).unwrap()
+    };
+    assert!(
+        run(json!({"op": "set_input_key", "action": back, "key": "K"}))
+            .get("warnings")
+            .is_some()
+    );
+    let third = run(json!({"op": "create_input_action", "name": "Recarregar", "key": "K"}));
+    assert!(
+        third["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("A tecla K é de 3 ações de entrada"),
+        "{third}"
+    );
+    assert_eq!(
+        run(json!({"op": "delete_input_action", "action": "Recarregar"})),
+        json!({"created": {}})
+    );
+}
+
+#[test]
+fn plain_values_follow_the_catalog_type_and_the_rest_is_refused_in_portuguese() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Armadilha"},
+            {"op": "add_node", "entity": "$0", "operation": "action.damage",
+             "params": {"attribute": "Vida", "amount": 3, "once": false}},
+            {"op": "add_node", "entity": "$0", "operation": "event.input",
+             "params": {"mode": "held"}},
+        ])),
+    )
+    .unwrap();
+    let trap = applied[0].created[0].clone();
+    let damage = applied[1].created[0].clone();
+    let nodes = &project
+        .scene(&scene)
+        .unwrap()
+        .entity(&trap)
+        .unwrap()
+        .graph
+        .nodes;
+    assert_eq!(nodes[0].params["attribute"], Value::Text("Vida".into()));
+    assert_eq!(nodes[0].params["amount"], Value::Number(3.));
+    assert_eq!(nodes[0].params["once"], Value::Bool(false));
+    assert_eq!(nodes[1].text("mode"), "held");
+
+    // Parameters whose input takes any type (attribute.set's value, condition.compare's a and
+    // b) have a number as default, not as type: a plain value is read by its form.
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": trap, "operation": "attribute.set",
+             "params": {"attribute": "Checkpoint", "value": "Outro"}},
+            {"op": "add_node", "entity": trap, "operation": "condition.compare",
+             "params": {"a": 5, "b": true, "operator": "=="}},
+        ])),
+    )
+    .unwrap();
+    let node = |id: &str| {
+        project
+            .scene(&scene)
+            .unwrap()
+            .entity(&trap)
+            .unwrap()
+            .graph
+            .node(id)
+            .unwrap()
+            .clone()
+    };
+    let set = node(&applied[0].created[0]);
+    assert_eq!(set.params["value"], Value::Text("Outro".into()));
+    let compare = node(&applied[1].created[0]);
+    assert_eq!(compare.params["a"], Value::Number(5.));
+    assert_eq!(compare.params["b"], Value::Bool(true));
+
+    let add = |params: serde_json::Value| json!({"op": "add_node", "entity": trap, "operation": "action.damage", "params": params});
+    for (command, expected) in [
+        // An object is never read from a plain text.
+        (
+            add(json!({"target": "abc"})),
+            "O parâmetro target do nó action.damage precisa de um valor marcado com o tipo, \
+             como {\"Object\":\"abc\"}; recebeu \"abc\"",
+        ),
+        (
+            add(json!({"amount": {"number": 3}})),
+            "como {\"Number\":3}; recebeu {\"number\":3} (o nome do tipo começa com maiúscula)",
+        ),
+        (add(json!({"amount": "muito"})), "como {\"Number\":1}"),
+        (
+            add(json!({"amount": {"Number": "muito"}})),
+            "como {\"Number\":1}; recebeu {\"Number\":\"muito\"}",
+        ),
+        (
+            json!({"op": "set_node_params", "entity": trap, "node": damage,
+                   "params": {"once": "sim"}}),
+            "O parâmetro once do nó action.damage precisa de um valor marcado com o tipo, como \
+             {\"Bool\":true}",
+        ),
+        // Attributes have no type in the catalog: their values are always tagged.
+        (
+            json!({"op": "set_attribute", "entity": trap, "name": "vida", "value": 3}),
+            "O atributo vida precisa de um valor marcado com o tipo, como {\"Number\":3}; \
+             recebeu 3",
+        ),
+        (
+            json!({"op": "add_node", "entity": trap, "operation": "event.input",
+                   "params": {"mode": "segurando"}}),
+            "recebeu \"segurando\"",
+        ),
+        // A parameter of any type is read only by an obvious form, and the example follows it.
+        (
+            json!({"op": "add_node", "entity": trap, "operation": "attribute.set",
+                   "params": {"value": [1, 2, 3]}}),
+            "O parâmetro value do nó attribute.set precisa de um valor marcado com o tipo, como \
+             {\"Vector3\":[1,2,3]}",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+    // Other enums: in Portuguese, with the spelling when only the case differs.
+    let error = command::parse(&json!(
+        {"op": "apply_movement_profile", "entity": trap, "profile": "Parkour"}
+    ))
+    .unwrap_err();
+    assert!(
+        error.starts_with("Comando 0 (apply_movement_profile, o 1º do lote) não reconhecido")
+            && error.contains("valor `Parkour` desconhecido")
+            && error.contains("escreva `parkour`")
+            && !error.contains("unknown variant"),
+        "{error}"
+    );
+    let error =
+        command::parse(&json!({"op": "rename_entity", "entity": trap, "nome": "X"})).unwrap_err();
+    assert!(error.contains("campo `nome` desconhecido"), "{error}");
+    // Wrong types and lengths, too.
+    for (command, expected) in [
+        (
+            json!({"op": "set_transform", "entity": trap, "position": [1, 2]}),
+            "não reconhecido: tamanho errado: 2 itens, esperava uma lista de 3 itens",
+        ),
+        (
+            json!({"op": "set_node_params", "entity": trap, "node": damage, "params": [1]}),
+            "não reconhecido: tipo errado: recebeu uma lista, esperava um objeto",
+        ),
+        (
+            json!("texto"),
+            "não reconhecido: tipo errado: recebeu o texto \"texto\", esperava um comando, um \
+             objeto com op",
+        ),
+        (
+            json!({"op": "duplicate_entities", "ids": [trap], "count": -1}),
+            "não reconhecido: valor inválido: recebeu o número `-1`, esperava um número inteiro, \
+             0 ou mais",
+        ),
+    ] {
+        let error = command::parse(&command).unwrap_err();
+        assert!(error.ends_with(expected), "{error}");
+    }
+}
+
+#[test]
+fn the_current_scene_wires_into_the_scene_change_and_the_catalog_lists_both() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Reiniciar", "key": "R"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Controle"},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": "Reiniciar"}},
+            {"op": "add_node", "entity": "$1", "operation": "scene.current"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene"},
+            {"op": "connect", "entity": "$1", "from_node": "$2", "from_port": "exec",
+             "to_node": "$4", "to_port": "exec"},
+            {"op": "connect", "entity": "$1", "from_node": "$3", "from_port": "scene",
+             "to_node": "$4", "to_port": "scene"},
+        ])),
+    )
+    .unwrap();
+    // An empty scene parameter is no warning: the input gives the scene.
+    assert!(report.get("warnings").is_none(), "{report}");
+    validate_project(&project).unwrap();
+    let id = |index: &str| {
+        report["created"][index][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (control, current, change) = (id("1"), id("3"), id("4"));
+    let graph = &project
+        .scene(&scene)
+        .unwrap()
+        .entity(&control)
+        .unwrap()
+        .graph;
+    let summary = query::graph_summary(&project, project.scene(&scene).unwrap(), graph);
+    assert!(
+        summary["edges"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("scene.current.scene -> action.scene.scene")),
+        "{summary}"
+    );
+    // The scene is text, and the input takes one connection.
+    for (to_port, refusal) in [
+        ("seconds", "Conexão incompatível: Texto → Número"),
+        ("scene", "já possui uma conexão de dados"),
+    ] {
+        let before = project.clone();
+        let to_node = if to_port == "scene" {
+            change.as_str()
+        } else {
+            "$0"
+        };
+        let error = command::apply(
+            &mut project,
+            &scene,
+            &batch(json!([
+                {"op": "add_node", "entity": control, "operation": "control.wait"},
+                {"op": "connect", "entity": control, "from_node": current, "from_port": "name",
+                 "to_node": to_node, "to_port": to_port},
+            ])),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(refusal), "{error}");
+        assert_eq!(project, before);
+    }
+
+    let catalog = |args: serde_json::Value| query::catalog_query(&args).unwrap();
+    let categories = catalog(json!({}))["categories"].clone();
+    let categories: Vec<&str> = categories
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    let game = categories.iter().position(|c| *c == "Jogo").unwrap();
+    assert_eq!(
+        categories[game - 1..=game + 2],
+        ["Ações", "Jogo", "Som", "Controle"],
+        "{categories:?}"
+    );
+    let nodes = catalog(json!({"category": "Jogo"}))["nodes"].clone();
+    let current = nodes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["operation"] == "scene.current")
+        .unwrap();
+    assert_eq!(current["inputs"], json!([]));
+    assert_eq!(
+        current["outputs"],
+        json!([
+            {"id": "scene", "label": "Cena", "type": "text"},
+            {"id": "name", "label": "Nome", "type": "text"},
+        ])
+    );
+    assert_eq!(current["params"], json!([]));
+    let change = catalog(json!({"operations": ["action.scene"]}))["nodes"][0].clone();
+    assert_eq!(
+        change["inputs"],
+        json!([
+            {"id": "exec", "label": "Executar", "type": "exec"},
+            {"id": "scene", "label": "Cena", "type": "text"},
+        ])
+    );
+    assert_eq!(change["params"][0]["id"], "scene");
+    assert_eq!(change["params"][0]["ref"], "scene");
+}
+
+#[test]
+fn a_copied_scene_change_fed_by_its_input_is_not_warned() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // Both name the scene they are in, but the second takes the scene from Cena atual.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Fixo"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": first}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Ligado"},
+            {"op": "add_node", "entity": "$3", "operation": "action.scene",
+             "params": {"scene": first}},
+            {"op": "add_node", "entity": "$3", "operation": "scene.current"},
+            {"op": "connect", "entity": "$3", "from_node": "$5", "from_port": "scene",
+             "to_node": "$4", "to_port": "scene"},
+            {"op": "copy_entities", "ids": ["$1", "$3"], "to_scene": "$0"},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    let copies = &report["created"]["7"];
+    let (fixed, wired) = (
+        copies[0]["id"].as_str().unwrap(),
+        copies[1]["id"].as_str().unwrap(),
+    );
+    assert!(
+        warning.contains(&format!("Fixo ({fixed})"))
+            && !warning.contains(wired)
+            && warning.contains("ou ligue a saída scene de um scene.current à entrada scene"),
+        "{warning}"
+    );
+}
+
+#[test]
+fn a_scene_named_only_where_the_input_decides_can_be_deleted() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // A restart wired to Cena atual whose ignored parameter still names "Fase 2", in a scene
+    // and in a model.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Reinício"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": "$0"}},
+            {"op": "add_node", "entity": "$1", "operation": "scene.current"},
+            {"op": "connect", "entity": "$1", "from_node": "$3", "from_port": "scene",
+             "to_node": "$2", "to_port": "scene"},
+            {"op": "save_model", "entity": "$1", "name": "Reinício salvo"},
+        ])),
+    )
+    .unwrap();
+    let id = |index: &str| {
+        report["created"][index][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (second, owner) = (id("0"), id("1"));
+    assert!(editing::scene_references(&project, &second).is_empty());
+
+    // Unconnected, the same parameter guards the scene.
+    let mut unwired = project.clone();
+    unwired.scenes[0]
+        .entity_mut(&owner)
+        .unwrap()
+        .graph
+        .edges
+        .clear();
+    assert_eq!(
+        editing::scene_references(&unwired, &second),
+        ["Cena 3D → Reinício → Mudar de cena"]
+    );
+    assert!(editing::delete_scene(&mut unwired, &second).is_err());
+
+    command::apply(
+        &mut project,
+        &first,
+        &batch(json!({"op": "delete_scene", "scene": second})),
+    )
+    .unwrap();
+    validate_project(&project).unwrap();
+    assert!(project.scene(&second).is_none());
+    let model = project
+        .assets
+        .iter()
+        .find(|asset| asset.name == "Reinício salvo")
+        .and_then(|asset| asset.model.as_ref())
+        .unwrap();
+    for e in [project.scenes[0].entity(&owner).unwrap(), &model[0]] {
+        let node = e
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.operation == "action.scene")
+            .unwrap();
+        // The parameter goes back to its default; the input still gives the scene.
+        assert_eq!(node.text("scene"), "", "{}", e.name);
+        assert_eq!(e.graph.edges.len(), 1);
+    }
+}
+
+#[test]
+fn a_scene_reference_holds_its_scene_like_a_scene_change_and_the_catalog_lists_it() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // The scene change takes its scene from the reference, so only the reference names it.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Portal"},
+            {"op": "add_node", "entity": "$1", "operation": "value.scene",
+             "params": {"scene": "$0"}},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene"},
+            {"op": "connect", "entity": "$1", "from_node": "$2", "from_port": "value",
+             "to_node": "$3", "to_port": "scene"},
+        ])),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
+    validate_project(&project).unwrap();
+    let id = |index: &str| {
+        report["created"][index][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (second, portal, reference) = (id("0"), id("1"), id("2"));
+    assert_eq!(
+        editing::scene_references(&project, &second),
+        ["Cena 3D → Portal → Referência de cena"]
+    );
+    let before = project.clone();
+    let error = command::apply(
+        &mut project,
+        &first,
+        &batch(json!({"op": "delete_scene", "scene": second})),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Cena 3D → Portal → Referência de cena"),
+        "{error}"
+    );
+    assert_eq!(project, before);
+
+    // Pointed at the scene it is in and copied to Fase 2, it still gives the first scene.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "set_node_params", "entity": portal, "node": reference,
+             "params": {"scene": first}},
+            {"op": "copy_entities", "ids": [portal], "to_scene": second},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    let copy = report["created"]["1"][0]["id"].as_str().unwrap();
+    let copied = project
+        .scene(&second)
+        .unwrap()
+        .entity(copy)
+        .unwrap()
+        .graph
+        .nodes
+        .iter()
+        .find(|n| n.operation == "value.scene")
+        .unwrap();
+    assert_eq!(copied.text("scene"), first);
+    assert!(
+        warning.contains(&format!("Portal ({copy}) → nó value.scene ({})", copied.id))
+            && warning.contains(&format!("set_node_params com scene {{\"Text\": \"{second}\"}}"))
+            // The reference has no input to wire Cena atual into.
+            && !warning.contains("scene.current"),
+        "{warning}"
+    );
+
+    let catalog = |args: serde_json::Value| query::catalog_query(&args).unwrap();
+    let data = catalog(json!({"category": "Dados"}))["nodes"].clone();
+    let data = data.as_array().unwrap();
+    let at = |operation: &str| {
+        data.iter()
+            .position(|n| n["operation"] == operation)
+            .unwrap()
+    };
+    assert_eq!(at("value.scene"), at("value.object") + 1);
+    let node = &data[at("value.scene")];
+    assert_eq!(node["label"], "Referência de cena");
+    assert_eq!(node["inputs"], json!([]));
+    assert_eq!(
+        node["outputs"],
+        json!([
+            {"id": "value", "label": "Cena", "type": "text"},
+            {"id": "name", "label": "Nome", "type": "text"},
+        ])
+    );
+    assert_eq!(
+        node["params"],
+        json!([{"id": "scene", "label": "Cena", "default": {"Text": ""}, "ref": "scene"}])
+    );
+}
+
+#[test]
+fn a_copied_scene_reference_leaves_the_wiring_hint_to_the_nodes_with_the_input() {
+    let (mut project, first) = project(SceneKind::ThreeD);
+    // A restart and a reference to the scene they are in, which only the restart can take from
+    // Cena atual.
+    let report = command::apply_and_report(
+        &mut project,
+        &first,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Reinício"},
+            {"op": "add_node", "entity": "$1", "operation": "action.scene",
+             "params": {"scene": first}},
+            {"op": "add_node", "entity": "$1", "operation": "value.scene",
+             "params": {"scene": first}},
+            {"op": "copy_entities", "ids": ["$1"], "to_scene": "$0"},
+        ])),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("ainda nomeiam Cena 3D, a cena de onde vieram")
+            && warning.contains("nó action.scene")
+            && warning.contains("nó value.scene")
+            && warning.contains(
+                ", ou, nos nós action.scene, ligue a saída scene de um scene.current à entrada \
+                 scene, para que abram a cena em que estiverem"
+            ),
+        "{warning}"
+    );
+}
+
+#[test]
+fn game_variables_are_created_updated_and_deleted_by_command() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let commands = batch(json!([
+        {"op": "create_variable", "name": " Moedas ", "value": 0},
+        {"op": "create_variable", "name": "Fase atual", "value": "Início", "persistent": true},
+        {"op": "create_variable", "name": "Ligado", "value": false},
+        {"op": "create_variable", "name": "Saída", "value": {"Vector3": [0, 1, 0]}},
+        {"op": "create_entity", "kind": {"type": "group"}, "name": "Contador"},
+        {"op": "add_node", "entity": "$4", "operation": "variable.set",
+         "params": {"variable": "moedas", "key": "Fase 1", "value": 5}},
+        {"op": "add_node", "entity": "$4", "operation": "variable.get",
+         "params": {"variable": "$1"}},
+    ]));
+    assert_eq!(commands[0].label(), "Criar variável do jogo");
+    let before = command::batch_warnings(&project);
+    let applied = command::apply(&mut project, &scene, &commands).unwrap();
+    let id = |index: usize| applied[index].created[0].clone();
+    let (coins, stage, entity, set) = (id(0), id(1), id(4), id(5));
+    let declared: Vec<_> = project
+        .variables
+        .iter()
+        .map(|v| (v.id.clone(), v.name.as_str(), v.value.clone(), v.persistent))
+        .collect();
+    assert_eq!(
+        declared,
+        [
+            (coins.clone(), "Moedas", Value::Number(0.), false),
+            (
+                stage.clone(),
+                "Fase atual",
+                Value::Text("Início".into()),
+                true
+            ),
+            (id(2), "Ligado", Value::Bool(false), false),
+            (id(3), "Saída", Value::Vector3([0., 1., 0.]), false),
+        ]
+    );
+    // Nodes keep the ID, whether given by name or by ID.
+    let nodes = &project
+        .scene(&scene)
+        .unwrap()
+        .entity(&entity)
+        .unwrap()
+        .graph
+        .nodes;
+    assert_eq!(nodes[0].text("variable"), coins);
+    assert_eq!(nodes[0].text("key"), "Fase 1");
+    assert_eq!(nodes[1].text("variable"), stage);
+    // The answer names what was created.
+    let report = command::report(&project, &applied, &before);
+    assert_eq!(report["created"]["0"][0]["name"], "Moedas");
+    assert!(report.get("warnings").is_none(), "{report}");
+
+    for (command, expected) in [
+        (
+            json!({"op": "create_variable", "name": "MOEDAS", "value": 1}),
+            "Já existe uma variável do jogo chamada \"Moedas\"",
+        ),
+        (
+            json!({"op": "create_variable", "name": " ", "value": 1}),
+            "nome",
+        ),
+        (
+            json!({"op": "create_variable", "name": "Moedas · Fase", "value": 1}),
+            "não pode ter ·",
+        ),
+        (
+            json!({"op": "create_variable", "name": "Alvo", "value": {"Object": null}}),
+            "não guarda objetos",
+        ),
+        (
+            json!({"op": "create_variable", "name": "Ponto", "value": [1, 2, 3]}),
+            "como {\"Vector3\":[1,2,3]}",
+        ),
+        (
+            json!({"op": "update_variable", "variable": "Moedas", "value": "dez"}),
+            "como {\"Number\":1}",
+        ),
+        (
+            json!({"op": "update_variable", "variable": "Ligado", "name": "fase ATUAL"}),
+            "Já existe",
+        ),
+        (
+            json!({"op": "update_variable", "variable": "Vidas", "value": 3}),
+            "A variável do jogo \"Vidas\" não existe no projeto. Variáveis: Moedas, Fase atual, \
+             Ligado, Saída",
+        ),
+        (
+            json!({"op": "delete_variable", "variable": "moedas"}),
+            "Cena 3D → Contador → nó Alterar variável do jogo",
+        ),
+        (
+            json!({"op": "add_node", "entity": entity, "operation": "variable.get",
+                   "params": {"variable": "Vidas"}}),
+            "não existe no projeto",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(command)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+
+    // A plain value is read as the variable's type; a tagged one may change the type.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "update_variable", "variable": "moedas", "value": 10, "persistent": true},
+            {"op": "update_variable", "variable": "Ligado", "name": "Aceso", "value": true},
+            {"op": "update_variable", "variable": stage, "value": {"Number": 1}},
+        ])),
+    )
+    .unwrap();
+    let coins_now = oxy_core::variables::get(&project, &coins).unwrap();
+    assert_eq!(
+        (&coins_now.value, coins_now.persistent),
+        (&Value::Number(10.), true)
+    );
+    assert_eq!(project.variables[2].name, "Aceso");
+    assert_eq!(project.variables[2].value, Value::Bool(true));
+    assert_eq!(project.variables[1].value, Value::Number(1.));
+
+    let summary = query::project_summary(&project);
+    assert_eq!(
+        summary["variables"][0],
+        json!({"id": coins, "name": "Moedas", "type": "Number", "value": {"Number": 10.0},
+               "persistent": true,
+               "used_by": [{"entity": entity, "name": "Contador", "role": "variable.set"}]})
+    );
+    assert_eq!(summary["variables"][3]["type"], "Vector3");
+
+    // A constant of another type than the variable's is warned: the game would stop there.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(
+            json!([{"op": "set_node_params", "entity": entity, "node": set,
+                        "params": {"value": "cinco"}}]),
+        ),
+    )
+    .unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].as_str().unwrap().contains(
+            "o value é texto, mas a variável do jogo Moedas guarda número; no jogo, o nó para \
+             com erro"
+        ),
+        "{warnings:?}"
+    );
+    // A value from a port is known only in the game.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": entity, "operation": "value.number"},
+            {"op": "connect", "entity": entity, "from_node": "$0", "from_port": "value",
+             "to_node": set, "to_port": "value"},
+        ])),
+    )
+    .unwrap();
+    assert!(command::warnings(&project).is_empty());
+
+    // Unused, a variable can go.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "remove_node", "entity": entity, "node": set},
+            {"op": "delete_variable", "variable": "Moedas"},
+        ])),
+    )
+    .unwrap();
+    assert!(oxy_core::variables::get(&project, &coins).is_none());
+    assert_eq!(project.variables.len(), 3);
+    assert!(validate_project(&project).is_ok());
+}
+
+/// The rectangles of `graph`'s nodes, as the editor draws them, never overlap.
+fn assert_nodes_apart(graph: &graph::Graph) {
+    let rects: Vec<[f32; 4]> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let [w, h] = graph::node_extent(graph::definition(&n.operation));
+            [
+                n.position[0],
+                n.position[1],
+                n.position[0] + w,
+                n.position[1] + h,
+            ]
+        })
+        .collect();
+    for (k, a) in rects.iter().enumerate() {
+        for b in &rects[k + 1..] {
+            assert!(
+                a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1],
+                "{a:?} overlaps {b:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nodes_added_without_a_position_are_laid_out_when_the_batch_ends() {
+    use graph::layout::{BAND_GAP, COLUMN_STEP};
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta"},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "position": [900.0, -300.0]},
+            {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$0", "operation": "condition.branch"},
+            {"op": "add_node", "entity": "$0", "operation": "value.bool"},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message"},
+            {"op": "connect", "entity": "$0", "from_node": "$2", "from_port": "exec",
+             "to_node": "$3", "to_port": "exec"},
+            {"op": "connect", "entity": "$0", "from_node": "$4", "from_port": "value",
+             "to_node": "$3", "to_port": "condition"},
+            {"op": "connect", "entity": "$0", "from_node": "$3", "from_port": "then",
+             "to_node": "$5", "to_port": "exec"},
+        ])),
+    )
+    .unwrap();
+    let id = |i: usize| applied[i].created[0].clone();
+    let porta = id(0);
+    let positions = |project: &Project| -> Vec<[f32; 2]> {
+        let graph = &project.scene(&scene).unwrap().entity(&porta).unwrap().graph;
+        (1..=5)
+            .map(|i| graph.node(&id(i)).unwrap().position)
+            .collect()
+    };
+    let at = positions(&project);
+    assert_eq!(at[0], [900., -300.], "a position given stays");
+    // The new chain goes below what was there, its event first, its data left of the branch.
+    let message = graph::node_extent(graph::definition("debug.message"))[1];
+    assert_eq!(at[1], [900., -300. + message + BAND_GAP]);
+    assert_eq!(at[2][0], at[1][0] + COLUMN_STEP);
+    assert_eq!(at[3][0], at[2][0] - COLUMN_STEP);
+    assert_eq!(at[4][0], at[2][0] + COLUMN_STEP);
+    assert_nodes_apart(&project.scene(&scene).unwrap().entity(&porta).unwrap().graph);
+
+    // A node added later, fed by one that stays, starts right of it, below what is there.
+    let more = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "add_node", "entity": porta, "operation": "attribute.set"},
+            {"op": "connect", "entity": porta, "from_node": id(3), "from_port": "else",
+             "to_node": "$0", "to_port": "exec"},
+        ])),
+    )
+    .unwrap();
+    let graph = &project.scene(&scene).unwrap().entity(&porta).unwrap().graph;
+    assert_eq!(positions(&project), at, "nodes already placed stay");
+    let set = graph.node(&more[0].created[0]).unwrap().position;
+    assert_eq!(set[0], at[2][0] + COLUMN_STEP);
+    assert!(set[1] > at[4][1], "below the message in its column");
+    assert_nodes_apart(graph);
+
+    // arrange_logic lays out every node, as one undo step.
+    let mut images = TextureCache::default();
+    let before = project.clone();
+    let mut history = CommandHistory::new();
+    history.begin("Agente: Organizar lógica", &project, &images);
+    let arrange = batch(json!({"op": "arrange_logic", "entity": porta}));
+    assert_eq!(arrange[0].label(), "Organizar lógica");
+    command::apply(&mut project, &scene, &arrange).unwrap();
+    history.commit(&project, &mut images).unwrap();
+    let after = positions(&project);
+    assert_eq!(after[1], [0., 0.], "the event leads column 0");
+    assert_eq!(after[0][0], 0., "the loose message goes below, in column 0");
+    assert!(after[0][1] > after[3][1]);
+    assert_nodes_apart(&project.scene(&scene).unwrap().entity(&porta).unwrap().graph);
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, before);
+
+    // Only the nodes named move; unknown nodes and objects without logic are refused.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "arrange_logic", "entity": porta, "nodes": [id(1)]})),
+    )
+    .unwrap();
+    assert_eq!(positions(&project)[1..], at[1..]);
+    for (commands, expected) in [
+        (
+            json!({"op": "arrange_logic", "entity": porta, "nodes": ["fantasma"]}),
+            "Nó fantasma não existe neste objeto",
+        ),
+        (
+            json!({"op": "arrange_logic", "entity": porta, "nodes": []}),
+            "Informe ao menos um nó",
+        ),
+        (
+            json!([{"op": "create_entity", "kind": {"type": "group"}, "name": "Vazio"},
+                   {"op": "arrange_logic", "entity": "$0"}]),
+            "Vazio não tem lógica para organizar",
+        ),
+    ] {
+        let before = project.clone();
+        let error = command::apply(&mut project, &scene, &batch(commands)).unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+        assert_eq!(project, before);
+    }
+}
+
+#[test]
+fn commands_and_scene_parameters_take_a_scene_by_name_and_store_its_id() {
+    let (mut project, start) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([
+            {"op": "create_scene", "name": "Menu", "kind": "3d"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Porta", "scene": "menu"},
+            {"op": "add_node", "entity": "$1", "scene": "MENU", "operation": "action.scene",
+             "params": {"scene": " cena 3d "}},
+            {"op": "add_node", "entity": "$1", "scene": "Menu", "operation": "value.scene",
+             "params": {"scene": "Menu"}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Placa"},
+            {"op": "copy_entities", "ids": ["$4"], "to_scene": "menu"},
+            {"op": "set_start_scene", "scene": "Menu"},
+        ])),
+    )
+    .unwrap();
+    let menu = applied[0].created[0].clone();
+    assert_eq!(project.start_scene, menu);
+    let door = project
+        .scene(&menu)
+        .unwrap()
+        .entity(&applied[1].created[0])
+        .unwrap();
+    assert_eq!(door.graph.nodes[0].text("scene"), start);
+    assert_eq!(door.graph.nodes[1].text("scene"), menu);
+    assert!(
+        project
+            .scene(&menu)
+            .unwrap()
+            .entity(&applied[5].created[0])
+            .is_some()
+    );
+    // set_node_params too; and the default scene of a batch may be a name.
+    let (door_id, change) = (door.id.clone(), door.graph.nodes[0].id.clone());
+    command::apply(
+        &mut project,
+        "menu",
+        &batch(json!([
+            {"op": "set_node_params", "entity": door_id, "node": change,
+             "params": {"scene": "Menu"}},
+            {"op": "rename_scene", "scene": "Cena 3D", "name": "Pista"},
+        ])),
+    )
+    .unwrap();
+    let door = project.scene(&menu).unwrap().entity(&door_id).unwrap();
+    assert_eq!(door.graph.nodes[0].text("scene"), menu);
+    assert_eq!(project.scene(&start).unwrap().name, "Pista");
+    // A scene the project lacks: what received it, and the scenes.
+    let scenes = format!(
+        "Cenas: [{{\"id\":\"{start}\",\"name\":\"Pista\"}},{{\"id\":\"{menu}\",\"name\":\"Menu\"}}]"
+    );
+    let before = project.clone();
+    for (commands, expected) in [
+        (
+            json!([{"op": "add_node", "entity": door_id, "scene": "Menu",
+                    "operation": "action.scene", "params": {"scene": "Fase 9"}}]),
+            format!(
+                "Comando 0 (add_node, o 1º do lote): O parâmetro scene do nó action.scene \
+                 recebeu \"Fase 9\", que não é o ID nem o nome de uma cena do projeto. \
+                 {scenes}. Nada foi alterado."
+            ),
+        ),
+        (
+            json!([{"op": "create_entity", "kind": {"type": "group"}, "scene": "Fase 9"}]),
+            format!(
+                "Comando 0 (create_entity, o 1º do lote): scene recebeu \"Fase 9\", que não é o \
+                 ID nem o nome de uma cena do projeto. {scenes}. Nada foi alterado."
+            ),
+        ),
+        (
+            json!([{"op": "copy_entities", "ids": [door_id], "scene": "Menu",
+                    "to_scene": "Fase 9"}]),
+            format!(
+                "Comando 0 (copy_entities, o 1º do lote): to_scene recebeu \"Fase 9\", que não é \
+                 o ID nem o nome de uma cena do projeto. {scenes}. Nada foi alterado."
+            ),
+        ),
+    ] {
+        let error = command::apply(&mut project, &start, &batch(commands)).unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(project, before);
+    }
+    // Two scenes with one name: the name is refused, the ID taken.
+    command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "create_scene", "name": "MENU", "kind": "2d"}])),
+    )
+    .unwrap();
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "set_start_scene", "scene": "menu"}])),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("scene recebeu \"menu\", o nome de 2 cenas; use o ID: [{\"id\":"),
+        "{error}"
+    );
+    command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "set_start_scene", "scene": menu}])),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_broken_scene_reference_names_the_node_and_the_parameter_not_its_id() {
+    let (mut project, start) = project(SceneKind::ThreeD);
+    let mut portal = Entity::new("Portal", None);
+    let mut change = graph::Node::new("action.scene", [0.; 2]);
+    change
+        .params
+        .insert("scene".into(), Value::Text("cena-inexistente".into()));
+    let node = change.id.clone();
+    portal.graph.nodes.push(change);
+    project.scene_mut(&start).unwrap().entities.push(portal);
+    let error = validate_project(&project).unwrap_err();
+    // People read it too, in the editor: the scenes by name only.
+    assert_eq!(
+        error,
+        "Referência quebrada: objeto Portal, nó Mudar de cena (action.scene): o parâmetro scene \
+         recebeu \"cena-inexistente\". Cenas: Cena 3D"
+    );
+    assert!(!error.contains(&node) && !error.contains(&start), "{error}");
+}
+
+#[test]
+fn update_entity_refuses_the_degrees_reads_add_to_keyframes() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Disco"},
+            {"op": "set_clip", "entity": "$0", "name": "Giro", "duration": 1.0, "tracks": [
+                {"keyframes": [{"time": 0.0}, {"time": 1.0, "rotation": [0.0, 90.0, 0.0]}]}]},
+        ])),
+    )
+    .unwrap();
+    let disc = applied[0].created[0].clone();
+    let mut clips = query::entity(&project, &scene, &disc).unwrap()["clips"].clone();
+    clips[0]["tracks"][0]["keyframes"][1]["rotation_degrees"] = json!([0.0, 45.0, 0.0]);
+    let before = project.clone();
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([{"op": "update_entity", "entity": disc, "patch": {"clips": clips}}])),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("Patch inválido: os quadros-chave das animações não guardam")
+            && error.message.contains("use set_clip"),
+        "{error}"
+    );
+    assert_eq!(project, before);
+    // Without it, the keyframes as read go back as they were.
+    for keyframe in clips[0]["tracks"][0]["keyframes"].as_array_mut().unwrap() {
+        keyframe.as_object_mut().unwrap().remove("rotation_degrees");
+    }
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([{"op": "update_entity", "entity": disc, "patch": {"clips": clips}}])),
+    )
+    .unwrap();
+    assert_eq!(project, before);
+}
+
+#[test]
+fn connect_takes_many_links_and_add_node_wires_its_inputs_as_it_is_added() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Painel"},
+            {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$0", "operation": "value.number",
+             "params": {"value": 2.0}},
+            // Wired as it is added: the start runs it, the number gives its seconds.
+            {"op": "add_node", "entity": "$0", "operation": "control.wait",
+             "links": [["$1", "exec", "exec"], ["$2", "value", "seconds"]]},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "params": {"message": "Pronto"}},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "params": {"message": "Começou"}},
+            {"op": "connect", "entity": "$0", "links": [
+                ["$3", "exec", "$4", "exec"], ["$1", "exec", "$5", "exec"]]},
+        ])),
+    )
+    .unwrap();
+    let painel = applied[0].created[0].clone();
+    let ids: Vec<String> = applied[1..6].iter().map(|a| a.created[0].clone()).collect();
+    let [start, number, wait, ready, began] = [0, 1, 2, 3, 4].map(|i| ids[i].as_str());
+    // The links create nothing of their own.
+    assert!(applied[6].created.is_empty());
+    let mut edges: Vec<_> = project.scenes[0]
+        .entity(&painel)
+        .unwrap()
+        .graph
+        .edges
+        .iter()
+        .map(|e| {
+            [
+                e.from_node.as_str(),
+                e.from_port.as_str(),
+                e.to_node.as_str(),
+                e.to_port.as_str(),
+            ]
+        })
+        .collect();
+    edges.sort();
+    let mut expected = vec![
+        [start, "exec", wait, "exec"],
+        [number, "value", wait, "seconds"],
+        [wait, "exec", ready, "exec"],
+        [start, "exec", began, "exec"],
+    ];
+    expected.sort();
+    assert_eq!(edges, expected);
+    validate_project(&project).unwrap();
+    // The game runs the logic so wired.
+    let report = oxy_core::headless::simulate(
+        &project,
+        &serde_json::from_value(json!({"seconds": 2.5})).unwrap(),
+    )
+    .unwrap();
+    let logs: Vec<(&str, f64)> = report
+        .logs
+        .iter()
+        .map(|l| (l.text.as_str(), (l.time * 10.).round() / 10.))
+        .collect();
+    assert_eq!(logs, [("Começou", 0.), ("Pronto", 2.)]);
+
+    // One refused link refuses its command and the batch, by its place in links and with the
+    // nodes by name.
+    let before = project.clone();
+    let mut refused = |commands: serde_json::Value| {
+        let error = command::apply(&mut project, &scene, &batch(commands)).unwrap_err();
+        assert_eq!(project, before, "a refused batch changes nothing");
+        error.to_string()
+    };
+    for (commands, expected) in [
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [began, "exec", ready, "exec"], [start, "valor", ready, "exec"]]}]),
+            "Comando 0 (connect, o 1º do lote): Ligação 1 de links (a 2ª): O nó Ao iniciar \
+             cena (event.scene_start) não tem a saída valor; saídas: exec",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [number, "value", ready, "mensagem"]]}]),
+            "Ligação 0 de links (a 1ª): O nó Mensagem de diagnóstico (debug.message) não tem \
+             a entrada mensagem; entradas: exec",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [began, "exec", ready, "exec"], [began, "exec", ready, "exec"]]}]),
+            "Ligação 1 de links (a 2ª): Essas portas já estão ligadas",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [number, "value", wait, "seconds"]]}]),
+            "Ligação 0 de links (a 1ª): Essas portas já estão ligadas",
+        ),
+        (
+            json!([
+                {"op": "add_node", "entity": painel, "operation": "value.number"},
+                {"op": "connect", "entity": painel, "from_node": "$0", "from_port": "value",
+                 "to_node": wait, "to_port": "seconds"}]),
+            "Comando 1 (connect, o 2º do lote): A entrada seconds de Esperar sem bloquear \
+             (control.wait) já possui uma conexão de dados; desligue-a antes (disconnect)",
+        ),
+        (
+            json!([{"op": "add_node", "entity": painel, "operation": "debug.message",
+                    "links": [[ready, "exec", "exec"], [start, "exec", "seconds"]]}]),
+            "Comando 0 (add_node, o 1º do lote): Ligação 1 de links (a 2ª): O nó Mensagem de \
+             diagnóstico (debug.message) não tem a entrada seconds; entradas: exec",
+        ),
+        (
+            json!([
+                {"op": "add_node", "entity": painel, "operation": "value.text"},
+                {"op": "add_node", "entity": painel, "operation": "control.wait",
+                 "links": [["$0", "value", "seconds"]]}]),
+            "Conexão incompatível: Texto → Número (a saída value de Texto (value.text) na \
+             entrada seconds de Esperar sem bloquear (control.wait))",
+        ),
+        (
+            json!([
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Outro"},
+                {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+                {"op": "add_node", "entity": painel, "operation": "debug.message",
+                 "links": [["$1", "exec", "exec"]]}]),
+            "Ligação 0 de links (a 1ª): O nó Ao iniciar cena (event.scene_start) é da lógica \
+             de Outro, não da de Painel",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                ["nenhum", "exec", ready, "exec"]]}]),
+            "Ligação 0 de links (a 1ª): Painel não tem o nó nenhum na lógica",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "from_node": ready,
+                    "links": [[ready, "exec", start, "exec"]]}]),
+            "Use links ou from_node, from_port, to_node e to_port, não os dois",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "from_node": ready, "from_port": "exec"}]),
+            "Informe from_node, from_port, to_node e to_port, ou links",
+        ),
+        (
+            json!([{"op": "connect", "entity": painel, "links": []}]),
+            "Informe from_node, from_port, to_node e to_port, ou links",
+        ),
+        // A cycle through the links is the graph's own refusal.
+        (
+            json!([{"op": "connect", "entity": painel, "links": [
+                [ready, "exec", wait, "exec"]]}]),
+            "Ligação 0 de links (a 1ª): A ligação de Mensagem de diagnóstico (debug.message) \
+             para Esperar sem bloquear (control.wait) fecharia um ciclo",
+        ),
+    ] {
+        let error = refused(commands);
+        assert!(error.contains(expected), "{error}");
+    }
+    // A link is four texts, and an add_node link three.
+    for commands in [
+        json!({"op": "connect", "entity": painel, "links": [[ready, "exec", start]]}),
+        json!({"op": "add_node", "entity": painel, "operation": "debug.message",
+               "links": [[ready, "exec", start, "exec"]]}),
+    ] {
+        let error = command::parse(&commands).unwrap_err();
+        assert!(error.contains("não reconhecido"), "{error}");
+    }
+    // Placeholders reach the links, which write back in the form they read.
+    let read = batch(json!({"op": "connect", "entity": "x", "links": [["a", "b", "c", "d"]]}));
+    assert_eq!(
+        serde_json::to_value(&read[0]).unwrap(),
+        json!({"op": "connect", "scene": null, "entity": "x", "links": [["a", "b", "c", "d"]]})
+    );
+}
+
+#[test]
+fn a_scene_reference_gives_the_name_that_keys_a_record_per_scene() {
+    let (mut project, menu) = project(SceneKind::TwoD);
+    command::apply(
+        &mut project,
+        &menu,
+        &batch(json!([
+            {"op": "create_scene", "name": "Fase 2", "kind": "3d"},
+            {"op": "create_variable", "name": "Recorde", "value": 0},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Menu"},
+            {"op": "add_node", "entity": "$2", "operation": "event.scene_start"},
+            // Picked by name, the scene gives its name to the key: nothing typed by hand.
+            {"op": "add_node", "entity": "$2", "operation": "value.scene",
+             "params": {"scene": "Fase 2"}},
+            {"op": "add_node", "entity": "$2", "operation": "variable.set",
+             "params": {"variable": "Recorde", "value": 41.5},
+             "links": [["$3", "exec", "exec"], ["$4", "name", "key"]]},
+        ])),
+    )
+    .unwrap();
+    let report = oxy_core::headless::simulate(
+        &project,
+        &serde_json::from_value(json!({"seconds": 0.1})).unwrap(),
+    )
+    .unwrap();
+    assert!(report.logs.is_empty(), "{:?}", report.logs);
+    assert_eq!(report.variables["Recorde · Fase 2"], Value::Number(41.5));
+    // The catalog lists the name beside the ID.
+    let node =
+        query::catalog_query(&json!({"operations": ["value.scene"]})).unwrap()["nodes"][0].clone();
+    assert_eq!(
+        node["outputs"],
+        json!([
+            {"id": "value", "label": "Cena", "type": "text"},
+            {"id": "name", "label": "Nome", "type": "text"},
+        ])
+    );
+}
+
+#[test]
+fn an_object_of_another_scene_is_named_with_both_scenes_and_placeholders_carry_their_scene() {
+    let (mut project, start) = project(SceneKind::ThreeD);
+    let start_name = project.scene(&start).unwrap().name.clone();
+    // A command without scene whose entity is a "$N" works where the object was created.
+    let applied = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([
+            {"op": "create_scene", "name": "Pista", "kind": "3d"},
+            {"op": "create_entity", "scene": "Pista", "kind": {"type": "group"},
+             "name": "Controle da corrida"},
+            {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+            {"op": "set_attribute", "entity": "$1", "name": "Etapa", "value": {"Number": 0}},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Bandeira",
+             "parent": "$1"},
+        ])),
+    )
+    .unwrap();
+    let course = project.scenes.iter().find(|s| s.name == "Pista").unwrap();
+    let control = course.entity(&applied[1].created[0]).unwrap();
+    assert_eq!(control.graph.nodes.len(), 1);
+    assert_eq!(control.attributes["Etapa"], Value::Number(0.));
+    let flag = course.entity(&applied[4].created[0]).unwrap();
+    assert_eq!(flag.parent.as_deref(), Some(control.id.as_str()));
+    assert!(project.scene(&start).unwrap().entities.is_empty());
+    let control = control.id.clone();
+    // In a later batch, the ID alone uses the batch's scene: the error names it and the
+    // object's own, by name.
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "add_node", "entity": control, "operation": "event.step"}])),
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        error,
+        format!(
+            "Comando 0 (add_node, o 1º do lote): Controle da corrida não existe na cena \
+             {start_name} (a do comando); ele está na cena Pista: passe scene. Nada foi alterado."
+        )
+    );
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([{"op": "rename_entity", "entity": "nada", "name": "Outro"}])),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains(&format!(
+            "Objeto nada não existe na cena {start_name} (a do comando) nem em outra cena do \
+             projeto"
+        )),
+        "{error}"
+    );
+    // A scene given to the command wins over the placeholder's.
+    let error = command::apply(
+        &mut project,
+        &start,
+        &batch(json!([
+            {"op": "create_entity", "scene": "Pista", "kind": {"type": "group"}, "name": "Poste"},
+            {"op": "set_visible", "scene": start, "entity": "$0", "visible": false},
+        ])),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Poste não existe na cena") && error.contains("ele está na cena Pista"),
+        "{error}"
+    );
+}
+
+#[test]
+fn collision_filters_take_group_names_in_patches_and_presets_and_reads_name_them() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    project.collision_groups.insert(5, "Inimigos".into());
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"}, "name": "Área"},
+            {"op": "add_component", "entity": "$0", "component": "sensor3d"},
+            {"op": "update_entity", "entity": "$0", "patch": {"physics3d": {"filter": {
+                "category": ["áreas"], "mask": ["Personagens", "Inimigos"]}}}},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person",
+             "camera": "none", "filter": {"category": ["Personagens"]}}},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+             "filter": {"mask": "Personagens"}}},
+            {"op": "update_entity", "entity": "$3", "patch": {"character3d": {"body": {
+                "filter": {"mask": ["Cenário padrão", "Personagens"]}}}}},
+            {"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+             "filter": {"category": 2, "mask": 3}}},
+        ])),
+    )
+    .unwrap();
+    let level = project.scene(&scene).unwrap();
+    let area = level.entity(&applied[0].created[0]).unwrap();
+    let filter = &area.physics3d.as_ref().unwrap().filter;
+    assert_eq!((filter.category, filter.mask), (4, 2 | 32));
+    let player = level.entity(&applied[3].created[0]).unwrap();
+    let body = &player.character3d.as_ref().unwrap().body.filter;
+    assert_eq!((body.category, body.mask), (2, 1 | 2));
+    let platform = level.entity(&applied[4].created[0]).unwrap();
+    let solid = &platform.physics3d.as_ref().unwrap().filter;
+    assert_eq!(
+        (solid.category, solid.mask),
+        (1, 2),
+        "the category left out keeps the default"
+    );
+    // A preset takes bits too.
+    let lift = level.entity(&applied[6].created[0]).unwrap();
+    let solid = &lift.physics3d.as_ref().unwrap().filter;
+    assert_eq!((solid.category, solid.mask), (2, 3));
+    // Bits still work, and "all" is every group.
+    let area_id = area.id.clone();
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!([{"op": "update_entity", "entity": area_id, "patch": {"physics3d": {
+            "filter": {"category": 8, "mask": "all"}}}}]),
+        ),
+    )
+    .unwrap();
+    let read = query::entity(&project, &scene, &area_id).unwrap();
+    let filter = &read["physics3d"]["filter"];
+    assert_eq!(
+        (&filter["category"], &filter["mask"]),
+        (&json!(8), &json!(u32::MAX))
+    );
+    assert_eq!(filter["category_groups"], json!(["Grupo 4"]));
+    assert_eq!(filter["mask_groups"], json!("all"));
+    let player = query::entity(&project, &scene, &applied[3].created[0]).unwrap();
+    assert_eq!(
+        player["character3d"]["body"]["filter"]["mask_groups"],
+        json!(["Cenário padrão", "Personagens"])
+    );
+    // An unknown name is refused with the groups; so are other values.
+    for (filter, expected) in [
+        (
+            json!({"category": ["Personagem"]}),
+            "physics3d.filter.category: o grupo de colisão \"Personagem\" não existe; grupos: \
+             Cenário padrão, Personagens, Áreas, Inimigos",
+        ),
+        (
+            json!({"mask": [1]}),
+            "physics3d.filter.mask: a lista leva nomes de grupos de colisão",
+        ),
+        (json!({"mask": true}), "informe um número (os bits)"),
+        (
+            json!({"category": -1}),
+            "physics3d.filter.category: os bits são um número inteiro de 0 a 4294967295",
+        ),
+    ] {
+        let error = command::apply(
+            &mut project,
+            &scene,
+            &batch(json!([{"op": "update_entity", "entity": area_id,
+                           "patch": {"physics3d": {"filter": filter}}}])),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!([{"op": "create_entity", "kind": {"type": "preset", "preset": "platform",
+                       "filter": {"category": ["Nada"]}}}]),
+        ),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("filter.category: o grupo de colisão \"Nada\""),
+        "{error}"
+    );
+}
+
+#[test]
+fn disconnect_takes_many_links_like_connect_and_names_what_is_not_linked() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Painel"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Outro"},
+            {"op": "add_node", "entity": "$0", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$0", "operation": "value.number",
+             "params": {"value": 2.0}},
+            {"op": "add_node", "entity": "$0", "operation": "control.wait",
+             "links": [["$2", "exec", "exec"], ["$3", "value", "seconds"]]},
+            {"op": "add_node", "entity": "$0", "operation": "debug.message",
+             "links": [["$4", "exec", "exec"]]},
+            {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+        ])),
+    )
+    .unwrap();
+    let painel = applied[0].created[0].clone();
+    let [start, number, wait, message, other] =
+        [2, 3, 4, 5, 6].map(|i| applied[i].created[0].clone());
+    let edges = |project: &Project| {
+        project.scenes[0]
+            .entity(&painel)
+            .unwrap()
+            .graph
+            .edges
+            .clone()
+    };
+    assert_eq!(edges(&project).len(), 3);
+    // A link that is not there refuses the batch, by its place in links and the nodes by name.
+    let before = project.clone();
+    for (commands, expected) in [
+        (
+            json!({"op": "disconnect", "entity": painel, "links": [
+                [start, "exec", wait, "exec"], [message, "exec", wait, "exec"]]}),
+            "Comando 0 (disconnect, o 1º do lote): Ligação 1 de links (a 2ª): A saída exec de \
+             Mensagem de diagnóstico (debug.message) não está ligada à entrada exec de Esperar \
+             sem bloquear (control.wait)",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "links": [
+                [start, "exec", wait, "exec"], [start, "exec", wait, "exec"]]}),
+            "Ligação 1 de links (a 2ª): a ligação 0 de links já desliga essas portas",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "links": [
+                [other, "exec", wait, "exec"]]}),
+            "Ligação 0 de links (a 1ª): O nó Ao iniciar cena (event.scene_start) é da lógica \
+             de Outro, não da de Painel",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "from_node": number,
+                   "from_port": "value", "to_node": message, "to_port": "value"}),
+            "Comando 0 (disconnect, o 1º do lote): A saída value de Número (value.number) não \
+             está ligada à entrada value de Mensagem de diagnóstico (debug.message)",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "from_node": start,
+                   "links": [[start, "exec", wait, "exec"]]}),
+            "Use links ou from_node, from_port, to_node e to_port, não os dois",
+        ),
+        (
+            json!({"op": "disconnect", "entity": painel, "links": []}),
+            "Informe from_node, from_port, to_node e to_port, ou links",
+        ),
+    ] {
+        let error = command::apply(&mut project, &scene, &batch(commands))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(project, before, "a refused batch changes nothing");
+    }
+    // Many links in one command, all of them.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "disconnect", "entity": painel, "links": [
+            [start, "exec", wait, "exec"], [number, "value", wait, "seconds"]]})),
+    )
+    .unwrap();
+    let left = edges(&project);
+    assert_eq!(left.len(), 1);
+    assert_eq!((&left[0].from_node, &left[0].to_node), (&wait, &message));
+    // One link the way it always was.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "disconnect", "entity": painel, "from_node": wait,
+                      "from_port": "exec", "to_node": message, "to_port": "exec"}),
+        ),
+    )
+    .unwrap();
+    assert!(edges(&project).is_empty());
+    // The links write back in the form they read, so placeholders reach them.
+    let read = batch(json!({"op": "disconnect", "entity": "x", "links": [["a", "b", "c", "d"]]}));
+    assert_eq!(
+        serde_json::to_value(&read[0]).unwrap(),
+        json!({"op": "disconnect", "scene": null, "entity": "x", "links": [["a", "b", "c", "d"]]})
+    );
+    assert_eq!(read[0].label(), "Desligar portas");
+}
+
+/// The logs a run of `project` writes, by time and text, and the watched object `watched` at
+/// its end, as text; `action` is pressed at 0.5 s.
+fn logged_run(project: &Project, action: &str, watched: &str) -> (Vec<(f64, String)>, String) {
+    let report = oxy_core::headless::simulate(
+        project,
+        &serde_json::from_value(json!({
+            "seconds": 1.0,
+            "inputs": [{"type": "press", "at": 0.5, "action": action},
+                       {"type": "release", "at": 0.6, "action": action}],
+            "watch": [watched],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let logs = report
+        .logs
+        .iter()
+        .map(|l| ((l.time * 100.).round() / 100., l.text.clone()))
+        .collect();
+    (logs, serde_json::to_string(&report.watched).unwrap())
+}
+
+#[test]
+fn arrange_logic_gives_each_lane_its_own_shared_data_and_the_game_runs_the_same() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    // The start and the jump both read Pontos + 10; the jump reads Pontos too.
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_input_action", "name": "Pular", "key": "Space"},
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Placar"},
+            {"op": "set_attribute", "entity": "$1", "name": "Pontos", "value": {"Number": 2}},
+            {"op": "add_node", "entity": "$1", "operation": "attribute.get",
+             "params": {"attribute": "Pontos"}},
+            {"op": "add_node", "entity": "$1", "operation": "value.number",
+             "params": {"value": 10.0}},
+            {"op": "add_node", "entity": "$1", "operation": "math.binary",
+             "links": [["$3", "value", "a"], ["$4", "value", "b"]]},
+            {"op": "add_node", "entity": "$1", "operation": "event.scene_start"},
+            {"op": "add_node", "entity": "$1", "operation": "debug.message",
+             "params": {"message": "Início"},
+             "links": [["$6", "exec", "exec"], ["$5", "value", "value"]]},
+            {"op": "add_node", "entity": "$1", "operation": "attribute.set",
+             "params": {"attribute": "Pontos"},
+             "links": [["$7", "exec", "exec"], ["$5", "value", "value"]]},
+            {"op": "add_node", "entity": "$1", "operation": "event.input",
+             "params": {"action": "$0"}},
+            {"op": "add_node", "entity": "$1", "operation": "debug.message",
+             "params": {"message": "Pulo"},
+             "links": [["$9", "exec", "exec"], ["$5", "value", "value"]]},
+            {"op": "add_node", "entity": "$1", "operation": "debug.message",
+             "params": {"message": "Lido"},
+             "links": [["$10", "exec", "exec"], ["$3", "value", "value"]]},
+        ])),
+    )
+    .unwrap();
+    let id = |i: usize| applied[i].created[0].clone();
+    let (action, placar) = (id(0), id(1));
+    let (read, number, sum, start_message, jump_message, read_message) =
+        (id(3), id(4), id(5), id(7), id(10), id(11));
+    let before = logged_run(&project, &action, &placar);
+    assert_eq!(before.0.len(), 3, "{:?}", before.0);
+    assert!(before.0[1].1.contains("Pulo: 22"), "{:?}", before.0);
+    assert!(before.0[2].1.contains("Lido: 12"), "{:?}", before.0);
+
+    // One undo step: the copies come and go together.
+    let unsplit = project.clone();
+    let mut images = TextureCache::default();
+    let mut history = CommandHistory::new();
+    history.begin("Agente: Organizar lógica", &project, &images);
+    let arrange = batch(json!({"op": "arrange_logic", "entity": placar,
+                               "split_shared_data": true}));
+    let report = command::apply_and_report(&mut project, &scene, &arrange).unwrap();
+    history.commit(&project, &mut images).unwrap();
+    // The read, the number and the sum, once more for the jump's lane, named as created.
+    let created = report["created"]["0"].as_array().unwrap();
+    let names: Vec<&str> = created
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["attribute.get", "value.number", "math.binary"]);
+    assert!(report.get("warnings").is_none(), "{report}");
+    let copies: Vec<String> = created
+        .iter()
+        .map(|c| c["id"].as_str().unwrap().to_owned())
+        .collect();
+    let graph = project.scenes[0].entity(&placar).unwrap().graph.clone();
+    let fed = |to: &str, port: &str| {
+        graph
+            .edges
+            .iter()
+            .find(|e| e.to_node == to && e.to_port == port)
+            .unwrap()
+            .from_node
+            .clone()
+    };
+    assert_eq!(
+        fed(&start_message, "value"),
+        sum,
+        "the first lane keeps the originals"
+    );
+    assert_eq!(fed(&sum, "a"), read);
+    assert_eq!(fed(&sum, "b"), number);
+    assert_eq!(fed(&jump_message, "value"), copies[2]);
+    assert_eq!(fed(&copies[2], "a"), copies[0]);
+    assert_eq!(fed(&copies[2], "b"), copies[1]);
+    assert_eq!(fed(&read_message, "value"), copies[0]);
+    assert_nodes_apart(&graph);
+    // The game does exactly what it did.
+    assert_eq!(logged_run(&project, &action, &placar), before);
+    // The same project gives the same copies.
+    let mut again = unsplit.clone();
+    let repeated = command::apply(&mut again, &scene, &arrange).unwrap();
+    assert_eq!(repeated[0].created, copies);
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, unsplit);
+
+    // A wire a node that stays keeps long is listed; an execution wire, which copying data
+    // would not shorten, without the option.
+    let far = command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": placar, "operation": "debug.message",
+                      "position": [0.0, 4000.0], "params": {"message": "Longe"},
+                      "links": [[id(6), "exec", "exec"]]}),
+        ),
+    )
+    .unwrap()[0]
+        .created[0]
+        .clone();
+    let arranged = |project: &mut Project, extra: serde_json::Value| {
+        let mut command = json!({"op": "arrange_logic", "entity": placar, "nodes": [id(8)]});
+        command
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        command::apply_and_report(project, &scene, &batch(command)).unwrap()
+    };
+    let report = arranged(&mut project, json!({}));
+    let warning = report["warnings"][0].as_str().unwrap();
+    assert!(
+        warning.starts_with(
+            "Comando 0 (arrange_logic, o 1º do lote): a lógica de Placar ficou com 1 fio longo"
+        ) && warning.contains("event.scene_start.exec -> debug.message(Longe).exec (")
+            && !warning.contains("split_shared_data"),
+        "{warning}"
+    );
+    let report = arranged(&mut project, json!({"split_shared_data": true}));
+    let warning = report["warnings"][0].as_str().unwrap();
+    assert!(
+        warning.contains("debug.message(Longe)") && !warning.contains("split_shared_data"),
+        "{warning}"
+    );
+    // Laid out with the rest, it is not long any more.
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "arrange_logic", "entity": placar, "nodes": [far]})),
+    )
+    .unwrap();
+    assert!(report.get("warnings").is_none(), "{report}");
+
+    // Shared data pulled far by a node of the jump's lane: the warning suggests the option,
+    // naming the data it would copy, and the option copies it.
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(
+            json!({"op": "add_node", "entity": placar, "operation": "debug.message",
+                      "position": [0.0, 4000.0], "params": {"message": "Longe 2"},
+                      "links": [[id(9), "exec", "exec"], [read, "value", "value"]]}),
+        ),
+    )
+    .unwrap();
+    let shared = |split: bool| {
+        command::apply_and_report(
+            &mut project.clone(),
+            &scene,
+            &batch(json!({"op": "arrange_logic", "entity": placar,
+                          "nodes": [read, number, sum], "split_shared_data": split})),
+        )
+        .unwrap()
+    };
+    let report = shared(false);
+    let warning = report["warnings"][0].as_str().unwrap();
+    let hint = warning
+        .split_once(
+            ". Com split_shared_data: true, o arrange_logic dá a cada faixa a sua cópia dos nós \
+             de dados puros que ela usa (",
+        )
+        .map(|(_, hint)| hint);
+    assert!(
+        warning.contains("debug.message(Longe 2)")
+            && hint.is_some_and(|hint| hint.contains("attribute.get(Pontos)")),
+        "{warning}"
+    );
+    let report = shared(true);
+    assert_eq!(
+        report["created"]["0"].as_array().unwrap().len(),
+        3,
+        "{report}"
+    );
+}
+
+#[test]
+fn models_are_replaced_keeping_their_id_renamed_deleted_when_unused_and_read_by_part() {
+    let (mut project, scene) = project(SceneKind::ThreeD);
+    let report = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Checkpoint 1",
+             "position": [3.0, 0.0, 0.0]},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+             "name": "Bandeira", "parent": "$0"},
+            {"op": "save_model", "entity": "$0", "name": "Checkpoint"},
+            {"op": "place_model", "model": "Checkpoint", "position": [0.0, 0.0, 10.0]},
+        ])),
+    )
+    .unwrap();
+    let model = report["created"]["2"][0]["id"].as_str().unwrap().to_owned();
+    // The placed root keeps the name it was saved with, and the answer says it.
+    assert_eq!(report["created"]["3"][0]["name"], "Checkpoint 1");
+    let first: Vec<String> = report["created"]["3"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|piece| piece["id"].as_str().unwrap().to_owned())
+        .collect();
+    let listed = |project: &Project| {
+        query::project_summary(project)["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == model.as_str())
+            .unwrap()
+            .clone()
+    };
+    let entry = listed(&project);
+    assert_eq!(
+        (&entry["part_count"], &entry["root"]["name"]),
+        (&json!(2), &json!("Checkpoint 1"))
+    );
+    // The parts, by name or ID, each parent before its children.
+    let parts =
+        query::answer(&project, &scene, "summary", &json!({"model": "checkpoint"})).unwrap();
+    let root = parts["root"]["id"].clone();
+    assert_eq!(
+        parts,
+        json!({"id": model, "name": "Checkpoint", "root": {"id": root, "name": "Checkpoint 1"},
+               "parts": [
+                   {"id": root, "name": "Checkpoint 1", "parent": null, "kind": "group"},
+                   {"id": parts["parts"][1]["id"], "name": "Bandeira", "parent": root,
+                    "kind": "shape"}],
+               "total": 2})
+    );
+    let page = query::answer(
+        &project,
+        &scene,
+        "summary",
+        &json!({"model": model, "limit": 1}),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            page["parts"].as_array().unwrap().len(),
+            &page["next_offset"]
+        ),
+        (1, &json!(1))
+    );
+    let error =
+        query::answer(&project, &scene, "summary", &json!({"model": "Fantasma"})).unwrap_err();
+    assert!(
+        error.starts_with("Modelo Fantasma não existe no projeto. Modelos: Checkpoint ("),
+        "{error}"
+    );
+
+    // Replaced, the model keeps its ID and name; the batch reaches the new content.
+    let replaced = command::apply_and_report(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "create_entity", "kind": {"type": "group"}, "name": "Ponto"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Sphere"},
+             "name": "Luz", "parent": "$0"},
+            {"op": "create_entity", "kind": {"type": "shape", "shape": "Cylinder"},
+             "name": "Haste", "parent": "$0"},
+            {"op": "save_model", "entity": "$0", "replace": "Checkpoint"},
+            {"op": "place_model", "model": "$3", "position": [0.0, 0.0, 20.0]},
+            {"op": "rename_entity", "entity": "$4@$3@$1", "name": "Luz colocada"},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(
+        replaced["created"]["3"],
+        json!([{"id": model, "name": "Checkpoint"}])
+    );
+    let second = replaced["created"]["4"].as_array().unwrap().clone();
+    assert_eq!(second.len(), 3);
+    assert_eq!(second[0]["name"], "Ponto");
+    let level = project.scene(&scene).unwrap();
+    let lamp = level
+        .entities
+        .iter()
+        .find(|e| e.name == "Luz colocada")
+        .unwrap();
+    assert_eq!(lamp.parent.as_deref(), second[0]["id"].as_str());
+    // The placement made before is a copy: it keeps its pieces and its origin.
+    let kept: Vec<(&str, Option<&str>)> = first
+        .iter()
+        .map(|id| {
+            let e = level.entity(id).unwrap();
+            (e.name.as_str(), e.model_source.as_deref())
+        })
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            ("Checkpoint 1", Some(model.as_str())),
+            ("Bandeira", Some(model.as_str()))
+        ]
+    );
+    let entry = listed(&project);
+    assert_eq!(
+        (&entry["part_count"], &entry["root"]["name"]),
+        (&json!(3), &json!("Ponto"))
+    );
+    assert_eq!(entry["used_by"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        batch(json!({"op": "save_model", "entity": "x", "replace": "m"}))[0].label(),
+        "Substituir modelo"
+    );
+
+    // A name another model has, and an asset that is not a model, are refused.
+    let ponto = replaced["created"]["0"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "save_model", "entity": ponto, "name": "Marco"})),
+    )
+    .unwrap();
+    let texture = new_id();
+    let audio = new_id();
+    let stones = [new_id(), new_id()];
+    for (id, name, path, kind) in [
+        (&texture, "Placa", "assets/placa.png", AssetKind::Texture),
+        (
+            &audio,
+            "Checkpoint",
+            "assets/checkpoint.wav",
+            AssetKind::Audio,
+        ),
+        (&stones[0], "Pedra", "assets/pedra.png", AssetKind::Texture),
+        (
+            &stones[1],
+            "Pedra",
+            "assets/pedra-2.png",
+            AssetKind::Texture,
+        ),
+    ] {
+        project.assets.push(Asset {
+            id: id.clone(),
+            name: name.into(),
+            path: path.into(),
+            kind,
+            model: None,
+        });
+    }
+    let before = project.clone();
+    for (command, expected) in [
+        (
+            json!({"op": "save_model", "entity": ponto, "replace": model, "name": " marco "}),
+            "Já existe um modelo chamado \"Marco\"",
+        ),
+        (
+            json!({"op": "save_model", "entity": ponto, "replace": texture}),
+            "O recurso Placa não é um modelo",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "checkpoint", "name": "Outro"}),
+            "\"checkpoint\" é o nome de 2 recursos: Checkpoint (modelo), Checkpoint (áudio); \
+             passe kind (Model ou Audio)",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Checkpoint", "kind": "Model", "name": "marco"}),
+            "Já existe um modelo com o nome \"Marco\"; escolha outro nome",
+        ),
+        (
+            json!({"op": "save_model", "entity": ponto, "name": "checkpoint"}),
+            "escolha outro nome com name, ou troque o conteúdo desse modelo com replace",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Placa", "kind": "Model", "name": "X"}),
+            "O recurso Placa é uma textura, não um modelo",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Fantasma", "kind": "Model", "name": "X"}),
+            "O recurso Fantasma não existe no projeto. Modelos: Checkpoint (modelo), Marco \
+             (modelo)",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "pedra", "name": "X"}),
+            "\"pedra\" é o nome de 2 recursos: Pedra (textura, assets/pedra.png), Pedra \
+             (textura, assets/pedra-2.png); passe o ID que o oxy_project lista",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": texture, "kind": "Audio", "name": "X"}),
+            "O recurso Placa é uma textura, não um áudio",
+        ),
+        (
+            json!({"op": "rename_asset", "asset": "Placa", "name": "  "}),
+            "Informe um nome para o recurso",
+        ),
+        (
+            json!({"op": "delete_asset", "asset": "Checkpoint", "kind": "Model"}),
+            "Não é possível excluir o modelo Checkpoint, que ainda está em uso; tire estes usos \
+             antes (as colocações do modelo saem com delete_entities das raízes listadas):\n\
+             Cena 3D → Checkpoint 1: modelo\nCena 3D → Ponto: modelo",
+        ),
+    ] {
+        let error = command::apply(&mut project, &scene, &batch(command))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+        assert!(
+            stones.iter().all(|id| !error.contains(id.as_str())),
+            "{error}"
+        );
+        assert_eq!(project, before, "a refused batch changes nothing");
+    }
+    // Many assets of the kind asked for: the first ten, and how many more.
+    let mut crowded = project.clone();
+    crowded.assets.extend((1..=11).map(|n| Asset {
+        id: new_id(),
+        name: format!("Ladrilho {n}"),
+        path: format!("assets/ladrilho-{n}.png"),
+        kind: AssetKind::Texture,
+        model: None,
+    }));
+    let error = command::apply(
+        &mut crowded,
+        &scene,
+        &batch(json!({"op": "delete_asset", "asset": "Fantasma", "kind": "Texture"})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Texturas: Placa (textura), Pedra (textura)")
+            && error.contains("Ladrilho 7 (textura), … e mais 4"),
+        "{error}"
+    );
+    let error =
+        command::parse(&json!({"op": "delete_asset", "asset": "a", "kind": "model"})).unwrap_err();
+    assert!(error.contains("escreva `Model`"), "{error}");
+
+    // Renaming keeps the ID and the file; a name of another kind is fine; as one undo step.
+    let mut images = TextureCache::default();
+    let mut history = CommandHistory::new();
+    let start = project.clone();
+    history.begin("Agente: 4 comandos", &project, &images);
+    let applied = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "rename_asset", "asset": "checkpoint", "kind": "Audio",
+             "name": "Som do checkpoint"},
+            {"op": "rename_asset", "asset": texture, "name": "Checkpoint"},
+            {"op": "delete_asset", "asset": "Checkpoint", "kind": "Texture"},
+            {"op": "add_node", "entity": ponto, "operation": "action.sound",
+             "params": {"asset": audio}},
+        ])),
+    )
+    .unwrap();
+    history.commit(&project, &mut images).unwrap();
+    assert!(applied.iter().take(3).all(|a| a.created.is_empty()));
+    let sound = project.asset(&audio).unwrap();
+    assert_eq!(
+        (sound.name.as_str(), sound.path.as_str()),
+        ("Som do checkpoint", "assets/checkpoint.wav")
+    );
+    assert!(project.asset(&texture).is_none(), "an unused asset goes");
+    let error = command::apply(
+        &mut project,
+        &scene,
+        &batch(json!({"op": "delete_asset", "asset": "Som do checkpoint"})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Não é possível excluir o áudio Som do checkpoint")
+            && error.contains("Cena 3D → Ponto: ação Reproduzir WAV")
+            && !error.contains("delete_entities"),
+        "{error}"
+    );
+    history.undo(&mut project, &mut images).unwrap();
+    assert_eq!(project, start, "one undo step");
+    for (command, label) in [
+        (
+            json!({"op": "rename_asset", "asset": "a", "name": "b"}),
+            "Renomear recurso",
+        ),
+        (
+            json!({"op": "delete_asset", "asset": "a"}),
+            "Excluir recurso",
+        ),
+    ] {
+        assert_eq!(batch(command)[0].label(), label);
+    }
+
+    // Once its placements are gone, the model goes too.
+    let roots = [
+        first[0].clone(),
+        second[0]["id"].as_str().unwrap().to_owned(),
+    ];
+    command::apply(
+        &mut project,
+        &scene,
+        &batch(json!([
+            {"op": "delete_entities", "ids": roots},
+            {"op": "delete_asset", "asset": model},
+        ])),
+    )
+    .unwrap();
+    assert!(project.asset(&model).is_none());
+    validate_project(&project).unwrap();
+}

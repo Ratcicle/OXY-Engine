@@ -33,9 +33,11 @@ pub(super) struct MotorStep {
     pub path: Vec<(Vec3, Vec3)>,
     pub lateral: Vec<QueryHit>,
     pub warning: Option<String>,
-    /// The platform that dropped or refused the support this step because it turned, scaled
-    /// or jumped: the part that did, not the piece under the feet.
+    /// The platform that dropped or refused the support this step because it turned too fast,
+    /// scaled or jumped: the part that did, not the piece under the feet.
     pub released: Option<Id>,
+    /// How far the platform under the feet turned the body this step, in radians.
+    pub turn: f32,
 }
 fn append_path(
     path: &mut Vec<(Vec3, Vec3)>,
@@ -176,15 +178,15 @@ impl MotorContext<'_> {
         // must not grant a jump or suspend gravity. The solver handles snapping.
         Ok(best.filter(|hit| hit.distance <= lift + motion.margin + 0.02))
     }
-    /// The support `hit` gives; none on a platform that turned, scaled or jumped this step,
-    /// which is noted in `dropped`.
+    /// The support `hit` gives, moving as the platform's point under the feet does; none on a
+    /// platform that turned too fast, scaled or jumped this step, which is noted in `dropped`.
     fn support(&self, hit: QueryHit, dropped: &mut Option<Id>) -> Option<Support> {
         let platform = self.platforms.get(&hit.object);
         if platform.is_some_and(|p| p.discontinuous) {
             *dropped = Some(hit.object);
             return None;
         }
-        let mut velocity = platform.map_or(Vec3::ZERO, |p| p.velocity);
+        let mut velocity = platform.map_or(Vec3::ZERO, |p| p.point_velocity(hit.point, self.dt));
         if let Some(material) = hit
             .surface
             .as_ref()
@@ -220,6 +222,53 @@ impl MotorContext<'_> {
             collider = parent.clone();
         }
         collider
+    }
+    /// The moving group `collider` belongs to: its outermost ancestor that platforms move and
+    /// everything in it, which moves rigidly with it. Just `collider` when no platform does.
+    fn group(&self, collider: &Id) -> Vec<Id> {
+        if !self.platforms.contains_key(collider) {
+            return vec![collider.clone()];
+        }
+        let mut root = collider;
+        while let Some(parent) = self
+            .evaluation
+            .index
+            .position(root)
+            .and_then(|i| self.scene.entities[i].parent.as_ref())
+            && self.platforms.contains_key(parent)
+        {
+            root = parent;
+        }
+        self.evaluation.index.descendants(self.scene, root)
+    }
+    /// Whether `turned` takes no room that `motion` did not at `feet`: a box, or a body off the
+    /// axis of its feet, can turn into a wall that carrying it did not reach.
+    fn turn_fits(
+        &self,
+        motion: &ShapeMotion,
+        turned: &ShapeMotion,
+        feet: Vec3,
+        options: &QueryOptions,
+    ) -> Result<bool, String> {
+        if turned.rotation == motion.rotation && turned.at(feet) == motion.at(feet) {
+            return Ok(true);
+        }
+        let inside = self.world.penetrating_prepared(
+            &turned.geometry,
+            turned.rotation,
+            turned.at(feet),
+            options,
+        )?;
+        if inside.is_empty() {
+            return Ok(true);
+        }
+        let before = self.world.penetrating_prepared(
+            &motion.geometry,
+            motion.rotation,
+            motion.at(feet),
+            options,
+        )?;
+        Ok(inside.iter().all(|id| before.contains(id)))
     }
     pub fn advance(
         &self,
@@ -339,8 +388,9 @@ impl MotorContext<'_> {
         }
         state.sprinting = input.sprint && state.posture == Posture::Standing;
 
-        // Carry exactly once, before depenetration. Ignore only the supporting
-        // platform during this sweep; walls/ceilings still stop the passenger.
+        // Carry exactly once, before depenetration: around the platform as it moved and
+        // turned, then turned with it. Ignore only the supporting platform's moving group
+        // during this sweep, which moves with the passenger; walls/ceilings still stop it.
         if let Some(support) = state.support.clone() {
             let exists = self
                 .evaluation
@@ -371,14 +421,12 @@ impl MotorContext<'_> {
                 state.support = None;
                 state.grounded = false;
             } else {
-                let base = self
-                    .platforms
-                    .get(&support.object)
-                    .map_or(Vec3::ZERO, |p| p.delta);
-                let platform_velocity = self
-                    .platforms
-                    .get(&support.object)
-                    .map_or(Vec3::ZERO, |p| p.velocity);
+                let frame = self.platforms.get(&support.object);
+                let base = frame.map_or(Vec3::ZERO, |p| {
+                    p.motion.transform_point3(state.position) - state.position
+                });
+                let platform_velocity =
+                    frame.map_or(Vec3::ZERO, |p| p.point_velocity(support.point, dt));
                 let fresh = self
                     .support(
                         QueryHit {
@@ -392,9 +440,10 @@ impl MotorContext<'_> {
                     )
                     .unwrap();
                 let carry = base + (fresh.velocity - platform_velocity) * dt;
+                let mut options = self.options.clone();
+                options.exclude.insert(support.object.clone());
+                options.exclude.extend(self.group(&support.object));
                 if carry.length_squared() > 1e-12 {
-                    let mut options = self.options.clone();
-                    options.exclude.insert(support.object.clone());
                     let mut carry_motion = motion.clone();
                     carry_motion.snap = 0.;
                     carry_motion.step_height = 0.;
@@ -404,6 +453,19 @@ impl MotorContext<'_> {
                     append_path(&mut out.path, state.position, &resolved);
                     state.position += resolved.delta;
                     state.velocity += (resolved.delta - carry) / dt;
+                }
+                // Then the body turns with the platform, unless turning takes room it did not
+                // have (a box by a wall): it keeps the move and skips this step's turn.
+                let turn = frame.map_or(0., |p| p.turn);
+                if turn.abs() > 1e-6 {
+                    let yaw = (state.yaw + turn).rem_euclid(std::f32::consts::TAU);
+                    let mut turned = motion.clone();
+                    turned.set_yaw(yaw);
+                    if self.turn_fits(&motion, &turned, state.position, &options)? {
+                        motion = turned;
+                        state.yaw = yaw;
+                        out.turn = turn;
+                    }
                 }
                 state.support = Some(fresh);
             }
@@ -486,12 +548,7 @@ impl MotorContext<'_> {
         let friction = material.map_or(1., |s| s.friction);
         let traction = material.map_or(1., |s| s.traction);
         let modifier = material.map_or(1., |s| s.speed_multiplier);
-        let yaw = match config.reference {
-            MovementReference::World => 0.,
-            MovementReference::Body => state.yaw,
-            MovementReference::Camera => state.look_yaw,
-        };
-        let axis = wish_direction(input.axis, yaw);
+        let axis = wish_direction(input.axis, config.reference.yaw(state));
         if state.grounded {
             let normal = state.support.as_ref().map_or(Vec3::Y, |s| s.normal);
             let speed = if state.posture != Posture::Standing {

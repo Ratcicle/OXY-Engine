@@ -45,7 +45,7 @@ impl Runtime {
             "time.read" => Value::Number(if output == "dt" {
                 f64::from(FIXED_DT)
             } else {
-                self.time
+                self.game_time()
             }),
             "character.state" => {
                 let id = self.target(graph, node, context, budget, depth + 1)?;
@@ -58,8 +58,16 @@ impl Runtime {
                 let (position, rotation) = match node.text("space") {
                     "local" => (Vec3::from(e.transform.position), e.transform.quaternion()),
                     "world" => {
-                        let (p, r, _) =
-                            crate::physics3d::world_pose(self.scene().world_matrix(&id)?)?;
+                        let world = self.scene().world_matrix(&id)?;
+                        let (origin, r, _) = crate::physics3d::world_pose(world)?;
+                        // The pivot, as Properties shows it and Mover / girar / escalar
+                        // objeto places it; a 3D character's origin, where Teleportar com
+                        // segurança puts it.
+                        let p = if e.character3d.is_some() {
+                            origin
+                        } else {
+                            world.transform_point3(Vec3::from(e.transform.pivot))
+                        };
                         (p, r)
                     }
                     _ => return Err("Espaço deve ser Local ou Mundo".into()),

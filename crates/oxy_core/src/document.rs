@@ -1,12 +1,17 @@
 //! Versioned editor documents. Units are metres, +Y is up, +Z faces the viewer.
 //! Euler angles are radians in XYZ order. Transforms use an explicit local pivot.
-use crate::{animation::Clip, graph::Graph};
+use crate::{
+    animation::Clip,
+    graph::{Graph, Reference, node_references},
+};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 pub type Id = String;
+/// The IDs a copy took: each original object, node and animation (and scene) to its copy.
+pub type CopyMap = HashMap<Id, Id>;
 pub fn new_id() -> Id {
     uuid::Uuid::new_v4().to_string()
 }
@@ -227,6 +232,19 @@ pub enum UiAnchor {
     BottomRight,
     Center,
 }
+/// Where the lines of a Text element sit across its width.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UiTextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+impl UiTextAlign {
+    pub fn is_left(&self) -> bool {
+        *self == Self::Left
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiElement {
     pub kind: UiKind,
@@ -239,6 +257,16 @@ pub struct UiElement {
     pub binding_object: Option<Id>,
     pub binding_attribute: String,
     pub max_value: f64,
+    /// Text elements only. Left out of the document while it is the default, as is `text_size`.
+    #[serde(default, skip_serializing_if = "UiTextAlign::is_left")]
+    pub text_align: UiTextAlign,
+    /// Font size of a text or a button label in pixels of the game view, within `TEXT_SIZES`;
+    /// None sizes it automatically (`game_ui::font_size`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_size: Option<f32>,
+}
+impl UiElement {
+    pub const TEXT_SIZES: std::ops::RangeInclusive<f32> = 10.0..=96.0;
 }
 impl Default for UiElement {
     fn default() -> Self {
@@ -253,6 +281,8 @@ impl Default for UiElement {
             binding_object: None,
             binding_attribute: String::new(),
             max_value: 100.,
+            text_align: UiTextAlign::Left,
+            text_size: None,
         }
     }
 }
@@ -323,21 +353,67 @@ impl Entity {
         }
     }
 }
+/// What a scene shows behind its objects, in the editor, the game and captures.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Background {
+    /// Céu da OXY, the engine's sky: a panorama around the camera (3D scenes only).
+    Sky,
+    /// RGBA from 0 to 1, as the image shows it. Backgrounds are opaque: alpha is 1.
+    Color([f32; 4]),
+}
+impl Background {
+    /// The dark color of a scene without a background of its own: 2D scenes by default and
+    /// scenes made before backgrounds existed.
+    pub const DARK: [f32; 4] = [0.068, 0.068, 0.072, 1.];
+    /// What a new scene of `kind` gets: the sky in 3D; in 2D none, which shows [`Self::DARK`].
+    pub fn default_for(kind: SceneKind) -> Option<Self> {
+        (kind == SceneKind::ThreeD).then_some(Self::Sky)
+    }
+    fn check(&self, scene: &Scene) -> Result<(), String> {
+        match self {
+            Self::Sky if scene.kind == SceneKind::TwoD => Err(format!(
+                "{}: o Céu da OXY é só para cenas 3D; dê uma cor ao fundo desta cena 2D",
+                scene.name
+            )),
+            Self::Color(color) if !color.iter().all(|c| (0.0..=1.0).contains(c)) => Err(format!(
+                "{}: a cor de fundo precisa de valores de 0 a 1",
+                scene.name
+            )),
+            Self::Color(color) if color[3] != 1. => Err(format!(
+                "{}: a cor de fundo é opaca; use alfa 1",
+                scene.name
+            )),
+            _ => Ok(()),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
     pub id: Id,
     pub name: String,
     pub kind: SceneKind,
+    /// Left out of the document while the scene has none, so scenes made before backgrounds
+    /// existed keep their file and their dark color ([`Background::DARK`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Background>,
     pub entities: Vec<Entity>,
 }
 impl Scene {
+    /// An empty scene without a background of its own; scenes that people and agents create
+    /// come from [`crate::editing::new_scene`], which gives a 3D scene the sky.
     pub fn new(name: impl Into<String>, kind: SceneKind) -> Self {
         Self {
             id: new_id(),
             name: name.into(),
             kind,
+            background: None,
             entities: Vec::new(),
         }
+    }
+    /// What the scene shows behind its objects: its background or the dark color.
+    pub fn shown_background(&self) -> Background {
+        self.background
+            .unwrap_or(Background::Color(Background::DARK))
     }
     pub fn entity(&self, id: &str) -> Option<&Entity> {
         crate::metrics::count(|c| c.entity_queries += 1);
@@ -352,6 +428,44 @@ impl Scene {
             crate::metrics::count(|c| c.entity_scans += 1);
             e.id == id
         })
+    }
+    /// The objects called `name`, in any case and without the spaces around it.
+    pub fn entities_named(&self, name: &str) -> Vec<&Entity> {
+        let wanted = name.trim().to_lowercase();
+        self.entities
+            .iter()
+            .filter(|e| e.name.trim().to_lowercase() == wanted)
+            .collect()
+    }
+    /// The object `text` names in this scene: its ID, or the name of exactly one of its objects
+    /// (see [`Self::entities_named`]). `what` is the field that gave it; a name several objects
+    /// share is refused with their IDs and where each one is.
+    pub fn find_entity(&self, text: &str, what: &str) -> Result<&Entity, String> {
+        if let Some(entity) = self.entity(text) {
+            return Ok(entity);
+        }
+        match self.entities_named(text).as_slice() {
+            [one] => Ok(one),
+            [] => Err(format!(
+                "{what}: \"{text}\" não é o ID nem o nome de um objeto da cena {}",
+                self.name
+            )),
+            many => Err(format!(
+                "{what}: há {} objetos chamados \"{text}\" na cena {}; use o ID: {}",
+                many.len(),
+                self.name,
+                many.iter()
+                    .map(|e| {
+                        let parent = e.parent.as_deref().and_then(|p| self.entity(p));
+                        match parent {
+                            Some(parent) => format!("{} (em {})", e.id, parent.name),
+                            None => format!("{} (na raiz da cena)", e.id),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
     }
     pub fn world_matrix(&self, id: &str) -> Result<Mat4, String> {
         let mut current = Some(id);
@@ -473,6 +587,16 @@ impl Scene {
         removed
     }
     pub fn duplicate_subtree(&mut self, id: &str) -> Result<Id, String> {
+        self.duplicate_subtree_with(id, &mut |_| new_id())
+    }
+    /// [`Scene::duplicate_subtree`] with the copies' IDs from `ids`, which gets the ID of each
+    /// original object, clip and node. It is asked again for an object whose ID it gave is
+    /// taken, so a generator of repeatable IDs moves on to another one.
+    pub fn duplicate_subtree_with(
+        &mut self,
+        id: &str,
+        ids: &mut dyn FnMut(&str) -> Id,
+    ) -> Result<Id, String> {
         if self.entity(id).is_none() {
             return Err("Objeto não encontrado".into());
         }
@@ -483,8 +607,17 @@ impl Scene {
             .filter(|e| selected.contains(&e.id))
             .cloned()
             .collect();
-        let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
-        remap_entities(&mut copies, &map)?;
+        let taken: HashSet<&str> = self.entities.iter().map(|e| e.id.as_str()).collect();
+        let mut given = HashSet::new();
+        let mut map = HashMap::new();
+        for copy in &copies {
+            let new = (0..64)
+                .map(|_| ids(&copy.id))
+                .find(|new| !taken.contains(new.as_str()) && given.insert(new.clone()))
+                .ok_or_else(|| format!("Sem ID livre para a cópia de {}", copy.name))?;
+            map.insert(copy.id.clone(), new);
+        }
+        remap_entities_with(&mut copies, &map, ids)?;
         let root = map[id].clone();
         if let Some(e) = copies.iter_mut().find(|e| e.id == root) {
             e.name.push_str(" (cópia)");
@@ -514,15 +647,25 @@ pub fn translate_entity_and_tracks(entities: &mut [Entity], target: &str, delta:
         }
     }
 }
-/// Remaps only exact stable identifiers; names and relative paths remain untouched.
-pub fn remap_entities(entities: &mut [Entity], map: &HashMap<Id, Id>) -> Result<(), String> {
+/// Remaps only exact stable identifiers; names and relative paths remain untouched. Answers
+/// the whole map: `map` plus the new IDs of the clips and nodes.
+pub fn remap_entities(entities: &mut [Entity], map: &HashMap<Id, Id>) -> Result<CopyMap, String> {
+    remap_entities_with(entities, map, &mut |_| new_id())
+}
+/// [`remap_entities`] with the new IDs of the clips and nodes `map` leaves out from `ids`,
+/// which gets each original ID.
+pub fn remap_entities_with(
+    entities: &mut [Entity],
+    map: &HashMap<Id, Id>,
+    ids: &mut dyn FnMut(&str) -> Id,
+) -> Result<CopyMap, String> {
     let mut map = map.clone();
     for e in entities.iter() {
         for clip in &e.clips {
-            map.entry(clip.id.clone()).or_insert_with(new_id);
+            map.entry(clip.id.clone()).or_insert_with(|| ids(&clip.id));
         }
         for node in &e.graph.nodes {
-            map.entry(node.id.clone()).or_insert_with(new_id);
+            map.entry(node.id.clone()).or_insert_with(|| ids(&node.id));
         }
     }
     for e in entities {
@@ -569,7 +712,7 @@ pub fn remap_entities(entities: &mut [Entity], map: &HashMap<Id, Id>) -> Result<
         remap_json(&mut json, &map);
         e.graph = serde_json::from_value(json).map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(map)
 }
 fn remap_json(value: &mut serde_json::Value, map: &HashMap<Id, Id>) {
     match value {
@@ -621,8 +764,80 @@ pub struct Project {
     pub collision_groups: BTreeMap<u8, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surfaces: Vec<crate::surface::SurfaceMaterial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<crate::variables::GameVariable>,
+    #[serde(default, skip_serializing_if = "GameSettings::is_default")]
+    pub game: GameSettings,
+}
+/// How the exported game opens: its name and its window. Left out of the document while every
+/// value is the default.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameSettings {
+    /// The window's title and the name of the exported game; empty for the project's name.
+    #[serde(default)]
+    pub title: String,
+    /// Width and height of the window's inside, in pixels at the system's 100% scale.
+    #[serde(default = "GameSettings::default_window")]
+    pub window: [u32; 2],
+    #[serde(default)]
+    pub fullscreen: bool,
+}
+impl Default for GameSettings {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            window: Self::DEFAULT_WINDOW,
+            fullscreen: false,
+        }
+    }
+}
+impl GameSettings {
+    pub const DEFAULT_WINDOW: [u32; 2] = [1280, 720];
+    pub const MIN_WINDOW: [u32; 2] = [320, 240];
+    pub const MAX_WINDOW: [u32; 2] = [7680, 4320];
+    pub const MAX_TITLE_CHARS: usize = 80;
+    fn default_window() -> [u32; 2] {
+        Self::DEFAULT_WINDOW
+    }
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.title.chars().count() > Self::MAX_TITLE_CHARS {
+            return Err(format!(
+                "O título do jogo tem mais de {} caracteres",
+                Self::MAX_TITLE_CHARS
+            ));
+        }
+        if self.title.chars().any(char::is_control) {
+            return Err(
+                "O título do jogo não pode ter quebras de linha nem caracteres de controle".into(),
+            );
+        }
+        let [width, height] = self.window;
+        let [min_width, min_height] = Self::MIN_WINDOW;
+        let [max_width, max_height] = Self::MAX_WINDOW;
+        if !(min_width..=max_width).contains(&width) || !(min_height..=max_height).contains(&height)
+        {
+            return Err(format!(
+                "A janela do jogo deve ter de {min_width}×{min_height} a {max_width}×{max_height} \
+                 pixels; recebeu {width}×{height}"
+            ));
+        }
+        Ok(())
+    }
 }
 impl Project {
+    /// The exported game's name: its title, or the project's name when it has none.
+    pub fn game_title(&self) -> &str {
+        let title = self.game.title.trim();
+        if title.is_empty() {
+            self.name.trim()
+        } else {
+            title
+        }
+    }
     pub fn collision_group_label(&self, bit: u8) -> String {
         self.collision_groups
             .get(&bit)
@@ -633,6 +848,42 @@ impl Project {
                 2 => "Áreas".into(),
                 _ => format!("Grupo {}", bit + 1),
             })
+    }
+    /// The bit of the collision group named `name` (any case), as `collision_group_label`
+    /// names the 32 groups.
+    pub fn collision_group_bit(&self, name: &str) -> Result<u8, String> {
+        let wanted = name.trim().to_lowercase();
+        let bits: Vec<u8> = (0..32)
+            .filter(|bit| self.collision_group_label(*bit).trim().to_lowercase() == wanted)
+            .collect();
+        match bits.as_slice() {
+            [bit] => Ok(*bit),
+            [] => Err(format!(
+                "o grupo de colisão \"{name}\" não existe; grupos: {} (os sem nome se chamam Grupo \
+                 N, N sendo o bit + 1)",
+                (0..32)
+                    .filter(|bit| *bit < 3 || self.collision_groups.contains_key(bit))
+                    .map(|bit| self.collision_group_label(bit))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            many => Err(format!(
+                "há {} grupos de colisão chamados \"{name}\" (bits {}); renomeie um deles no \
+                 editor ou use o número da máscara",
+                many.len(),
+                many.iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+    /// The names of the collision groups whose bits `mask` sets, in bit order.
+    pub fn collision_group_names(&self, mask: u32) -> Vec<String> {
+        (0..32)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| self.collision_group_label(bit))
+            .collect()
     }
     pub fn new(name: impl Into<String>) -> Self {
         let scene = Scene::new("Cena 2D", SceneKind::TwoD);
@@ -646,6 +897,8 @@ impl Project {
             input_labels: BTreeMap::new(),
             collision_groups: BTreeMap::new(),
             surfaces: Vec::new(),
+            variables: Vec::new(),
+            game: GameSettings::default(),
             input_bindings: BTreeMap::from([
                 ("mover_esquerda".into(), "A".into()),
                 ("mover_direita".into(), "D".into()),
@@ -662,6 +915,61 @@ impl Project {
     }
     pub fn scene_mut(&mut self, id: &str) -> Option<&mut Scene> {
         self.scenes.iter_mut().find(|s| s.id == id)
+    }
+    /// The scene `text` names, as agents give it: its ID or, when no scene has that ID, its
+    /// name in any case, when no other scene has it. `what` is who gave it ("scene", "O
+    /// parâmetro scene do nó action.scene"…): the refusal says what it received and lists the
+    /// scenes.
+    pub fn find_scene(&self, text: &str, what: &str) -> Result<&Scene, String> {
+        if let Some(scene) = self.scene(text) {
+            return Ok(scene);
+        }
+        let wanted = text.trim().to_lowercase();
+        let named: Vec<&Scene> = self
+            .scenes
+            .iter()
+            .filter(|s| s.name.trim().to_lowercase() == wanted)
+            .collect();
+        match named.as_slice() {
+            [one] => Ok(one),
+            [] => Err(format!(
+                "{what} recebeu \"{text}\", que não é o ID nem o nome de uma cena do projeto. \
+                 Cenas: {}",
+                scene_list(self.scenes.iter())
+            )),
+            many => Err(format!(
+                "{what} recebeu \"{text}\", o nome de {} cenas; use o ID: {}",
+                many.len(),
+                scene_list(many.iter().copied())
+            )),
+        }
+    }
+    /// The object `text` names in any scene, with its scene: its ID, or the name (any case,
+    /// without the spaces around it) of exactly one object of the project. `what` is the field
+    /// that gave it; a name several objects share is refused with their IDs and scenes.
+    pub fn find_entity(&self, text: &str, what: &str) -> Result<(&Scene, &Entity), String> {
+        if let Some(found) = self.scenes.iter().find_map(|s| Some((s, s.entity(text)?))) {
+            return Ok(found);
+        }
+        let named: Vec<(&Scene, &Entity)> = self
+            .scenes
+            .iter()
+            .flat_map(|s| s.entities_named(text).into_iter().map(move |e| (s, e)))
+            .collect();
+        match named.as_slice() {
+            [one] => Ok(*one),
+            [] => Err(format!(
+                "{what}: \"{text}\" não é o ID nem o nome de um objeto do projeto"
+            )),
+            many => Err(format!(
+                "{what}: há {} objetos chamados \"{text}\"; use o ID: {}",
+                many.len(),
+                many.iter()
+                    .map(|(s, e)| format!("{} (cena {})", e.id, s.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
     }
     pub fn asset(&self, id: &str) -> Option<&Asset> {
         self.assets.iter().find(|a| a.id == id)
@@ -693,6 +1001,17 @@ impl Project {
         entity_id: &str,
         name: impl Into<String>,
     ) -> Result<Id, String> {
+        self.save_model_mapped(scene_id, entity_id, name)
+            .map(|(model, _)| model)
+    }
+    /// [`Self::save_model`] with the IDs the model took: each object, node and animation saved
+    /// to its copy in the model.
+    pub fn save_model_mapped(
+        &mut self,
+        scene_id: &str,
+        entity_id: &str,
+        name: impl Into<String>,
+    ) -> Result<(Id, CopyMap), String> {
         let name = name.into();
         if let Some(other) = self.model_named(&name) {
             return Err(format!(
@@ -700,6 +1019,64 @@ impl Project {
                 other.name, other.id
             ));
         }
+        let (pieces, map) = self.model_pieces(scene_id, entity_id)?;
+        let id = new_id();
+        self.assets.push(Asset {
+            id: id.clone(),
+            name,
+            path: String::new(),
+            kind: AssetKind::Model,
+            model: Some(pieces),
+        });
+        if let Err(error) = validate_project(self) {
+            self.assets.pop();
+            return Err(error);
+        }
+        Ok((id, map))
+    }
+    /// Makes an object of `scene_id` and everything under it the content of the model `model`,
+    /// named `name`, as [`Self::save_model_mapped`] would save it, keeping the model's ID. The
+    /// placements already made keep their pieces: they are copies, which only record the model
+    /// they came from. A name another model has is refused.
+    pub fn replace_model_mapped(
+        &mut self,
+        model: &str,
+        scene_id: &str,
+        entity_id: &str,
+        name: impl Into<String>,
+    ) -> Result<CopyMap, String> {
+        let name = name.into();
+        if let Some(other) = self.model_named(&name).filter(|other| other.id != model) {
+            return Err(format!(
+                "Já existe um modelo chamado \"{}\" ({})",
+                other.name, other.id
+            ));
+        }
+        let (pieces, map) = self.model_pieces(scene_id, entity_id)?;
+        let asset = self
+            .assets
+            .iter_mut()
+            .find(|a| a.id == model && a.kind == AssetKind::Model)
+            .ok_or("Modelo não encontrado")?;
+        let before = (
+            std::mem::replace(&mut asset.name, name),
+            asset.model.replace(pieces),
+        );
+        if let Err(error) = validate_project(self) {
+            let asset = self.assets.iter_mut().find(|a| a.id == model).unwrap();
+            (asset.name, asset.model) = before;
+            return Err(error);
+        }
+        Ok(map)
+    }
+    /// The pieces a model of the object `entity_id` of `scene_id` holds: copies of it and
+    /// everything under it with new IDs, its root at the origin and without a parent, none of
+    /// them a placement. Answers the IDs they took too.
+    fn model_pieces(
+        &self,
+        scene_id: &str,
+        entity_id: &str,
+    ) -> Result<(Vec<Entity>, CopyMap), String> {
         let scene = self.scene(scene_id).ok_or("Cena não encontrada")?;
         if scene.entity(entity_id).is_none() {
             return Err("Objeto não encontrado".into());
@@ -712,7 +1089,7 @@ impl Project {
             .cloned()
             .collect();
         let map: HashMap<_, _> = pieces.iter().map(|e| (e.id.clone(), new_id())).collect();
-        remap_entities(&mut pieces, &map)?;
+        let map = remap_entities(&mut pieces, &map)?;
         let root_id = &map[entity_id];
         let offset = pieces
             .iter()
@@ -726,27 +1103,25 @@ impl Project {
         for piece in &mut pieces {
             piece.model_source = None;
         }
-        let id = new_id();
-        self.assets.push(Asset {
-            id: id.clone(),
-            name,
-            path: String::new(),
-            kind: AssetKind::Model,
-            model: Some(pieces),
-        });
-        if let Err(error) = validate_project(self) {
-            self.assets.pop();
-            return Err(error);
-        }
-        Ok(id)
+        Ok((pieces, map))
     }
     pub fn instantiate_model(&mut self, asset_id: &str, scene_id: &str) -> Result<Id, String> {
+        self.instantiate_model_mapped(asset_id, scene_id)
+            .map(|(root, _)| root)
+    }
+    /// [`Self::instantiate_model`] with the IDs the copy took: each piece, node and animation
+    /// of the model to its copy in the scene.
+    pub fn instantiate_model_mapped(
+        &mut self,
+        asset_id: &str,
+        scene_id: &str,
+    ) -> Result<(Id, CopyMap), String> {
         let mut model = self
             .asset(asset_id)
             .and_then(|a| a.model.clone())
             .ok_or("Modelo não encontrado")?;
         let map: HashMap<_, _> = model.iter().map(|e| (e.id.clone(), new_id())).collect();
-        remap_entities(&mut model, &map)?;
+        let map = remap_entities(&mut model, &map)?;
         let mut roots: Vec<_> = model
             .iter()
             .filter(|e| e.parent.is_none())
@@ -771,7 +1146,7 @@ impl Project {
             .ok_or("Cena não encontrada")?
             .entities
             .extend(model);
-        Ok(root)
+        Ok((root, map))
     }
 }
 pub fn validate_project(project: &Project) -> Result<(), String> {
@@ -794,6 +1169,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
     if project.id.is_empty() || project.name.trim().is_empty() {
         return Err("Projeto deve possuir identificador e nome".into());
     }
+    project.game.validate()?;
     if project.input_bindings.len() > 1024 || project.input_labels.len() > 1024 {
         return Err("Limite de 1024 ações de entrada excedido.".into());
     }
@@ -811,6 +1187,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
             return Err("Identificador de superfície duplicado.".into());
         }
     }
+    crate::variables::validate_all(&project.variables, &mut identifiers)?;
     for entity in project.scenes.iter().flat_map(|s| &s.entities).chain(
         project
             .assets
@@ -877,7 +1254,7 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
                 return Err(format!("Identificador de objeto duplicado: {}", e.name));
             }
         }
-        validate_action_references(project, scene)?;
+        validate_action_references(project, &scene.entities, None)?;
     }
     for asset in &project.assets {
         if let Some(model) = &asset.model {
@@ -885,9 +1262,11 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
                 id: asset.id.clone(),
                 name: asset.name.clone(),
                 kind: SceneKind::ThreeD,
+                background: None,
                 entities: model.clone(),
             };
-            validate_scene(&scene, &assets)?
+            validate_scene(&scene, &assets)?;
+            validate_action_references(project, model, Some(&asset.name))?;
         }
     }
     Ok(())
@@ -897,6 +1276,9 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     let ids: HashSet<_> = scene.entities.iter().map(|e| e.id.as_str()).collect();
     if ids.len() != scene.entities.len() {
         return Err(format!("IDs duplicados em {}", scene.name));
+    }
+    if let Some(background) = &scene.background {
+        background.check(scene)?;
     }
     let owned_ids: HashSet<_> = ids.iter().map(|id| (*id).to_owned()).collect();
     for e in &scene.entities {
@@ -1003,6 +1385,16 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
             {
                 return Err(format!("Valores de interface inválidos: {}", e.name));
             }
+            if let Some(size) = ui.text_size
+                && !UiElement::TEXT_SIZES.contains(&size)
+            {
+                return Err(format!(
+                    "Tamanho do texto de {} deve ficar entre {} e {} px; recebeu {size}",
+                    e.name,
+                    UiElement::TEXT_SIZES.start(),
+                    UiElement::TEXT_SIZES.end()
+                ));
+            }
         }
         if let Some(c) = &e.collider
             && (!c.size.iter().all(|v| v.is_finite() && *v > 0.)
@@ -1034,36 +1426,81 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
     }
     Ok(())
 }
-fn validate_action_references(project: &Project, scene: &Scene) -> Result<(), String> {
-    let clips: HashSet<_> = scene
-        .entities
+/// Scenes that messages list; more are only counted.
+const SCENES_LISTED: usize = 30;
+
+/// Up to [`SCENES_LISTED`] scenes as `[{"id": …, "name": …}]`, for refusals of what agents
+/// give, which may need the ID.
+fn scene_list<'a>(scenes: impl Iterator<Item = &'a Scene>) -> String {
+    let scenes: Vec<&Scene> = scenes.collect();
+    let listed: Vec<serde_json::Value> = scenes
+        .iter()
+        .take(SCENES_LISTED)
+        .map(|s| serde_json::json!({"id": s.id, "name": s.name}))
+        .collect();
+    let text = serde_json::to_string(&listed).unwrap_or_default();
+    with_more(text, scenes.len())
+}
+/// The names of up to [`SCENES_LISTED`] of the project's scenes, for messages people read.
+fn scene_names(project: &Project) -> String {
+    let names: Vec<&str> = project
+        .scenes
+        .iter()
+        .take(SCENES_LISTED)
+        .map(|s| s.name.as_str())
+        .collect();
+    with_more(names.join(", "), project.scenes.len())
+}
+fn with_more(mut text: String, scenes: usize) -> String {
+    if scenes > SCENES_LISTED {
+        text.push_str(&format!(" e mais {}", scenes - SCENES_LISTED));
+    }
+    text
+}
+
+/// The scenes, audios, clips and game variables named by the logic of `entities`, a scene's
+/// objects or the pieces of the model named `model`. Clips are checked in scenes only: a model
+/// may name the clip of an object it is placed with, such as the visitor of its area.
+fn validate_action_references(
+    project: &Project,
+    entities: &[Entity],
+    model: Option<&str>,
+) -> Result<(), String> {
+    let clips: HashSet<_> = entities
         .iter()
         .flat_map(|e| e.clips.iter().map(|clip| clip.id.as_str()))
         .collect();
-    for e in &scene.entities {
+    for e in entities {
         for node in &e.graph.nodes {
-            let missing = match node.operation.as_str() {
-                "action.scene" => {
-                    let id = node.text("scene");
-                    !id.is_empty() && project.scene(id).is_none()
-                }
-                "action.sound" => {
-                    let id = node.text("asset");
-                    !id.is_empty()
-                        && !project
+            let missing = node_references(node).find(|(param, reference, _)| {
+                let id = node.text(param.id);
+                !id.is_empty()
+                    && match reference {
+                        Reference::Scene => project.scene(id).is_none(),
+                        Reference::Audio => !project
                             .asset(id)
-                            .is_some_and(|a| a.kind == AssetKind::Audio)
-                }
-                "action.animation" => {
-                    let id = node.text("clip");
-                    !id.is_empty() && !clips.contains(id)
-                }
-                _ => false,
-            };
-            if missing {
+                            .is_some_and(|a| a.kind == AssetKind::Audio),
+                        Reference::Clip => model.is_none() && !clips.contains(id),
+                        Reference::Variable => crate::variables::get(project, id).is_none(),
+                        _ => false,
+                    }
+            });
+            if let Some((param, reference, _)) = missing {
+                // A piece exists only in its model: the scenes do not show it.
+                let holder = model.map_or(String::new(), |name| format!("modelo {name}, "));
+                let label = crate::graph::definition(&node.operation).map_or("", |d| d.label);
+                let scenes = if reference == Reference::Scene {
+                    format!(". Cenas: {}", scene_names(project))
+                } else {
+                    String::new()
+                };
                 return Err(format!(
-                    "Referência quebrada: objeto {}, nó {} ({})",
-                    e.name, node.id, node.operation
+                    "Referência quebrada: {holder}objeto {}, nó {label} ({}): o parâmetro {} \
+                     recebeu \"{}\"{scenes}",
+                    e.name,
+                    node.operation,
+                    param.id,
+                    node.text(param.id)
                 ));
             }
         }
@@ -1085,6 +1522,239 @@ mod tests {
         assert_eq!(p, q);
         assert_eq!(q.scenes[0].entities[0].id, id);
         validate_project(&q).unwrap();
+    }
+    #[test]
+    fn game_variables_are_optional_typed_and_named_apart() {
+        use crate::variables::{GameVariable, MAX_TEXT, MAX_VARIABLES};
+        let mut p = Project::new("Variáveis");
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("variables").is_none(), "{json}");
+        let variable = |name: &str, value: Value| GameVariable {
+            id: new_id(),
+            name: name.into(),
+            value,
+            persistent: false,
+        };
+        p.variables = vec![
+            variable("Moedas", Value::Number(0.)),
+            variable("Saída", Value::Vector3([0., 1., 0.])),
+        ];
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["variables"][0]["persistent"], false);
+        let loaded: Project = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(loaded, p);
+        // persistent may be left out; unknown fields may not.
+        let mut short = json.clone();
+        short["variables"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("persistent");
+        let loaded: Project = serde_json::from_value(short).unwrap();
+        assert!(!loaded.variables[0].persistent);
+        let mut unknown = json;
+        unknown["variables"][0]["scope"] = "cena".into();
+        assert!(serde_json::from_value::<Project>(unknown).is_err());
+
+        let refused = |change: &dyn Fn(&mut Project)| {
+            let mut broken = p.clone();
+            change(&mut broken);
+            validate_project(&broken).unwrap_err()
+        };
+        let error = refused(&|p| p.variables[1].value = Value::Object(None));
+        assert!(
+            error.contains("Saída") && error.contains("objetos"),
+            "{error}"
+        );
+        let error = refused(&|p| p.variables[1].value = Value::Surface(None));
+        assert!(error.contains("superfícies"), "{error}");
+        let error = refused(&|p| p.variables[1].name = " moedas ".into());
+        assert!(
+            error.contains("duas variáveis do jogo chamadas moedas"),
+            "{error}"
+        );
+        let error = refused(&|p| p.variables[1].name = "  ".into());
+        assert!(error.contains("nome"), "{error}");
+        // Reports write a key's value as "name · key".
+        let error = refused(&|p| p.variables[1].name = "Moedas · Fase".into());
+        assert!(error.contains("não pode ter ·"), "{error}");
+        let error = refused(&|p| p.variables[1].id = p.scenes[0].id.clone());
+        assert!(error.contains("Identificador"), "{error}");
+        let error = refused(&|p| p.variables[0].value = Value::Number(f64::INFINITY));
+        assert!(error.contains("finito"), "{error}");
+        let error = refused(&|p| p.variables[0].value = Value::Text("a".repeat(MAX_TEXT + 1)));
+        assert!(error.contains("4096 bytes"), "{error}");
+        let error = refused(&|p| {
+            p.variables = (0..=MAX_VARIABLES)
+                .map(|i| variable(&format!("V{i}"), Value::Bool(false)))
+                .collect();
+        });
+        assert!(error.contains("256"), "{error}");
+    }
+    #[test]
+    fn game_settings_are_optional_and_limited() {
+        let mut p = Project::new("Corrida");
+        // Without settings the document is as before, and an older one loads.
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("game").is_none(), "{json}");
+        assert_eq!(p.game_title(), "Corrida");
+        p.game.title = "  Corrida Noturna ".into();
+        p.game.fullscreen = true;
+        assert_eq!(p.game_title(), "Corrida Noturna");
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["game"]["window"], serde_json::json!([1280, 720]));
+        assert_eq!(serde_json::from_value::<Project>(json.clone()).unwrap(), p);
+        // Fields may be left out; unknown ones may not.
+        let mut short = json.clone();
+        short["game"] = serde_json::json!({"fullscreen": true});
+        let loaded: Project = serde_json::from_value(short).unwrap();
+        assert_eq!(loaded.game.window, GameSettings::DEFAULT_WINDOW);
+        assert!(loaded.game.fullscreen && loaded.game.title.is_empty());
+        let mut unknown = json;
+        unknown["game"]["save_folder"] = "Corrida".into();
+        assert!(serde_json::from_value::<Project>(unknown).is_err());
+
+        let refused = |change: &dyn Fn(&mut GameSettings)| {
+            let mut broken = p.clone();
+            change(&mut broken.game);
+            validate_project(&broken).unwrap_err()
+        };
+        let error = refused(&|g| g.title = "a".repeat(81));
+        assert!(error.contains("80 caracteres"), "{error}");
+        validate_project(&Project {
+            game: GameSettings {
+                title: "é".repeat(80),
+                ..p.game.clone()
+            },
+            ..p.clone()
+        })
+        .unwrap();
+        let error = refused(&|g| g.title = "Linha\nNova".into());
+        assert!(error.contains("quebras de linha"), "{error}");
+        for window in [[319, 240], [320, 239], [7681, 720], [1280, 4321], [0, 0]] {
+            let error = refused(&|g| g.window = window);
+            assert!(
+                error.contains("320×240 a 7680×4320")
+                    && error.contains(&format!("{}×{}", window[0], window[1])),
+                "{error}"
+            );
+        }
+        for window in [GameSettings::MIN_WINDOW, GameSettings::MAX_WINDOW] {
+            let mut edge = p.clone();
+            edge.game.window = window;
+            validate_project(&edge).unwrap();
+        }
+    }
+    #[test]
+    fn ui_text_alignment_and_size_are_optional_and_limited() {
+        let mut p = Project::new("Interface");
+        let mut title = Entity::new("Título", None);
+        title.ui = Some(UiElement::default());
+        p.scenes[0].entities.push(title);
+        // Left and automatic stay out of the document, so files saved before them read and
+        // save to the same bytes.
+        let saved = serde_json::to_string(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        let ui = json["scenes"][0]["entities"][0]["ui"].as_object().unwrap();
+        assert!(!ui.contains_key("text_align") && !ui.contains_key("text_size"));
+        let loaded: Project = serde_json::from_str(&saved).unwrap();
+        let element = loaded.scenes[0].entities[0].ui.as_ref().unwrap();
+        assert_eq!(
+            (element.text_align, element.text_size),
+            (UiTextAlign::Left, None)
+        );
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), saved);
+
+        let ui = p.scenes[0].entities[0].ui.as_mut().unwrap();
+        ui.text_align = UiTextAlign::Center;
+        ui.text_size = Some(48.);
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        let ui = &json["scenes"][0]["entities"][0]["ui"];
+        assert_eq!(ui["text_align"], "Center");
+        assert_eq!(ui["text_size"], 48.0);
+        assert_eq!(serde_json::from_value::<Project>(json).unwrap(), p);
+
+        for size in [UiElement::TEXT_SIZES.start(), UiElement::TEXT_SIZES.end()] {
+            p.scenes[0].entities[0].ui.as_mut().unwrap().text_size = Some(*size);
+            validate_project(&p).unwrap();
+        }
+        for size in [9.5, 96.5, f32::INFINITY, f32::NAN] {
+            p.scenes[0].entities[0].ui.as_mut().unwrap().text_size = Some(size);
+            let error = validate_project(&p).unwrap_err();
+            assert!(
+                error.starts_with("Tamanho do texto de Título deve ficar entre 10 e 96 px"),
+                "{error}"
+            );
+        }
+    }
+    #[test]
+    fn scene_background_is_optional_round_trips_and_is_checked() {
+        let mut p = Project::new("Fundo");
+        p.scenes.push(Scene::new("Pista", SceneKind::ThreeD));
+        // Without one the document is as before and the scenes keep the dark color; the
+        // shipped parkour, which uses the sky, reads and saves to the same bytes.
+        let saved = serde_json::to_string(&p).unwrap();
+        assert!(!saved.contains("background"), "{saved}");
+        let loaded: Project = serde_json::from_str(&saved).unwrap();
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), saved);
+        assert_eq!(
+            loaded.scenes[1].shown_background(),
+            Background::Color(Background::DARK)
+        );
+        // A checkout may turn the file's line endings into CRLF; the rest is compared as is.
+        let example = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/parkour/project.oxy.json"),
+        )
+        .unwrap()
+        .replace("\r\n", "\n");
+        let parkour: Project = serde_json::from_str(&example).unwrap();
+        assert!(
+            parkour
+                .scenes
+                .iter()
+                .all(|s| s.background == Some(Background::Sky))
+        );
+        assert_eq!(serde_json::to_string_pretty(&parkour).unwrap(), example);
+
+        p.scenes[0].background = Some(Background::Color([0.25, 0.5, 0.75, 1.]));
+        p.scenes[1].background = Some(Background::Sky);
+        validate_project(&p).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            json["scenes"][0]["background"],
+            serde_json::json!({"Color": [0.25, 0.5, 0.75, 1.0]})
+        );
+        assert_eq!(json["scenes"][1]["background"], "Sky");
+        assert_eq!(serde_json::from_value::<Project>(json).unwrap(), p);
+
+        assert_eq!(
+            Background::default_for(SceneKind::ThreeD),
+            Some(Background::Sky)
+        );
+        assert_eq!(Background::default_for(SceneKind::TwoD), None);
+        let refused = |background: Background| {
+            let mut broken = p.clone();
+            broken.scenes[0].background = Some(background);
+            validate_project(&broken).unwrap_err()
+        };
+        let error = refused(Background::Sky);
+        assert!(
+            error.starts_with("Cena 2D: o Céu da OXY é só para cenas 3D"),
+            "{error}"
+        );
+        for color in [
+            [1.2, 0., 0., 1.],
+            [-0.1, 0., 0., 1.],
+            [f32::NAN, 0., 0., 1.],
+        ] {
+            let error = refused(Background::Color(color));
+            assert!(error.contains("de 0 a 1"), "{error}");
+        }
+        let error = refused(Background::Color([0., 0., 0., 0.5]));
+        assert!(error.contains("opaca"), "{error}");
     }
     #[test]
     fn cycles_are_rejected_and_world_is_preserved() {

@@ -8,7 +8,7 @@ pub struct Recipe {
     pub bytes: &'static [u8],
 }
 pub fn recipes() -> &'static [Recipe] {
-    static RECIPES: [Recipe; 12] = [
+    static RECIPES: [Recipe; 14] = [
         Recipe {
             title: "Primeira mensagem",
             setup: "Um retângulo contém o grafo. Na Lógica, a ação Mostrar mensagem está ligada a K, no modo Pressionar.",
@@ -127,6 +127,26 @@ pub fn recipes() -> &'static [Recipe] {
             bytes: include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../examples/guia/12-movimento-3d/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Menu de pausa",
+            setup: "O grupo Menu de pausa começa oculto e contém o grafo. Seus filhos: o Fundo da pausa, uma Imagem de interface sem imagem, que desenha um retângulo na Cor (com transparência); o título Pausa; e os botões Continuar, Reiniciar e Sair do jogo. A/D movem; Espaço pula.",
+            flow: "No grupo: Ao pausar ou retomar, Quando = Ao pausar → ativar Visibilidade; Quando = Ao retomar → desativar Visibilidade (Objeto vazio = o próprio grupo, e os filhos o acompanham). Continuar: Ao clicar → Pausar / retomar jogo, Ação Retomar. Reiniciar: Ao clicar → Mudar de cena; Cena atual: Cena → Cena. Sair do jogo: Ao clicar → Sair do jogo.",
+            expected: "Com o evento na cena, Esc pausa o jogo e abre o menu: o personagem para e o mouse fica livre, sem nó de cursor. Continuar, ou Esc de novo, fecha o menu e o jogo segue de onde parou. Reiniciar recarrega a cena como no começo, já sem pausa. Sair do jogo para o teste no editor e fecha o jogo exportado.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/13-menu-de-pausa/project.oxy.json"
+            )),
+        },
+        Recipe {
+            title: "Recorde salvo",
+            setup: "A variável do jogo Melhor tempo (número, 0 = sem recorde) é Salva entre partidas. A cena se chama Fase 1. A área verde Chegada contém o grafo; o Placar guarda Início, Tempo e Recorde, que os textos da interface exibem. A/D movem; Espaço pula; a Parede segura o personagem.",
+            flow: "Ler variável e Alterar variável recebem na Chave o Nome de Cena atual. Ao iniciar cena → Alterar Início do Placar com o Tempo de Ler tempo da simulação → se Melhor tempo > 0, Formatar tempo → Recorde. Ao entrar na área: o Tempo de Ler tempo da simulação menos Início dá o tempo da tentativa, que, formatado, vai para o Tempo do Placar. Se Melhor tempo == 0, ou se a tentativa for mais rápida → Alterar variável → Salvar progresso → Recorde, com Melhor tempo lido de novo. Senão, só uma mensagem no Console.",
+            expected: "Chegue à área: o tempo vira o recorde e o progresso é salvo, como Melhor tempo · Fase 1. Pare e jogue de novo: o recorde aparece desde o começo, porque o teste do editor guarda o progresso até você abrir outro projeto; no jogo exportado, ele volta na próxima partida. Mais devagar, o recorde fica e nada é salvo; mais rápido, ele é trocado e salvo de novo.",
+            bytes: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/guia/14-recorde-salvo/project.oxy.json"
             )),
         },
     ];

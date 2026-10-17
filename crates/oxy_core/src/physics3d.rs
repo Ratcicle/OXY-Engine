@@ -4,6 +4,7 @@ mod movement;
 mod scene;
 mod shapes;
 mod sweep;
+mod window;
 pub use movement::{MotionSettings, ShapeMotion};
 pub use scene::*;
 pub use shapes::*;
@@ -11,7 +12,7 @@ pub use sweep::SweepSpan;
 
 use crate::document::Id;
 use glam::{Quat, Vec3};
-use rapier3d::parry::query::ShapeCastOptions;
+use rapier3d::parry::query::{QueryDispatcher, ShapeCastOptions};
 use rapier3d::{
     control::{CharacterAutostep, CharacterLength, KinematicCharacterController},
     prelude::*,
@@ -20,6 +21,7 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, HashMap, HashSet},
 };
+use window::Windowed;
 
 fn vector(v: Vec3) -> Vector {
     Vector::from_array(v.to_array())
@@ -175,7 +177,6 @@ pub struct PhysicsWorld {
     colliders: ColliderSet,
     bodies: RigidBodySet,
     broad: BroadPhaseBvh,
-    narrow: NarrowPhase,
     islands: IslandManager,
     entries: BTreeMap<Id, Entry>,
     ids: HashMap<ColliderHandle, Id>,
@@ -206,7 +207,6 @@ impl PhysicsWorld {
             colliders: ColliderSet::new(),
             bodies: RigidBodySet::new(),
             broad: BroadPhaseBvh::new(),
-            narrow: NarrowPhase::new(),
             islands: IslandManager::new(),
             entries: BTreeMap::new(),
             ids: HashMap::new(),
@@ -429,7 +429,7 @@ impl PhysicsWorld {
         }
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
+            &Windowed,
             &self.bodies,
             &self.colliders,
             QueryFilter::default().predicate(&predicate),
@@ -472,7 +472,7 @@ impl PhysicsWorld {
         }
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
+            &Windowed,
             &self.bodies,
             &self.colliders,
             QueryFilter::default().predicate(&predicate),
@@ -520,7 +520,7 @@ impl PhysicsWorld {
         }
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
+            &Windowed,
             &self.bodies,
             &self.colliders,
             QueryFilter::default().predicate(&predicate),
@@ -596,7 +596,7 @@ impl PhysicsWorld {
         };
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
+            &Windowed,
             &self.bodies,
             &self.colliders,
             QueryFilter::default().predicate(&predicate),
@@ -672,10 +672,9 @@ impl PhysicsWorld {
                 }
             }
         }
-        // Rapier's generic support-map snap can cross a flat face while starting
-        // within its target margin (notably boxes/convexes). Validate the resolved
-        // route against actual volumes before accepting it. Capsule behavior is
-        // retained; it has its own analytic path in Parry.
+        // Last guard for box and convex bodies: a resolved route that ends inside an
+        // obstacle it started clear of stops at its first contact on the route.
+        // Capsule routes are kept as Rapier resolves them.
         if !matches!(shape.as_typed_shape(), TypedShape::Capsule(_))
             && !self
                 .penetrating_prepared(shape, config.rotation, center + result.delta, options)?
@@ -795,16 +794,14 @@ impl PhysicsWorld {
         let at = pose(position, rotation);
         let predicate = |h, _: &Collider| self.accepts(h, options);
         let queries = self.broad.as_query_pipeline(
-            self.narrow.query_dispatcher(),
+            &Windowed,
             &self.bodies,
             &self.colliders,
             QueryFilter::default().predicate(&predicate),
         );
         self.queries.set(self.queries.get() + 1);
         for (handle, collider) in queries.intersect_shape(at, &**shape) {
-            let contact = self
-                .narrow
-                .query_dispatcher()
+            let contact = Windowed
                 .contact(
                     &at.inv_mul(collider.position()),
                     &**shape,
@@ -849,7 +846,7 @@ impl PhysicsWorld {
             let at = pose(position, Quat::IDENTITY);
             let predicate = |h, _: &Collider| self.accepts(h, options);
             let queries = self.broad.as_query_pipeline(
-                self.narrow.query_dispatcher(),
+                &Windowed,
                 &self.bodies,
                 &self.colliders,
                 QueryFilter::default().predicate(&predicate),
@@ -857,9 +854,7 @@ impl PhysicsWorld {
             self.queries.set(self.queries.get() + 1);
             let mut contacts = Vec::new();
             for (handle, collider) in queries.intersect_shape(at, &*shape) {
-                let contact = self
-                    .narrow
-                    .query_dispatcher()
+                let contact = Windowed
                     .contact(
                         &at.inv_mul(collider.position()),
                         &*shape,

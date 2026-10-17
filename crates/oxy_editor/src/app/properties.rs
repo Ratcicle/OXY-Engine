@@ -123,6 +123,8 @@ impl Editor {
             });
         });
         ui.add_space(8.);
+        self.open_scene_properties(ui);
+        ui.add_space(8.);
         egui::Frame::new()
             .stroke(egui::Stroke::new(1., theme::BORDER))
             .corner_radius(6)
@@ -147,6 +149,30 @@ impl Editor {
                     );
                 });
             });
+    }
+    /// The scene being edited: its name and kind, and what it shows behind its objects.
+    fn open_scene_properties(&mut self, ui: &mut egui::Ui) {
+        use crate::widgets;
+        let scene = self.scene();
+        let (kind, current) = (scene.kind, scene.background);
+        let title = format!("{} · {}", scene.name, scenes::kind_label(kind));
+        let mut chosen = None;
+        widgets::open_card(ui, "open_scene_properties", "Cena aberta", |ui| {
+            widgets::property_row(ui, "Cena", "", |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(title).size(12.5)).truncate());
+            });
+            chosen = background_rows(ui, kind, current);
+            widgets::hint(
+                ui,
+                "O que aparece atrás de tudo nesta cena: no editor, no teste, no jogo exportado \
+                 e nas capturas. Cada cena tem o seu.",
+            );
+        });
+        if let Some(background) = chosen
+            && background != current
+        {
+            self.scene_mut().background = background;
+        }
     }
     fn multiple_properties(&mut self, ui: &mut egui::Ui) {
         use crate::icons::{self, Icon};
@@ -369,9 +395,71 @@ impl Editor {
                         ui,
                         "Durante o teste, mudanças não vão para o projeto. Pare o jogo para editar.",
                     );
+                    if self.play.driver == Driver::Agent {
+                        ui.add_space(8.);
+                        Self::test_card(
+                            ui,
+                            "Um agente está jogando",
+                            "O agente iniciou este teste pelo MCP e envia as entradas. O mouse \
+                             continua livre. Clique em Assumir para jogar você mesmo.",
+                            true,
+                        );
+                    }
+                    if self
+                        .play
+                        .runtime
+                        .as_ref()
+                        .is_some_and(|rt| rt.game_paused() && !rt.paused)
+                    {
+                        ui.add_space(8.);
+                        // What the game's own pause means, apart from the test's Pausar.
+                        Self::test_card(
+                            ui,
+                            "O jogo pausou a si mesmo",
+                            "O menu é do jogo: física, personagens, animações e efeitos param, e a interface continua. O mouse fica livre. Pausar, na barra, pausa o teste inteiro.",
+                            false,
+                        );
+                    }
                     ui.disable();
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| self.properties_body(ui));
+            });
+    }
+    /// A note about the running test; `agent` draws it in the colours of the agent's chip.
+    fn test_card(ui: &mut egui::Ui, title: &str, text: &str, agent: bool) {
+        use crate::theme;
+        let (fill, border) = if agent {
+            (
+                Color32::from_rgb(43, 58, 79),
+                Color32::from_rgb(60, 83, 116),
+            )
+        } else {
+            (theme::CARD_FILL, theme::CARD_BORDER)
+        };
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(egui::Stroke::new(1., border))
+            .corner_radius(theme::CARD_RADIUS)
+            .inner_margin(egui::Margin::symmetric(12, 10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new(title)
+                        .font(theme::medium(13.))
+                        .color(if agent { Color32::WHITE } else { theme::TEXT }),
+                );
+                if agent {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(text)
+                                .size(12.)
+                                .color(Color32::from_rgb(183, 210, 245)),
+                        )
+                        .wrap(),
+                    );
+                } else {
+                    crate::widgets::hint(ui, text);
+                }
             });
     }
     fn properties_body(&mut self, ui: &mut egui::Ui) {
@@ -632,8 +720,10 @@ impl Editor {
                 None,
                 None,
                 |ui| {
+                    use crate::widgets::property_row_with;
                     let element = entity.ui.as_mut().unwrap();
-                    property_row(ui, "Tipo", "", |ui| {
+                    let column = ui_label_column(ui);
+                    property_row_with(ui, column, "Tipo", "", |ui| {
                         egui::ComboBox::from_id_salt("ui_kind")
                             .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(crate::labels::ui_kind(element.kind))
@@ -649,7 +739,7 @@ impl Editor {
                                 }
                             });
                     });
-                    property_row(ui, "Âncora", "", |ui| {
+                    property_row_with(ui, column, "Âncora", "", |ui| {
                         egui::ComboBox::from_id_salt("ui_anchor")
                             .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(crate::labels::anchor(element.anchor))
@@ -669,22 +759,31 @@ impl Editor {
                                 }
                             });
                     });
-                    property_row(ui, "Deslocamento", "Em pontos, a partir da âncora.", |ui| {
-                        for value in &mut element.position {
-                            ui.add(egui::DragValue::new(value));
-                        }
-                    });
-                    property_row(ui, "Tamanho", "", |ui| {
+                    property_row_with(
+                        ui,
+                        column,
+                        "Deslocamento",
+                        "Em pontos, a partir da âncora.",
+                        |ui| {
+                            for value in &mut element.position {
+                                ui.add(egui::DragValue::new(value));
+                            }
+                        },
+                    );
+                    property_row_with(ui, column, "Tamanho", "", |ui| {
                         for value in &mut element.size {
                             ui.add(egui::DragValue::new(value).range(1.0..=4000.));
                         }
                     });
+                    ui_text_rows(ui, column, element);
                     ui.label("Texto ({valor} mostra o vínculo)");
                     ui.add(
                         egui::TextEdit::multiline(&mut element.text)
                             .desired_width(ui.available_width()),
                     );
-                    property_row(ui, "Cor", "", |ui| color_editor(ui, &mut element.color));
+                    property_row_with(ui, column, "Cor", "", |ui| {
+                        color_editor(ui, &mut element.color)
+                    });
                     ui.label("Objeto que possui o atributo").on_hover_text(
                     "A interface lê o valor deste objeto, por exemplo Vida do personagem. Sem escolha, usa o próprio objeto.",
                 );
@@ -708,7 +807,12 @@ impl Editor {
                                 .map(|(_, n)| n.as_str())
                         })
                         .unwrap_or("Sem imagem");
-                    property_row(ui, "Imagem", "", |ui| {
+                    let hint = if element.kind == UiKind::Image {
+                        "Sem imagem, a Imagem é um retângulo na Cor, com a transparência dela, como fundo de um menu. Com imagem, a Cor tinge a imagem."
+                    } else {
+                        ""
+                    };
+                    property_row_with(ui, column, "Imagem", hint, |ui| {
                         egui::ComboBox::from_id_salt("ui_image")
                             .width(crate::widgets::combo_inner_width(ui, ui.available_width()))
                             .selected_text(label)
@@ -832,6 +936,178 @@ impl Editor {
     }
 }
 
+/// Fundo of the Cena aberta card, within its width: Céu da OXY (3D scenes only) or Cor and, for
+/// a color, the color, picked as the image shows it (sRGB) with no ready-made swatches, and
+/// Padrão, the background of a new scene of `kind`. Answers the background chosen, if any.
+fn background_rows(
+    ui: &mut egui::Ui,
+    kind: SceneKind,
+    current: Option<Background>,
+) -> Option<Option<Background>> {
+    use crate::{theme, widgets};
+    let mut chosen = None;
+    let sky = current == Some(Background::Sky);
+    widgets::combo_row(
+        ui,
+        "Fundo",
+        "O que a cena mostra atrás dos objetos.",
+        "open_scene_background",
+        if sky { "Céu da OXY" } else { "Cor" },
+        |ui| {
+            if ui
+                .add_enabled(
+                    kind == SceneKind::ThreeD,
+                    egui::Button::selectable(sky, "Céu da OXY"),
+                )
+                .on_disabled_hover_text("O Céu da OXY é só para cenas 3D.")
+                .clicked()
+            {
+                chosen = Some(Some(Background::Sky));
+            }
+            // From the sky, the color starts at its horizon.
+            if ui.selectable_label(!sky, "Cor").clicked() && sky {
+                chosen = Some(Some(Background::Color(oxy_render::sky::HORIZON)));
+            }
+        },
+    );
+    if sky {
+        return chosen;
+    }
+    let color = match current {
+        Some(Background::Color(color)) => color,
+        _ => Background::DARK,
+    };
+    widgets::property_row(ui, "Cor", "", |ui| {
+        let mut srgb =
+            [color[0], color[1], color[2]].map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
+        if ui.color_edit_button_srgb(&mut srgb).changed() {
+            let [r, g, b] = srgb.map(|c| f32::from(c) / 255.);
+            chosen = Some(Some(Background::Color([r, g, b, 1.])));
+        }
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!("#{:02X}{:02X}{:02X}", srgb[0], srgb[1], srgb[2]))
+                    .monospace()
+                    .size(11.5)
+                    .color(theme::TEXT_MUTED),
+            )
+            .truncate(),
+        );
+    });
+    let default = Background::default_for(kind);
+    widgets::property_row(ui, "", "", |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let reset = ui
+                .add_enabled(current != default, egui::Button::new("Padrão"))
+                .on_hover_text(if kind == SceneKind::ThreeD {
+                    "Volta ao Céu da OXY, o fundo das cenas 3D novas."
+                } else {
+                    "Volta ao fundo escuro das cenas 2D."
+                });
+            if reset.clicked() {
+                chosen = Some(default);
+            }
+        });
+    });
+    chosen
+}
+
+/// Label column of the Interface do jogo card: wide enough for Tamanho do texto while the card
+/// keeps room for its rows of two numbers; narrower, the usual column, and the longer label
+/// takes its own line.
+fn ui_label_column(ui: &egui::Ui) -> f32 {
+    let wide =
+        crate::widgets::label_column(ui, &["Deslocamento", "Alinhamento", "Tamanho do texto"]);
+    let numbers = 2. * (ui.spacing().interact_size.x + ui.spacing().item_spacing.x);
+    if ui.available_width() >= wide + numbers {
+        wide
+    } else {
+        crate::theme::LABEL_COLUMN
+    }
+}
+
+/// Alinhamento (texts) and Tamanho do texto (texts and button labels) of the Interface do jogo
+/// card, within its width: where the px field does not fit beside the choice, it goes under it.
+fn ui_text_rows(ui: &mut egui::Ui, column: f32, element: &mut UiElement) {
+    use crate::{icons::Icon, widgets};
+    if element.kind == UiKind::Text {
+        let aligns = [
+            (
+                UiTextAlign::Left,
+                Icon::AlignLeft,
+                "Alinhar à esquerda",
+                "Alinhar à esquerda",
+            ),
+            (
+                UiTextAlign::Center,
+                Icon::AlignCenter,
+                "Centralizar",
+                "Centralizar",
+            ),
+            (
+                UiTextAlign::Right,
+                Icon::AlignRight,
+                "Alinhar à direita",
+                "Alinhar à direita",
+            ),
+        ];
+        let width = widgets::segmented_icons_width(ui, &aligns.map(|(_, _, l, _)| l), false);
+        widgets::property_row_fit(ui, column, "Alinhamento", "", width, |ui| {
+            widgets::segmented_icons(ui, &mut element.text_align, &aligns, false);
+        });
+    }
+    if !matches!(element.kind, UiKind::Text | UiKind::Button) {
+        return;
+    }
+    // Switching to px starts from the size drawn now.
+    let drawn =
+        oxy_core::game_ui::font_size(element, element.size[1].max(1.), element.texture.is_some())
+            .unwrap_or(16.);
+    let modes = [(false, "Automático"), (true, "px")];
+    let mut fixed = element.text_size.is_some();
+    let number = ui.spacing().interact_size.x;
+    let mut placed = false;
+    let width = widgets::segmented_width(ui, &modes.map(|(_, label)| label));
+    let beside = widgets::property_row_fit(ui, column, "Tamanho do texto", "", width, |ui| {
+        if widgets::segmented(ui, &mut fixed, &modes) {
+            element.text_size = fixed.then_some(drawn.round());
+        }
+        if ui.available_width() >= number
+            && let Some(size) = &mut element.text_size
+        {
+            text_size_field(ui, size);
+            placed = true;
+        }
+    });
+    if !placed && let Some(size) = &mut element.text_size {
+        if beside {
+            widgets::property_row_with(ui, column, "", "", |ui| text_size_field(ui, size));
+        } else {
+            text_size_field(ui, size);
+        }
+    }
+    let hint = match (element.text_size, element.kind) {
+        (Some(_), UiKind::Text) => {
+            "De 10 a 96 px, na escala da janela do jogo. Vale também para botões.".into()
+        }
+        (Some(_), _) => "De 10 a 96 px, na escala da janela do jogo.".into(),
+        (None, UiKind::Text) => "Automático: metade da altura do elemento, de 12 a 32 px.".into(),
+        (None, _) => format!("Automático: {drawn} px, o padrão dos botões."),
+    };
+    widgets::hint(ui, &hint);
+}
+
+/// The px field of Tamanho do texto; whole pixels read "48" at any interface scale.
+fn text_size_field(ui: &mut egui::Ui, size: &mut f32) {
+    let field = ui.add(
+        egui::DragValue::new(size)
+            .range(UiElement::TEXT_SIZES)
+            .speed(1.)
+            .custom_formatter(|value, _| egui::emath::format_with_decimals_in_range(value, 0..=1)),
+    );
+    crate::icons::register_qa(ui, "Tamanho do texto em px", field.rect);
+}
+
 /// End of a project path, from its folder: the part that tells projects apart.
 fn short_project_path(path: &Path) -> String {
     let file = path.file_name().unwrap_or_default().to_string_lossy();
@@ -848,6 +1124,221 @@ fn short_project_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_rows_keep_to_the_width_of_the_card() {
+        use egui::{Pos2, Rect, Shape, vec2};
+        use oxy_core::document::{UiElement, UiTextAlign};
+        fn find(shape: &Shape, label: &str) -> Option<Rect> {
+            match shape {
+                Shape::Text(text) if text.galley.text() == label => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, label)),
+                _ => None,
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let mut element = UiElement {
+            size: [520., 56.],
+            text_align: UiTextAlign::Center,
+            text_size: Some(48.),
+            ..Default::default()
+        };
+        // The rows laid out `width` points wide: the width they take and where the label, the
+        // px choice and the px field are drawn.
+        let mut rows = |width: f32| {
+            let mut used = 0.;
+            let mut output = None;
+            for _ in 0..2 {
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800., 600.))),
+                    ..Default::default()
+                };
+                output = Some(ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.allocate_ui(vec2(width, 500.), |ui| {
+                            let column = super::ui_label_column(ui);
+                            super::ui_text_rows(ui, column, &mut element);
+                            used = ui.min_rect().width();
+                        });
+                    });
+                }));
+            }
+            let output = output.unwrap();
+            let at = |label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| find(&shape.shape, label))
+                    .unwrap_or_else(|| panic!("{label} not drawn {width} points wide"))
+            };
+            (used, at("Tamanho do texto"), at("px"), at("48"))
+        };
+        let same_line = |a: Rect, b: Rect| (a.center().y - b.center().y).abs() < 4.;
+        // Wide, as in the prototype: one row, past the label column.
+        let (used, label, choice, field) = rows(360.);
+        assert!(used <= 360.5, "{used}");
+        assert!(same_line(label, choice) && same_line(label, field));
+        // The default panel: the px field goes under the choice, in the field column.
+        let (used, label, choice, field) = rows(260.);
+        assert!(used <= 260.5, "{used}");
+        assert!(
+            same_line(label, choice) && field.top() > label.bottom(),
+            "{field:?}"
+        );
+        assert!(field.left() > label.right(), "{field:?}");
+        // Narrow: the label over the choice and the field.
+        let (used, label, choice, field) = rows(170.);
+        assert!(used <= 170.5, "{used}");
+        assert!(choice.top() > label.bottom() && same_line(choice, field));
+    }
+
+    #[test]
+    fn background_rows_keep_to_the_width_of_the_card() {
+        use egui::{Pos2, Rect, Shape, vec2};
+        use oxy_core::document::{Background, SceneKind};
+        fn drawn(shape: &Shape, label: &str) -> bool {
+            match shape {
+                Shape::Text(text) => text.galley.text() == label,
+                Shape::Vec(shapes) => shapes.iter().any(|shape| drawn(shape, label)),
+                _ => false,
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        for (kind, background, hex) in [
+            (SceneKind::ThreeD, Some(Background::Sky), None),
+            (SceneKind::ThreeD, None, Some("#111112")),
+            (
+                SceneKind::TwoD,
+                Some(Background::Color([0.25, 0.5, 0.75, 1.])),
+                Some("#4080BF"),
+            ),
+        ] {
+            for width in [360., 260., 170.] {
+                let mut used = 0.;
+                let mut output = None;
+                for _ in 0..2 {
+                    let input = egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800., 600.))),
+                        ..Default::default()
+                    };
+                    output = Some(ctx.run(input, |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            ui.allocate_ui(vec2(width, 500.), |ui| {
+                                assert_eq!(super::background_rows(ui, kind, background), None);
+                                used = ui.min_rect().width();
+                            });
+                        });
+                    }));
+                }
+                let shapes = output.unwrap().shapes;
+                let shows = |label: &str| shapes.iter().any(|s| drawn(&s.shape, label));
+                assert!(
+                    used <= width + 0.5,
+                    "{kind:?} {background:?}: {used} > {width}"
+                );
+                assert!(shows("Fundo"));
+                // The sky is the default of a 3D scene: no color and nothing to reset.
+                assert_eq!(shows("Padrão"), hex.is_some(), "{kind:?} {background:?}");
+                if let Some(hex) = hex
+                    && width >= 260.
+                {
+                    assert!(shows(hex), "{hex} at {width}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn background_rows_answer_the_background_clicked() {
+        use egui::{Pos2, Rect, Shape, vec2};
+        use oxy_core::document::{Background, SceneKind};
+        // Every place `label` is drawn, top first.
+        fn drawn(output: &egui::FullOutput, label: &str) -> Vec<Pos2> {
+            fn find(shape: &Shape, label: &str, found: &mut Vec<Pos2>) {
+                match shape {
+                    Shape::Text(text) if text.galley.text() == label => {
+                        found.push(text.pos + text.galley.size() * 0.5)
+                    }
+                    Shape::Vec(shapes) => shapes.iter().for_each(|s| find(s, label, found)),
+                    _ => {}
+                }
+            }
+            let mut found = Vec::new();
+            for shape in &output.shapes {
+                find(&shape.shape, label, &mut found);
+            }
+            found.sort_by(|a, b| a.y.total_cmp(&b.y));
+            found
+        }
+        let frame = |ctx: &egui::Context, kind, current, events| {
+            let mut chosen = None;
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800., 600.))),
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.allocate_ui(vec2(260., 500.), |ui| {
+                        chosen = super::background_rows(ui, kind, current);
+                    });
+                });
+            });
+            (output, chosen)
+        };
+        // A press and a release on `at`: what the rows answered on either.
+        let click = |ctx: &egui::Context, kind, current, at: Pos2| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let events = vec![egui::Event::PointerMoved(at), button(true)];
+            let (_, pressed) = frame(ctx, kind, current, events);
+            let (_, released) = frame(ctx, kind, current, vec![button(false)]);
+            pressed.or(released)
+        };
+        let color = Some(Background::Color([0.25, 0.5, 0.75, 1.]));
+        // Padrão: the sky in a 3D scene, none (the dark color) in a 2D one.
+        for (kind, expected) in [
+            (SceneKind::ThreeD, Some(Background::Sky)),
+            (SceneKind::TwoD, None),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply(&ctx);
+            let (output, _) = frame(&ctx, kind, color, vec![]);
+            let reset = drawn(&output, "Padrão")[0];
+            assert_eq!(click(&ctx, kind, color, reset), Some(expected), "{kind:?}");
+        }
+        // From the sky, Cor starts at its horizon.
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let sky = Some(Background::Sky);
+        let (output, _) = frame(&ctx, SceneKind::ThreeD, sky, vec![]);
+        let combo = drawn(&output, "Céu da OXY")[0];
+        assert_eq!(click(&ctx, SceneKind::ThreeD, sky, combo), None);
+        let (output, _) = frame(&ctx, SceneKind::ThreeD, sky, vec![]);
+        let item = drawn(&output, "Cor")[0];
+        assert_eq!(
+            click(&ctx, SceneKind::ThreeD, sky, item),
+            Some(Some(Background::Color(oxy_render::sky::HORIZON)))
+        );
+        // In 2D the sky is offered but cannot be chosen.
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let (output, _) = frame(&ctx, SceneKind::TwoD, color, vec![]);
+        assert!(drawn(&output, "Céu da OXY").is_empty());
+        let combo = drawn(&output, "Cor")[0];
+        assert_eq!(click(&ctx, SceneKind::TwoD, color, combo), None);
+        let (output, _) = frame(&ctx, SceneKind::TwoD, color, vec![]);
+        let item = drawn(&output, "Céu da OXY")[0];
+        assert_eq!(click(&ctx, SceneKind::TwoD, color, item), None);
+    }
+
     #[test]
     fn project_path_shows_only_its_folder_and_file() {
         let path = std::path::Path::new("C:/Users/nome/Documents/Jogo/project.oxy.json");

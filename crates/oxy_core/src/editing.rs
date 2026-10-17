@@ -1,5 +1,8 @@
 //! Reversible editing rules, independent of widgets and runtime input.
-use crate::document::*;
+use crate::{
+    document::*,
+    graph::{self, Reference},
+};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::{HashMap, HashSet};
 
@@ -9,7 +12,7 @@ pub fn blank_project(name: &str, kind: SceneKind) -> Result<Project, String> {
         return Err("Informe um nome para o projeto.".into());
     }
     let mut project = Project::new(name.trim());
-    let scene = Scene::new(
+    let scene = new_scene(
         if kind == SceneKind::TwoD {
             "Cena 2D"
         } else {
@@ -23,7 +26,20 @@ pub fn blank_project(name: &str, kind: SceneKind) -> Result<Project, String> {
     Ok(project)
 }
 
+/// A scene as people and agents create it: empty, with the background of its kind
+/// ([`Background::default_for`]), the sky for a 3D scene.
+pub fn new_scene(name: &str, kind: SceneKind) -> Scene {
+    let mut scene = Scene::new(name, kind);
+    scene.background = Background::default_for(kind);
+    scene
+}
+
 pub fn duplicate_scene(project: &mut Project, id: &str) -> Result<Id, String> {
+    duplicate_scene_mapped(project, id).map(|(scene, _)| scene)
+}
+/// [`duplicate_scene`] with the IDs the copy took: the scene's, and each object, node and
+/// animation of it to its copy.
+pub fn duplicate_scene_mapped(project: &mut Project, id: &str) -> Result<(Id, CopyMap), String> {
     let mut scene = project.scene(id).ok_or("Cena não encontrada")?.clone();
     let new_scene = new_id();
     let mut map: HashMap<_, _> = scene
@@ -32,31 +48,32 @@ pub fn duplicate_scene(project: &mut Project, id: &str) -> Result<Id, String> {
         .map(|e| (e.id.clone(), new_id()))
         .collect();
     map.insert(scene.id.clone(), new_scene.clone());
-    remap_entities(&mut scene.entities, &map)?;
+    let map = remap_entities(&mut scene.entities, &map)?;
     scene.id = new_scene.clone();
     scene.name.push_str(" (cópia)");
     project.scenes.push(scene);
-    Ok(new_scene)
+    Ok((new_scene, map))
 }
 
+/// The logic nodes of the scenes and models that name the scene `id`, as "Scope → Object →
+/// node label". A parameter that a connected input replaces names nothing: the input decides.
 pub fn scene_references(project: &Project, id: &str) -> Vec<String> {
-    project
-        .scenes
-        .iter()
-        .map(|s| (s.name.as_str(), s.entities.as_slice()))
-        .chain(
-            project
-                .assets
+    crate::input_actions::every_entity(project)
+        .flat_map(|(scope, e)| {
+            e.graph
+                .nodes
                 .iter()
-                .filter_map(|a| a.model.as_deref().map(|m| (a.name.as_str(), m))),
-        )
-        .flat_map(|(scope, entities)| {
-            entities.iter().flat_map(move |e| {
-                e.graph.nodes.iter().filter(move |n| {
-                    n.operation == "action.scene"
-                        && matches!(n.params.get("scene"), Some(Value::Text(target)) if target==id)
-                }).map(move |_| format!("{scope} → {} → Mudar de cena", e.name))
-            })
+                .filter(move |n| {
+                    graph::node_references(n).any(|(param, reference, value)| {
+                        reference == Reference::Scene
+                            && matches!(value, Value::Text(target) if target == id)
+                            && !e.graph.input_connected(&n.id, param.id)
+                    })
+                })
+                .filter_map(move |n| {
+                    let label = graph::definition(&n.operation)?.label;
+                    Some(format!("{scope} → {} → {label}", e.name))
+                })
         })
         .collect()
 }
@@ -79,6 +96,25 @@ pub fn delete_scene(project: &mut Project, id: &str) -> Result<(), String> {
         return Err("Escolha outra cena inicial do jogo antes de excluir esta cena.".into());
     }
     project.scenes.retain(|s| s.id != id);
+    // What still names the scene is a parameter that a connected input replaces: it goes back
+    // to its default, so the project keeps no broken reference.
+    let holders = project
+        .scenes
+        .iter_mut()
+        .map(|s| &mut s.entities)
+        .chain(project.assets.iter_mut().filter_map(|a| a.model.as_mut()));
+    for n in holders.flatten().flat_map(|e| &mut e.graph.nodes) {
+        let unused: Vec<_> = graph::node_references(n)
+            .filter(|(_, reference, value)| {
+                *reference == Reference::Scene
+                    && matches!(value, Value::Text(target) if target == id)
+            })
+            .map(|(param, ..)| param)
+            .collect();
+        for param in unused {
+            n.params.insert(param.id.into(), param.default.clone());
+        }
+    }
     Ok(())
 }
 
@@ -227,18 +263,19 @@ pub const DUPLICATE_OFFSET: [f32; 3] = [0.5, 0., 0.];
 pub const MAX_DUPLICATES: usize = 100;
 
 pub fn duplicate_selection(scene: &mut Scene, ids: &[Id]) -> Result<Vec<Id>, String> {
-    duplicate_repeated(scene, ids, DUPLICATE_OFFSET, 1)
+    duplicate_repeated(scene, ids, DUPLICATE_OFFSET, 1).map(|(roots, _)| roots)
 }
 
 /// Duplicates the selection `count` times, copy k (from 1) moved by k × `offset` from the
 /// original in its parent's space, keyframes that animate it included. Answers the new roots,
-/// copy after copy: with two roots, the first copy of each, then the second of each…
+/// copy after copy: with two roots, the first copy of each, then the second of each…; and,
+/// for each copy, the IDs it took: each object, node and animation copied to its copy.
 pub fn duplicate_repeated(
     scene: &mut Scene,
     ids: &[Id],
     offset: [f32; 3],
     count: usize,
-) -> Result<Vec<Id>, String> {
+) -> Result<(Vec<Id>, Vec<CopyMap>), String> {
     if !offset.iter().all(|v| v.is_finite()) {
         return Err("O deslocamento das cópias precisa de números finitos.".into());
     }
@@ -256,10 +293,11 @@ pub fn duplicate_repeated(
         .cloned()
         .collect();
     let mut created = Vec::with_capacity(roots.len() * count);
+    let mut maps = Vec::with_capacity(count);
     for copy in 1..=count {
         let mut copies = originals.clone();
         let map: HashMap<_, _> = copies.iter().map(|e| (e.id.clone(), new_id())).collect();
-        remap_entities(&mut copies, &map)?;
+        let map = remap_entities(&mut copies, &map)?;
         let delta = Vec3::from(offset) * copy as f32;
         for root in roots.iter().map(|id| &map[id]) {
             if let Some(entity) = copies.iter_mut().find(|e| e.id == *root) {
@@ -273,8 +311,9 @@ pub fn duplicate_repeated(
             created.push(root.clone());
         }
         scene.entities.extend(copies);
+        maps.push(map);
     }
-    Ok(created)
+    Ok((created, maps))
 }
 
 /// Whether the object's own animations move it, as the moving platform's does. Moving such an

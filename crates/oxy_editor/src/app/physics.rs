@@ -110,7 +110,7 @@ impl Editor {
                     "",
                     "platform_mode",
                     if animation {
-                        "Seguir animação"
+                        "Seguir animação ou lógica"
                     } else {
                         "Velocidade constante"
                     },
@@ -118,7 +118,7 @@ impl Editor {
                         ui.selectable_value(
                             &mut platform.mode,
                             PlatformMode::Animation,
-                            "Seguir animação",
+                            "Seguir animação ou lógica",
                         );
                         ui.selectable_value(
                             &mut platform.mode,
@@ -168,7 +168,7 @@ impl Editor {
                 );
                 crate::widgets::hint(
                     ui,
-                    "Transporta por translação. Rotações, mudança de escala e saltos de animação soltam o apoio com diagnóstico.",
+                    "Transporta quem está em cima, também quando a plataforma gira: o passageiro gira junto, e em primeira pessoa a câmera acompanha. Giros rápidos demais, mudança de escala e saltos de animação soltam o apoio com diagnóstico.",
                 );
             },
         );
@@ -634,8 +634,8 @@ impl Editor {
                 };
                 sub_section(ui, "character_basic", "Básico", |ui| {
                     ui.menu_button("Aplicar perfil de movimento", |ui| {
-                    for (profile, label) in [(MovementProfile::Direct, "Direto"), (MovementProfile::Parkour, "Parkour"), (MovementProfile::ChainedJumps, "Saltos encadeados")] {
-                        if ui.button(label).on_hover_text("Aplica valores iniciais editáveis. Preserva ações, vínculos e geometria; pode ser desfeito.").clicked() {
+                    for profile in MovementProfile::ALL {
+                        if ui.button(profile.label()).on_hover_text("Aplica valores iniciais editáveis. Preserva ações, vínculos e geometria; pode ser desfeito.").clicked() {
                             config.apply_profile(profile);
                             ui.close();
                         }
@@ -1335,7 +1335,7 @@ impl Editor {
                     toggle_row(
                         ui,
                         "Só em 1ª pessoa",
-                        "Oculta as peças abaixo apenas em primeira pessoa.",
+                        "Oculta as peças abaixo só em primeira pessoa e na câmera fixada nos olhos, até ela ser movida; desligado, em todos os modos.",
                         &mut rig.hide_first_person_only,
                     );
                     for (id, name) in &targets {

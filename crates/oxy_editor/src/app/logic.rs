@@ -1,13 +1,17 @@
-//! Lógica: the toolbar, the node inspector, input actions and the visual logic guide.
+//! Lógica: the toolbar, the node inspector, input actions, game variables and the visual
+//! logic guide.
+mod variables;
 use super::*;
 use crate::graph_ui::{catalog_docked, categories, graph_meta, operation_description};
 use crate::icons::{self, Icon};
 use oxy_core::graph::Graph;
 use oxy_core::input_actions;
+pub(super) use variables::value_text;
 
 #[derive(Default)]
 pub(super) struct LogicUi {
     pub inputs: bool,
+    variables: variables::VariablesUi,
     pub guide: bool,
     /// Guide page: empty for the first behavior, "recipe:N", "category:Name" or a node.
     pub topic: String,
@@ -15,6 +19,11 @@ pub(super) struct LogicUi {
     action_name: String,
     action_key: String,
     remove: Option<Id>,
+}
+impl LogicUi {
+    pub(super) fn variables_open(&self) -> bool {
+        self.variables.open
+    }
 }
 impl Editor {
     /// The toolbar, then the catalog and canvas of the selected object's graph.
@@ -191,6 +200,20 @@ impl Editor {
         if guide.clicked() {
             self.open_guide("");
         }
+        // Its label goes first, so the object's name keeps its room.
+        if icons::button(
+            &mut right,
+            Icon::Variables,
+            "Variáveis do jogo",
+            "Variáveis que valem para o jogo inteiro e progresso salvo.",
+            false,
+            names && rect.width() >= 900.,
+        )
+        .clicked()
+        {
+            self.pause();
+            self.logic_ui.variables.show();
+        }
         if icons::button(
             &mut right,
             Icon::Keyboard,
@@ -291,6 +314,9 @@ impl Editor {
     pub(super) fn logic_dialogs(&mut self, ctx: &egui::Context) {
         if self.logic_ui.inputs {
             self.input_actions_dialog(ctx);
+        }
+        if self.logic_ui.variables.open {
+            self.variables_dialog(ctx);
         }
         if self.logic_ui.guide {
             self.guide_ui(ctx);
@@ -1016,5 +1042,5 @@ fn key_choice(ui: &mut egui::Ui, key: &mut String, salt: impl std::hash::Hash) {
                 ui.selectable_value(key,candidate.name().into(),crate::labels::key(candidate.name()));
             }
         }});
-    }).response.on_hover_text("Tecla que aciona este vínculo. Escape libera o jogo; F3 pertence ao diagnóstico do player.");
+    }).response.on_hover_text("Tecla que aciona este vínculo. Escape abre o menu de pausa do jogo, quando a cena tem um, ou pausa e libera o jogo; F3 pertence ao diagnóstico do player.");
 }

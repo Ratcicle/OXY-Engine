@@ -159,6 +159,7 @@ impl eframe::App for MeshPlayerQa {
 #[ignore = "Run after native_final_mesh_workflow; opens isolated inactive WGPU player"]
 fn native_player_final_authored_mesh() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
+    super::isolate_progress();
     let source = std::env::var_os("OXY_NATIVE_MESH_PROJECT")
         .map(PathBuf::from)
         .unwrap_or_else(|| oxy_core::qa::output_dir("v0.2.1/m7/full-flow/project"));

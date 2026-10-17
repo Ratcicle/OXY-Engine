@@ -20,6 +20,8 @@ if (!$GraphicsOnly) {
         @('oxy_editor','native_movement_scale_v030'),
         @('oxy_player','native_player_movement_v030'),
         @('oxy_editor','native_input_guide_workflow'),
+        @('oxy_editor','native_game_variables_workflow'),
+        @('oxy_editor','native_game_pause_workflow'),
         @('oxy_editor','native_mesh_foundation_workflow'),
         @('oxy_editor','native_direct_modeling_v021_workflow'),
         @('oxy_editor','native_basic_modeling_workflow'),
@@ -32,7 +34,9 @@ if (!$GraphicsOnly) {
         @('oxy_editor','native_editor_workflow'),
         @('oxy_editor','native_portable_home_workflow'),
         @('oxy_editor','native_agents_live_channel'),
+        @('oxy_editor','native_export_workflow'),
         @('oxy_player','native_player_portable_workflow'),
+        @('oxy_player','native_player_game_pause_workflow'),
         @('oxy_player','native_player_final_authored_mesh')
     )
 }
@@ -50,6 +54,11 @@ foreach ($check in $checks) {
     $test = $check[1]
     if ($test -eq $From) { $started = $true }
     if (!$started) { continue }
+    if ($test -eq 'native_export_workflow') {
+        # The editor exports with the player next to it: target/release/oxy_player.exe, current.
+        & (Join-Path $PSScriptRoot 'cargo.ps1') build --release --locked -p oxy_player
+        if ($LASTEXITCODE -ne 0) { throw "Falhou: build do oxy_player para $test" }
+    }
     $arguments = @('test','--release','--locked','-p',$crate,$test,'--','--ignored','--nocapture')
     & (Join-Path $PSScriptRoot 'cargo.ps1') @arguments 2>&1 | Tee-Object -FilePath (Join-Path $workspace "artifacts/v021-final-$test.log")
     if ($LASTEXITCODE -ne 0) { throw "Falhou: $crate / $test" }

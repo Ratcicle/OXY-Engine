@@ -1,7 +1,9 @@
 //! Human-readable choices preserve stable identifiers in graph parameters.
 use oxy_core::document::{AssetKind, Id, Project, Scene, Value};
-use oxy_core::graph::{Node, ParamDef};
+use oxy_core::graph::{Node, OperationDef, ParamDef, Reference, reference};
+use oxy_core::variables::{self, GameVariable};
 use std::collections::{BTreeMap, BTreeSet};
+use std::mem::discriminant;
 
 pub fn value_editor(
     ui: &mut egui::Ui,
@@ -147,14 +149,41 @@ fn enum_choice(
 /// some definitions carry in their label.
 pub(super) fn param_label(operation: &str, param: &ParamDef) -> &'static str {
     match (operation, param.id) {
-        ("action.animation", "clip") => "Animação",
-        ("action.sound", "asset") => "Áudio",
-        ("action.scene", "scene") => "Cena de destino",
         ("action.component", "component") => "Componente",
-        ("math.binary", "operator") => "Operação",
         ("condition.compare", "operator") => "Comparação",
         _ => param.label,
     }
+}
+
+/// What the picker of a parameter chosen by name (a scene, an audio, a clip, an input action)
+/// shows while the input of the same id is connected, as Mudar de cena's scene with Cena atual
+/// wired in: the input decides the value. `None` for the other parameters.
+pub(super) fn connected_choice(operation: &OperationDef, param: &ParamDef) -> Option<String> {
+    let input = operation.inputs.iter().find(|port| port.id == param.id)?;
+    matches!(
+        reference(operation.id, param),
+        Some(Reference::Scene | Reference::Audio | Reference::Clip | Reference::InputAction)
+    )
+    .then(|| format!("Usando a entrada {}", input.label))
+}
+
+/// A game variable in its picker: "Nome · Tipo".
+fn variable_choice(variable: &GameVariable) -> String {
+    format!(
+        "{} · {}",
+        variable.name,
+        oxy_core::graph::value_type(&variable.value).label()
+    )
+}
+
+/// The game variable `node` names, when the project has it.
+fn named_variable<'a>(node: &Node, project: &'a Project) -> Option<&'a GameVariable> {
+    let operation = oxy_core::graph::definition(&node.operation)?;
+    operation
+        .params
+        .iter()
+        .find(|param| reference(operation.id, param) == Some(Reference::Variable))
+        .and_then(|param| variables::get(project, node.text(param.id)))
 }
 
 fn number_text(value: f64) -> String {
@@ -197,7 +226,11 @@ pub(super) fn param_summary(
             .iter()
             .find(|surface| &surface.id == id)
             .map_or_else(|| "superfície removida".into(), |s| s.name.clone()),
-        Value::Text(text) if text.is_empty() => "—".into(),
+        Value::Text(text) if text.is_empty() => {
+            oxy_core::graph::empty_choice(&node.operation, param.id)
+                .unwrap_or("—")
+                .into()
+        }
         Value::Text(text) => {
             if let Some(options) = oxy_core::graph::choices(&node.operation, param.id) {
                 return Some(
@@ -208,21 +241,21 @@ pub(super) fn param_summary(
                         .to_owned(),
                 );
             }
-            match (node.operation.as_str(), param.id) {
-                ("action.animation", "clip") => context
+            match reference(&node.operation, param) {
+                Some(Reference::Clip) => context
                     .scene
                     .entities
                     .iter()
                     .flat_map(|entity| entity.clips.iter())
                     .find(|clip| &clip.id == text)
                     .map_or_else(|| "animação removida".into(), |clip| clip.name.clone()),
-                ("action.sound", "asset") => context
+                Some(Reference::Audio) => context
                     .project
                     .assets
                     .iter()
                     .find(|asset| &asset.id == text)
                     .map_or_else(|| "áudio removido".into(), |asset| asset.name.clone()),
-                ("action.scene", "scene") => context
+                Some(Reference::Scene) => context
                     .project
                     .scenes
                     .iter()
@@ -230,16 +263,16 @@ pub(super) fn param_summary(
                     .map_or_else(|| "cena removida".into(), |scene| scene.name.clone()),
                 // The key goes in parentheses: the action name alone stays the name of
                 // its field in Ações de entrada.
-                ("event.input" | "input.read", "action") => {
-                    match context.project.input_bindings.get(text) {
-                        Some(key) => format!(
-                            "{} ({})",
-                            oxy_core::input_actions::label(context.project, text),
-                            crate::labels::key(key)
-                        ),
-                        None => "ação removida".into(),
-                    }
-                }
+                Some(Reference::InputAction) => match context.project.input_bindings.get(text) {
+                    Some(key) => format!(
+                        "{} ({})",
+                        oxy_core::input_actions::label(context.project, text),
+                        crate::labels::key(key)
+                    ),
+                    None => "ação removida".into(),
+                },
+                Some(Reference::Variable) => variables::get(context.project, text)
+                    .map_or_else(|| "variável removida".into(), |v| v.name.clone()),
                 _ => text.clone(),
             }
         }
@@ -283,8 +316,8 @@ pub(super) fn parameter_editor(
             node.params.insert(param.id.into(), value);
             return;
         }
-        match (node.operation.as_str(), param.id) {
-            ("action.animation", "clip") => {
+        match reference(&node.operation, param) {
+            Some(Reference::Clip) => {
                 let choices: Vec<_> = context
                     .scene
                     .entities
@@ -296,51 +329,60 @@ pub(super) fn parameter_editor(
                     })
                     .collect();
                 let changed = named_choice(ui, selected, &choices, salt.clone());
-                if changed
-                    && !context.target_connected
-                    && let Some(owner) = context
-                        .scene
-                        .entities
-                        .iter()
-                        .find(|entity| entity.clips.iter().any(|clip| clip.id == *selected))
-                {
-                    node.params
-                        .insert("target".into(), Value::Object(Some(owner.id.clone())));
-                }
-                ui.small(if context.target_connected {
-                    "O objeto recebido pela porta deve conter a animação escolhida."
-                } else {
-                    "Escolher uma animação define também o objeto que a contém."
-                });
-                if let Some(target) = target
-                    && !context.target_connected
-                    && !changed
-                    && !selected.is_empty()
-                    && !context
-                        .scene
-                        .entity(target)
-                        .is_some_and(|entity| entity.clips.iter().any(|clip| clip.id == *selected))
-                {
-                    ui.colored_label(
-                        crate::theme::ERROR,
-                        "A animação selecionada não pertence ao objeto atual.",
-                    );
+                // On a node that acts on an object, picking a clip also picks its object.
+                if node.params.contains_key("target") {
+                    if changed
+                        && !context.target_connected
+                        && let Some(owner) = context
+                            .scene
+                            .entities
+                            .iter()
+                            .find(|entity| entity.clips.iter().any(|clip| clip.id == *selected))
+                    {
+                        node.params
+                            .insert("target".into(), Value::Object(Some(owner.id.clone())));
+                    }
+                    ui.small(if context.target_connected {
+                        "O objeto recebido pela porta deve conter a animação escolhida."
+                    } else {
+                        "Escolher uma animação define também o objeto que a contém."
+                    });
+                    if let Some(target) = target
+                        && !context.target_connected
+                        && !changed
+                        && !selected.is_empty()
+                        && !context.scene.entity(target).is_some_and(|entity| {
+                            entity.clips.iter().any(|clip| clip.id == *selected)
+                        })
+                    {
+                        ui.colored_label(
+                            crate::theme::ERROR,
+                            "A animação selecionada não pertence ao objeto atual.",
+                        );
+                    }
                 }
                 specialized = true;
             }
-            ("action.sound", "asset") => {
-                let choices: Vec<_> = context
-                    .project
-                    .assets
-                    .iter()
-                    .filter(|asset| asset.kind == AssetKind::Audio)
-                    .map(|asset| (asset.id.clone(), asset.name.clone()))
+            Some(Reference::Audio) => {
+                // Parar som's empty audio is a choice of its own: every loop of the channel.
+                let empty = oxy_core::graph::empty_choice(&node.operation, param.id)
+                    .map(|label| (String::new(), label.to_owned()));
+                let choices: Vec<_> = empty
+                    .into_iter()
+                    .chain(
+                        context
+                            .project
+                            .assets
+                            .iter()
+                            .filter(|asset| asset.kind == AssetKind::Audio)
+                            .map(|asset| (asset.id.clone(), asset.name.clone())),
+                    )
                     .collect();
                 named_choice(ui, selected, &choices, salt.clone());
                 ui.small("Importe um WAV pela biblioteca para adicioná-lo aqui.");
                 specialized = true;
             }
-            ("action.scene", "scene") => {
+            Some(Reference::Scene) => {
                 let choices: Vec<_> = context
                     .project
                     .scenes
@@ -350,7 +392,7 @@ pub(super) fn parameter_editor(
                 named_choice(ui, selected, &choices, salt.clone());
                 specialized = true;
             }
-            ("event.input" | "input.read", "action") => {
+            Some(Reference::InputAction) => {
                 let choices: Vec<_> = context
                     .project
                     .input_bindings
@@ -369,7 +411,30 @@ pub(super) fn parameter_editor(
                 named_choice(ui, selected, &choices, salt.clone());
                 specialized = true;
             }
-            ("event.animation", "marker") => {
+            Some(Reference::Variable) => {
+                let choices: Vec<_> = context
+                    .project
+                    .variables
+                    .iter()
+                    .map(|variable| (variable.id.clone(), variable_choice(variable)))
+                    .collect();
+                // On a node that writes the variable, the new value takes its type, as
+                // Alterar atributo does.
+                if named_choice(ui, selected, &choices, salt.clone())
+                    && let Some(variable) = variables::get(context.project, selected)
+                    && node
+                        .params
+                        .get("value")
+                        .is_some_and(|value| discriminant(value) != discriminant(&variable.value))
+                {
+                    node.params.insert("value".into(), variable.value.clone());
+                }
+                if choices.is_empty() {
+                    ui.small("Crie variáveis em Variáveis do jogo, na barra da Lógica.");
+                }
+                specialized = true;
+            }
+            Some(Reference::Marker) => {
                 let markers: BTreeSet<_> = context
                     .scene
                     .entities
@@ -396,7 +461,7 @@ pub(super) fn parameter_editor(
                 );
                 specialized = true;
             }
-            (_, "attribute") => {
+            Some(Reference::Attribute) => {
                 let attributes: BTreeMap<_, _> = context
                     .scene
                     .entities
@@ -440,7 +505,11 @@ pub(super) fn parameter_editor(
         }
     }
     if !specialized {
-        if context.any_type {
+        // The new value of a chosen game variable has the variable's type: no other type to
+        // pick, unless it was given another one.
+        let variable = named_variable(node, context.project).filter(|_| param.id == "value");
+        let follows = variable.is_some_and(|v| discriminant(&v.value) == discriminant(&value));
+        if context.any_type && !follows {
             let kind = match value {
                 Value::Number(_) => 0,
                 Value::Text(_) => 1,
@@ -490,14 +559,36 @@ pub(super) fn parameter_editor(
                     _ => Value::Object(None),
                 };
             }
+            if let Some(variable) = variable {
+                ui.colored_label(
+                    crate::theme::ERROR,
+                    format!(
+                        "{} guarda {}: escolha esse tipo.",
+                        variable.name,
+                        variables::kind(&variable.value)
+                    ),
+                );
+            }
         }
-        value_editor(
-            ui,
-            &mut value,
-            context.objects,
-            &context.project.surfaces,
-            salt,
-        );
+        match (param.range, &mut value) {
+            // Dragging and typing stay within what the game takes; a value an older project
+            // holds outside shows as it is until edited.
+            (Some(range), Value::Number(number)) => {
+                ui.add(
+                    egui::DragValue::new(number)
+                        .speed(0.1)
+                        .range(range.min..=range.max.unwrap_or(f64::INFINITY))
+                        .clamp_existing_to_range(false),
+                );
+            }
+            _ => value_editor(
+                ui,
+                &mut value,
+                context.objects,
+                &context.project.surfaces,
+                salt,
+            ),
+        }
     }
     node.params.insert(param.id.into(), value);
 }

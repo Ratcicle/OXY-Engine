@@ -66,6 +66,15 @@ pub fn same_project(a: &Path, b: &Path) -> bool {
     canonical(a) == canonical(b)
 }
 
+/// The answer that never came: the connection may still deliver it, after the next request.
+pub const NO_ANSWER: &str = "O editor não respondeu.";
+
+/// How long the editor may take to answer `method`: a little more than it gives itself (60
+/// seconds, 300 for an export, which copies and runs the game before it answers).
+fn answer_timeout(method: &str) -> Duration {
+    Duration::from_secs(if method == "export" { 330 } else { 90 })
+}
+
 pub struct LiveEditor {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
@@ -77,7 +86,7 @@ impl LiveEditor {
         let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
             .map_err(|_| "O editor não está respondendo (pode ter sido fechado).".to_owned())?;
         stream
-            .set_read_timeout(Some(Duration::from_secs(90)))
+            .set_read_timeout(Some(answer_timeout("")))
             .map_err(|e| e.to_string())?;
         let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(stream);
@@ -100,6 +109,10 @@ impl LiveEditor {
     pub fn request(&mut self, method: &str, params: Json) -> Result<Json, String> {
         let id = self.next_id;
         self.next_id += 1;
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(answer_timeout(method)))
+            .map_err(|e| e.to_string())?;
         writeln!(
             self.writer,
             "{}",
@@ -110,7 +123,7 @@ impl LiveEditor {
         let read = self
             .reader
             .read_line(&mut line)
-            .map_err(|_| "O editor não respondeu.".to_owned())?;
+            .map_err(|_| NO_ANSWER.to_owned())?;
         if read == 0 {
             return Err("A conexão com o editor caiu.".into());
         }

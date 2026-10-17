@@ -7,6 +7,7 @@ mod camera_authoring;
 mod cameras;
 mod cuts;
 mod direct;
+mod export;
 mod final_flow;
 mod input_guide;
 mod inspector;
@@ -16,11 +17,13 @@ mod modeling;
 mod movement;
 mod movement_lab;
 mod painting;
+mod pause;
 mod physics;
 mod portable;
 mod recipes;
 mod spatial;
 mod ux;
+mod variables;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use oxy_core::document::{Id, SceneKind, new_id};
 use std::{
@@ -172,6 +175,10 @@ struct NativeQa {
     paint_uploads: u64,
     held_until: Option<(Key, Instant)>,
     click_candidate: Option<(&'static str, Pos2, Instant)>,
+    /// Whether the game held the cursor in the last frame.
+    cursor_captured: bool,
+    /// The editor sees its window without focus, as when the person works in another window.
+    unfocused: bool,
 }
 
 impl NativeQa {
@@ -484,6 +491,8 @@ impl NativeQa {
             paint_uploads: 0,
             held_until: None,
             click_candidate: None,
+            cursor_captured: false,
+            unfocused: false,
         }
     }
 
@@ -667,6 +676,15 @@ impl NativeQa {
         if label.starts_with("agent_") {
             return self.check_agents(label);
         }
+        if label.starts_with("var_") {
+            return self.check_variables(label);
+        }
+        if label.starts_with("export_") {
+            return self.check_export(label);
+        }
+        if label.starts_with("pause_") {
+            return self.check_pause(label);
+        }
         let ensure = |condition: bool, message: &str| {
             if condition {
                 Ok(())
@@ -685,6 +703,7 @@ impl NativeQa {
                     "Abrir projeto",
                     "PROJETOS RECENTES",
                     "Projeto de exemplo",
+                    "OXY Parkour",
                 ] {
                     ensure(
                         self.surface.texts.iter().any(|t| t.text == label),
@@ -728,6 +747,26 @@ impl NativeQa {
                 ensure(
                     self.editor.state.project.scenes.len() == 3,
                     "Cópia perdeu cenas",
+                )
+            }
+            "home_parkour" => {
+                let project = &self.editor.state.project;
+                ensure(
+                    project.name == "OXY Parkour" && project.scenes.len() == 2,
+                    "O parkour não abriu",
+                )?;
+                let root = self.editor.root();
+                ensure(
+                    root.starts_with(std::env::temp_dir()),
+                    "O parkour não abriu como cópia",
+                )?;
+                ensure(
+                    project
+                        .assets
+                        .iter()
+                        .filter(|a| a.kind == oxy_core::document::AssetKind::Audio)
+                        .all(|a| root.join(&a.path).is_file()),
+                    "A cópia do parkour ficou sem os sons",
                 )
             }
             "home_recent" => ensure(
@@ -1465,8 +1504,9 @@ impl NativeQa {
                         .play
                         .runtime
                         .as_ref()
-                        .is_some_and(|runtime| runtime.paused),
-                "Jogo deveria pausar e liberar entrada",
+                        .is_some_and(|runtime| runtime.paused && !runtime.game_paused())
+                    && self.test_chip() == Some("Pausado"),
+                "Jogo deveria pausar e liberar entrada; sem menu de pausa, Esc pausa o teste",
             ),
             "stop_isolated" => ensure(
                 self.editor.play.runtime.is_none()
@@ -2169,11 +2209,11 @@ impl eframe::App for NativeQa {
             })
             .unwrap_or_default();
         input.events.extend(scripted);
-        input.focused = true;
+        input.focused = !self.unfocused;
         input.hovered_files.clear();
         input.dropped_files.clear();
         if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
-            viewport.focused = Some(true);
+            viewport.focused = Some(!self.unfocused);
         }
         self.editor.raw_input_hook(_ctx, input);
     }
@@ -2274,6 +2314,7 @@ impl eframe::App for NativeQa {
         self.editor.update(ctx, frame);
         self.camera_measurement_frame(camera_start.elapsed().as_secs_f64() * 1000.);
         self.surface = capture_surface(ctx);
+        self.cursor_captured = oxy_render::input::cursor_captured(ctx);
         if let Some((key, deadline)) = self.held_until {
             if Instant::now() < deadline {
                 ctx.request_repaint();

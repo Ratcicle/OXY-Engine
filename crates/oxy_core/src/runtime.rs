@@ -1,4 +1,31 @@
 //! Fixed-step, editor-independent execution of ordinary project documents.
+//!
+//! Runtime state has three lifetimes; a new field picks one and follows its rules:
+//! - Per run: survives `change_scene` and dies with the `Runtime` (Parar, a new player run).
+//!   The clock (`time`), activation serials, the host pause, logs and traces with their
+//!   counters, the host queues (`sounds`, `save_requests`, `scene_starts`, `recording`), the
+//!   quit request and `run`, the `RunState` (draws, copy counts, game variables, saved
+//!   progress, time spent in the game pause, music and volumes) that new run-wide state goes
+//!   into. `stop` resets `run`.
+//! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
+//!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
+//!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
+//!   stopped behaviors, area pairs, activations, hit leases, the game pause, the cursor shown
+//!   by logic and the effect loops (kept with the music in `run`, which `change_scene` ends).
+//! - Per object: the entries of per-scene structures keyed by an object, pruned in
+//!   `remove_object` when it goes (the cameras' lazily, at the next presentation), and the
+//!   run's counts of an object made during the run (see `forget_copies`).
+//!
+//! Two pauses are kept apart and may hold together: the host's (`paused`, the editor's Pausar
+//! and the player's window) stops everything, while the game's own (`game_paused`, set by
+//! logic or by Esc in a scene with a pause menu) freezes only the world. Gameplay clocks read
+//! `game_time`, which stands still in the game pause; `time` keeps running for input, traces
+//! and hosts.
+//!
+//! Anything whose order reaches events, tasks, logs, the recording or physics is walked in
+//! an order the scene fixes (scene order, as `emit` visits owners), a BTreeMap or a Vec,
+//! never in the order of a HashMap or HashSet. The state digest (`state_hash.rs`) reads every
+//! field that shapes the steps to come, so a new one goes there too or is left out on purpose.
 use crate::scene_view::{SceneEvaluation, SceneIndex, SceneView};
 use crate::{
     animation::AnimationPlayer,
@@ -14,14 +41,24 @@ type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
 mod cameras;
 pub use cameras::{CameraDebug, CameraPreview};
+mod audio_nodes;
 mod characters;
+mod game_nodes;
+mod math_nodes;
 mod movement_nodes;
+mod state_hash;
+mod transforms;
 pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
+pub use state_hash::{StateDifference, StateDigest, StatePart};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
 pub const MAX_NODE_WORK: usize = 1024;
+/// The longest Esperar sem bloquear waits, in seconds: a day.
+pub const MAX_WAIT: f64 = 86_400.;
+/// Save requests a host may leave queued before they are folded (see `request_save`).
+const MAX_SAVE_REQUESTS: usize = 64;
 
 #[derive(Clone, Debug, Default)]
 pub struct InputFrame {
@@ -66,6 +103,8 @@ pub enum RuntimeEvent {
         object: Id,
         marker: String,
     },
+    /// The game pause started (true) or ended.
+    Pause(bool),
 }
 #[derive(Clone, Debug)]
 pub struct NodeTrace {
@@ -100,6 +139,17 @@ pub struct Recording {
     pub movements: Vec<crate::character::MovementRecord>,
     /// Every object of each spawned copy.
     pub spawned: Vec<SpawnedObject>,
+    /// Each change of the game pause, scene changes ending one included: the new state.
+    pub pauses: Vec<bool>,
+    /// What logic changed in what plays (loops, stops, volumes). As with `Runtime::sounds`, a
+    /// scene that started and ended within a step leaves none of its effect loops: they ended
+    /// with it unheard. Its changes to the music and the volumes stay, since they go on. In a
+    /// step that changed scene, a loop started that no longer plays at its end, as an effect
+    /// loop started right before the change or a music the next scene replaced, was never
+    /// heard either: its start is left out.
+    pub audio: Vec<crate::audio::AudioChange>,
+    /// The object whose first Sair do jogo ran.
+    pub quit: Option<Id>,
 }
 #[derive(Clone, Debug)]
 struct Context {
@@ -108,6 +158,12 @@ struct Context {
     activation: u64,
     outputs: Arc<BTreeMap<(Id, String), Value>>,
     hits: Option<HitLease>,
+    /// While an event waits to run: the character whose trajectory it comes from, and which
+    /// one (see [`crate::character::CharacterState`]): the character of a movement event, the
+    /// one that crossed an area, a character's own step and input events. Teleporting that
+    /// character drops those events, since its old path no longer happened and its input for
+    /// the step is spent. Once the event runs it is cleared: the flow it starts is logic like
+    /// any other, and goes on, waits included, whoever is teleported later.
     trajectory: Option<(Id, u64)>,
 }
 #[derive(Clone, Debug)]
@@ -127,6 +183,60 @@ struct EventCatalog {
 struct BodyState {
     velocity: Vec3,
     grounded: bool,
+}
+/// Run-lifetime state: `change_scene` keeps it and `stop` resets it. The home of the seeded
+/// draws, the spawn counters, the game variables, the saved progress, the game-clock offset
+/// and what plays. The counts of an object made during the run go with it (see
+/// `Runtime::forget_copies`), and the effect loops with their scene.
+#[derive(Debug, Default)]
+pub(crate) struct RunState {
+    /// What Sortear número draws from, with the draws so far of each (owner, node): a node's
+    /// numbers depend on the seed and on that node alone. Definir semente aleatória sets the
+    /// seed and starts the counts over.
+    seed: u64,
+    rolls: BTreeMap<(Id, Id), u64>,
+    /// Copies made so far by each (owner, Criar cópia node), which name the IDs of the next
+    /// one (see `spawn_ids`). The seed plays no part.
+    spawns: BTreeMap<(Id, Id), u64>,
+    /// The game variables' values by (variable, key): the empty key is the variable's own
+    /// value, which starts at the declared one; a key never written reads the declared value.
+    variables: BTreeMap<(Id, String), Value>,
+    /// The saved progress as the host gave it, then as Salvar progresso and Apagar progresso
+    /// left it; Ler progresso salvo reads whether there is any.
+    save: crate::save::SaveSlot,
+    /// Seconds of `time` spent in the game pause, in every scene of the run: the game clock is
+    /// `time` minus them (see `Runtime::game_time`).
+    paused_for: f64,
+    /// The music, the effect loops and the volumes, which the hosts play.
+    audio: crate::audio::AudioState,
+    /// The (owner, node) actions whose failure no one read and the log already told.
+    failures_logged: BTreeSet<(Id, Id)>,
+}
+impl RunState {
+    /// A run's start: the draws from `seed`, every variable at its declared value.
+    fn new(project: &Project, seed: u64) -> Self {
+        Self {
+            seed,
+            variables: project
+                .variables
+                .iter()
+                .map(|v| ((v.id.clone(), String::new()), v.value.clone()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+/// How a host starts a [`Runtime`]. The default is [`Runtime::new`].
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeOptions {
+    /// Keep a [`Recording`] from the scene start logic on, as [`Runtime::recorded`] does.
+    pub record: bool,
+    /// What Sortear número draws from: hosts that play pass entropy, a headless run the seed
+    /// asked for, 0 by default. The same seed and inputs give the same draws.
+    pub seed: u64,
+    /// The progress saved by earlier runs, which starts the persistent game variables before
+    /// the scene start logic; none is a fresh install. Hosts read it from disk (see `save`).
+    pub save: Option<crate::save::SaveSlot>,
 }
 
 pub struct Runtime {
@@ -148,11 +258,26 @@ pub struct Runtime {
     /// the same step drops the rest: they belong to scenes that started and ended within the
     /// step, as in a scene that restarts itself as it starts until the work budget runs out.
     sounds_before_change: Option<usize>,
+    /// The same for the recording's audio changes.
+    audio_before_change: Option<usize>,
+    /// How many of the recording's audio changes came before this step.
+    audio_step_start: usize,
+    /// What Salvar progresso and Apagar progresso asked since the host last took them, oldest
+    /// first. Unlike sounds, scene changes and `stop` never drop them: they are the game's state.
+    pub save_requests: Vec<crate::save::SaveRequest>,
     /// Scenes started by `change_scene` (reloads included), oldest first, until a host takes them.
     pub scene_starts: Vec<Id>,
     /// Off unless the runtime was created with `recorded`.
     pub recording: Option<Recording>,
+    /// Sair do jogo ran: the player closes, the editor test stops, a simulation ends.
+    pub quit_requested: bool,
+    /// The run clock, which the game pause does not stop (see `game_time`).
     pub time: f64,
+    /// The game's own pause (see the module docs); a scene starts without it.
+    game_paused: bool,
+    /// Mostrar / esconder cursor showed the cursor: the mouse is free and turns no camera,
+    /// while the game runs on. A scene starts with the camera's own capture.
+    cursor_shown: bool,
     source: Project,
     accumulator: f32,
     pending_pressed: BTreeSet<String>,
@@ -178,20 +303,28 @@ pub struct Runtime {
     area_hits: HashMap<Id, HitLease>,
     serial: u64,
     stopped: bool,
+    run: RunState,
 }
 
 impl Runtime {
     pub fn new(project: &Project, scene_id: &str) -> Result<Self, String> {
-        Self::start(project, scene_id, None)
+        Self::with_options(project, scene_id, RuntimeOptions::default())
     }
     /// `new` with a `Recording`, kept from the scene start logic on.
     pub fn recorded(project: &Project, scene_id: &str) -> Result<Self, String> {
-        Self::start(project, scene_id, Some(Recording::default()))
+        Self::with_options(
+            project,
+            scene_id,
+            RuntimeOptions {
+                record: true,
+                ..Default::default()
+            },
+        )
     }
-    fn start(
+    pub fn with_options(
         project: &Project,
         scene_id: &str,
-        recording: Option<Recording>,
+        options: RuntimeOptions,
     ) -> Result<Self, String> {
         validate_project(project)?;
         if project.scene(scene_id).is_none() {
@@ -209,9 +342,15 @@ impl Runtime {
             traces_written: 0,
             sounds: Vec::new(),
             sounds_before_change: None,
+            audio_before_change: None,
+            audio_step_start: 0,
+            save_requests: Vec::new(),
             scene_starts: Vec::new(),
-            recording,
+            recording: options.record.then(Recording::default),
+            quit_requested: false,
             time: 0.0,
+            game_paused: false,
+            cursor_shown: false,
             source: project.clone(),
             accumulator: 0.0,
             pending_pressed: BTreeSet::new(),
@@ -237,12 +376,18 @@ impl Runtime {
             area_hits: HashMap::new(),
             serial: 0,
             stopped: false,
+            // Before the scene start logic, which may read the variables.
+            run: RunState::new(project, options.seed),
         };
+        if let Some(slot) = options.save {
+            runtime.load_save(slot);
+        }
         runtime.initialize_character_states()?;
         runtime.begin_camera_input(&InputFrame::default());
         runtime.emit(RuntimeEvent::SceneStart);
         let mut budget = MAX_NODE_WORK;
         runtime.process_tasks(&mut budget);
+        runtime.settle_audio_changes();
         Ok(runtime)
     }
     pub fn scene(&self) -> &Scene {
@@ -300,6 +445,65 @@ impl Runtime {
             self.waiting.len(),
         ]
     }
+    /// The run state as text, for the lifetime contract test
+    /// (tests/integration/runtime_lifetimes.rs).
+    #[doc(hidden)]
+    pub fn run_state_debug(&self) -> String {
+        format!("{:?}", self.run)
+    }
+    /// The per-scene structures holding anything, for the same test: none right after
+    /// `change_scene` into a scene without start logic, characters or cameras, nor after `stop`.
+    #[doc(hidden)]
+    pub fn scene_state_in_use(&self) -> Vec<&'static str> {
+        let InputFrame {
+            held,
+            pressed,
+            released,
+            movement,
+            look,
+            wheel,
+        } = &self.step_input;
+        [
+            ("graphs", self.graphs.is_empty()),
+            ("input_timeline", self.input_timeline.is_empty()),
+            ("pending_pressed", self.pending_pressed.is_empty()),
+            ("pending_released", self.pending_released.is_empty()),
+            ("pending_look", self.pending_look == [0.; 2]),
+            ("pending_wheel", self.pending_wheel == 0.),
+            (
+                "step_input",
+                held.is_empty()
+                    && pressed.is_empty()
+                    && released.is_empty()
+                    && *movement == [0.; 2]
+                    && *look == [0.; 2]
+                    && *wheel == 0.,
+            ),
+            (
+                "characters",
+                self.characters.states.is_empty() && self.characters.world.is_none(),
+            ),
+            (
+                "cameras",
+                self.cameras.worlds.is_none() && self.cameras.pose.is_none(),
+            ),
+            ("ready", self.ready.is_empty()),
+            ("waiting", self.waiting.is_empty()),
+            ("bodies", self.bodies.is_empty()),
+            ("animations", self.animations.is_empty()),
+            ("disabled_behaviors", self.disabled_behaviors.is_empty()),
+            ("overlap_pairs", self.overlap_pairs.is_empty()),
+            ("area_activations", self.area_activations.is_empty()),
+            ("damage_hits", self.damage_hits.is_empty()),
+            ("area_hits", self.area_hits.is_empty()),
+            ("game_paused", !self.game_paused),
+            ("cursor_shown", !self.cursor_shown),
+            ("effect_loops", self.run.audio.loops.is_empty()),
+        ]
+        .into_iter()
+        .filter_map(|(name, empty)| (!empty).then_some(name))
+        .collect()
+    }
     pub fn set_paused(&mut self, paused: bool) {
         self.input_timeline = Default::default();
         self.paused = paused;
@@ -309,16 +513,19 @@ impl Runtime {
         self.pending_look = [0.; 2];
         self.pending_wheel = 0.;
         self.characters.release_input();
+        self.cameras.settle();
         self.step_input = InputFrame::default();
         self.update_presentation(0.);
     }
     pub fn stop(&mut self) {
         self.stopped = true;
         self.set_paused(true);
+        self.graphs.clear();
         self.ready.clear();
         self.waiting.clear();
         self.sounds.clear();
         self.animations.clear();
+        self.disabled_behaviors.clear();
         self.area_hits.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -326,11 +533,56 @@ impl Runtime {
         self.bodies.clear();
         self.characters = Default::default();
         self.cameras = Default::default();
+        self.game_paused = false;
+        self.cursor_shown = false;
+        self.run = RunState::new(&self.source, 0);
     }
+    /// A click on an object or on its interface element. An element hidden, by itself or by a
+    /// group above it, takes no click, as a person could not click it: it is logged, as is a
+    /// click on an object of another scene. In the game pause only interface elements take
+    /// clicks.
     pub fn click(&mut self, entity: &str) {
-        if !self.paused && !self.stopped {
-            self.emit(RuntimeEvent::Click(entity.into()));
+        if self.paused || self.stopped {
+            return;
         }
+        if self.entity(entity).is_none() {
+            // An object the game removed is named as the project had it; a copy action.spawn
+            // has not made has no name, and its ID is not shown.
+            let name = [&self.project, &self.source]
+                .into_iter()
+                .flat_map(|project| &project.scenes)
+                .find_map(|s| s.entity(entity))
+                .map_or_else(|| "o objeto clicado".to_owned(), |e| e.name.clone());
+            let scene = self.scene().name.clone();
+            self.log(format!(
+                "Clique ignorado: {name} não está na cena atual ({scene})."
+            ));
+            return;
+        }
+        if let Some(e) = self.entity(entity).filter(|e| e.ui.is_some()) {
+            if !self.shown(e) {
+                let name = e.name.clone();
+                self.log(format!(
+                    "Clique ignorado: {name} está oculto (ele mesmo ou um grupo acima dele)."
+                ));
+                return;
+            }
+        } else if self.game_paused {
+            return;
+        }
+        self.emit(RuntimeEvent::Click(entity.into()));
+    }
+    /// Whether `entity` and every group above it are visible.
+    fn shown(&self, entity: &crate::document::Entity) -> bool {
+        let mut current = Some(entity);
+        for _ in 0..=self.scene().entities.len() {
+            let Some(e) = current else { return true };
+            if !e.visible {
+                return false;
+            }
+            current = e.parent.as_deref().and_then(|id| self.entity(id));
+        }
+        false
     }
     pub fn advance(&mut self, elapsed: f32, input: &InputFrame) {
         if self.stopped || self.paused {
@@ -347,7 +599,9 @@ impl Runtime {
         }
         self.pending_pressed.extend(input.pressed.iter().cloned());
         self.pending_released.extend(input.released.iter().cloned());
-        if self.cameras.accepts_look(self.scene(), &self.characters) {
+        // In the game pause and with the cursor shown the camera stands still; the wheel still
+        // reaches logic.
+        if !self.look_held() && self.cameras.accepts_look(self.scene(), &self.characters) {
             for axis in 0..2 {
                 if input.look[axis].is_finite() {
                     self.pending_look[axis] = (f64::from(self.pending_look[axis])
@@ -376,24 +630,41 @@ impl Runtime {
             };
             self.input_timeline
                 .sample(self.time + f64::from(FIXED_DT), &mut frame);
+            // A shown cursor is on the interface: its moves (timed ones included) turn nothing.
+            if self.cursor_shown {
+                frame.look = [0.; 2];
+            }
             crate::metrics::timed(
                 || self.fixed_step(&frame, &mut budget),
                 |c, ns| c.fixed_step_ns += ns,
             );
+            self.settle_audio_changes();
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
         }
         self.update_presentation(elapsed);
     }
+    /// One step. In the game pause only the clock, input events, logic and activations run:
+    /// the camera, Ao passo, movement, animations and areas wait, and so do waits, whose due
+    /// times are in game time. A pause that logic starts in the first logic phase skips the
+    /// world phase of that same step; one it ends takes effect on the next step.
     fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
         self.step_input = input.clone();
         self.query_work = 0;
         self.sounds_before_change = None;
-        crate::metrics::timed(|| self.begin_camera_input(input), |c, ns| c.input_ns += ns);
+        self.audio_before_change = None;
+        self.audio_step_start = self.recording.as_ref().map_or(0, |r| r.audio.len());
+        let paused = self.game_paused;
+        if !paused {
+            crate::metrics::timed(|| self.begin_camera_input(input), |c, ns| c.input_ns += ns);
+        }
         self.collect_activations();
         crate::metrics::count(|c| c.steps += 1);
         self.time += f64::from(FIXED_DT);
-        if self.event_used("event.step") {
+        self.run.audio.prune(self.time);
+        if paused {
+            self.run.paused_for += f64::from(FIXED_DT);
+        } else if self.event_used("event.step") {
             self.emit(RuntimeEvent::FixedStep);
         }
         for action in &input.pressed {
@@ -410,6 +681,10 @@ impl Runtime {
             }
         }
         crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
+        if paused || self.game_paused {
+            self.collect_activations();
+            return;
+        }
         let movement_input = self.step_input.clone();
         crate::metrics::timed(
             || self.move_controllers(&movement_input),
@@ -448,6 +723,18 @@ impl Runtime {
     ) -> Result<(), String> {
         self.input_timeline.push(event, self.time)
     }
+    /// Queues timed inputs in time order: all of them or, when one is refused, none.
+    pub fn queue_timed_inputs(
+        &mut self,
+        events: Vec<crate::input_timeline::TimedInput>,
+    ) -> Result<(), String> {
+        self.input_timeline.push_all(events, self.time)
+    }
+    /// The game time of the last queued timed input still waiting. A pause, a scene change or
+    /// a restart drops them.
+    pub fn timed_input_end(&self) -> Option<f64> {
+        self.input_timeline.last_at()
+    }
     /// Log lines written since the runtime started; the last `logs.len()` of them are in
     /// `logs`.
     pub fn logs_written(&self) -> u64 {
@@ -457,7 +744,7 @@ impl Runtime {
     pub fn traces_written(&self) -> u64 {
         self.traces_written
     }
-    fn log(&mut self, message: String) {
+    pub(crate) fn log(&mut self, message: String) {
         self.logs_written += 1;
         self.logs.push(message);
         if self.logs.len() > 500 {
@@ -578,6 +865,10 @@ impl Runtime {
                             && node.operation == "event.animation"
                             && node.text("marker") == marker
                     }
+                    RuntimeEvent::Pause(paused) => {
+                        node.operation == "event.pause"
+                            && node.text("when") == if *paused { "pause" } else { "resume" }
+                    }
                 };
                 if matches {
                     let (other, activation) = match &event {
@@ -616,12 +907,12 @@ impl Runtime {
                             .map(|s| (entity.id.clone(), s.trajectory)),
                         _ => None,
                     };
-                    let values = movement_nodes::event_values(&event, self.time)
+                    let values = movement_nodes::event_values(&event, self.game_time())
                         .into_iter()
                         .map(|(key, value)| ((node.id.clone(), key.into()), value))
                         .collect();
                     found.push(Task {
-                        due: self.time,
+                        due: self.game_time(),
                         owner: entity.id.clone(),
                         node: node.id.clone(),
                         context: Context {
@@ -654,8 +945,9 @@ impl Runtime {
             return;
         }
         let mut future = Vec::new();
+        let now = self.game_time();
         for task in std::mem::take(&mut self.waiting) {
-            if task.due <= self.time {
+            if task.due <= now {
                 self.ready.push_back(task);
             } else {
                 future.push(task);
@@ -663,6 +955,7 @@ impl Runtime {
         }
         self.waiting = future;
         while let Some(task) = self.ready.pop_front() {
+            // An event of a trajectory that ended, or of a character gone, never runs.
             if task
                 .context
                 .trajectory
@@ -791,28 +1084,6 @@ impl Runtime {
                         )
                     })
             }
-            "math.binary" => {
-                let a = self
-                    .input_value(graph, node, "a", context, budget, depth + 1)?
-                    .number()
-                    .ok_or("A precisa ser número")?;
-                let b = self
-                    .input_value(graph, node, "b", context, budget, depth + 1)?
-                    .number()
-                    .ok_or("B precisa ser número")?;
-                let value = match node.text("operator") {
-                    "+" => a + b,
-                    "-" => a - b,
-                    "*" => a * b,
-                    "/" if b != 0.0 => a / b,
-                    "/" => return Err("Divisão por zero".into()),
-                    _ => return Err("Operador aritmético inválido".into()),
-                };
-                if !value.is_finite() {
-                    return Err("Resultado aritmético não finito".into());
-                }
-                Ok(Value::Number(value))
-            }
             "condition.compare" => {
                 let a = self.input_value(graph, node, "a", context, budget, depth + 1)?;
                 let b = self.input_value(graph, node, "b", context, budget, depth + 1)?;
@@ -833,7 +1104,7 @@ impl Runtime {
                 };
                 Ok(Value::Bool(result))
             }
-            _ => self.movement_data(graph, node, output, context, budget, depth),
+            _ => self.game_data(graph, node, output, context, budget, depth),
         }
     }
     fn outputs(
@@ -848,7 +1119,7 @@ impl Runtime {
         for port in ports {
             for edge in graph.outputs(&node.id, port) {
                 tasks.push(Task {
-                    due: self.time + delay,
+                    due: self.game_time() + delay,
                     owner: context.owner.clone(),
                     node: edge.to_node.clone(),
                     context: context.clone(),
@@ -893,7 +1164,8 @@ impl Runtime {
         let mut ports = vec!["exec"];
         let mut delay = 0.0;
         match node.operation.as_str() {
-            operation if operation.starts_with("event.") => {}
+            // The event ran: what follows no longer hangs on the trajectory it came from.
+            operation if operation.starts_with("event.") => context.trajectory = None,
             "condition.branch" => {
                 let condition = self
                     .input_value(&graph, node, "condition", &context, budget, 0)?
@@ -907,17 +1179,24 @@ impl Runtime {
                     .input_value(&graph, node, "seconds", &context, budget, 0)?
                     .number()
                     .ok_or("Espera precisa de segundos numéricos")?;
-                if !delay.is_finite() || !(0.0..=86400.0).contains(&delay) {
-                    return Err("Espera deve estar entre 0 e 86400 segundos".into());
+                if !delay.is_finite() || !(0.0..=MAX_WAIT).contains(&delay) {
+                    return Err(format!("Espera deve estar entre 0 e {MAX_WAIT} segundos"));
                 }
                 delay = delay.max(f64::from(FIXED_DT));
             }
-            "debug.message" => self.log(format!(
-                "[{} / {}] {}",
-                task.owner,
-                node.id,
-                node.text("message")
-            )),
+            "debug.message" => {
+                let mut message = node.text("message").to_owned();
+                if graph.input(&node.id, "value").is_some() {
+                    let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
+                    let value = self.logged_value(&value);
+                    message = if message.is_empty() {
+                        value
+                    } else {
+                        format!("{message}: {value}")
+                    };
+                }
+                self.log(format!("[{} / {}] {message}", task.owner, node.id));
+            }
             "attribute.set" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
@@ -996,26 +1275,18 @@ impl Runtime {
                         .insert(target, AnimationPlayer::new(clip_id));
                 }
             }
-            "action.sound" => {
-                let asset = self
-                    .project
-                    .asset(node.text("asset"))
-                    .ok_or("Asset de áudio não existe")?;
-                if asset.kind != crate::document::AssetKind::Audio {
-                    return Err("Asset selecionado não é áudio".into());
-                }
-                self.sounds.push(SoundRequest {
-                    asset: asset.id.clone(),
-                    volume: node.number("volume", 1.0).clamp(0.0, 1.0) as f32,
-                });
-            }
             "action.spawn" => {
                 let template = self.target(&graph, node, &context, budget, 0)?;
                 self.physics_dirty = true;
                 self.index.take();
                 self.input_modes.take();
                 self.event_operations.take();
-                let root = self.scene_mut_internal().duplicate_subtree(&template)?;
+                let key = (context.owner.clone(), node.id.clone());
+                let count = self.run.spawns.get(&key).copied().unwrap_or(0);
+                let root = self
+                    .scene_mut_internal()
+                    .duplicate_subtree_with(&template, &mut spawn_ids(&key, count))?;
+                self.run.spawns.insert(key, count + 1);
                 // The editor duplicate offset is not part of a runtime spawn's explicit offset.
                 let delta = Vec3::new(
                     node.number("x", 0.0) as f32 - 0.5,
@@ -1075,13 +1346,27 @@ impl Runtime {
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let enabled = node.boolean("enabled", true);
                 match node.text("component") {
+                    // The 2D box and the 3D collider or area alike; an old document may have both.
                     "collider" => {
-                        let collider = self.entity_mut(&target).ok_or("Objeto ausente")?.collider.as_mut().ok_or("Objeto não tem colisor")?;
-                        let activation = enabled && !collider.enabled;
-                        collider.enabled = enabled;
-                        if activation {
+                        let entity = self.entity_mut(&target).ok_or("Objeto ausente")?;
+                        if entity.collider.is_none() && entity.physics3d.is_none() {
+                            return Err("Objeto não tem colisor nem área".into());
+                        }
+                        let was = entity.collider.as_ref().is_some_and(|c| c.enabled)
+                            || entity.physics3d.as_ref().is_some_and(|c| c.enabled);
+                        if let Some(collider) = &mut entity.collider {
+                            collider.enabled = enabled;
+                        }
+                        if let Some(collider) = &mut entity.physics3d {
+                            collider.enabled = enabled;
+                        }
+                        // Turned back on, an area starts a new activation that whoever is inside
+                        // enters afresh, even when it was off only within this step. Turned off,
+                        // its occupancy ends without an exit.
+                        if enabled && !was {
                             self.activate_area(&target);
                             self.overlap_pairs.retain(|(area, _)| area != &target);
+                            self.characters.forget_area(&target);
                         }
                         if !enabled {
                             self.area_activations.remove(&target); self.area_hits.remove(&target);
@@ -1094,33 +1379,107 @@ impl Runtime {
                         if enabled { self.disabled_behaviors.remove(&target); } else { self.disabled_behaviors.insert(target.clone()); self.waiting.retain(|task| task.owner != target); }
                     }
                     "animation" => { if let Some(player) = self.animations.get_mut(&target) { player.playing = enabled; } }
-                    _ => return Err("Componente desconhecido; use collider/controller/visible/behavior/animation".into()),
+                    "platform" => self.entity_mut(&target).ok_or("Objeto ausente")?.platform.as_mut().ok_or("Objeto não tem plataforma móvel")?.enabled = enabled,
+                    _ => return Err("Componente desconhecido; use collider/controller/visible/behavior/animation/platform".into()),
                 }
             }
             "action.scene" => {
-                self.change_scene(node.text("scene"))?;
+                let scene = self.scene_destination(&graph, node, &context, budget)?;
+                self.change_scene(&scene)?;
                 // A sound played right before the first change of the step is heard; those
-                // of a scene that starts and ends within the step are not.
+                // of a scene that starts and ends within the step are not, nor its effect
+                // loops, which the change ended.
                 match self.sounds_before_change {
                     Some(kept) => self.sounds.truncate(kept),
                     None => self.sounds_before_change = Some(self.sounds.len()),
                 }
+                if let Some(recording) = &mut self.recording {
+                    match self.audio_before_change {
+                        Some(kept) => {
+                            let mut index = 0;
+                            recording.audio.retain(|change| {
+                                index += 1;
+                                index <= kept || change.lasts()
+                            });
+                        }
+                        None => self.audio_before_change = Some(recording.audio.len()),
+                    }
+                }
                 return Ok(());
             }
             _ => {
-                if !self.movement_action(&graph, node, &mut context, budget)? {
+                if !self.game_action(&graph, node, &mut context, budget)? {
                     return Err(format!("Operação {} não é executável", node.operation));
                 }
             }
         }
+        self.report_unread_failure(&graph, &task.owner, node, &context);
         self.outputs(&graph, node, &ports, context, delay);
         Ok(())
+    }
+    /// A value as Mensagem de diagnóstico writes it: numbers in full, texts as they are,
+    /// objects and surfaces by name.
+    fn logged_value(&self, value: &Value) -> String {
+        let numbers = |values: &[f32]| {
+            let numbers: Vec<String> = values.iter().map(|v| (v + 0.).to_string()).collect();
+            format!("({})", numbers.join("; "))
+        };
+        match value {
+            Value::Number(number) => (number + 0.).to_string(),
+            Value::Text(text) => text.clone(),
+            Value::Bool(true) => "verdadeiro".into(),
+            Value::Bool(false) => "falso".into(),
+            Value::Object(Some(id)) => self
+                .entity(id)
+                .map_or_else(|| "objeto ausente".into(), |e| e.name.clone()),
+            Value::Object(None) => "nenhum objeto".into(),
+            Value::Vector2(v) => numbers(v),
+            Value::Vector3(v) => numbers(v),
+            Value::Surface(Some(id)) => self
+                .project
+                .surfaces
+                .iter()
+                .find(|s| s.id == *id)
+                .map_or_else(|| "superfície ausente".into(), |s| s.name.clone()),
+            Value::Surface(None) => "nenhuma superfície".into(),
+        }
+    }
+    /// An action that answers its failure in Sucesso and Motivo de recusa (Teleportar com
+    /// segurança, the queries) failed and its graph reads neither: nothing would show it, so
+    /// the log says it once per node in the run, naming the object, the node and the reason.
+    fn report_unread_failure(
+        &mut self,
+        graph: &PreparedGraph,
+        owner: &str,
+        node: &Node,
+        context: &Context,
+    ) {
+        let output = |port: &str| context.outputs.get(&(node.id.clone(), port.to_owned()));
+        if output("success") != Some(&Value::Bool(false))
+            || ["success", "error"]
+                .iter()
+                .any(|port| graph.outputs(&node.id, port).next().is_some())
+            || !self
+                .run
+                .failures_logged
+                .insert((owner.to_owned(), node.id.clone()))
+        {
+            return;
+        }
+        let reason = match output("error") {
+            Some(Value::Text(reason)) if !reason.is_empty() => reason.clone(),
+            _ => "sem motivo informado".into(),
+        };
+        let object = self.entity(owner).map_or(owner, |e| e.name.as_str());
+        let label = crate::graph::definition(&node.operation).map_or("", |def| def.label);
+        let line = format!("{object} · {label} falhou: {reason}");
+        self.log(line);
     }
     pub fn remove_object(&mut self, id: &str) {
         self.physics_dirty = true;
         let ids: HashSet<_> = self.scene().descendants(id).into_iter().collect();
         let mut characters = std::mem::take(&mut self.characters);
-        characters.remove_entities(&ids, self.scene(), self.time);
+        characters.remove_entities(&ids, self.scene(), self.game_time());
         self.characters = characters;
         self.index.take();
         self.input_modes.take();
@@ -1134,6 +1493,7 @@ impl Runtime {
         self.waiting.retain(|task| !ids.contains(&task.owner));
         self.bodies.retain(|owner, _| !ids.contains(owner));
         self.animations.retain(|owner, _| !ids.contains(owner));
+        self.disabled_behaviors.retain(|owner| !ids.contains(owner));
         self.overlap_pairs
             .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
         self.damage_hits.retain(|(a, _), hits| {
@@ -1142,6 +1502,30 @@ impl Runtime {
             }
             !ids.contains(a) && hits.strong_count() > 0
         });
+        self.forget_copies(|owner| ids.contains(owner));
+    }
+    /// Drops the draw and copy counts of the objects `gone` names that the project lacks: an
+    /// object made during the run never comes back, since copies get new IDs, while a scene
+    /// reload brings back the project's own with their IDs, and their counts go on.
+    fn forget_copies(&mut self, gone: impl Fn(&str) -> bool) {
+        let source = &self.source;
+        let mut authored: Option<HashSet<&str>> = None;
+        let mut keep = |owner: &Id| {
+            !gone(owner)
+                || authored
+                    .get_or_insert_with(|| {
+                        source
+                            .scenes
+                            .iter()
+                            .flat_map(|scene| &scene.entities)
+                            .map(|entity| entity.id.as_str())
+                            .collect()
+                    })
+                    .contains(owner.as_str())
+        };
+        self.run.rolls.retain(|(owner, _), _| keep(owner));
+        self.run.spawns.retain(|(owner, _), _| keep(owner));
+        self.run.failures_logged.retain(|(owner, _)| keep(owner));
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();
@@ -1162,6 +1546,9 @@ impl Runtime {
         if self.scene_starts.len() > 64 {
             self.scene_starts.drain(..32);
         }
+        // Per-scene state only (see the module docs): `run` carries over, but for the counts
+        // of the copies left behind.
+        self.forget_copies(|_| true);
         self.input_timeline = Default::default();
         self.characters = Default::default();
         self.cameras = Default::default();
@@ -1178,8 +1565,19 @@ impl Runtime {
         self.area_hits.clear();
         self.pending_pressed.clear();
         self.pending_released.clear();
+        // The new scene starts unpaused, without Ao pausar ou retomar: the menu that showed
+        // the pause went with the old one.
+        if std::mem::take(&mut self.game_paused)
+            && let Some(recording) = &mut self.recording
+        {
+            recording.pauses.push(false);
+        }
+        // The camera of the new scene captures the mouse as it does by itself.
+        self.cursor_shown = false;
         // Sounds already requested still play ("play a sound, then restart"): the host takes
-        // them after the step. action.scene drops those of scenes left within the step.
+        // them after the step. action.scene drops those of scenes left within the step. The
+        // music and the volumes go on; the effect loops end with the scene.
+        self.run.audio.change_scene();
         self.physics_dirty = true;
         self.step_input = InputFrame::default();
         self.query_work = 0;
@@ -1324,13 +1722,26 @@ impl Runtime {
             self.bodies.insert(id, body_state);
         }
     }
+    /// Plays the clips one step. A clip poses its targets only while it plays and on the step
+    /// a clip that does not loop ends: one that ended or was paused leaves them where logic or
+    /// anything else puts them.
     fn advance_animations(&mut self) {
-        if !self.animations.is_empty() && self.scene().kind == SceneKind::ThreeD {
+        if self.animations.values().any(|player| player.playing)
+            && self.scene().kind == SceneKind::ThreeD
+        {
             self.physics_dirty = true;
         }
         let mut players = std::mem::take(&mut self.animations);
+        // Scene order, as `emit` visits owners: the markers of one step and clips that share
+        // a target never follow the map's order.
+        let index = self.index();
+        let mut ordered: Vec<_> = players
+            .iter_mut()
+            .filter(|(_, player)| player.playing)
+            .collect();
+        ordered.sort_by_key(|(owner, _)| index.and_then(|index| index.position(owner)));
         let mut events = Vec::new();
-        for (owner, player) in &mut players {
+        for (owner, player) in ordered {
             let clip = self
                 .entity(owner)
                 .and_then(|entity| entity.clips.iter().find(|clip| clip.id == player.clip_id))
@@ -1361,16 +1772,10 @@ impl Runtime {
                         }
                     }
                 }
-                // A physical root is owned by its controller; only visual children
-                // may be animated. The authored clip is never rewritten here.
+                // The authored clip is never rewritten here.
                 let mut ignored = Vec::new();
                 clip.tracks.retain(|track| {
-                    let keep = self.entity(&track.target).is_none_or(|e| {
-                        e.character3d.is_none()
-                            && !e.platform.as_ref().is_some_and(|p| {
-                                p.enabled && p.mode == crate::surface::PlatformMode::Velocity
-                            })
-                    });
+                    let keep = self.entity(&track.target).is_none_or(animated);
                     if !keep {
                         ignored.push(track.target.clone());
                     }
@@ -1511,12 +1916,47 @@ impl Runtime {
     }
 }
 
+/// Whether a clip's track poses `target`. A physical root is owned by its controller (a 3D
+/// character, a platform that moves by velocity): only its visual children are animated.
+fn animated(target: &crate::document::Entity) -> bool {
+    target.character3d.is_none()
+        && !target
+            .platform
+            .as_ref()
+            .is_some_and(|p| p.enabled && p.mode == crate::surface::PlatformMode::Velocity)
+}
+
 pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {
     let collider = scene.entity(id)?.collider.as_ref()?;
     if !collider.enabled {
         return None;
     }
     crate::spatial::collider_bounds(scene, id).ok()
+}
+
+/// The IDs of copy number `count` made by the Criar cópia node of `(owner, node)`: each comes
+/// from the ID of the original object, clip or node, so a run that makes the same copies gives
+/// them the same IDs, in any order and whatever the seed. An ID the scene already has is
+/// asked again and salted.
+fn spawn_ids((owner, node): &(Id, Id), count: u64) -> impl FnMut(&str) -> Id {
+    let (owner, node) = (owner.clone(), node.clone());
+    let mut salts: HashMap<Id, u64> = HashMap::new();
+    move |original: &str| {
+        let salt = salts.entry(original.into()).or_insert(0);
+        let (count, extra) = (count.to_le_bytes(), salt.to_le_bytes());
+        let mut parts = vec![
+            b"oxy.spawn".as_slice(),
+            owner.as_bytes(),
+            node.as_bytes(),
+            &count,
+            original.as_bytes(),
+        ];
+        if *salt > 0 {
+            parts.push(&extra);
+        }
+        *salt += 1;
+        crate::random::derived_id(&parts)
+    }
 }
 
 #[cfg(test)]
@@ -1605,6 +2045,273 @@ mod tests {
         }
         assert!(runtime.scene_starts.len() <= 64);
         assert!(runtime.scene_starts.iter().all(|id| *id == next_id));
+        // The game pause holds the wait for as long as it lasts; it then ends on time.
+        let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+        assert!(runtime.set_game_paused(true));
+        assert!(!runtime.set_game_paused(true), "already paused");
+        runtime.advance(1.0, &InputFrame::default());
+        for _ in 0..60 {
+            runtime.advance(FIXED_DT, &InputFrame::default());
+        }
+        assert_eq!(runtime.pending_tasks(), 1);
+        assert_eq!(runtime.game_time(), 0.0);
+        assert!(runtime.time > 1.0);
+        runtime.set_game_paused(false);
+        for _ in 0..5 {
+            runtime.advance(FIXED_DT, &InputFrame::default());
+        }
+        assert_eq!(
+            runtime.scene().entity(&id).unwrap().attributes["contador"],
+            Value::Number(0.0)
+        );
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(
+            runtime.scene().entity(&id).unwrap().attributes["contador"],
+            Value::Number(42.0)
+        );
+    }
+
+    /// Links `nodes` of `entity` in a chain of execution, in order.
+    fn chain(entity: &mut Entity, nodes: Vec<Node>) {
+        for pair in nodes.windows(2) {
+            connect(&mut entity.graph, &pair[0], "exec", &pair[1], "exec");
+        }
+        entity.graph.nodes.extend(nodes);
+    }
+    fn node(operation: &str, params: &[(&str, Value)]) -> Node {
+        let mut node = Node::new(operation, [0.0; 2]);
+        for (key, value) in params {
+            node.params.insert((*key).into(), value.clone());
+        }
+        node
+    }
+    fn message(text: &str) -> Node {
+        node("debug.message", &[("message", Value::Text(text.into()))])
+    }
+    /// A 2D scene that falls (a controller), counts steps and keeps each one's time, logs
+    /// input and keeps the time Ler tempo gives it, waits 0.1 s at the start, pauses on
+    /// "pausar", has a world object and a Continuar button that resumes, a button hidden in a
+    /// group, and logs each change of the game pause.
+    fn pausing_project() -> (Project, [Id; 5]) {
+        let mut project = Project::new("Pausa do jogo");
+        let mut faller = Entity::new("Móvel", Some(Primitive::Rectangle));
+        faller.controller = Some(Controller::default());
+        faller.collider = Some(Collider::default());
+        faller.transform.position[1] = 50.0;
+        let mut clock = Entity::new("Relógio", None);
+        for attribute in ["contador", "tempo_passo", "tempo_entrada"] {
+            clock
+                .attributes
+                .insert(attribute.into(), Value::Number(0.0));
+        }
+        let set = |attribute: &str| {
+            node(
+                "attribute.set",
+                &[("attribute", Value::Text(attribute.into()))],
+            )
+        };
+        chain(
+            &mut clock,
+            vec![
+                node("event.scene_start", &[]),
+                node("control.wait", &[("seconds", Value::Number(0.1))]),
+                node(
+                    "attribute.set",
+                    &[
+                        ("attribute", Value::Text("contador".into())),
+                        ("value", Value::Number(42.0)),
+                    ],
+                ),
+            ],
+        );
+        let step = node("event.step", &[]);
+        let step_time = set("tempo_passo");
+        connect(&mut clock.graph, &step, "time", &step_time, "value");
+        chain(&mut clock, vec![step, message("passo"), step_time]);
+        let action = |name: &str| ("action", Value::Text(name.into()));
+        let read = node("time.read", &[]);
+        let input_time = set("tempo_entrada");
+        connect(&mut clock.graph, &read, "time", &input_time, "value");
+        clock.graph.nodes.push(read);
+        chain(
+            &mut clock,
+            vec![
+                node("event.input", &[action("atacar")]),
+                message("entrada"),
+                input_time,
+            ],
+        );
+        chain(
+            &mut clock,
+            vec![
+                node("event.input", &[action("pausar")]),
+                node("game.pause", &[("mode", Value::Text("pause".into()))]),
+            ],
+        );
+        for when in ["pause", "resume"] {
+            chain(
+                &mut clock,
+                vec![
+                    node("event.pause", &[("when", Value::Text(when.into()))]),
+                    message(when),
+                ],
+            );
+        }
+        let mut target = Entity::new("Alvo", Some(Primitive::Rectangle));
+        target.transform.position[0] = 10.0;
+        chain(
+            &mut target,
+            vec![node("event.click", &[]), message("mundo")],
+        );
+        let button = || crate::document::UiElement {
+            kind: crate::document::UiKind::Button,
+            ..Default::default()
+        };
+        let mut resume = Entity::new("Continuar", None);
+        resume.ui = Some(button());
+        chain(
+            &mut resume,
+            vec![
+                node("event.click", &[]),
+                node("game.pause", &[("mode", Value::Text("resume".into()))]),
+            ],
+        );
+        let mut group = Entity::new("Grupo oculto", None);
+        group.visible = false;
+        let mut hidden = Entity::new("Escondido", None);
+        hidden.parent = Some(group.id.clone());
+        hidden.ui = Some(button());
+        chain(
+            &mut hidden,
+            vec![node("event.click", &[]), message("oculto")],
+        );
+        let ids = [
+            faller.id.clone(),
+            clock.id.clone(),
+            target.id.clone(),
+            resume.id.clone(),
+            hidden.id.clone(),
+        ];
+        project.scenes[0].kind = SceneKind::TwoD;
+        project.scenes[0]
+            .entities
+            .extend([faller, clock, target, resume, group, hidden]);
+        validate_project(&project).unwrap();
+        (project, ids)
+    }
+    #[test]
+    fn game_pause_freezes_world_but_runs_input_and_ui_clicks() {
+        let (mut project, [faller, clock, target, resume, hidden]) = pausing_project();
+        let other = Scene::new("Outra", SceneKind::TwoD);
+        let other_id = other.id.clone();
+        project.scenes.push(other);
+        let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
+        let count = |runtime: &Runtime, text: &str| {
+            runtime.logs.iter().filter(|l| l.ends_with(text)).count()
+        };
+        let height =
+            |runtime: &Runtime| runtime.scene().entity(&faller).unwrap().transform.position[1];
+        let attribute = |runtime: &Runtime, name: &str| {
+            runtime.scene().entity(&clock).unwrap().attributes[name].clone()
+        };
+        let counter = |runtime: &Runtime| attribute(runtime, "contador");
+        let pressed = |action: &str| InputFrame {
+            pressed: [action.to_owned()].into(),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            runtime.advance(FIXED_DT, &InputFrame::default());
+        }
+        assert_eq!(count(&runtime, "passo"), 2);
+        let falling = height(&runtime);
+        assert!(falling < 50.0);
+        assert_eq!(
+            runtime.game_time(),
+            runtime.time,
+            "the same clock until a pause"
+        );
+        assert!(runtime.has_pause_menu());
+
+        assert!(runtime.set_game_paused(true));
+        let (time, game_time) = (runtime.time, runtime.game_time());
+        for step in 0..60 {
+            let input = if step == 30 {
+                pressed("atacar")
+            } else {
+                InputFrame::default()
+            };
+            runtime.advance(FIXED_DT, &input);
+        }
+        assert!(runtime.game_paused());
+        assert_eq!(count(&runtime, "pause"), 1, "{:?}", runtime.logs);
+        assert_eq!(height(&runtime), falling, "the controller stands still");
+        assert_eq!(count(&runtime, "passo"), 2, "Ao passo waits");
+        assert_eq!(counter(&runtime), Value::Number(0.0), "the wait waits");
+        assert_eq!(count(&runtime, "entrada"), 1, "input still runs");
+        assert!((runtime.time - time - 1.0).abs() < 1e-3);
+        assert_eq!(runtime.game_time(), game_time);
+        // Ler tempo, read half a second into the pause, gave the game clock that stood still.
+        assert_eq!(
+            attribute(&runtime, "tempo_entrada"),
+            Value::Number(game_time)
+        );
+
+        // World objects take no click in the pause; hidden elements never do, with a line.
+        runtime.click(&target);
+        runtime.click(&hidden);
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(count(&runtime, "mundo"), 0);
+        assert_eq!(count(&runtime, "oculto"), 0);
+        let ignored = "Clique ignorado: Escondido está oculto (ele mesmo ou um grupo acima dele).";
+        assert!(
+            runtime.logs.iter().any(|l| l == ignored),
+            "{:?}",
+            runtime.logs
+        );
+        // The engine's pause over the game's: resuming it goes back to the game pause.
+        runtime.set_paused(true);
+        runtime.advance(1.0, &InputFrame::default());
+        runtime.set_paused(false);
+        assert!(runtime.game_paused());
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(height(&runtime), falling);
+
+        // Continuar resumes; the world waits for the next step.
+        runtime.click(&resume);
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert!(!runtime.game_paused());
+        assert_eq!(count(&runtime, "resume"), 1);
+        assert_eq!(height(&runtime), falling);
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert!(height(&runtime) < falling);
+        assert_eq!(count(&runtime, "passo"), 3);
+        // Ao passo gives the game clock as well, behind the run clock by the pause.
+        assert_eq!(
+            attribute(&runtime, "tempo_passo"),
+            Value::Number(runtime.game_time())
+        );
+        assert!(runtime.time - runtime.game_time() > 1.0);
+        runtime.click(&target);
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(count(&runtime, "mundo"), 1, "world clicks are back");
+        // The wait counts game time only: 0.1 s (6 steps) from the start, 2 + 2 already gone.
+        assert_eq!(counter(&runtime), Value::Number(0.0));
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(counter(&runtime), Value::Number(0.0), "5 steps");
+        runtime.advance(FIXED_DT, &InputFrame::default());
+        assert_eq!(counter(&runtime), Value::Number(42.0), "6 steps");
+
+        // Logic that pauses within a step skips that step's world phase.
+        let before = height(&runtime);
+        runtime.advance(FIXED_DT, &pressed("pausar"));
+        assert!(runtime.game_paused());
+        assert_eq!(height(&runtime), before);
+        assert_eq!(count(&runtime, "pause"), 2);
+        // A scene change ends the pause, without the event.
+        runtime.change_scene(&other_id).unwrap();
+        assert!(!runtime.game_paused());
+        assert!(!runtime.has_pause_menu());
+        assert!(runtime.scene_state_in_use().is_empty());
     }
     #[test]
     fn controller_falls_lands_and_jump_does_not_tunnel() {

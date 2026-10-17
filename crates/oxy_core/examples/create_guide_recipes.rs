@@ -2,9 +2,11 @@
 use oxy_core::{
     animation::*,
     document::*,
-    graph::{Edge, Graph, Node},
+    graph::{Edge, Graph, Node, arrange, layout},
     input_actions, persistence,
+    variables::GameVariable,
 };
+use std::collections::HashSet;
 fn id(n: u32) -> Id {
     format!("02000000-0000-4000-8000-{n:012x}")
 }
@@ -475,12 +477,318 @@ fn passage() -> Project {
     p.scenes.push(destination);
     p
 }
+/// A centred element of the pause menu, child of its group.
+fn menu_item(n: u32, name: &str, kind: UiKind, shown: &str, y: f32, size: [f32; 2]) -> Entity {
+    let mut e = entity(n, name, None, [0.; 3], [1.; 3]);
+    e.parent = Some(id(610));
+    e.layer = 11;
+    e.ui = Some(UiElement {
+        kind,
+        anchor: UiAnchor::Center,
+        position: [0., y],
+        size,
+        text: shown.into(),
+        ..Default::default()
+    });
+    e
+}
+/// A text of the interface named for what it shows, not Informação.
+fn named(mut e: Entity, name: &str) -> Entity {
+    e.name = name.into();
+    e
+}
+fn pause_menu() -> Project {
+    let mut p = project(600, "Guia · Menu de pausa");
+    let player = body(616);
+    movement(&mut p, &player);
+    let mut menu = entity(610, "Menu de pausa", None, [0.; 3], [1.; 3]);
+    menu.visible = false;
+    menu.graph = graph(
+        vec![
+            node(620, "event.pause", [0., 40.], &[("when", text("pause"))]),
+            node(
+                621,
+                "action.component",
+                [300., 40.],
+                &[
+                    ("component", text("visible")),
+                    ("enabled", Value::Bool(true)),
+                ],
+            ),
+            node(622, "event.pause", [0., 260.], &[("when", text("resume"))]),
+            node(
+                623,
+                "action.component",
+                [300., 260.],
+                &[
+                    ("component", text("visible")),
+                    ("enabled", Value::Bool(false)),
+                ],
+            ),
+        ],
+        &[(620, "exec", 621, "exec"), (622, "exec", 623, "exec")],
+    );
+    // An image without an image is a filled rectangle in its color: the dimmed screen.
+    let mut backdrop = menu_item(611, "Fundo da pausa", UiKind::Image, "", 0., [4000., 4000.]);
+    backdrop.layer = 10;
+    backdrop.ui.as_mut().unwrap().color = [0.02, 0.03, 0.05, 0.78];
+    let mut title = menu_item(
+        612,
+        "Título da pausa",
+        UiKind::Text,
+        "Pausa",
+        -130.,
+        [400., 60.],
+    );
+    let ui = title.ui.as_mut().unwrap();
+    ui.text_align = UiTextAlign::Center;
+    ui.text_size = Some(48.);
+    // Named apart from what they show, so the Hierarquia never repeats a button's text.
+    let mut resume = menu_item(
+        613,
+        "Botão de continuar",
+        UiKind::Button,
+        "Continuar",
+        -50.,
+        [260., 48.],
+    );
+    resume.graph = graph(
+        vec![
+            node(630, "event.click", [0., 40.], &[]),
+            node(631, "game.pause", [300., 40.], &[("mode", text("resume"))]),
+        ],
+        &[(630, "exec", 631, "exec")],
+    );
+    let mut restart = menu_item(
+        614,
+        "Botão de reiniciar",
+        UiKind::Button,
+        "Reiniciar",
+        10.,
+        [260., 48.],
+    );
+    restart.graph = graph(
+        vec![
+            node(632, "event.click", [0., 40.], &[]),
+            node(633, "scene.current", [0., 220.], &[]),
+            node(634, "action.scene", [300., 40.], &[]),
+        ],
+        &[(632, "exec", 634, "exec"), (633, "scene", 634, "scene")],
+    );
+    let mut quit = menu_item(
+        615,
+        "Botão de sair",
+        UiKind::Button,
+        "Sair do jogo",
+        70.,
+        [260., 48.],
+    );
+    quit.graph = graph(
+        vec![
+            node(635, "event.click", [0., 40.], &[]),
+            node(636, "game.quit", [300., 40.], &[]),
+        ],
+        &[(635, "exec", 636, "exec")],
+    );
+    p.scenes[0].entities = vec![
+        menu,
+        backdrop,
+        title,
+        resume,
+        restart,
+        quit,
+        player,
+        floor(617),
+        named(
+            hud(618, "A/D: mover · Espaço: pular · Esc: pausa", 24., None),
+            "Dica",
+        ),
+    ];
+    p
+}
+fn record() -> Project {
+    let mut p = project(700, "Guia · Recorde salvo");
+    p.variables.push(GameVariable {
+        id: id(702),
+        name: "Melhor tempo".into(),
+        value: Value::Number(0.),
+        persistent: true,
+    });
+    let player = body(712);
+    movement(&mut p, &player);
+    // The Placar keeps the run's start, its time and the record, which the interface shows.
+    let on_placar = |attribute: &str| vec![("target", object(711)), ("attribute", text(attribute))];
+    let mut finish = entity(
+        710,
+        "Chegada",
+        Some(Primitive::Rectangle),
+        [4.5, 0.5, 0.],
+        [1., 1.6, 1.],
+    );
+    finish.collider = Some(Collider {
+        is_trigger: true,
+        size: [1., 1.4, 1.],
+        offset: [0., 0.1, 0.],
+        ..Default::default()
+    });
+    finish.material.color = [0.3, 0.78, 0.45, 1.];
+    finish.graph = graph(
+        vec![
+            node(720, "event.scene_start", [0.; 2], &[]),
+            node(721, "time.read", [0.; 2], &[]),
+            node(722, "attribute.set", [0.; 2], &on_placar("Início")),
+            node(723, "scene.current", [0.; 2], &[]),
+            node(
+                724,
+                "variable.get",
+                [0.; 2],
+                &[("variable", text(&id(702)))],
+            ),
+            node(
+                725,
+                "condition.compare",
+                [0.; 2],
+                &[("operator", text(">")), ("b", Value::Number(0.))],
+            ),
+            node(726, "condition.branch", [0.; 2], &[]),
+            node(727, "text.time", [0.; 2], &[]),
+            node(728, "attribute.set", [0.; 2], &on_placar("Recorde")),
+            node(730, "event.area_enter", [0.; 2], &[]),
+            node(731, "attribute.get", [0.; 2], &on_placar("Início")),
+            node(732, "math.binary", [0.; 2], &[("operator", text("-"))]),
+            node(733, "text.time", [0.; 2], &[]),
+            node(734, "attribute.set", [0.; 2], &on_placar("Tempo")),
+            node(
+                735,
+                "condition.compare",
+                [0.; 2],
+                &[("operator", text("==")), ("b", Value::Number(0.))],
+            ),
+            node(736, "condition.branch", [0.; 2], &[]),
+            node(
+                737,
+                "condition.compare",
+                [0.; 2],
+                &[("operator", text("<"))],
+            ),
+            node(738, "condition.branch", [0.; 2], &[]),
+            node(
+                739,
+                "variable.set",
+                [0.; 2],
+                &[("variable", text(&id(702)))],
+            ),
+            node(740, "save.write", [0.; 2], &[]),
+            node(
+                741,
+                "debug.message",
+                [0.; 2],
+                &[(
+                    "message",
+                    text("Recorde mantido, nada foi salvo. Seu tempo"),
+                )],
+            ),
+            node(742, "text.time", [0.; 2], &[]),
+            node(743, "attribute.set", [0.; 2], &on_placar("Recorde")),
+        ],
+        &[
+            // Ao iniciar cena: the start time, and the saved record when there is one.
+            (720, "exec", 722, "exec"),
+            (721, "time", 722, "value"),
+            (722, "exec", 726, "exec"),
+            (723, "name", 724, "key"),
+            (724, "value", 725, "a"),
+            (725, "result", 726, "condition"),
+            (726, "then", 728, "exec"),
+            (724, "value", 727, "seconds"),
+            (727, "text", 728, "value"),
+            // Ao entrar na área: this run's time; saved only when there was no record or it
+            // is better. Ler variável reads again after the change: Recorde shows the new one.
+            (730, "exec", 734, "exec"),
+            (721, "time", 732, "a"),
+            (731, "value", 732, "b"),
+            (732, "value", 733, "seconds"),
+            (733, "text", 734, "value"),
+            (734, "exec", 736, "exec"),
+            (724, "value", 735, "a"),
+            (735, "result", 736, "condition"),
+            (736, "then", 739, "exec"),
+            (736, "else", 738, "exec"),
+            (732, "value", 737, "a"),
+            (724, "value", 737, "b"),
+            (737, "result", 738, "condition"),
+            (738, "then", 739, "exec"),
+            (738, "else", 741, "exec"),
+            (733, "text", 741, "value"),
+            (723, "name", 739, "key"),
+            (732, "value", 739, "value"),
+            (739, "exec", 740, "exec"),
+            (740, "exec", 743, "exec"),
+            (724, "value", 742, "seconds"),
+            (742, "text", 743, "value"),
+        ],
+    );
+    // As the editor's Organizar does: each band gets its own copy of the data it reads, so no
+    // wire runs from the start band to the arrival band.
+    let mut all: HashSet<Id> = finish.graph.nodes.iter().map(|n| n.id.clone()).collect();
+    all.extend(layout::split_shared_data(
+        &mut finish.graph,
+        &all,
+        &finish.id,
+    ));
+    arrange(&mut finish.graph, &all);
+    let mut placar = entity(711, "Placar", None, [0.; 3], [1.; 3]);
+    placar.attributes.insert("Início".into(), Value::Number(0.));
+    for attribute in ["Tempo", "Recorde"] {
+        placar.attributes.insert(attribute.into(), text("--:--.--"));
+    }
+    let mut wall = entity(
+        714,
+        "Parede",
+        Some(Primitive::Rectangle),
+        [6.75, 0.5, 0.],
+        [0.5, 2., 1.],
+    );
+    wall.collider = Some(Collider {
+        size: wall.dimensions,
+        ..Default::default()
+    });
+    wall.material.color = [0.23, 0.25, 0.3, 1.];
+    p.scenes[0].name = "Fase 1".into();
+    p.scenes[0].entities = vec![
+        finish,
+        placar,
+        player,
+        floor(713),
+        wall,
+        named(
+            hud(
+                715,
+                "A/D: mover · Espaço: pular · chegue à área verde",
+                24.,
+                None,
+            ),
+            "Dica",
+        ),
+        named(
+            hud(716, "Seu tempo: {valor}", 65., Some((711, "Tempo"))),
+            "Texto do tempo",
+        ),
+        named(
+            hud(717, "Recorde: {valor}", 106., Some((711, "Recorde"))),
+            "Texto do recorde",
+        ),
+    ];
+    p
+}
 fn main() -> Result<(), String> {
     for (name, project) in [
         ("02-porta-com-chave", door()),
         ("03-carta-e-energia", card()),
         ("04-ataque-por-marcador", attack()),
         ("05-passagem-entre-cenas", passage()),
+        ("13-menu-de-pausa", pause_menu()),
+        ("14-recorde-salvo", record()),
     ] {
         validate_project(&project)?;
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

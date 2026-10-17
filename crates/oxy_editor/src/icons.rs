@@ -67,7 +67,9 @@ pub enum Icon {
     Branch,
     Action,
     Flow,
+    Game,
     Keyboard,
+    Variables,
     Book,
     Check,
     Minus,
@@ -80,6 +82,12 @@ pub enum Icon {
     Examples,
     Track,
     Console,
+    // The test an agent plays.
+    Agent,
+    // Where a text of the game interface sits.
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
 }
 pub fn width(ui: &mut Ui, label: &str, names: bool) -> f32 {
     if names {
@@ -852,6 +860,27 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 );
             }
         }
+        Icon::Game => {
+            // A gamepad drawn on a 14-unit grid: body and grips, a cross and a button.
+            let unit = |x: f32, y: f32| at(x / 14., y / 14.);
+            let arc = |cx: f32, cy: f32, radius: f32, from: f32, to: f32| -> Vec<Pos2> {
+                (0..=6)
+                    .map(|i| {
+                        let a = (from + (to - from) * i as f32 / 6.).to_radians();
+                        unit(cx + radius * a.cos(), cy + radius * a.sin())
+                    })
+                    .collect()
+            };
+            let mut body = arc(10., 7.5, 3., -90., 0.);
+            body.extend(arc(11.2, 8.67, 1.8, 0., 141.));
+            body.extend([unit(8.8, 8.5), unit(5.2, 8.5)]);
+            body.extend(arc(2.8, 8.67, 1.8, 39., 180.));
+            body.extend(arc(4., 7.5, 3., 180., 270.));
+            p.add(egui::Shape::closed_line(body, Stroke::new(1.3, color)));
+            line(unit(4.3, 6.), unit(4.3, 7.8));
+            line(unit(3.4, 6.9), unit(5.2, 6.9));
+            p.circle_filled(unit(9.8, 6.8), r.width() * 0.08, color);
+        }
         Icon::Keyboard => {
             p.rect_stroke(
                 Rect::from_min_max(at(0.04, 0.22), at(0.96, 0.8)),
@@ -863,6 +892,31 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 p.circle_filled(at(x, 0.42), 0.9, color);
             }
             line(at(0.3, 0.62), at(0.7, 0.62));
+        }
+        Icon::Variables => {
+            // Curly braces on a 16-unit grid; the right one mirrors the left.
+            let left = [
+                (5.5, 2.5),
+                (4.3, 2.8),
+                (3.7, 3.5),
+                (3.5, 4.5),
+                (3.5, 6.1),
+                (3.1, 7.3),
+                (2.1, 8.),
+                (3.1, 8.7),
+                (3.5, 9.9),
+                (3.5, 11.5),
+                (3.7, 12.5),
+                (4.3, 13.2),
+                (5.5, 13.5),
+            ];
+            for mirrored in [false, true] {
+                let points = left
+                    .iter()
+                    .map(|&(x, y)| at(if mirrored { 16. - x } else { x } / 16., y / 16.))
+                    .collect();
+                p.add(egui::Shape::line(points, Stroke::new(1.3, color)));
+            }
         }
         Icon::Book => {
             p.add(egui::Shape::closed_line(
@@ -954,6 +1008,35 @@ fn draw(ui: &Ui, r: Rect, icon: Icon, color: Color32) {
                 Stroke::new(1.3, color),
             ));
             line(at(0.5, 0.66), at(0.74, 0.66));
+        }
+        Icon::AlignLeft | Icon::AlignCenter | Icon::AlignRight => {
+            // Four lines on a 14-unit grid; the short ones lean to the side the text sits.
+            let unit = |x: f32, y: f32| at(x / 14., y / 14.);
+            let start = match icon {
+                Icon::AlignLeft => 2.,
+                Icon::AlignCenter => 4.,
+                _ => 6.,
+            };
+            for y in [3., 9.] {
+                line(unit(2., y), unit(12., y));
+            }
+            for y in [6., 12.] {
+                line(unit(start, y), unit(start + 6., y));
+            }
+        }
+        Icon::Agent => {
+            // A robot head on a 14-unit grid: the face, an antenna and two eyes.
+            let unit = |x: f32, y: f32| at(x / 14., y / 14.);
+            p.rect_stroke(
+                Rect::from_min_max(unit(2.5, 4.), unit(11.5, 11.)),
+                2.,
+                Stroke::new(1.3, color),
+                egui::StrokeKind::Middle,
+            );
+            line(unit(7., 1.8), unit(7., 4.));
+            for x in [5., 9.] {
+                p.circle_filled(unit(x, 7.2), r.width() * 0.07, color);
+            }
         }
         Icon::Move => {
             for end in [at(0.5, 0.), at(1., 0.5), at(0.5, 1.), at(0., 0.5)] {

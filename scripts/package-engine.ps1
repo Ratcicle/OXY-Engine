@@ -27,6 +27,21 @@ Copy-Item -LiteralPath $mcp -Destination (Join-Path $destinationPath 'oxy-mcp.ex
 $lab = Join-Path $destinationPath 'laboratorio-3d'
 New-Item -ItemType Directory -Path $lab -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $workspace 'examples/laboratorio-3d/project.oxy.json') -Destination $lab
+# OXY Parkour, which the home screen opens as a copy: the project and the files its assets name,
+# never the backups left next to it (agent and schema backups).
+$parkourSource = Join-Path $workspace 'examples/parkour'
+$parkour = Join-Path $destinationPath 'parkour'
+New-Item -ItemType Directory -Path $parkour -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $parkourSource 'project.oxy.json') -Destination $parkour
+$parkourManifest = Get-Content -LiteralPath (Join-Path $parkourSource 'project.oxy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+foreach ($asset in $parkourManifest.assets) {
+    if ($asset.kind -eq 'Model') { continue }
+    $relative = [string]$asset.path
+    if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative) -or $relative.Contains(':') -or ($relative -split '[/\\]' -contains '..')) { throw "Caminho de asset inseguro no parkour: $relative" }
+    $target = Join-Path $parkour $relative
+    New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $parkourSource $relative) -Destination $target
+}
 $instructions = @"
 OXY Engine $version — Windows x64 portátil
 
@@ -40,6 +55,8 @@ Projetos recentes: lista local em %LOCALAPPDATA%\OXY Engine.
 Projeto de exemplo: sala 2D, oficina 3D e cartas; Salvar cria sua cópia.
 Laboratório 3D · movimento: pista editável; WASD, mouse, Espaço, Shift e C.
 V alterna primeira/terceira pessoa; Q muda ombro; R retorna ao checkpoint.
+OXY Parkour: jogo completo em primeira pessoa (menu, pista, pausa, recorde e música),
+aberto como cópia; R volta ao checkpoint e Esc abre o menu de pausa do jogo.
 Jogador e Câmera principal são objetos separados, ligados pelo Alvo da câmera.
 Personagem 3D > Corpo de movimento: escolha cápsula, caixa, esfera ou convexo.
 Deslocamento local alinha a colisão sem mover a raiz ou a aparência.
@@ -53,7 +70,7 @@ Propriedades mostra os componentes presentes; + Adicionar componente oferece
 as opções compatíveis. Na Hierarquia, arraste para definir parentesco e use
 o botão direito para duplicar, agrupar, excluir ou salvar hierarquia como modelo.
 Lógica: selecione um objeto, adicione nós pelo catálogo e ligue saídas a entradas.
-Guia (ou Ajuda > Guia de lógica visual): consulte os nós e abra cópias de doze
+Guia (ou Ajuda > Guia de lógica visual): consulte os nós e abra cópias de catorze
 receitas editáveis, disponíveis offline dentro do executável.
 Estúdio: em Modelagem, crie formas e edite faces/arestas/vértices; em Pintura e
 Animação, pinte e anime peças rígidas. Soltar a alça aplica a edição; Esc
@@ -61,7 +78,7 @@ cancela o gesto inteiro. Última operação ajusta o mesmo comando. Shift+U cria
 borda interna; Shift+E extruda. Ctrl+caixa soma componentes, inclusive ocultos.
 F1 abre ajuda contextual.
 Interface: ajuste a escala pendente e clique Aplicar; Cancelar mantém a atual.
-Mantenha a pasta data e quaisquer DLLs ao lado dos executáveis.
+Mantenha as pastas data e parkour e quaisquer DLLs ao lado dos executáveis.
 
 Agentes de IA (MCP): oxy-mcp.exe é um servidor MCP que deixa agentes como o Claude
 ler, editar, testar e capturar projetos da OXY. No Claude Code, registre com
@@ -69,18 +86,20 @@ ler, editar, testar e capturar projetos da OXY. No Claude Code, registre com
 No editor, ligue Permitir agentes de IA em Preferências do editor (Interface: 100%,
 na barra de status). Com o projeto aberto, as mudanças do agente aparecem na hora,
 entram no histórico como "Agente: ..." e podem ser desfeitas com Ctrl+Z; quem salva
-é você. Sem o editor aberto, o agente edita os arquivos do projeto e guarda a versão
-anterior em project.oxy.json.agente.bak.
+é você. Sem o editor aberto, o agente edita os arquivos do projeto e guarda o projeto
+como estava antes da primeira mudança de cada sessão em project.oxy.json.agente.bak.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
-Projetos antigos (schema 1, 2 e 3) são convertidos em memória, sem alterar o original
+Projetos antigos (schema 1 a 4) são convertidos em memória, sem alterar o original
 ao abrir. Ao salvar convertido, a OXY preserva um backup do documento original.
-O schema 4 requer OXY Engine 0.3.2 ou leitor compatível; não abra esses
-documentos em versões antigas que desconheçam os corpos de movimento configuráveis.
+O schema 5 requer OXY Engine 0.6 ou mais recente: a 0.5.x e versões anteriores
+não abrem projetos salvos pela 0.6.
 Sem instalador, atualização automática ou assinatura digital.
 "@
 [IO.File]::WriteAllText((Join-Path $destinationPath 'LEIA-ME.txt'), $instructions, [Text.Encoding]::UTF8)
+# Backups an agent leaves next to a project (project.oxy.json.agente.bak) stay out of the ZIP.
+Get-ChildItem -LiteralPath $destinationPath -Recurse -File -Filter '*.agente.bak' | Remove-Item -Force
 $zip = "$destinationPath.zip"
 $temporaryZip = "$destinationPath.$([Guid]::NewGuid()).zip"
 Compress-Archive -LiteralPath $destinationPath -DestinationPath $temporaryZip -CompressionLevel Optimal

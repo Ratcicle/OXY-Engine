@@ -45,7 +45,7 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
      - plataformas móveis por animação;
      - importar PNG/WAV.
    - **Contexto e diagnóstico:** respostas compactas; Console e estado do teste no editor ao vivo.
-4. **0.6: parkour.** Feito com ajuda do MCP, que serve de teste do próprio MCP. Lacunas da engine que o parkour exige, encontradas na mesma análise:
+4. **0.6: parkour** (implementada em 17/10/2026, ainda não lançada; o resumo está no [CHANGELOG](../CHANGELOG.md)). Feito com ajuda do MCP, que serve de teste do próprio MCP. Lacunas da engine que o parkour exige, encontradas na mesma análise, todas resolvidas com ferramentas genéricas:
    - dados salvos entre partidas (melhor tempo);
    - estado que sobrevive à troca de cena;
    - menu de pausa controlado pelo jogo;
@@ -56,9 +56,49 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
    - transformar objetos pela lógica e plataformas que giram carregando o jogador;
    - exportar o jogo pelo editor.
 
-   Do lado do MCP, durante a 0.6 entram as melhorias que o uso real pedir: iniciar e parar o teste no editor sem tomar o mouse da pessoa, entradas de "bot" que seguem um caminho, interface do jogo desenhada nas capturas, lógica compacta com layout legível, colisores a partir da forma da peça, salvar ao vivo opcional (preferência própria, desligada).
-5. **0.7: FPS.** Lacunas da engine já identificadas: origem do tiro pela câmera, criar inimigos a partir de modelos em posições calculadas, navegação/busca de caminho, eventos de mudança de atributo e de timer.
-6. **Depois:**
+   Do lado do MCP, durante a 0.6 entraram as melhorias que o uso real pediu: iniciar e parar o teste no editor sem tomar o mouse da pessoa, um bot que segue um caminho (também em cenas abertas depois do menu, esperando plataformas), interface do jogo desenhada nas capturas, lógica compacta com layout legível, colisores a partir da forma da peça, salvar ao vivo opcional (preferência própria, desligada), criar projetos e exportar o jogo, cenas e objetos pelo nome em todas as ferramentas e relatórios que dizem por que o teste parou.
+
+   **Online (decidido em 13/10/2026):** o parkour terá o modo online como foco, com corrida em tempo real e colisão entre jogadores. A 0.6 sai offline e já monta o parkour pensando no online: o estado de cada jogador fica no próprio personagem, e as variáveis do jogo guardam só o estado da partida e dos menus. O online vem na 0.7.
+
+   **Princípio:** o parkour só mostra o que falta. A engine ganha ferramentas genéricas, que qualquer jogo usa; nada de checkpoint, linha de chegada ou "melhor tempo" embutidos. O jogo é conteúdo feito com essas ferramentas, em `examples/parkour`.
+
+   **Decisões (12/10/2026):**
+   - **Formato do projeto 5**, uma vez só, com migração que preenche parâmetros novos dos nós com o padrão e backup no primeiro salvamento. A 0.5.x não abre projetos salvos pela 0.6.
+   - **Variáveis do jogo** declaradas no projeto (nome, tipo, valor inicial, "Salva entre partidas"), com chave opcional nos nós, por exemplo um valor por fase. Botão "Variáveis do jogo" na barra da Lógica.
+   - **Progresso salvo** em `%APPDATA%\OXY Engine\Jogos\<id do projeto>\progresso.json`. No teste do editor, o progresso fica em memória durante a sessão.
+   - **Catálogo:** categorias novas **Jogo** (variáveis, progresso, cena atual, pausa, sair) e **Som** ("Reproduzir WAV" vai para Som). Formatar tempo corta as casas e usa ponto (01:23.45).
+   - **Pausa:** a pausa do jogo (menu feito na lógica) e a pausa da engine são separadas e podem coexistir. O Esc abre o menu do jogo quando a cena tem o evento "Ao pausar ou retomar", no player e no teste do editor; perder o foco sempre aciona a pausa da engine, com a janela "Jogo pausado". "Sair do jogo" fecha o player e para o teste do editor.
+   - **Interface:** sem tipo novo; a Imagem de interface sem imagem passa a desenhar um retângulo na Cor do elemento, para fundos de menus.
+   - **Áudio:** cpal para o dispositivo, com mixador próprio (loops, transições, canais de música e efeitos).
+   - **Plataformas que giram** passam a carregar o personagem (posição e giro), revertendo o contrato da 0.3.0; a câmera em primeira pessoa gira junto.
+   - **Exportação** pelo editor e pelo MCP (`oxy_export`, só num destino que a pessoa indicar). A janela do jogo usa o nome do jogo e o ícone da OXY; Alt+Enter alterna a tela cheia; ícone próprio do jogo fica para depois.
+   - **Agentes:** a barra do teste mostra "Agente jogando" com o botão "Assumir"; salvar ao vivo é uma preferência própria, desligada, que guarda um backup antes.
+   - Protótipos aprovados: Lógica e Variáveis do jogo (https://claude.ai/artifact/DpTXojrNpJKgH7a31ZUWsM); teste, pausa e exportação (https://claude.ai/artifact/RGSjLXekAJGumKdV9YzdMz), com as mudanças acima.
+
+   **Ordem de trabalho:**
+   1. Fundação: referências dos nós pelo catálogo, estado da partida no runtime e ordem determinística dos eventos (feito).
+   2. Formato 5, matemática e Formatar tempo, colisores e plataformas pela lógica (feito).
+   3. Cena atual e entrada Cena em Mudar de cena, Referência de cena, sorteio com semente, IDs estáveis e checagem de replay (feito).
+   4. Variáveis do jogo (núcleo, MCP e editor) e progresso salvo (feito).
+   5. Pausa do jogo, mixador e som em loop, transformações pela lógica e plataformas que giram (feito), com a correção do personagem que afundava no meio de pisos grandes.
+   6. MCP: interface do jogo nas capturas, layout automático da lógica, colisores pela forma e cópias no mesmo lote, bot que segue um caminho, teste e salvamento ao vivo (feito).
+   7. Exportação, o parkour (offline, pronto para o online), guia e receitas (feito); falta o lançamento.
+5. **0.7: rede e parkour online.** Corrida em tempo real com colisão entre jogadores. Ferramentas genéricas, que o FPS e o Shadow Duel reaproveitam:
+   - servidor com autoridade sobre a física: um `oxy-server` sem janela, sobre a simulação headless, e o mesmo servidor rodando dentro do jogo de quem hospeda;
+   - entradas por jogador (cada personagem controlado por um jogador);
+   - snapshot e restauração do estado da partida, para previsão no cliente e correção (rollback);
+   - salas, conexão e replicação de objetos.
+
+   As revisões do parkour da 0.6 apontaram o que a lógica precisa para o mesmo jogo valer com vários jogadores, sem nada que pressuponha "o único jogador":
+   - **personagem local:** uma referência ao personagem de quem joga, resolvida em cada cliente, para a interface e a câmera se ligarem "ao personagem local" em vez de a um objeto fixo;
+   - **entradas encaminhadas por jogador** e bots que conduzem vários personagens no mesmo teste (hoje a entrada é uma só para o jogo inteiro, e o bot leva um personagem por pedido);
+   - **evento "ao surgir"** para personagens criados no meio da partida, como quem entra numa sala já em andamento;
+   - **escopos de variáveis:** do cliente (menus, volumes, preferências) ou da partida, guardadas pelo servidor;
+   - **eventos entre objetos** e um evento **"variável mudou"**, para a lógica reagir sem consultar a cada passo;
+   - **reinício por personagem**, que leva um jogador de volta ao ponto de partida sem recarregar a cena para todos;
+   - **menu sobreposto local**, que abre no cliente sem pausar a simulação da partida.
+6. **0.8: FPS.** Lacunas da engine já identificadas: origem do tiro pela câmera, criar inimigos a partir de modelos em posições calculadas, navegação/busca de caminho, eventos de mudança de atributo e de timer.
+7. **Depois:**
    - tabelas de dados e módulos de jogo em Rust (o terreno do Shadow Duel);
    - automação/tower defense;
    - port do Shadow Duel;
@@ -91,6 +131,6 @@ O port do Shadow Duel é um dos motivos da OXY existir. Ele não começa agora, 
 
 **Terreno que a OXY prepara antes do port:**
 1. runtime headless (0.5);
-2. determinismo (0.6);
+2. determinismo (0.6: sorteios semeados, IDs estáveis para cópias, resumo do estado e checagem de replay);
 3. módulos de jogo em Rust: um projeto inclui uma crate própria, ligada ao player, com a lógica que os nós não comportam;
 4. tabelas de dados com esquema, que servem também a itens, torres e inimigos dos outros jogos.

@@ -8,6 +8,11 @@ pub(super) struct Preferences {
     pub navigation_sensitivity: f32,
     /// Lets AI agents connect to this editor through the local channel. Off by default.
     pub allow_agents: bool,
+    /// Lets connected agents save the project, the person's unsaved changes included. Off by
+    /// default, and off whenever `allow_agents` is.
+    pub allow_agent_save: bool,
+    /// The folder Exportar jogo last exported to; none until the first export.
+    pub export_folder: Option<PathBuf>,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -17,6 +22,8 @@ impl Default for Preferences {
             navigation_speed: 8.,
             navigation_sensitivity: 0.003,
             allow_agents: false,
+            allow_agent_save: false,
+            export_folder: None,
         }
     }
 }
@@ -60,6 +67,22 @@ impl Preferences {
                 .map(|v| v.as_bool().ok_or("Preferência de agentes inválida"))
                 .transpose()?
                 .unwrap_or(false),
+            allow_agent_save: json
+                .get("allow_agent_save")
+                .map(|v| {
+                    v.as_bool()
+                        .ok_or("Preferência de salvamento por agentes inválida")
+                })
+                .transpose()?
+                .unwrap_or(false),
+            export_folder: json
+                .get("export_folder")
+                .map(|v| {
+                    v.as_str()
+                        .map(PathBuf::from)
+                        .ok_or("Pasta de exportação inválida")
+                })
+                .transpose()?,
         };
         if !(80..=160).contains(&value.scale_percent) {
             return Err("A escala deve ficar entre 80% e 160%.".into());
@@ -90,12 +113,14 @@ impl Preferences {
         Ok(())
     }
     fn save_to(&self, path: &Path) -> Result<(), String> {
-        let bytes =
-            serde_json::to_vec_pretty(&serde_json::json!({"scale_percent":self.scale_percent,
+        let mut json = serde_json::json!({"scale_percent":self.scale_percent,
             "tool_names":self.tool_names,"navigation_speed":self.navigation_speed,
             "navigation_sensitivity":self.navigation_sensitivity,
-            "allow_agents":self.allow_agents}))
-            .map_err(|e| e.to_string())?;
+            "allow_agents":self.allow_agents,"allow_agent_save":self.allow_agent_save});
+        if let Some(folder) = &self.export_folder {
+            json["export_folder"] = folder.to_string_lossy().into();
+        }
+        let bytes = serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?;
         Ok(persistence::safe_write(path, &bytes)?)
     }
 }
@@ -141,8 +166,14 @@ impl Editor {
             use crate::widgets;
             ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 480.));
             cancel = widgets::dialog_header(ui, "Preferências do editor");
-            let column =
-                widgets::label_column(ui, &["Sensibilidade do olhar", "Nomes das ferramentas"]);
+            let column = widgets::label_column(
+                ui,
+                &[
+                    "Sensibilidade do olhar",
+                    "Nomes das ferramentas",
+                    "Permitir que agentes salvem",
+                ],
+            );
             let section = |ui: &mut egui::Ui, text: &str| {
                 ui.label(
                     egui::RichText::new(text)
@@ -244,7 +275,33 @@ impl Editor {
                 widgets::hint(
                     ui,
                     "Agentes conectados pelo servidor MCP da OXY (oxy-mcp) leem e editam o \
-                     projeto aberto. Eles não salvam, e cada mudança pode ser desfeita com Ctrl+Z.",
+                     projeto aberto. Cada mudança pode ser desfeita com Ctrl+Z.",
+                );
+                // Saving waits for agents to be allowed at all.
+                ui.add_enabled_ui(pending.allow_agents, |ui| {
+                    widgets::property_row_with(ui, column, "Permitir que agentes salvem", "", |ui| {
+                        let mut on = pending.allow_agents && pending.allow_agent_save;
+                        if widgets::toggle(ui, &mut on, "Permitir que agentes salvem").changed() {
+                            pending.allow_agent_save = on;
+                        }
+                        ui.label(
+                            egui::RichText::new(if !pending.allow_agents {
+                                "ligue Permitir agentes primeiro"
+                            } else if on {
+                                "ligado"
+                            } else {
+                                "desligado"
+                            })
+                            .size(12.)
+                            .color(crate::theme::TEXT_MUTED),
+                        );
+                    });
+                });
+                widgets::hint(
+                    ui,
+                    "Quando ligado, o agente pode salvar o projeto, inclusive alterações suas que \
+                     ainda não foram salvas. Antes de salvar, a OXY guarda uma cópia do arquivo \
+                     anterior (project.oxy.json.agente.bak). Desligado por padrão.",
                 );
                 });
             widgets::dialog_footer(ui, |ui| {
@@ -267,6 +324,7 @@ impl Editor {
             return;
         }
         if apply && !ctx.input(|i| i.pointer.any_down()) {
+            pending.allow_agent_save &= pending.allow_agents;
             self.scale = pending.scale_percent as f32 / 100.;
             self.preferences = pending;
             ctx.set_zoom_factor(self.scale);
@@ -291,14 +349,29 @@ mod tests {
             !old.allow_agents,
             "agents stay off unless the person turns them on"
         );
+        assert!(!old.allow_agent_save, "and so does their saving");
+        assert_eq!(old.export_folder, None);
         let mut changed = old;
         changed.allow_agents = true;
+        changed.allow_agent_save = true;
+        changed.export_folder = Some(PathBuf::from("D:\\Jogos\\Exportados"));
         changed.navigation_speed = 9.6;
         changed.navigation_sensitivity = 0.006;
         let folder = std::env::temp_dir().join(format!("oxy-preferences-{}", new_id()));
         let path = folder.join("interface.json");
         changed.save_to(&path).unwrap();
         let loaded = Preferences::decode(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            loaded.export_folder.as_deref(),
+            Some(Path::new("D:\\Jogos\\Exportados"))
+        );
+        // Before the first export the key stays out of the file.
+        let mut fresh = loaded.clone();
+        fresh.export_folder = None;
+        fresh.save_to(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.get("export_folder").is_none(), "{written}");
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&folder).unwrap();
         assert_eq!(loaded.navigation_speed, 9.6);
@@ -306,6 +379,9 @@ mod tests {
         assert_eq!(loaded.scale_percent, 120);
         assert!(loaded.tool_names);
         assert!(loaded.allow_agents);
+        assert!(loaded.allow_agent_save);
+        assert!(Preferences::decode(br#"{"scale_percent":100,"allow_agent_save":"sim"}"#).is_err());
+        assert!(Preferences::decode(br#"{"scale_percent":100,"export_folder":3}"#).is_err());
         let bounded = Preferences::decode(
             br#"{"scale_percent":100,"navigation_speed":100000,"navigation_sensitivity":-9}"#,
         )

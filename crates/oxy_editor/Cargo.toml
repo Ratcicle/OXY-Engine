@@ -8,15 +8,18 @@ license.workspace = true
 [dependencies]
 oxy_core.workspace = true
 oxy_render.workspace = true
+oxy_audio.workspace = true
 eframe.workspace = true
 egui.workspace = true
 glam.workspace = true
 image.workspace = true
 serde_json.workspace = true
 rfd.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 winresource = "=0.1.31"
 
 [dev-dependencies]
+hound.workspace = true
 winit = "=0.30.13"

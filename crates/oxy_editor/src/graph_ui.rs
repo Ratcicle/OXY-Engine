@@ -2,7 +2,9 @@
 //! The graph stays the persisted contract of `oxy_core::graph`; this module draws and
 //! edits it.
 mod parameters;
-use parameters::{ParameterContext, param_label, param_summary, parameter_editor};
+use parameters::{
+    ParameterContext, connected_choice, param_label, param_summary, parameter_editor,
+};
 pub use parameters::{collision_filter_picker, object_picker, value_editor};
 
 use crate::icons::{self, Icon};
@@ -11,17 +13,13 @@ use egui::{
     Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Vec2,
 };
 use oxy_core::document::{Id, Project, Scene, Value};
-use oxy_core::graph::{Edge, Graph, Node, OperationDef, ParamDef, PortDef, PortType, registry};
+use oxy_core::graph::layout::{BODY_TOP, HEADER_HEIGHT, ROW_HEIGHT, port_rows, summary_params};
+use oxy_core::graph::{Edge, Graph, Node, OperationDef, PortDef, PortType, registry};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub use oxy_render::input::text_input_active;
 
-const NODE_WIDTH: f32 = 200.;
-const HEADER_HEIGHT: f32 = 30.;
-const ROW_HEIGHT: f32 = 22.;
-const BODY_TOP: f32 = 6.;
-const BODY_BOTTOM: f32 = 8.;
 const MIN_ZOOM: f32 = 0.35;
 const MAX_ZOOM: f32 = 1.6;
 const DEFAULT_PAN: Vec2 = Vec2::new(35., 45.);
@@ -43,7 +41,15 @@ const STARTERS: [&str; 4] = [
     "event.area_enter",
 ];
 /// Catalog categories open by default; the movement families start collapsed.
-const OPEN_CATEGORIES: [&str; 5] = ["Eventos", "Dados", "Condições", "Ações", "Controle"];
+const OPEN_CATEGORIES: [&str; 7] = [
+    "Eventos",
+    "Dados",
+    "Condições",
+    "Ações",
+    "Jogo",
+    "Som",
+    "Controle",
+];
 
 fn port_color(kind: &PortType) -> Color32 {
     match kind {
@@ -85,6 +91,8 @@ pub fn category_icon(category: &str) -> Icon {
         "Dados" => Icon::Data,
         "Condições" => Icon::Branch,
         "Ações" => Icon::Action,
+        "Jogo" => Icon::Game,
+        "Som" => Icon::Sound,
         "Controle" => Icon::Flow,
         "Entrada e tempo" => Icon::Keyboard,
         "Personagem 3D" => Icon::Person,
@@ -193,26 +201,9 @@ fn bezier(points: [Pos2; 4], stroke: Stroke) -> egui::Shape {
         .into()
 }
 
-/// Parameters without an input port of the same name: rows of the node body.
-fn summary_params(op: &OperationDef) -> impl Iterator<Item = &ParamDef> {
-    op.params
-        .iter()
-        .filter(|param| !op.inputs.iter().any(|port| port.id == param.id))
-}
-
-fn port_rows(op: &OperationDef) -> usize {
-    op.inputs.len().max(op.outputs.len())
-}
-
-/// Size of a node in graph units. An unknown operation keeps one row for its identifier.
+/// Size of a node in graph units ([`oxy_core::graph::node_extent`], which agents' layouts use).
 fn node_size(op: Option<&OperationDef>) -> Vec2 {
-    let rows = op
-        .map_or(1, |op| port_rows(op) + summary_params(op).count())
-        .max(1);
-    Vec2::new(
-        NODE_WIDTH,
-        HEADER_HEIGHT + BODY_TOP + rows as f32 * ROW_HEIGHT + BODY_BOTTOM,
-    )
+    Vec2::from(oxy_core::graph::node_extent(op))
 }
 
 fn row_center(row: usize) -> f32 {
@@ -630,6 +621,8 @@ impl GraphView {
                 center.y - size.y * 0.5 + step,
             ],
         );
+        // The event never fires before an action is picked; Ler ação de entrada keeps its
+        // default, the jump action.
         if op.id == "event.input" {
             node.params
                 .insert("action".into(), Value::Text(String::new()));
@@ -1511,15 +1504,27 @@ impl GraphView {
             for (param, source) in op.params.iter().zip(&sources) {
                 widgets::property_row_with(ui, column, param_label(op.id, param), "", |ui| {
                     if let Some(source) = source {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("← {source}"))
-                                    .size(12.)
-                                    .color(theme::TEXT_MUTED),
+                        ui.vertical(|ui| {
+                            // A picker by name stays, disabled, saying the input decides.
+                            if let Some(choice) = connected_choice(op, param) {
+                                ui.add_enabled_ui(false, |ui| {
+                                    egui::ComboBox::from_id_salt((&node_id, param.id, "input"))
+                                        .width(ui.available_width().clamp(80., 240.))
+                                        .selected_text(choice)
+                                        .truncate()
+                                        .show_ui(ui, |_| {});
+                                });
+                            }
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("← {source}"))
+                                        .size(12.)
+                                        .color(theme::TEXT_MUTED),
+                                )
+                                .truncate(),
                             )
-                            .truncate(),
-                        )
-                        .on_hover_text("Uma entrada conectada recebe o valor do outro nó.");
+                            .on_hover_text("Uma entrada conectada recebe o valor do outro nó.");
+                        });
                     } else {
                         ui.vertical(|ui| {
                             let context = ParameterContext {
@@ -1888,7 +1893,7 @@ mod tests {
     use oxy_core::{
         animation::Clip,
         document::{Asset, AssetKind, Entity, SceneKind, new_id},
-        graph::ParamDef,
+        graph::{ParamDef, Reference, reference},
     };
 
     /// A context with the editor fonts: nodes and headers use the medium family.
@@ -1898,7 +1903,7 @@ mod tests {
         ctx
     }
 
-    fn text_center(output: &egui::FullOutput, label: &str) -> Pos2 {
+    fn rendered_text(output: &egui::FullOutput, label: &str) -> Option<Pos2> {
         fn find(shape: &egui::Shape, label: &str) -> Option<Pos2> {
             match shape {
                 egui::Shape::Text(text) if text.galley.text() == label => {
@@ -1912,7 +1917,10 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| find(&shape.shape, label))
-            .unwrap_or_else(|| panic!("UI text not rendered: {label}"))
+    }
+
+    fn text_center(output: &egui::FullOutput, label: &str) -> Pos2 {
+        rendered_text(output, label).unwrap_or_else(|| panic!("UI text not rendered: {label}"))
     }
 
     fn parameter_frame(
@@ -2065,6 +2073,302 @@ mod tests {
         }
     }
 
+    #[test]
+    fn number_fields_with_a_range_drag_only_within_it() {
+        let project = Project::new("Faixas");
+        let context = ParameterContext {
+            objects: &[],
+            project: &project,
+            scene: &project.scenes[0],
+            owner: None,
+            target_connected: false,
+            any_type: false,
+        };
+        let ctx = themed();
+        let mut node = Node::new("character.teleport", [0.0; 2]);
+        let param = registry()
+            .iter()
+            .find(|op| op.id == "character.teleport")
+            .unwrap()
+            .params
+            .iter()
+            .find(|param| param.id == "search")
+            .unwrap();
+        // An older project's value outside the range shows as it is, unchanged.
+        node.params.insert("search".into(), Value::Number(3.));
+        let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
+        assert_eq!(node.params["search"], Value::Number(3.));
+        let field = text_center(&output, "3.0");
+        let pressed = |pos: Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        node.params.insert("search".into(), Value::Number(0.));
+        let far = field + Vec2::new(300.0, 0.0);
+        for events in [
+            vec![egui::Event::PointerMoved(field), pressed(field, true)],
+            vec![egui::Event::PointerMoved(field + Vec2::new(150.0, 0.0))],
+            vec![egui::Event::PointerMoved(far)],
+            vec![pressed(far, false)],
+        ] {
+            parameter_frame(&ctx, &mut node, param, &context, events);
+        }
+        assert_eq!(node.params["search"], Value::Number(2.));
+    }
+
+    /// Every parameter that names a scene, an audio, a clip, an input action or a game
+    /// variable, by the core's reference(), is picked by name and never typed, and the node
+    /// body shows that name.
+    #[test]
+    fn every_reference_parameter_gets_a_picker_and_never_a_text_field() {
+        let mut project = Project::new("Referências do catálogo");
+        let mut owner = Entity::new("Peça animada", None);
+        let clip = Clip::new("Golpe editável");
+        let clip_id = clip.id.clone();
+        owner.clips.push(clip);
+        let owner_id = owner.id.clone();
+        project.scenes[0].entities.push(owner);
+        let next_scene = Scene::new("Outra cena", SceneKind::ThreeD);
+        let next_id = next_scene.id.clone();
+        project.scenes.push(next_scene);
+        let audio_id = new_id();
+        project.assets.push(Asset {
+            id: audio_id.clone(),
+            name: "Som de impacto".into(),
+            path: "assets/impacto.wav".into(),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        let variable_id =
+            oxy_core::variables::create(&mut project, "Moedas", Value::Number(0.), false).unwrap();
+        let context = ParameterContext {
+            objects: &[],
+            project: &project,
+            scene: &project.scenes[0],
+            owner: Some(&owner_id),
+            target_connected: false,
+            any_type: false,
+        };
+        let text_fields =
+            |ctx: &egui::Context| ctx.data(|data| data.count::<egui::text_edit::TextEditState>());
+        // A plain text parameter shows that the count sees text fields.
+        let (operation, plain) = registry()
+            .iter()
+            .find_map(|op| {
+                let param = op.params.iter().find(|param| {
+                    matches!(param.default, Value::Text(_))
+                        && reference(op.id, param).is_none()
+                        && oxy_core::graph::choices(op.id, param.id).is_none()
+                })?;
+                Some((op.id, param))
+            })
+            .unwrap();
+        let ctx = themed();
+        let mut node = Node::new(operation, [0.0; 2]);
+        parameter_frame(&ctx, &mut node, plain, &context, vec![]);
+        assert!(text_fields(&ctx) > 0);
+        let mut covered = Vec::new();
+        for op in registry() {
+            for param in &op.params {
+                let kind = reference(op.id, param);
+                let (label, expected, summary, missing) = match kind {
+                    Some(Reference::Scene) => (
+                        "Outra cena",
+                        next_id.as_str(),
+                        "Outra cena",
+                        "cena removida",
+                    ),
+                    Some(Reference::Audio) => (
+                        "Som de impacto",
+                        audio_id.as_str(),
+                        "Som de impacto",
+                        "áudio removido",
+                    ),
+                    Some(Reference::Clip) => (
+                        "Peça animada · Golpe editável",
+                        clip_id.as_str(),
+                        "Golpe editável",
+                        "animação removida",
+                    ),
+                    Some(Reference::InputAction) => {
+                        ("Atacar · J", "atacar", "Atacar (J)", "ação removida")
+                    }
+                    Some(Reference::Variable) => (
+                        "Moedas · Número",
+                        variable_id.as_str(),
+                        "Moedas",
+                        "variável removida",
+                    ),
+                    _ => continue,
+                };
+                let name = format!("{}.{}", op.id, param.id);
+                let ctx = themed();
+                let mut node = Node::new(op.id, [0.0; 2]);
+                node.params
+                    .insert(param.id.into(), Value::Text(String::new()));
+                let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
+                assert_eq!(text_fields(&ctx), 0, "{name} shows a text field");
+                // An empty value that is a choice of its own (Parar som's audio) shows it.
+                let empty = oxy_core::graph::empty_choice(op.id, param.id);
+                let button = text_center(&output, empty.unwrap_or("Escolha…"));
+                click_parameter(&ctx, &mut node, param, &context, button);
+                let output = parameter_frame(&ctx, &mut node, param, &context, vec![]);
+                let choice = text_center(&output, label);
+                click_parameter(&ctx, &mut node, param, &context, choice);
+                assert_eq!(text_fields(&ctx), 0, "{name} shows a text field");
+                assert_eq!(
+                    node.params[param.id],
+                    Value::Text(expected.into()),
+                    "{name}"
+                );
+                if kind == Some(Reference::Clip) && node.params.contains_key("target") {
+                    assert_eq!(node.params["target"], Value::Object(Some(owner_id.clone())));
+                }
+                assert_eq!(param_label(op.id, param), param.label, "{name}");
+                assert_eq!(
+                    param_summary(&node, param, &context).as_deref(),
+                    Some(summary),
+                    "{name}"
+                );
+                node.params
+                    .insert(param.id.into(), Value::Text("removido".into()));
+                assert_eq!(
+                    param_summary(&node, param, &context).as_deref(),
+                    Some(missing),
+                    "{name}"
+                );
+                node.params
+                    .insert(param.id.into(), Value::Text(String::new()));
+                assert_eq!(
+                    param_summary(&node, param, &context).as_deref(),
+                    Some(empty.unwrap_or("—")),
+                    "{name}"
+                );
+                covered.push(name);
+            }
+        }
+        for known in [
+            "action.scene.scene",
+            "value.scene.scene",
+            "action.sound.asset",
+            "action.sound_loop.asset",
+            "action.sound_stop.asset",
+            "action.animation.clip",
+            "event.input.action",
+            "input.read.action",
+            "variable.get.variable",
+            "variable.set.variable",
+        ] {
+            assert!(covered.iter().any(|name| name == known), "{known}");
+        }
+    }
+
+    /// Choosing a game variable on Alterar variável do jogo gives Novo valor the variable's
+    /// type, which then needs no type picker; a value of another type keeps it, with the
+    /// reason. Chave stays a plain text parameter.
+    #[test]
+    fn a_chosen_variable_gives_the_new_value_its_type() {
+        let mut project = Project::new("Variáveis");
+        let start = oxy_core::variables::create(
+            &mut project,
+            "Saída",
+            Value::Vector3([0., 1.5, 0.]),
+            false,
+        )
+        .unwrap();
+        let title =
+            oxy_core::variables::create(&mut project, "Título", Value::Text("Olá".into()), true)
+                .unwrap();
+        let op = registry()
+            .iter()
+            .find(|op| op.id == "variable.set")
+            .unwrap();
+        let param = |key: &str| op.params.iter().find(|param| param.id == key).unwrap();
+        let context = ParameterContext {
+            objects: &[],
+            project: &project,
+            scene: &project.scenes[0],
+            owner: None,
+            target_connected: false,
+            any_type: false,
+        };
+        let new_value = ParameterContext {
+            any_type: true,
+            ..context
+        };
+        let ctx = themed();
+        let mut node = Node::new("variable.set", [0.0; 2]);
+        assert_eq!(node.params["value"], Value::Number(0.));
+        // Without a variable, Novo valor offers every type.
+        let output = parameter_frame(&ctx, &mut node, param("value"), &new_value, vec![]);
+        assert!(rendered_text(&output, "Número").is_some());
+        for (label, id, value) in [
+            ("Saída · Vetor3", &start, Value::Vector3([0., 1.5, 0.])),
+            ("Título · Texto", &title, Value::Text("Olá".into())),
+        ] {
+            let output = parameter_frame(&ctx, &mut node, param("variable"), &context, vec![]);
+            let button = rendered_text(&output, "Escolha…")
+                .or_else(|| rendered_text(&output, "Saída · Vetor3"))
+                .unwrap();
+            click_parameter(&ctx, &mut node, param("variable"), &context, button);
+            let output = parameter_frame(&ctx, &mut node, param("variable"), &context, vec![]);
+            let choice = text_center(&output, label);
+            click_parameter(&ctx, &mut node, param("variable"), &context, choice);
+            assert_eq!(node.params["variable"], Value::Text(id.clone()), "{label}");
+            assert_eq!(node.params["value"], value, "{label}");
+            let output = parameter_frame(&ctx, &mut node, param("value"), &new_value, vec![]);
+            for kind in ["Número", "Texto", "Vetor3"] {
+                assert!(rendered_text(&output, kind).is_none(), "{label}: {kind}");
+            }
+        }
+        assert_eq!(
+            param_summary(&node, param("variable"), &context).as_deref(),
+            Some("Título")
+        );
+        // A value of another type, as an agent could leave it: the picker stays, with why.
+        node.params.insert("value".into(), Value::Number(3.));
+        let output = parameter_frame(&ctx, &mut node, param("value"), &new_value, vec![]);
+        assert!(rendered_text(&output, "Número").is_some());
+        assert!(rendered_text(&output, "Título guarda texto: escolha esse tipo.").is_some());
+        // A value that already has the variable's type stays.
+        let mut kept = Node::new("variable.set", [0.0; 2]);
+        kept.params
+            .insert("value".into(), Value::Vector3([1., 2., 3.]));
+        let output = parameter_frame(&ctx, &mut kept, param("variable"), &context, vec![]);
+        let button = text_center(&output, "Escolha…");
+        click_parameter(&ctx, &mut kept, param("variable"), &context, button);
+        let output = parameter_frame(&ctx, &mut kept, param("variable"), &context, vec![]);
+        let choice = text_center(&output, "Saída · Vetor3");
+        click_parameter(&ctx, &mut kept, param("variable"), &context, choice);
+        assert_eq!(kept.params["variable"], Value::Text(start.clone()));
+        assert_eq!(kept.params["value"], Value::Vector3([1., 2., 3.]));
+        // Ler variável do jogo has no new value. On both nodes, Chave is typed like any text.
+        assert!(
+            !Node::new("variable.get", [0.0; 2])
+                .params
+                .contains_key("value")
+        );
+        let text_fields =
+            |ctx: &egui::Context| ctx.data(|data| data.count::<egui::text_edit::TextEditState>());
+        for operation in ["variable.get", "variable.set"] {
+            let definition = registry().iter().find(|op| op.id == operation).unwrap();
+            let key = definition.params.iter().find(|p| p.id == "key").unwrap();
+            assert_eq!(reference(operation, key), None, "{operation}");
+            let ctx = themed();
+            let mut node = Node::new(operation, [0.0; 2]);
+            assert_eq!(text_fields(&ctx), 0, "{operation}");
+            parameter_frame(&ctx, &mut node, key, &context, vec![]);
+            assert!(text_fields(&ctx) > 0, "{operation}");
+            assert_eq!(
+                param_summary(&node, key, &context).as_deref(),
+                Some("—"),
+                "{operation}"
+            );
+        }
+    }
+
     /// Modes, operators and components come from the core lists that agent commands enforce:
     /// each value reads as its label, and the inspector stores the value of the label picked.
     #[test]
@@ -2092,8 +2396,17 @@ mod tests {
             ("event.input", "mode"),
             ("action.component", "component"),
             ("math.binary", "operator"),
+            ("math.unary", "operator"),
+            ("text.time", "format"),
+            ("random.number", "mode"),
             ("condition.compare", "operator"),
             ("camera.mode", "mode"),
+            ("event.pause", "when"),
+            ("game.pause", "mode"),
+            ("game.cursor", "mode"),
+            ("transform.write", "channel"),
+            ("transform.write", "mode"),
+            ("transform.write", "space"),
         ] {
             for (value, label) in oxy_core::graph::choices(operation, key).unwrap() {
                 let mut node = Node::new(operation, [0.0; 2]);
@@ -2160,6 +2473,52 @@ mod tests {
     }
 
     #[test]
+    fn a_scene_picker_says_when_its_connected_input_decides() {
+        let ctx = themed();
+        let mut project = Project::new("Reinício");
+        let other = Scene::new("Outra cena", SceneKind::ThreeD);
+        // The parameter still names a scene, which the connected input replaces.
+        let mut change = Node::new("action.scene", [260.0, 15.0]);
+        change
+            .params
+            .insert("scene".into(), Value::Text(other.id.clone()));
+        project.scenes.push(other);
+        let current = Node::new("scene.current", [15.0, 15.0]);
+        let mut graph = Graph {
+            nodes: vec![current.clone(), change.clone()],
+            edges: vec![Edge {
+                from_node: current.id.clone(),
+                from_port: "scene".into(),
+                to_node: change.id.clone(),
+                to_port: "scene".into(),
+            }],
+        };
+        let op = operation("action.scene").unwrap();
+        assert_eq!(
+            connected_choice(op, &op.params[0]).as_deref(),
+            Some("Usando a entrada Cena")
+        );
+        // Parameters without a picker keep showing only where the value comes from.
+        let wait = operation("control.wait").unwrap();
+        assert_eq!(connected_choice(wait, &wait.params[0]), None);
+        let mut view = GraphView {
+            selected: Some(change.id.clone()),
+            ..Default::default()
+        };
+        let output = logic_frame(&ctx, &mut view, &mut graph, &project, vec![]);
+        text_center(&output, "Usando a entrada Cena");
+        text_center(&output, "← Cena atual · Cena");
+        // Neither the inspector nor the node shows the ignored scene.
+        assert!(rendered_text(&output, "Outra cena").is_none());
+        // Disconnected, the scene is picked by name again.
+        graph.edges.clear();
+        let output = logic_frame(&ctx, &mut view, &mut graph, &project, vec![]);
+        text_center(&output, "Outra cena");
+        assert!(rendered_text(&output, "Usando a entrada Cena").is_none());
+        assert_eq!(graph.nodes[1].params, change.params);
+    }
+
+    #[test]
     fn every_operation_is_described_and_listed_once_in_the_catalog() {
         let listed: Vec<_> = categories()
             .iter()
@@ -2171,6 +2530,19 @@ mod tests {
             names.len(),
             categories().len(),
             "Each category appears once"
+        );
+        for name in &names {
+            assert!(
+                !matches!(category_icon(name), Icon::Logic),
+                "{name} has no icon"
+            );
+        }
+        assert!(OPEN_CATEGORIES.iter().all(|name| names.contains(name)));
+        let order: Vec<_> = categories().iter().map(|(name, _)| *name).collect();
+        let game = order.iter().position(|name| *name == "Jogo").unwrap();
+        assert_eq!(
+            order[game - 1..=game + 2],
+            ["Ações", "Jogo", "Som", "Controle"]
         );
         for op in registry() {
             assert!(

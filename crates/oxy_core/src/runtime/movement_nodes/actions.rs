@@ -33,7 +33,6 @@ impl Runtime {
         };
         let target = |rt: &Runtime, budget: &mut usize| rt.target(graph, node, context, budget, 0);
         let mut outputs = Vec::new();
-        let mut new_trajectory = None;
         match node.operation.as_str() {
             "character.intent" => {
                 let id = target(self, budget)?;
@@ -101,6 +100,21 @@ impl Runtime {
                 let yaw = number(self, "yaw", budget)?.to_radians();
                 self.set_character_yaw(&id, yaw)?;
             }
+            "transform.write" => {
+                let id = target(self, budget)?;
+                let value = input(self, "value", budget)?
+                    .vector3()
+                    .ok_or("Valor exige Vetor3")?;
+                let jump = boolean(self, "jump", budget)?;
+                self.write_transform(
+                    &id,
+                    node.text("channel"),
+                    node.text("mode"),
+                    node.text("space"),
+                    value,
+                    jump,
+                )?;
+            }
             "character.teleport" => {
                 let result = (|| {
                     let id = target(self, budget)?;
@@ -122,7 +136,8 @@ impl Runtime {
                     } else {
                         None
                     };
-                    let destination = self.teleport_character(
+                    // The flow goes on after the teleport, as any flow already running.
+                    self.teleport_character(
                         &id,
                         position,
                         TeleportOptions {
@@ -131,9 +146,7 @@ impl Runtime {
                             look,
                             search_radius,
                         },
-                    )?;
-                    new_trajectory = Some((id.clone(), self.characters.states[&id].trajectory));
-                    Ok::<_, String>(destination)
+                    )
                 })();
                 outputs.extend([
                     ("success", Value::Bool(result.is_ok())),
@@ -152,13 +165,17 @@ impl Runtime {
             "camera.mode" => {
                 let id = target(self, budget)?;
                 let seconds = number(self, "seconds", budget)?;
-                let mode = match node.text("mode") {
-                    "first_person" => CameraMode::FirstPerson,
-                    "third_person" => CameraMode::ThirdPerson,
-                    "fixed" => CameraMode::Fixed,
+                match node.text("mode") {
+                    "first_person" => {
+                        self.set_camera_mode(&id, CameraMode::FirstPerson, seconds)?
+                    }
+                    "third_person" => {
+                        self.set_camera_mode(&id, CameraMode::ThirdPerson, seconds)?
+                    }
+                    "fixed" => self.set_camera_mode(&id, CameraMode::Fixed, seconds)?,
+                    "fixed_object" => self.fix_camera_on_object(&id, seconds)?,
                     _ => return Err("Modo de câmera desconhecido".into()),
-                };
-                self.set_camera_mode(&id, mode, seconds)?;
+                }
             }
             "camera.target" => {
                 let id = target(self, budget)?;
@@ -268,9 +285,6 @@ impl Runtime {
                 ]);
             }
             _ => return Ok(false),
-        }
-        if let Some(trajectory) = new_trajectory {
-            context.trajectory = Some(trajectory);
         }
         if !outputs.is_empty() {
             let stored = Arc::make_mut(&mut context.outputs);

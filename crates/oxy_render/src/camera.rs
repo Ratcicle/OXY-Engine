@@ -106,8 +106,14 @@ impl CameraState {
     }
 
     pub fn matrix(&self, size: [u32; 2]) -> Mat4 {
+        self.projection(size) * self.view()
+    }
+
+    /// Orthographic for 2D scenes and for captures from above or from the side, perspective
+    /// otherwise.
+    pub fn projection(&self, size: [u32; 2]) -> Mat4 {
         let aspect = size[0].max(1) as f32 / size[1].max(1) as f32;
-        let projection = if self.kind == SceneKind::TwoD {
+        if self.kind == SceneKind::TwoD {
             let half = self.orthographic_size;
             Mat4::orthographic_rh(-half * aspect, half * aspect, -half, half, -1000., 1000.)
         } else {
@@ -117,8 +123,7 @@ impl CameraState {
                 oxy_core::character::CAMERA_NEAR,
                 2000.,
             )
-        };
-        projection * self.view()
+        }
     }
 
     pub fn ray(&self, size: [u32; 2], pixel: [f32; 2]) -> (Vec3, Vec3) {

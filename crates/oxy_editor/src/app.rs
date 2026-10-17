@@ -4,6 +4,7 @@ mod body_tools;
 mod camera_tools;
 mod console_feed;
 mod diagnostics;
+mod export;
 mod hierarchy;
 pub(crate) use hierarchy::entity_icon;
 mod home;
@@ -17,6 +18,7 @@ mod preferences;
 mod properties;
 mod scenes;
 mod spatial_tools;
+mod test_progress;
 mod textures;
 mod toolbar;
 mod viewport;
@@ -36,8 +38,8 @@ use oxy_core::{
     edit_history::CommandHistory,
     editing::{self, Selection},
     painting::PaintImage,
-    persistence,
-    runtime::Runtime,
+    persistence, random,
+    runtime::{Runtime, RuntimeOptions},
     texture_cache::TextureCache,
 };
 use oxy_render::{CameraState, Renderer};
@@ -122,14 +124,34 @@ impl Default for ViewOptions {
         }
     }
 }
+/// Who plays the test: the person, with their mouse and keyboard, or an AI agent through its
+/// channel, which never takes the mouse or reads the keyboard and plays on while the window is
+/// in the background.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Driver {
+    #[default]
+    Person,
+    Agent,
+}
 /// The isolated play test. While it runs, the central area shows the game.
 pub(crate) struct PlaySession {
     pub(crate) runtime: Option<Runtime>,
     pub(crate) game_ui: oxy_render::game_ui::GameUi,
     pub(crate) capture: bool,
+    pub(crate) driver: Driver,
+    /// Clicks and Esc an agent sent, by game time, given to the game when that time comes.
+    pub(crate) agent_clicks: std::collections::VecDeque<(f64, oxy_core::headless::Direct)>,
     pub(crate) previous_tab: Tab,
     pub(crate) last_runtime_scene: Option<Id>,
     pub(crate) game_size: Option<[u32; 2]>,
+    /// The seed the current or last test of the project started with, for agents to repeat
+    /// its draws in oxy_simulate after it stops too.
+    pub(crate) seed: Option<u64>,
+    /// What Salvar progresso recorded in this editor session's tests, which the next test
+    /// starts from (see `test_progress`).
+    pub(crate) test_save: oxy_core::save::SaveSlot,
+    /// The test's sounds and the Library's Ouvir.
+    pub(crate) mixer: oxy_audio::Mixer,
 }
 impl Default for PlaySession {
     fn default() -> Self {
@@ -137,10 +159,41 @@ impl Default for PlaySession {
             runtime: None,
             game_ui: Default::default(),
             capture: false,
+            driver: Driver::Person,
+            agent_clicks: Default::default(),
             previous_tab: Tab::Scene,
             last_runtime_scene: None,
             game_size: None,
+            seed: None,
+            test_save: Default::default(),
+            mixer: Default::default(),
         }
+    }
+}
+impl PlaySession {
+    /// What another project must not inherit: the running test, its seed, its sounds and the
+    /// test progress.
+    pub(crate) fn forget_project(&mut self) {
+        self.end();
+        self.seed = None;
+        self.test_save = Default::default();
+    }
+    /// Parar: the test ends, and nothing it played goes on.
+    pub(crate) fn end(&mut self) {
+        self.runtime = None;
+        self.capture = false;
+        self.driver = Driver::Person;
+        self.agent_clicks.clear();
+        self.last_runtime_scene = None;
+        self.mixer.stop_all();
+    }
+    /// Plays what the test asked for and follows its pauses; what went wrong, for the Console.
+    /// Also called when the test pauses, since the Logic tab does not draw the game.
+    pub(crate) fn update_audio(&mut self, root: &Path) -> Vec<String> {
+        if let Some(runtime) = &mut self.runtime {
+            self.mixer.update(runtime, root);
+        }
+        self.mixer.take_errors()
     }
 }
 #[derive(Default)]
@@ -228,6 +281,8 @@ pub struct Editor {
     body_tools: body_tools::BodyTools,
     new_project: Option<scenes::NewProject>,
     scene_dialog: Option<scenes::SceneDialog>,
+    /// Exportar jogo and an agent's export.
+    export: export::ExportUi,
     logic_ui: logic::LogicUi,
     modeling: modeling::ModelState,
     physics_ui: physics::PhysicsUi,
@@ -360,6 +415,7 @@ impl Editor {
             body_tools: Default::default(),
             new_project: None,
             scene_dialog: None,
+            export: Default::default(),
             logic_ui: Default::default(),
             modeling: Default::default(),
             physics_ui: Default::default(),
@@ -457,8 +513,7 @@ impl Editor {
         self.hierarchy_ui.reveal_scroll = None;
         self.sync_console_feed();
         self.console_feed.new_test();
-        self.play.runtime = None;
-        self.play.capture = false;
+        self.play.forget_project();
         self.selected = None;
         self.selection.single(None);
         self.hierarchy_ui.rename = None;
@@ -561,6 +616,10 @@ impl Editor {
         }
     }
     pub fn save(&mut self) -> bool {
+        self.save_from("")
+    }
+    /// Saves, writing the Console line "Salvo: …" with `origin` before it (an agent's prefix).
+    pub(crate) fn save_from(&mut self, origin: &str) -> bool {
         if self.mesh_operation_active() {
             self.warn("Termine o gesto de modelagem ou pressione Esc antes de salvar.");
             return false;
@@ -631,7 +690,7 @@ impl Editor {
                 self.remember_project();
                 self.renderer.release_saved_texture_pixels();
                 self.play.game_ui.release_saved_texture_pixels();
-                self.log(format!("Salvo: {}", path.display()));
+                self.log(format!("{origin}Salvo: {}", path.display()));
                 true
             }
             Err(e) => {
@@ -645,7 +704,10 @@ impl Editor {
         }
     }
     fn transition(&mut self, transition: Transition) {
-        if self.dirty() || !self.studio.animation.drafts.is_empty() {
+        if self.export.running() {
+            // The export finishes, and answers, in the project that started it.
+            self.warn("Espere a exportação do jogo terminar para trocar de projeto.");
+        } else if self.dirty() || !self.studio.animation.drafts.is_empty() {
             self.pending = Some(transition)
         } else {
             self.apply_transition(transition)
@@ -823,45 +885,81 @@ impl Editor {
             self.asset_ui.thumbnail = None;
         }
     }
+    /// Jogar: the person tests the open scene.
     fn start(&mut self) {
+        let scene = self.scene_id.clone();
+        if let Err(error) = self.start_with(&scene, Driver::Person) {
+            self.warn(error);
+        }
+    }
+    /// Starts a test in `scene`, shown in the Scene tab. The person's holds the mouse and reads
+    /// the keyboard; an agent's takes neither.
+    pub(crate) fn start_with(&mut self, scene: &Id, driver: Driver) -> Result<(), String> {
         if self.mesh_operation_active() {
-            self.warn("Termine o gesto de modelagem ou pressione Esc antes de jogar.");
-            return;
+            return Err("Termine o gesto de modelagem ou pressione Esc antes de jogar.".into());
         }
         self.cancel_mesh_operation();
         self.set_spatial_tool(Tool::Object);
         self.finish_history(true);
-        match Runtime::new(&self.state.project, &self.scene_id) {
-            Ok(runtime) => {
-                self.play.previous_tab = self.tab;
-                // The new test's logs count from zero.
-                self.sync_console_feed();
-                self.console_feed.new_test();
-                self.play.runtime = Some(runtime);
-                self.set_tab(Tab::Scene);
-                self.play.capture = true;
-                self.play.last_runtime_scene = Some(self.scene_id.clone());
-                self.frame.last_frame = Instant::now();
-                self.studio.playing = false;
-            }
-            Err(e) => {
-                self.log(e);
-                self.notice_last(false);
-            }
-        }
+        // A new test starts in silence, the Library's Ouvir included.
+        self.play.mixer.stop_all();
+        // Every test draws differently, as the exported game does. The low half of a v4 UUID
+        // has its fixed bits above the 53 kept.
+        let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
+        let options = self.play.options(seed);
+        let runtime = Runtime::with_options(&self.state.project, scene, options)?;
+        self.play.seed = Some(seed);
+        self.play.previous_tab = self.tab;
+        // The new test's logs count from zero.
+        self.sync_console_feed();
+        self.console_feed.new_test();
+        self.play.runtime = Some(runtime);
+        self.set_tab(Tab::Scene);
+        self.play.driver = driver;
+        self.play.capture = driver == Driver::Person;
+        self.play.agent_clicks.clear();
+        self.play.last_runtime_scene = Some(scene.clone());
+        self.frame.last_frame = Instant::now();
+        self.studio.playing = false;
+        Ok(())
     }
     fn stop(&mut self) {
-        // The last frame's logs reach agents after the test too.
+        // What the last frame saved, and its logs, reach the Console and agents after the test.
+        self.take_test_saves();
         self.sync_console_feed();
-        self.play.runtime = None;
-        self.play.capture = false;
+        self.play.end();
         self.set_tab(self.play.previous_tab);
-        self.play.last_runtime_scene = None;
     }
+    /// Pauses the test. What an agent sent and the game has not reached yet is dropped, as the
+    /// runtime drops its timed inputs.
     fn pause(&mut self) {
         self.play.capture = false;
+        self.play.agent_clicks.clear();
         if let Some(rt) = &mut self.play.runtime {
             rt.set_paused(true);
+        }
+        self.update_test_audio();
+    }
+    /// Resumes a paused test, or goes on with a running one, for `driver`: Retomar and Assumir
+    /// give it to the person, with their mouse and keyboard; an agent's resume to the agent.
+    /// Inputs an agent sent and the game has not reached yet are dropped, and keys held let go.
+    pub(crate) fn resume_for(&mut self, driver: Driver) {
+        if self.tab == Tab::Logic {
+            self.set_tab(Tab::Scene);
+        }
+        self.play.driver = driver;
+        self.play.capture = driver == Driver::Person;
+        self.play.agent_clicks.clear();
+        if let Some(rt) = &mut self.play.runtime {
+            rt.set_paused(false);
+        }
+        self.frame.last_frame = Instant::now();
+    }
+    /// The test's sounds follow it (see `PlaySession::update_audio`); problems go to the Console.
+    fn update_test_audio(&mut self) {
+        let root = self.root();
+        for error in self.play.update_audio(&root) {
+            self.log(error);
         }
     }
     pub fn select(&mut self, id: Option<Id>) {
@@ -1053,34 +1151,74 @@ impl Editor {
         if self.play.runtime.is_none() {
             return;
         }
-        if !ui.ctx().input(|i| i.focused) || ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.pause();
+        let (focused, escape) = ui.input(|i| (i.focused, i.key_pressed(egui::Key::Escape)));
+        // Losing focus pauses the person's test; an agent's plays on, as its inputs need no
+        // window. Esc opens and closes the game's pause menu when the scene has one, as in the
+        // exported game: capture stays on so the menu takes clicks, and the cursor goes free
+        // (wants_relative_mouse), so Pausar and Parar stay at hand.
+        if !focused {
+            if self.play.driver == Driver::Person {
+                self.pause();
+            }
+        } else if escape {
+            let menu = self.play.capture
+                && self
+                    .play
+                    .runtime
+                    .as_ref()
+                    .is_some_and(|rt| !rt.paused && rt.has_pause_menu());
+            if !menu {
+                self.pause();
+            } else if let Some(rt) = &mut self.play.runtime {
+                rt.toggle_game_pause();
+            }
         }
         let relative = self
             .play
             .runtime
             .as_ref()
             .is_some_and(Runtime::wants_relative_mouse);
-        let input = oxy_render::input::collect_game_input(
-            ui.ctx(),
-            &self.state.project.input_bindings,
-            self.play.capture,
-            relative,
-        );
         let available = [
             ui.available_width().max(1.) as u32,
             ui.available_height().max(1.) as u32,
         ];
+        let (rect, response) =
+            ui.allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
+        // A press on one of the game's buttons, or on the editor around the game, is not a
+        // mouse action of the game.
+        let input = oxy_render::input::collect_game_input_where(
+            ui.ctx(),
+            &self.state.project.input_bindings,
+            self.play.capture,
+            relative,
+            |p| {
+                rect.contains(p)
+                    && self.play.runtime.as_ref().is_some_and(|rt| {
+                        oxy_render::game_ui::button_at(rt.scene(), rect, p).is_none()
+                    })
+            },
+        );
         let resized = self.play.game_size != Some(available);
         self.play.game_size = Some(available);
-        if let Some(rt) = &mut self.play.runtime {
+        let play = &mut self.play;
+        if let Some(rt) = &mut play.runtime {
+            while play
+                .agent_clicks
+                .front()
+                .is_some_and(|(at, _)| *at <= rt.time)
+            {
+                let (_, direct) = play.agent_clicks.pop_front().unwrap();
+                direct.apply(rt);
+            }
             rt.set_viewport_aspect(available[0] as f32 / available[1] as f32);
             rt.advance(if resized { 0. } else { dt }, &input);
+            // A scene change or restart drops what the agent sent, as it drops timed inputs.
+            if !std::mem::take(&mut rt.scene_starts).is_empty() {
+                play.agent_clicks.clear();
+            }
         }
         let scene = self.play.runtime.as_ref().unwrap().scene().clone();
         let camera = CameraState::for_runtime(self.play.runtime.as_ref().unwrap());
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size().max(Vec2::splat(1.)), Sense::click());
         let size = [rect.width().max(1.) as u32, rect.height().max(1.) as u32];
         let physical = [
             (rect.width() * ui.ctx().pixels_per_point()).max(1.) as u32,
@@ -1132,18 +1270,17 @@ impl Editor {
                 }
             }
         }
-        let sounds = if let Some(rt) = &mut self.play.runtime {
-            std::mem::take(&mut rt.sounds)
-        } else {
-            Vec::new()
-        };
-        for request in sounds {
-            if let Some(asset) = self.state.project.asset(&request.asset)
-                && let Err(e) =
-                    oxy_core::audio::play_wav(&self.root().join(&asset.path), request.volume)
-            {
-                self.log(e);
-            }
+        self.update_test_audio();
+        self.take_test_saves();
+        // Sair do jogo ends the test as Parar does; the exported game would close.
+        if self
+            .play
+            .runtime
+            .as_ref()
+            .is_some_and(|rt| rt.quit_requested)
+        {
+            self.stop();
+            self.log("O jogo pediu para sair; o teste foi encerrado.");
         }
     }
     /// Console on the home screen, where the editor dock does not exist.
@@ -1258,6 +1395,15 @@ impl eframe::App for Editor {
             ctx.set_zoom_factor(self.scale);
         }
         self.agent_frame(ctx);
+        let mut close_requested =
+            ctx.input(|i| i.viewport().close_requested()) && !self.allow_close;
+        if close_requested && self.export.running() {
+            // The game's folder is put in place at the end; closing now would leave the work
+            // folder behind.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.warn("Espere a exportação do jogo terminar para fechar o editor.");
+            close_requested = false;
+        }
         if self.home.visible {
             self.stop_navigation(ctx);
             self.home_ui(ctx);
@@ -1283,7 +1429,7 @@ impl eframe::App for Editor {
             self.history
                 .begin("Editar projeto", &self.state.project, &self.state.images);
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+        if close_requested {
             if self.dirty() || !self.studio.animation.drafts.is_empty() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending = Some(Transition::Close);
@@ -1325,8 +1471,10 @@ impl eframe::App for Editor {
             || self.pending_preferences.is_some()
             || self.new_project.is_some()
             || self.scene_dialog.is_some()
+            || self.export.is_open()
             || self.pending.is_some()
             || self.logic_ui.inputs
+            || self.logic_ui.variables_open()
             || self.logic_ui.guide;
         if dialog_open && self.play.capture {
             self.pause();
@@ -1477,6 +1625,7 @@ impl eframe::App for Editor {
         self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);
         self.project_dialogs(ctx);
+        self.export_dialog(ctx);
         self.preferences_ui(ctx);
         self.logic_dialogs(ctx);
         self.mesh_help(ctx);
@@ -1531,6 +1680,9 @@ impl eframe::App for Editor {
             self.log(error);
         }
         self.frame.cpu_ms = frame_started.elapsed().as_secs_f32() * 1000.;
+        // The sound device rests a second after the last sound, the Library's Ouvir and a
+        // stopped test included; frames come back to let it.
+        let sounding = self.play.mixer.rest_when_quiet();
         if let Some(delay) = diagnostics::repaint_delay(
             self.play.runtime.as_ref().is_some_and(|r| !r.paused) && self.showing_game(),
             self.studio.playing
@@ -1538,7 +1690,9 @@ impl eframe::App for Editor {
                 && self.studio.tab == StudioTab::Animation,
             ctx.input(|i| i.pointer.any_down()),
             self.frame.visible,
-        ) {
+        )
+        .or(sounding.then_some(std::time::Duration::from_millis(500)))
+        {
             ctx.request_repaint_after(delay);
         }
     }
@@ -1579,3 +1733,89 @@ pub fn vector3(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64
 
 #[cfg(all(test, target_os = "windows"))]
 mod native_perf;
+
+#[cfg(test)]
+mod play_tests {
+    use super::*;
+    use oxy_core::graph::{Edge, Node};
+
+    /// A project in a new folder whose scene plays Bip, 50 ms long, as it starts.
+    fn beeping() -> (Project, PathBuf) {
+        let root = std::env::temp_dir().join(format!("oxy-editor-sound-{}", new_id()));
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wav = hound::WavWriter::create(root.join("assets/bip.wav"), spec).unwrap();
+        for _ in 0..400 {
+            wav.write_sample(16384i16).unwrap();
+        }
+        wav.finalize().unwrap();
+        let mut project = Project::new("Som");
+        let asset = new_id();
+        project.assets.push(Asset {
+            id: asset.clone(),
+            name: "Bip".into(),
+            path: "assets/bip.wav".into(),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        let mut speaker = Entity::new("Alto-falante", None);
+        let start = Node::new("event.scene_start", [0.; 2]);
+        let mut sound = Node::new("action.sound", [200., 0.]);
+        sound.params.insert("asset".into(), Value::Text(asset));
+        speaker.graph.edges.push(Edge {
+            from_node: start.id.clone(),
+            from_port: "exec".into(),
+            to_node: sound.id.clone(),
+            to_port: "exec".into(),
+        });
+        speaker.graph.nodes.extend([start, sound]);
+        project.scenes[0].entities.push(speaker);
+        (project, root)
+    }
+
+    #[test]
+    fn parar_and_another_project_silence_the_test() {
+        let (project, root) = beeping();
+        let scene = project.start_scene.clone();
+        let mut play = PlaySession {
+            mixer: oxy_audio::Mixer::silent(),
+            ..Default::default()
+        };
+        let jogar = |play: &mut PlaySession| {
+            play.runtime = Some(Runtime::with_options(&project, &scene, play.options(7)).unwrap());
+            assert!(play.update_audio(&root).is_empty());
+            assert_eq!(play.mixer.voice_count(), 1);
+        };
+        let paused = |play: &mut PlaySession, paused| {
+            play.runtime.as_mut().unwrap().set_paused(paused);
+            assert!(play.update_audio(&root).is_empty());
+        };
+        let later = |play: &mut PlaySession| {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            assert!(play.update_audio(&root).is_empty());
+        };
+        jogar(&mut play);
+        // Pausar freezes the sound, which holds its place past its length; Retomar lets it end.
+        paused(&mut play, true);
+        later(&mut play);
+        assert_eq!(play.mixer.voice_count(), 1);
+        paused(&mut play, false);
+        assert_eq!(play.mixer.voice_count(), 1);
+        later(&mut play);
+        assert_eq!(play.mixer.voice_count(), 0);
+        // Parar silences what plays.
+        jogar(&mut play);
+        play.end();
+        assert!(play.runtime.is_none());
+        assert_eq!(play.mixer.voice_count(), 0);
+        jogar(&mut play);
+        play.forget_project();
+        assert_eq!(play.mixer.voice_count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

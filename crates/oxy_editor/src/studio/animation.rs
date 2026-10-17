@@ -9,6 +9,7 @@ use egui::{Color32, Pos2, Rect, Sense, Vec2};
 use oxy_core::{
     animation::{AnimationEvent, Clip, Interpolation, Keyframe, sample_clip},
     document::*,
+    graph::{self, Reference},
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -126,30 +127,34 @@ fn automatic_model(scene: &Scene, selected: Option<&str>) -> Option<Id> {
     Some(top)
 }
 
+/// The labels of the logic nodes of `entity` that name the animation `id`.
+fn animation_uses<'a>(entity: &'a Entity, id: &'a str) -> impl Iterator<Item = &'static str> + 'a {
+    entity
+        .graph
+        .nodes
+        .iter()
+        .filter(move |node| {
+            graph::node_references(node).any(|(param, reference, _)| {
+                reference == Reference::Clip && node.text(param.id) == id
+            })
+        })
+        .filter_map(|node| graph::definition(&node.operation).map(|def| def.label))
+}
+
 fn animation_references(project: &Project, animation: &str) -> Vec<String> {
     let mut references = Vec::new();
     for scene in &project.scenes {
         for entity in &scene.entities {
-            for node in &entity.graph.nodes {
-                if node.operation == "action.animation" && node.text("clip") == animation {
-                    references.push(format!(
-                        "Cena {} › {} › Reproduzir animação",
-                        scene.name, entity.name
-                    ));
-                }
+            for label in animation_uses(entity, animation) {
+                references.push(format!("Cena {} › {} › {label}", scene.name, entity.name));
             }
         }
     }
     for asset in &project.assets {
         if let Some(model) = &asset.model {
             for entity in model {
-                for node in &entity.graph.nodes {
-                    if node.operation == "action.animation" && node.text("clip") == animation {
-                        references.push(format!(
-                            "Modelo {} › {} › Reproduzir animação",
-                            asset.name, entity.name
-                        ));
-                    }
+                for label in animation_uses(entity, animation) {
+                    references.push(format!("Modelo {} › {} › {label}", asset.name, entity.name));
                 }
             }
         }

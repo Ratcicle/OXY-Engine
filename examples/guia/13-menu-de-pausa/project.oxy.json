@@ -1,0 +1,890 @@
+{
+  "schema_version": 5,
+  "id": "02000000-0000-4000-8000-000000000258",
+  "name": "Guia · Menu de pausa",
+  "start_scene": "02000000-0000-4000-8000-000000000259",
+  "scenes": [
+    {
+      "id": "02000000-0000-4000-8000-000000000259",
+      "name": "Cena 2D",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "02000000-0000-4000-8000-000000000262",
+          "name": "Menu de pausa",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": false,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-00000000026c",
+                "operation": "event.pause",
+                "position": [
+                  0.0,
+                  40.0
+                ],
+                "params": {
+                  "when": {
+                    "Text": "pause"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-00000000026d",
+                "operation": "action.component",
+                "position": [
+                  300.0,
+                  40.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-00000000026e",
+                "operation": "event.pause",
+                "position": [
+                  0.0,
+                  260.0
+                ],
+                "params": {
+                  "when": {
+                    "Text": "resume"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-00000000026f",
+                "operation": "action.component",
+                "position": [
+                  300.0,
+                  260.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-00000000026c",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-00000000026d",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-00000000026e",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-00000000026f",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000263",
+          "name": "Fundo da pausa",
+          "parent": "02000000-0000-4000-8000-000000000262",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 10,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Image",
+            "anchor": "Center",
+            "position": [
+              0.0,
+              0.0
+            ],
+            "size": [
+              4000.0,
+              4000.0
+            ],
+            "text": "",
+            "color": [
+              0.02,
+              0.03,
+              0.05,
+              0.78
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000264",
+          "name": "Título da pausa",
+          "parent": "02000000-0000-4000-8000-000000000262",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 11,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "Center",
+            "position": [
+              0.0,
+              -130.0
+            ],
+            "size": [
+              400.0,
+              60.0
+            ],
+            "text": "Pausa",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0,
+            "text_align": "Center",
+            "text_size": 48.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000265",
+          "name": "Botão de continuar",
+          "parent": "02000000-0000-4000-8000-000000000262",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 11,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Button",
+            "anchor": "Center",
+            "position": [
+              0.0,
+              -50.0
+            ],
+            "size": [
+              260.0,
+              48.0
+            ],
+            "text": "Continuar",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-000000000276",
+                "operation": "event.click",
+                "position": [
+                  0.0,
+                  40.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000277",
+                "operation": "game.pause",
+                "position": [
+                  300.0,
+                  40.0
+                ],
+                "params": {
+                  "mode": {
+                    "Text": "resume"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-000000000276",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-000000000277",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000266",
+          "name": "Botão de reiniciar",
+          "parent": "02000000-0000-4000-8000-000000000262",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 11,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Button",
+            "anchor": "Center",
+            "position": [
+              0.0,
+              10.0
+            ],
+            "size": [
+              260.0,
+              48.0
+            ],
+            "text": "Reiniciar",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-000000000278",
+                "operation": "event.click",
+                "position": [
+                  0.0,
+                  40.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-000000000279",
+                "operation": "scene.current",
+                "position": [
+                  0.0,
+                  220.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-00000000027a",
+                "operation": "action.scene",
+                "position": [
+                  300.0,
+                  40.0
+                ],
+                "params": {
+                  "scene": {
+                    "Text": ""
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-000000000278",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-00000000027a",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-000000000279",
+                "from_port": "scene",
+                "to_node": "02000000-0000-4000-8000-00000000027a",
+                "to_port": "scene"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000267",
+          "name": "Botão de sair",
+          "parent": "02000000-0000-4000-8000-000000000262",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 11,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Button",
+            "anchor": "Center",
+            "position": [
+              0.0,
+              70.0
+            ],
+            "size": [
+              260.0,
+              48.0
+            ],
+            "text": "Sair do jogo",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-00000000027b",
+                "operation": "event.click",
+                "position": [
+                  0.0,
+                  40.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-00000000027c",
+                "operation": "game.quit",
+                "position": [
+                  300.0,
+                  40.0
+                ],
+                "params": {}
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-00000000027b",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-00000000027c",
+                "to_port": "exec"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000268",
+          "name": "Personagem",
+          "parent": null,
+          "transform": {
+            "position": [
+              -3.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.6,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.3,
+              0.75,
+              0.68,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.6,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "actions": {
+              "left": "mover_esquerda",
+              "right": "mover_direita",
+              "forward": "mover_frente",
+              "back": "mover_tras",
+              "jump": "pular"
+            },
+            "speed": 5.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-000000000269",
+          "name": "Chão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            14.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.23,
+              0.25,
+              0.3,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              14.0,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-00000000026a",
+          "name": "Dica",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              24.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "A/D: mover · Espaço: pular · Esc: pausa",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "pular": "Space"
+  },
+  "input_labels": {
+    "mover_direita": "Mover à direita",
+    "mover_esquerda": "Mover à esquerda",
+    "pular": "Pular"
+  }
+}

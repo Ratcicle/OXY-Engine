@@ -33,8 +33,12 @@ pub enum PresetCamera {
 pub struct PresetOptions {
     /// Platform: how far it goes from where it is placed, in metres, before coming back.
     pub travel: Vec3,
-    /// Platform: seconds for the way there and back.
+    /// Platform: seconds for the way there and back, the stops included.
     pub period: f32,
+    /// Platform: seconds it stands still at each end of its way, less than half the period.
+    pub pause_at_ends: f32,
+    /// Platform: degrees it turns about X, Y and Z per period, while it moves.
+    pub spin: Vec3,
     /// Characters.
     pub camera: PresetCamera,
 }
@@ -43,10 +47,74 @@ impl Default for PresetOptions {
         Self {
             travel: Vec3::X * 4.,
             period: 4.,
+            pause_at_ends: 0.,
+            spin: Vec3::ZERO,
             camera: PresetCamera::Create,
         }
     }
 }
+/// Most periods a platform's clip may last for its spin to come back to where it started.
+pub const MAX_SPIN_PERIODS: u32 = 8;
+/// Most degrees a platform may turn per period, the three axes summed.
+pub const MAX_SPIN: f32 = 3600.;
+/// How many periods `spin` (degrees per period) takes to come back to where it started, whole
+/// turns on every axis: what the platform's looping clip lasts, so it starts over without a
+/// jump. None past [`MAX_SPIN_PERIODS`].
+pub fn spin_periods(spin: Vec3) -> Option<u32> {
+    (1..=MAX_SPIN_PERIODS).find(|periods| {
+        spin.to_array().iter().all(|degrees| {
+            let turns = degrees * *periods as f32 / 360.;
+            (turns - turns.round()).abs() < 1e-3
+        })
+    })
+}
+/// The platform's way there and back from `position`, `periods` times over (see
+/// [`spin_periods`]): in each period it goes out, holds at the far end, comes back and holds at
+/// the start, turning half its spin on each way. Each way has a keyframe at least every 90° of
+/// turn (the axes summed), since between two keyframes the turn takes the shortest way.
+fn platform_keyframes(position: Vec3, options: &PresetOptions, periods: u32) -> Vec<Keyframe> {
+    let (period, pause) = (options.period, options.pause_at_ends);
+    let moving = (period - 2. * pause) * 0.5;
+    let spin = options.spin * (std::f32::consts::PI / 180.);
+    let steps = ((options.spin.abs().element_sum() * 0.5 / 90.).ceil() as usize).max(1);
+    let key = |time: f32, along: f32, turned: f32, interpolation| Keyframe {
+        time,
+        transform: Transform {
+            position: (position + options.travel * along).to_array(),
+            // + 0 writes 0 rather than -0 for a turn backwards that has not begun.
+            rotation: (spin * turned + Vec3::ZERO).to_array(),
+            ..Default::default()
+        },
+        interpolation,
+    };
+    let mut keyframes = Vec::new();
+    for cycle in 0..periods {
+        for (way, (from, to)) in [(0., 1.), (1., 0.)].into_iter().enumerate() {
+            let begin = cycle as f32 * period + way as f32 * (moving + pause);
+            let turned = cycle as f32 + way as f32 * 0.5;
+            for step in 0..steps {
+                let part = step as f32 / steps as f32;
+                keyframes.push(key(
+                    begin + moving * part,
+                    from + (to - from) * part,
+                    turned + 0.5 * part,
+                    Interpolation::Linear,
+                ));
+            }
+            if pause > 0. {
+                keyframes.push(key(begin + moving, to, turned + 0.5, Interpolation::Hold));
+            }
+        }
+    }
+    keyframes.push(key(
+        periods as f32 * period,
+        0.,
+        periods as f32,
+        Interpolation::Linear,
+    ));
+    keyframes
+}
+
 pub fn create(
     project: &mut Project,
     scene_id: &str,
@@ -80,6 +148,32 @@ pub fn create_with(
             "O período da plataforma precisa ser um número de segundos maior que 0.".into(),
         );
     }
+    if !options.pause_at_ends.is_finite()
+        || options.pause_at_ends < 0.
+        || options.pause_at_ends * 2. >= options.period
+    {
+        return Err(format!(
+            "A parada da plataforma em cada ponta precisa ser um número de segundos a partir de \
+             0 e menor que metade do período ({} s), para sobrar tempo para andar.",
+            options.period
+        ));
+    }
+    if !options.spin.is_finite() {
+        return Err("O giro da plataforma precisa de números finitos.".into());
+    }
+    if options.spin.abs().element_sum() > MAX_SPIN {
+        return Err(format!(
+            "O giro da plataforma passa de {MAX_SPIN}° por período, somando os eixos."
+        ));
+    }
+    let Some(periods) = spin_periods(options.spin) else {
+        return Err(format!(
+            "O giro da plataforma precisa voltar ao começo em até {MAX_SPIN_PERIODS} períodos, \
+             com voltas inteiras em todos os eixos, para a animação emendar quando recomeça \
+             (como 360°, 180°, 90° ou 45° por período); recebeu {:?}.",
+            options.spin.to_array()
+        ));
+    };
     // Checked before anything changes: the camera to follow the player, when reused.
     let reused = match options.camera {
         PresetCamera::Reuse if !matches!(preset, MovementPreset::Platform) => {
@@ -128,23 +222,18 @@ pub fn create_with(
             mode: PlatformMode::Animation,
             ..Default::default()
         });
-        let mut clip = Clip::new("Translação de ida e volta");
+        let turns = options.spin != Vec3::ZERO;
+        let mut clip = Clip::new(match (options.travel == Vec3::ZERO, turns) {
+            (true, true) => "Giro",
+            (false, true) => "Translação de ida e volta com giro",
+            _ => "Translação de ida e volta",
+        });
         let period = options.period;
-        clip.duration = period;
+        clip.duration = period * periods as f32;
         clip.looping = true;
         clip.tracks.push(Track {
             target: id.clone(),
-            keyframes: [(0., 0.), (period * 0.5, 1.), (period, 0.)]
-                .into_iter()
-                .map(|(time, along)| Keyframe {
-                    time,
-                    transform: Transform {
-                        position: (position + options.travel * along).to_array(),
-                        ..Default::default()
-                    },
-                    interpolation: Interpolation::Linear,
-                })
-                .collect(),
+            keyframes: platform_keyframes(position, &options, periods),
         });
         let start = Node::new("event.scene_start", [30., 40.]);
         let mut play = Node::new("action.animation", [340., 40.]);

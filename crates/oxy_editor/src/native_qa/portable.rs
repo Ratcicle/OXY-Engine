@@ -10,9 +10,11 @@ fn native_portable_home_workflow() {
     // adjacent data layout as the portable ZIP; never overwrite existing data.
     if !cfg!(debug_assertions) {
         let executable = std::env::current_exe().unwrap();
-        let data = executable.parent().unwrap().join("data");
-        if !data.exists() {
-            copy_directory(&workspace.join("examples/validacao"), &data).unwrap();
+        for (folder, example) in [("data", "validacao"), ("parkour", "parkour")] {
+            let data = executable.parent().unwrap().join(folder);
+            if !data.exists() {
+                copy_directory(&workspace.join("examples").join(example), &data).unwrap();
+            }
         }
     }
     let output = oxy_core::qa::output_dir("v0.2.1/portable");
@@ -25,7 +27,7 @@ fn native_portable_home_workflow() {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("OXY Engine — QA portátil")
-            .with_icon(crate::window_icon())
+            .with_icon(oxy_render::branding::oxy_icon())
             .with_inner_size([920., 600.])
             .with_active(false),
         event_loop_builder: Some(Box::new(|builder| {
@@ -67,6 +69,11 @@ fn native_portable_home_workflow() {
                 Action::Click("Minha cópia OXY"),
                 Action::Check("home_recent"),
                 Action::Check("home_bad_open"),
+                Action::Click("Projeto"),
+                Action::Click("Tela inicial"),
+                Action::Click("OXY Parkour"),
+                Action::Check("home_parkour"),
+                Action::Screenshot("parkour-copy.png"),
             ]);
             Ok(Box::new(qa))
         }),
@@ -83,5 +90,5 @@ fn native_portable_home_workflow() {
     std::fs::write(output.join("native-home.txt"), &summary).unwrap();
     println!("{summary}");
     assert!(report.done && report.error.is_none(), "{summary}");
-    assert_eq!(report.screenshots.len(), 3);
+    assert_eq!(report.screenshots.len(), 4);
 }

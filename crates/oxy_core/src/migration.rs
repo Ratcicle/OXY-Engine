@@ -66,28 +66,17 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), MigrationErro
             .map(|id| (id.clone(), crate::input_actions::legacy_label(id).into()))
             .collect();
         value["input_labels"] = labels.into();
-        if let Some(scenes) = value["scenes"].as_array_mut() {
-            for scene in scenes {
-                migrate_entities(&mut scene["entities"]);
-            }
-        }
-        if let Some(assets) = value["assets"].as_array_mut() {
-            for asset in assets {
-                migrate_entities(&mut asset["model"]);
-            }
-        }
+        for_each_entity_list(&mut value, |entities| {
+            migrate_entities(entities);
+            Ok(())
+        })?;
+    }
+    if version < 4 {
+        for_each_entity_list(&mut value, migrate_movement)?;
     }
     if version < u64::from(SCHEMA_VERSION) {
-        if let Some(scenes) = value["scenes"].as_array_mut() {
-            for scene in scenes {
-                migrate_movement(&mut scene["entities"])?;
-            }
-        }
-        if let Some(assets) = value["assets"].as_array_mut() {
-            for asset in assets {
-                migrate_movement(&mut asset["model"])?;
-            }
-        }
+        // Registry-driven: every older document gets the node parameters added since.
+        for_each_entity_list(&mut value, fill_node_params)?;
         value["schema_version"] = SCHEMA_VERSION.into();
     }
     let project = serde_json::from_value(value).map_err(MigrationError::InvalidDocument)?;
@@ -95,6 +84,60 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), MigrationErro
         project,
         (version < u64::from(SCHEMA_VERSION)).then_some(version as u32),
     ))
+}
+/// Runs `migrate` on the entity list of every scene, then on the pieces of every model.
+fn for_each_entity_list(
+    document: &mut serde_json::Value,
+    mut migrate: impl FnMut(&mut serde_json::Value) -> Result<(), MigrationError>,
+) -> Result<(), MigrationError> {
+    for (holders, field) in [("scenes", "entities"), ("assets", "model")] {
+        let holders = document
+            .get_mut(holders)
+            .and_then(serde_json::Value::as_array_mut);
+        for holder in holders.into_iter().flatten() {
+            if let Some(entities) = holder.get_mut(field) {
+                migrate(entities)?;
+            }
+        }
+    }
+    Ok(())
+}
+/// Gives each node the registry parameters it lacks, with their defaults, and never touches
+/// the values it has: a parameter added to an existing node must default to what the node
+/// did before it. Unknown operations are left for validation to report.
+fn fill_node_params(value: &mut serde_json::Value) -> Result<(), MigrationError> {
+    let Some(entities) = value.as_array_mut() else {
+        return Ok(());
+    };
+    for entity in entities {
+        let nodes = entity
+            .get_mut("graph")
+            .and_then(|graph| graph.get_mut("nodes"))
+            .and_then(serde_json::Value::as_array_mut);
+        for node in nodes.into_iter().flatten() {
+            let Some(definition) = node
+                .get("operation")
+                .and_then(serde_json::Value::as_str)
+                .and_then(crate::graph::definition)
+            else {
+                continue;
+            };
+            let Some(params) = node
+                .get_mut("params")
+                .and_then(serde_json::Value::as_object_mut)
+            else {
+                continue;
+            };
+            for param in &definition.params {
+                if !params.contains_key(param.id) {
+                    let default =
+                        serde_json::to_value(&param.default).map_err(MigrationError::Serialize)?;
+                    params.insert(param.id.into(), default);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 fn migrate_movement(value: &mut serde_json::Value) -> Result<(), MigrationError> {
     let Some(entities) = value.as_array_mut() else {
