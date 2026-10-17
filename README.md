@@ -12,7 +12,7 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 - **Modelagem** de primitivas paramétricas e malhas poligonais: extrusão, borda interna, corte em loop, bisturi, arredondamento e encaixe.
 - **Pintura** direto na imagem ou na superfície da peça, com atlas UV que preserva os pixels após cortes.
 - **Animação** rígida por peças, com timeline, quadros-chave e eventos.
-- **Lógica visual** por nós, com ações de entrada e um guia offline com doze receitas prontas.
+- **Lógica visual** por nós, com ações de entrada e um guia offline com catorze receitas prontas.
 - **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa e um laboratório de movimento editável.
 - **Jogos exportados** pelo editor: uma pasta com o executável do jogo (o player, `oxy_player.exe`, com o nome do jogo), os dados e as licenças, para distribuir só o jogo, sem o editor.
 - **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam e capturam o projeto, ao vivo no editor e com tudo desfazível. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
@@ -22,8 +22,8 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 Requisitos: Windows 10/11 x64, driver gráfico atualizado e GPU compatível com DirectX 12 ou Vulkan.
 
 1. Baixe o ZIP da [última Release](https://github.com/Ratcicle/OXY-Engine/releases/latest) e extraia tudo em uma pasta gravável.
-2. Abra **`OXY Engine.exe`**. Mantenha a pasta `data` e as DLLs junto dos executáveis.
-3. Na tela inicial, escolha **Novo projeto**, **Abrir projeto**, **Projeto de exemplo** ou **Laboratório 3D · movimento**.
+2. Abra **`OXY Engine.exe`**. Mantenha as pastas `data` e `parkour` e as DLLs junto dos executáveis.
+3. Na tela inicial, escolha **Novo projeto**, **Abrir projeto**, **Projeto de exemplo**, **Laboratório 3D · movimento** ou **OXY Parkour**.
 
 Os exemplos abrem como cópias seguras. Projetos recentes e preferências ficam em `%LOCALAPPDATA%/OXY Engine`, fora do projeto.
 

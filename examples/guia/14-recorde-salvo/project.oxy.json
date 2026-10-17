@@ -1,0 +1,1208 @@
+{
+  "schema_version": 5,
+  "id": "02000000-0000-4000-8000-0000000002bc",
+  "name": "Guia · Recorde salvo",
+  "start_scene": "02000000-0000-4000-8000-0000000002bd",
+  "scenes": [
+    {
+      "id": "02000000-0000-4000-8000-0000000002bd",
+      "name": "Fase 1",
+      "kind": "TwoD",
+      "entities": [
+        {
+          "id": "02000000-0000-4000-8000-0000000002c6",
+          "name": "Chegada",
+          "parent": null,
+          "transform": {
+            "position": [
+              4.5,
+              0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            1.0,
+            1.6,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.3,
+              0.78,
+              0.45,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              1.0,
+              1.4,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.1,
+              0.0
+            ],
+            "is_trigger": true,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [
+              {
+                "id": "02000000-0000-4000-8000-0000000002d0",
+                "operation": "event.scene_start",
+                "position": [
+                  0.0,
+                  0.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d1",
+                "operation": "time.read",
+                "position": [
+                  0.0,
+                  134.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d2",
+                "operation": "attribute.set",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Início"
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-0000000002c7"
+                  },
+                  "value": {
+                    "Number": 100.0
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d3",
+                "operation": "scene.current",
+                "position": [
+                  0.0,
+                  246.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d4",
+                "operation": "variable.get",
+                "position": [
+                  260.0,
+                  156.0
+                ],
+                "params": {
+                  "key": {
+                    "Text": ""
+                  },
+                  "variable": {
+                    "Text": "02000000-0000-4000-8000-0000000002be"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d5",
+                "operation": "condition.compare",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 0.0
+                  },
+                  "operator": {
+                    "Text": ">"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d6",
+                "operation": "condition.branch",
+                "position": [
+                  780.0,
+                  0.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d7",
+                "operation": "text.time",
+                "position": [
+                  780.0,
+                  112.0
+                ],
+                "params": {
+                  "format": {
+                    "Text": "mm:ss.cc"
+                  },
+                  "seconds": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002d8",
+                "operation": "attribute.set",
+                "position": [
+                  1040.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Recorde"
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-0000000002c7"
+                  },
+                  "value": {
+                    "Number": 100.0
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002da",
+                "operation": "event.area_enter",
+                "position": [
+                  0.0,
+                  414.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002db",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  548.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Início"
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-0000000002c7"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002dc",
+                "operation": "math.binary",
+                "position": [
+                  260.0,
+                  526.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 1.0
+                  },
+                  "operator": {
+                    "Text": "-"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002dd",
+                "operation": "text.time",
+                "position": [
+                  520.0,
+                  526.0
+                ],
+                "params": {
+                  "format": {
+                    "Text": "mm:ss.cc"
+                  },
+                  "seconds": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002de",
+                "operation": "attribute.set",
+                "position": [
+                  780.0,
+                  548.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Tempo"
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-0000000002c7"
+                  },
+                  "value": {
+                    "Number": 100.0
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002df",
+                "operation": "condition.compare",
+                "position": [
+                  780.0,
+                  414.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 0.0
+                  },
+                  "operator": {
+                    "Text": "=="
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e0",
+                "operation": "condition.branch",
+                "position": [
+                  1040.0,
+                  414.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e1",
+                "operation": "condition.compare",
+                "position": [
+                  1040.0,
+                  526.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 0.0
+                  },
+                  "operator": {
+                    "Text": "<"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e2",
+                "operation": "condition.branch",
+                "position": [
+                  1300.0,
+                  414.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e3",
+                "operation": "variable.set",
+                "position": [
+                  1560.0,
+                  414.0
+                ],
+                "params": {
+                  "key": {
+                    "Text": ""
+                  },
+                  "value": {
+                    "Number": 0.0
+                  },
+                  "variable": {
+                    "Text": "02000000-0000-4000-8000-0000000002be"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e4",
+                "operation": "save.write",
+                "position": [
+                  1820.0,
+                  414.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e5",
+                "operation": "debug.message",
+                "position": [
+                  1560.0,
+                  570.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Recorde mantido, nada foi salvo. Seu tempo"
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e6",
+                "operation": "text.time",
+                "position": [
+                  1820.0,
+                  504.0
+                ],
+                "params": {
+                  "format": {
+                    "Text": "mm:ss.cc"
+                  },
+                  "seconds": {
+                    "Number": 0.0
+                  }
+                }
+              },
+              {
+                "id": "02000000-0000-4000-8000-0000000002e7",
+                "operation": "attribute.set",
+                "position": [
+                  2080.0,
+                  414.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Recorde"
+                  },
+                  "target": {
+                    "Object": "02000000-0000-4000-8000-0000000002c7"
+                  },
+                  "value": {
+                    "Number": 100.0
+                  }
+                }
+              },
+              {
+                "id": "36afa2f8-d37f-822a-ba7c-58bd4196ffc5",
+                "operation": "time.read",
+                "position": [
+                  0.0,
+                  660.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "c1d6dcc9-948c-8181-9225-bb50e397c80f",
+                "operation": "scene.current",
+                "position": [
+                  260.0,
+                  414.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "86a262d4-44a2-8549-9a50-236916dceb4b",
+                "operation": "variable.get",
+                "position": [
+                  520.0,
+                  414.0
+                ],
+                "params": {
+                  "key": {
+                    "Text": ""
+                  },
+                  "variable": {
+                    "Text": "02000000-0000-4000-8000-0000000002be"
+                  }
+                }
+              }
+            ],
+            "edges": [
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d0",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000002d2",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d1",
+                "from_port": "time",
+                "to_node": "02000000-0000-4000-8000-0000000002d2",
+                "to_port": "value"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d2",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000002d6",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d3",
+                "from_port": "name",
+                "to_node": "02000000-0000-4000-8000-0000000002d4",
+                "to_port": "key"
+              },
+              {
+                "from_node": "c1d6dcc9-948c-8181-9225-bb50e397c80f",
+                "from_port": "name",
+                "to_node": "86a262d4-44a2-8549-9a50-236916dceb4b",
+                "to_port": "key"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d4",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002d5",
+                "to_port": "a"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d5",
+                "from_port": "result",
+                "to_node": "02000000-0000-4000-8000-0000000002d6",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d6",
+                "from_port": "then",
+                "to_node": "02000000-0000-4000-8000-0000000002d8",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d4",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002d7",
+                "to_port": "seconds"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002d7",
+                "from_port": "text",
+                "to_node": "02000000-0000-4000-8000-0000000002d8",
+                "to_port": "value"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002da",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000002de",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "36afa2f8-d37f-822a-ba7c-58bd4196ffc5",
+                "from_port": "time",
+                "to_node": "02000000-0000-4000-8000-0000000002dc",
+                "to_port": "a"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002db",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002dc",
+                "to_port": "b"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002dc",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002dd",
+                "to_port": "seconds"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002dd",
+                "from_port": "text",
+                "to_node": "02000000-0000-4000-8000-0000000002de",
+                "to_port": "value"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002de",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000002e0",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "86a262d4-44a2-8549-9a50-236916dceb4b",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002df",
+                "to_port": "a"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002df",
+                "from_port": "result",
+                "to_node": "02000000-0000-4000-8000-0000000002e0",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e0",
+                "from_port": "then",
+                "to_node": "02000000-0000-4000-8000-0000000002e3",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e0",
+                "from_port": "else",
+                "to_node": "02000000-0000-4000-8000-0000000002e2",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002dc",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002e1",
+                "to_port": "a"
+              },
+              {
+                "from_node": "86a262d4-44a2-8549-9a50-236916dceb4b",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002e1",
+                "to_port": "b"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e1",
+                "from_port": "result",
+                "to_node": "02000000-0000-4000-8000-0000000002e2",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e2",
+                "from_port": "then",
+                "to_node": "02000000-0000-4000-8000-0000000002e3",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e2",
+                "from_port": "else",
+                "to_node": "02000000-0000-4000-8000-0000000002e5",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002dd",
+                "from_port": "text",
+                "to_node": "02000000-0000-4000-8000-0000000002e5",
+                "to_port": "value"
+              },
+              {
+                "from_node": "c1d6dcc9-948c-8181-9225-bb50e397c80f",
+                "from_port": "name",
+                "to_node": "02000000-0000-4000-8000-0000000002e3",
+                "to_port": "key"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002dc",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002e3",
+                "to_port": "value"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e3",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000002e4",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e4",
+                "from_port": "exec",
+                "to_node": "02000000-0000-4000-8000-0000000002e7",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "86a262d4-44a2-8549-9a50-236916dceb4b",
+                "from_port": "value",
+                "to_node": "02000000-0000-4000-8000-0000000002e6",
+                "to_port": "seconds"
+              },
+              {
+                "from_node": "02000000-0000-4000-8000-0000000002e6",
+                "from_port": "text",
+                "to_node": "02000000-0000-4000-8000-0000000002e7",
+                "to_port": "value"
+              }
+            ]
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000002c7",
+          "name": "Placar",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {
+            "Início": {
+              "Number": 0.0
+            },
+            "Recorde": {
+              "Text": "--:--.--"
+            },
+            "Tempo": {
+              "Text": "--:--.--"
+            }
+          },
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000002c8",
+          "name": "Personagem",
+          "parent": null,
+          "transform": {
+            "position": [
+              -3.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.6,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.3,
+              0.75,
+              0.68,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.6,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": {
+            "actions": {
+              "left": "mover_esquerda",
+              "right": "mover_direita",
+              "forward": "mover_frente",
+              "back": "mover_tras",
+              "jump": "pular"
+            },
+            "speed": 5.0,
+            "jump": 8.0,
+            "gravity": 22.0,
+            "enabled": true
+          },
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000002c9",
+          "name": "Chão",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            14.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.23,
+              0.25,
+              0.3,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              14.0,
+              1.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000002ca",
+          "name": "Parede",
+          "parent": null,
+          "transform": {
+            "position": [
+              6.75,
+              0.5,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": "Rectangle",
+          "dimensions": [
+            0.5,
+            2.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.23,
+              0.25,
+              0.3,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": {
+            "size": [
+              0.5,
+              2.0,
+              1.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "is_trigger": false,
+            "enabled": true
+          },
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000002cb",
+          "name": "Dica",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              24.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "A/D: mover · Espaço: pular · chegue à área verde",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000002cc",
+          "name": "Texto do tempo",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              65.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "Seu tempo: {valor}",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "02000000-0000-4000-8000-0000000002c7",
+            "binding_attribute": "Tempo",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "02000000-0000-4000-8000-0000000002cd",
+          "name": "Texto do recorde",
+          "parent": null,
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "TopLeft",
+            "position": [
+              24.0,
+              106.0
+            ],
+            "size": [
+              560.0,
+              36.0
+            ],
+            "text": "Recorde: {valor}",
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": "02000000-0000-4000-8000-0000000002c7",
+            "binding_attribute": "Recorde",
+            "max_value": 100.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "input_bindings": {
+    "mover_direita": "D",
+    "mover_esquerda": "A",
+    "pular": "Space"
+  },
+  "input_labels": {
+    "mover_direita": "Mover à direita",
+    "mover_esquerda": "Mover à esquerda",
+    "pular": "Pular"
+  },
+  "variables": [
+    {
+      "id": "02000000-0000-4000-8000-0000000002be",
+      "name": "Melhor tempo",
+      "value": {
+        "Number": 0.0
+      },
+      "persistent": true
+    }
+  ]
+}

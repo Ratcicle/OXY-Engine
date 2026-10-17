@@ -703,6 +703,7 @@ impl NativeQa {
                     "Abrir projeto",
                     "PROJETOS RECENTES",
                     "Projeto de exemplo",
+                    "OXY Parkour",
                 ] {
                     ensure(
                         self.surface.texts.iter().any(|t| t.text == label),
@@ -746,6 +747,26 @@ impl NativeQa {
                 ensure(
                     self.editor.state.project.scenes.len() == 3,
                     "Cópia perdeu cenas",
+                )
+            }
+            "home_parkour" => {
+                let project = &self.editor.state.project;
+                ensure(
+                    project.name == "OXY Parkour" && project.scenes.len() == 2,
+                    "O parkour não abriu",
+                )?;
+                let root = self.editor.root();
+                ensure(
+                    root.starts_with(std::env::temp_dir()),
+                    "O parkour não abriu como cópia",
+                )?;
+                ensure(
+                    project
+                        .assets
+                        .iter()
+                        .filter(|a| a.kind == oxy_core::document::AssetKind::Audio)
+                        .all(|a| root.join(&a.path).is_file()),
+                    "A cópia do parkour ficou sem os sons",
                 )
             }
             "home_recent" => ensure(

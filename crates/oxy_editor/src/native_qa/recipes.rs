@@ -2,6 +2,14 @@ use super::*;
 use oxy_core::document::Value;
 impl NativeQa {
     pub(super) fn check_recipes(&mut self, label: &str) -> Result<(), String> {
+        if label == "r6_pause_quit" {
+            // Sair do jogo stops the test, as Parar does.
+            return if self.editor.play.runtime.is_none() && !self.editor.play.capture {
+                Ok(())
+            } else {
+                Err("Sair do jogo deveria encerrar o teste da receita".into())
+            };
+        }
         let runtime = self
             .editor
             .play
@@ -9,6 +17,14 @@ impl NativeQa {
             .as_ref()
             .ok_or("Runtime não iniciou")?;
         let id = |n: u32| format!("02000000-0000-4000-8000-{n:012x}");
+        let shown = |n| runtime.scene().entity(&id(n)).is_some_and(|e| e.visible);
+        let x = |n| {
+            runtime
+                .scene()
+                .entity(&id(n))
+                .map_or(f32::NAN, |e| e.transform.position[0])
+        };
+        let unset = Value::Text("--:--.--".into());
         let value = |n, attribute: &str| {
             runtime
                 .scene()
@@ -36,6 +52,22 @@ impl NativeQa {
                         .enabled
             }
             "r6_passage" => runtime.scene_id() == id(502),
+            // Walked, then Esc: the game's pause opens the menu.
+            "r6_pause_menu" => runtime.game_paused() && shown(610) && x(616) > -2.5,
+            "r6_pause_resumed" => !runtime.game_paused() && !shown(610),
+            // Reiniciar opens the scene again, as it began.
+            "r6_pause_restarted" => !runtime.game_paused() && !shown(610) && x(616) < -2.9,
+            "r6_record" | "r6_record_kept" => {
+                let best = runtime
+                    .variable(&id(702), "Fase 1")
+                    .and_then(Value::number)
+                    .unwrap_or(0.);
+                let record = value(711, "Recorde");
+                // Played again, the test's progress brings the record back from the start.
+                best > 0.
+                    && record.is_some_and(|r| r != &unset)
+                    && (label == "r6_record_kept" || runtime.save_slot().exists)
+            }
             _ => false,
         };
         if !pass {
@@ -56,7 +88,7 @@ impl NativeQa {
     }
 }
 #[test]
-#[ignore = "Native guide opens and executes four editable recipes using real game input"]
+#[ignore = "Native guide opens and executes six editable recipes using real game input"]
 #[cfg(target_os = "windows")]
 fn native_guide_recipes_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
@@ -133,6 +165,46 @@ fn native_guide_recipes_workflow() {
                 Action::HoldSeconds(Key::D, 2.),
                 Action::Check("r6_passage"),
                 Action::Screenshot("recipe-passage-game.png"),
+                Action::Click("Parar"),
+                Action::Click("Lógica"),
+                Action::Click("Guia de lógica visual"),
+                Action::Scroll("Guia de lógica visual", 2000.),
+                Action::Click("Menu de pausa"),
+                Action::Scroll("Guia de lógica visual", -650.),
+                Action::Click("Abrir cópia da receita: menu de pausa"),
+                Action::Click("Jogar"),
+                Action::HoldSeconds(Key::D, 0.6),
+                Action::Key(Key::Escape, false),
+                Action::Wait(4),
+                Action::Check("r6_pause_menu"),
+                Action::Screenshot("recipe-pause-game.png"),
+                Action::Click("Continuar"),
+                Action::Wait(10),
+                Action::Check("r6_pause_resumed"),
+                Action::Key(Key::Escape, false),
+                Action::Wait(4),
+                Action::Click("Reiniciar"),
+                Action::Wait(10),
+                Action::Check("r6_pause_restarted"),
+                Action::Key(Key::Escape, false),
+                Action::Wait(4),
+                Action::Click("Sair do jogo"),
+                Action::Wait(6),
+                Action::Check("r6_pause_quit"),
+                Action::Click("Lógica"),
+                Action::Click("Guia de lógica visual"),
+                Action::Scroll("Guia de lógica visual", 2000.),
+                Action::Click("Recorde salvo"),
+                Action::Scroll("Guia de lógica visual", -650.),
+                Action::Click("Abrir cópia da receita: recorde salvo"),
+                Action::Click("Jogar"),
+                Action::HoldSeconds(Key::D, 2.),
+                Action::Check("r6_record"),
+                Action::Screenshot("recipe-record-game.png"),
+                Action::Click("Parar"),
+                Action::Click("Jogar"),
+                Action::Wait(10),
+                Action::Check("r6_record_kept"),
                 Action::Click("Parar"),
             ]);
             Ok(Box::new(qa))

@@ -1,4 +1,9 @@
-use oxy_core::{document::*, persistence, texture_cache::TextureCache};
+use oxy_core::{
+    document::*,
+    persistence,
+    runtime::{FIXED_DT, InputFrame, Runtime},
+    texture_cache::TextureCache,
+};
 use std::path::Path;
 
 #[test]
@@ -73,5 +78,52 @@ fn example_copy_keeps_lazy_png_audio_and_ids_without_writing_source() {
         std::fs::read(output.join(&asset.path)).unwrap(),
         b"preserve existing file"
     );
+    std::fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn shipped_parkour_opens_as_a_copy_with_its_sounds_and_plays() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/parkour");
+    let file = source.join(persistence::PROJECT_FILE);
+    let original = std::fs::read(&file).unwrap();
+    let project = persistence::load_project_lazy(&file).unwrap();
+    let sounds: Vec<&Asset> = project
+        .assets
+        .iter()
+        .filter(|a| a.kind == AssetKind::Audio)
+        .collect();
+    assert!(!sounds.is_empty());
+    let output = std::env::temp_dir().join(format!("oxy-parkour-copy-{}", new_id()));
+    let mut images = TextureCache::default();
+    images.configure(&source, &project);
+    persistence::save_cached_copy(
+        &output.join(persistence::PROJECT_FILE),
+        &project,
+        &mut images,
+        &source,
+    )
+    .unwrap();
+    for asset in &sounds {
+        assert_eq!(
+            std::fs::read(source.join(&asset.path)).unwrap(),
+            std::fs::read(output.join(&asset.path)).unwrap()
+        );
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    let copy = persistence::load_project(&output.join(persistence::PROJECT_FILE)).unwrap();
+    assert_eq!(copy, project);
+    // Each scene of the copy plays some seconds without errors.
+    for scene in &copy.scenes {
+        let mut runtime = Runtime::new(&copy, &scene.id).unwrap();
+        for _ in 0..240 {
+            runtime.advance(FIXED_DT, &InputFrame::default());
+        }
+        assert!(
+            !runtime.logs.iter().any(|l| l.contains("interrompido")),
+            "{}: {:?}",
+            scene.name,
+            runtime.logs
+        );
+    }
     std::fs::remove_dir_all(output).unwrap();
 }

@@ -31,9 +31,21 @@ if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).Pr
     if (!(Test-Path -LiteralPath (Join-Path $package 'oxy-mcp.exe') -PathType Leaf)) { throw 'Arquivo da 0.5.0 ausente: oxy-mcp.exe' }
 }
 if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).ProductVersion) -ge [version]'0.6.0') {
-    foreach ($file in @('licenses/cpal-0.18.2.txt','licenses/kenney-skyboxes-cc0.txt')) {
+    foreach ($file in @('licenses/cpal-0.18.2.txt','licenses/kenney-skyboxes-cc0.txt','parkour/project.oxy.json')) {
         if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo da 0.6.0 ausente: $file" }
     }
+    # OXY Parkour, opened from the home screen as a copy, needs every file its assets name.
+    $parkour = [IO.Path]::GetFullPath((Join-Path $package 'parkour'))
+    $parkourManifest = Get-Content -LiteralPath (Join-Path $parkour 'project.oxy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($parkourManifest.schema_version -ne 5 -or $parkourManifest.scenes.Count -lt 2) { throw 'O parkour deve ter o menu e a pista, no schema 5.' }
+    foreach ($asset in $parkourManifest.assets) {
+        if ($asset.kind -eq 'Model') { continue }
+        $assetPath = [IO.Path]::GetFullPath((Join-Path $parkour $asset.path))
+        if (!$assetPath.StartsWith($parkour + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Asset do parkour inválido/ausente: $($asset.path)" }
+    }
+    # Backups an agent or a schema conversion leaves next to a project never ship.
+    $backups = @(Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object { $_.Name -like '*.agente.bak' -or $_.Name -like '*.backup.json' })
+    if ($backups.Count) { throw "Backups de projeto no pacote: $($backups.Name -join ', ')" }
 }
 if (Get-ChildItem -LiteralPath $package -Filter '*.cmd') { throw 'O pacote portátil não deve depender de launchers .cmd.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName)
