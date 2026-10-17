@@ -5612,6 +5612,41 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// docs/agentes-mcp.md lists every tool in its table, so a new tool comes with its row and
+    /// a removed one takes it away.
+    #[test]
+    fn the_agents_guide_lists_every_tool() {
+        let guide = include_str!("../../../docs/agentes-mcp.md");
+        let table = guide
+            .split("\n## Ferramentas")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .unwrap();
+        let listed: Vec<&str> = table
+            .lines()
+            .filter_map(|line| line.strip_prefix('|')?.split('|').next())
+            .flat_map(|cell| cell.split(','))
+            .filter_map(|name| name.trim().strip_prefix('`')?.strip_suffix('`'))
+            .filter(|name| name.starts_with("oxy_"))
+            .collect();
+        let tools: Vec<String> = definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        for tool in &tools {
+            assert!(listed.contains(&tool.as_str()), "{tool} has no row");
+        }
+        for name in &listed {
+            assert!(
+                tools.iter().any(|tool| tool == name),
+                "{name} is not a tool"
+            );
+        }
+        assert_eq!(listed.len(), tools.len(), "{listed:?}");
+    }
+
     #[test]
     fn status_tells_which_server_answers_and_descriptions_say_what_takes_names() {
         let server = server_info();

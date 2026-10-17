@@ -8,14 +8,16 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 
 ## O que ela faz
 
-- **Cenas 2D e 3D** com hierarquia, grupos, câmeras, interface de jogo (texto, imagem, botão, barra) e importação de PNG/WAV.
+- **Cenas 2D e 3D** com hierarquia, grupos, câmeras, fundo com o céu da OXY ou uma cor, interface de jogo (texto, imagem, botão, barra) e importação de PNG/WAV.
 - **Modelagem** de primitivas paramétricas e malhas poligonais: extrusão, borda interna, corte em loop, bisturi, arredondamento e encaixe.
 - **Pintura** direto na imagem ou na superfície da peça, com atlas UV que preserva os pixels após cortes.
 - **Animação** rígida por peças, com timeline, quadros-chave e eventos.
-- **Lógica visual** por nós, com ações de entrada e um guia offline com catorze receitas prontas.
-- **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa e um laboratório de movimento editável.
+- **Lógica visual** por nós, com ações de entrada, variáveis do jogo, progresso salvo entre partidas, menu de pausa feito na lógica e um guia offline com catorze receitas prontas.
+- **Som** com mixador próprio: música e efeitos em canais, loops com transição e volumes pela lógica.
+- **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa, plataformas móveis que levam o personagem também quando giram e um laboratório de movimento editável.
 - **Jogos exportados** pelo editor: uma pasta com o executável do jogo (o player, `oxy_player.exe`, com o nome do jogo), os dados e as licenças, para distribuir só o jogo, sem o editor.
-- **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam e capturam o projeto, ao vivo no editor e com tudo desfazível. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
+- **OXY Parkour**, um jogo completo em primeira pessoa feito só com os nós e componentes da engine (menu, pista, cronômetro, pausa, recorde salvo e música), que abre como exemplo na tela inicial.
+- **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam (com um bot que percorre a fase) e capturam o projeto, ao vivo no editor e com as edições desfazíveis, e criam projetos e exportam o jogo quando você pede. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
 
 ## Baixar e abrir
 
