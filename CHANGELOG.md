@@ -2,7 +2,7 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
-## 0.6.0 — (data a definir no lançamento)
+## 0.6.0 — 2026-10-17
 
 - **Formato do projeto 5:** o formato sobe uma vez só na 0.6, para que nós existentes possam ganhar parâmetros e entradas. Projetos anteriores abrem como antes, convertidos em memória, e cada nó recebe os parâmetros novos com o valor padrão. O primeiro salvamento grava o formato 5 e guarda o arquivo original num backup (como `project.oxy.json.schema-4.….backup.json`, para um projeto da 0.5), também quando um agente edita os arquivos. A 0.5.x e versões anteriores não abrem projetos salvos pela 0.6.
 - **Variáveis do jogo:** valores do projeto inteiro, com tipo e valor inicial, que continuam valendo ao mudar ou reiniciar a cena, até a partida acabar. O botão **Variáveis do jogo**, na barra da Lógica, abre a tabela com nome, tipo, valor inicial, **Salva entre partidas** e onde cada variável é usada. **Ler variável do jogo** e **Alterar variável do jogo** aceitam uma **Chave** opcional, que guarda um valor por chave, como um recorde por cena.

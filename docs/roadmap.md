@@ -45,7 +45,7 @@ Cada jogo constrói sistemas que o seguinte reaproveita. Combate, IA e animaçã
      - plataformas móveis por animação;
      - importar PNG/WAV.
    - **Contexto e diagnóstico:** respostas compactas; Console e estado do teste no editor ao vivo.
-4. **0.6: parkour** (implementada em 17/10/2026, ainda não lançada; o resumo está no [CHANGELOG](../CHANGELOG.md)). Feito com ajuda do MCP, que serve de teste do próprio MCP. Lacunas da engine que o parkour exige, encontradas na mesma análise, todas resolvidas com ferramentas genéricas:
+4. **0.6: parkour** (lançada em 17/10/2026; o resumo está no [CHANGELOG](../CHANGELOG.md)). Feito com ajuda do MCP, que serve de teste do próprio MCP. Lacunas da engine que o parkour exige, encontradas na mesma análise, todas resolvidas com ferramentas genéricas:
    - dados salvos entre partidas (melhor tempo);
    - estado que sobrevive à troca de cena;
    - menu de pausa controlado pelo jogo;
