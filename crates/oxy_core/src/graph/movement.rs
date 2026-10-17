@@ -509,7 +509,7 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
         "event.character" => (
             "Executa na transição do personagem 3D escolhida em Quando (pular, aterrissar, perder o apoio, mudar de superfície ou de postura, ou começar um contato lateral) e fornece o estado daquele instante, como Ler personagem 3D (posições em metros, velocidades em m/s), a Rapidez do impacto ao aterrissar, em m/s, o objeto do contato lateral e a superfície anterior.",
             "Escolha Aterrissar e use a rapidez anterior à correção para uma condição de impacto.",
-            "Contatos laterais persistentes não repetem início a cada passo. Um teleporte cancela continuações da trajetória anterior.",
+            "Contatos laterais persistentes não repetem início a cada passo. Um teleporte descarta os eventos da trajetória anterior que ainda não executaram; o que um evento já iniciou continua, esperas incluídas.",
         ),
         "input.read" => (
             "Lê uma ação de entrada no passo atual: Pressionada e Solta são verdadeiras só no passo em que a tecla desce ou sobe; Mantida, enquanto ela está segura.",
@@ -587,7 +587,7 @@ pub fn movement_help(id: &str) -> Option<(&'static str, &'static str, &'static s
             "No Mundo, a posição é a do pivô, como nas Propriedades e em Ler posição e orientação; no Local, os eixos são os do pai. Somar à rotação no Local soma aos ângulos XYZ; no Mundo, gira nos eixos do mundo. Somar à escala multiplica; a escala só muda no Local e não pode chegar a zero. Recusa a raiz de um personagem 3D (use Teleportar com segurança ou Definir giro horizontal do personagem) e objetos que uma animação em reprodução move (pause-a com Ativar / desativar componente). Uma plataforma movida mais que o Salto máximo num passo, ou com Salto: soltar passageiros ligado, solta quem está em cima sem lançá-lo. Uma animação terminada ou pausada não desfaz a mudança.",
         ),
         "character.teleport" => (
-            "Põe os pés do personagem 3D na Posição mundial, em metros, se houver espaço, com giro do corpo e olhar opcionais, em graus, e fornece Sucesso, o Motivo de recusa e o Destino utilizado, em metros.",
+            "Põe os pés do personagem 3D na Posição mundial, em metros, se houver espaço, com giro do corpo e olhar opcionais, em graus, e fornece Sucesso, o Motivo de recusa e o Destino utilizado, em metros. Descarta os eventos do trajeto abandonado que ainda não executaram: aterrissagens, contatos e entradas ou saídas de áreas do mesmo passo, e A cada passo e Ação de entrada da lógica do próprio personagem naquele passo. A lógica que já começou, esperas incluídas, continua, seja de que objeto for.",
             "Guarde a posição (Vetor3) e o olhar (Vetor2) de um ponto de retorno e use-os ao reiniciar.",
             "Destino ocupado, inclusive por outro personagem cujo corpo colide com o deste pelos grupos de colisão dos dois, não altera a posição. Busca local vai de 0 a 2 m; limpa apoio, pedidos e trajetória anterior. Uma recusa que nenhum nó lê (Sucesso e Motivo de recusa desligados) escreve uma linha no log, uma vez por nó na partida.",
         ),

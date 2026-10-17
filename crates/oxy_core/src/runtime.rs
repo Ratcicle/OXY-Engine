@@ -158,6 +158,12 @@ struct Context {
     activation: u64,
     outputs: Arc<BTreeMap<(Id, String), Value>>,
     hits: Option<HitLease>,
+    /// While an event waits to run: the character whose trajectory it comes from, and which
+    /// one (see [`crate::character::CharacterState`]): the character of a movement event, the
+    /// one that crossed an area, a character's own step and input events. Teleporting that
+    /// character drops those events, since its old path no longer happened and its input for
+    /// the step is spent. Once the event runs it is cleared: the flow it starts is logic like
+    /// any other, and goes on, waits included, whoever is teleported later.
     trajectory: Option<(Id, u64)>,
 }
 #[derive(Clone, Debug)]
@@ -949,6 +955,7 @@ impl Runtime {
         }
         self.waiting = future;
         while let Some(task) = self.ready.pop_front() {
+            // An event of a trajectory that ended, or of a character gone, never runs.
             if task
                 .context
                 .trajectory
@@ -1157,7 +1164,8 @@ impl Runtime {
         let mut ports = vec!["exec"];
         let mut delay = 0.0;
         match node.operation.as_str() {
-            operation if operation.starts_with("event.") => {}
+            // The event ran: what follows no longer hangs on the trajectory it came from.
+            operation if operation.starts_with("event.") => context.trajectory = None,
             "condition.branch" => {
                 let condition = self
                     .input_value(&graph, node, "condition", &context, budget, 0)?

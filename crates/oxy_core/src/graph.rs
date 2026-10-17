@@ -331,7 +331,7 @@ pub fn description(operation: &str) -> &'static str {
     match operation {
         "event.scene_start" => "Executa quando a cena começa.",
         "event.input" => {
-            "Executa ao pressionar, manter ou soltar uma ação configurada em Ações de entrada."
+            "Executa ao pressionar, manter ou soltar uma ação configurada em Ações de entrada, em todo objeto que tem o nó, inclusive num personagem 3D com as ações automáticas desligadas: nesta versão, a entrada é uma só para o jogo inteiro."
         }
         "event.click" => "Executa ao clicar neste objeto ou em seu botão de interface.",
         "event.area_enter" => {
@@ -371,7 +371,7 @@ pub fn description(operation: &str) -> &'static str {
         }
         "control.sequence" => "Executa as saídas 1, 2 e 3 nessa ordem.",
         "control.wait" => {
-            "Continua após os segundos indicados, em tempo de jogo, sem interromper o jogo ou o editor."
+            "Continua após os segundos indicados, em tempo de jogo, sem interromper o jogo ou o editor. Um teleporte não cancela a espera, nem a de um fluxo que o personagem teleportado iniciou, como a entrada numa área."
         }
         "debug.message" => {
             "Exibe uma mensagem no diagnóstico durante a execução e, com a entrada Valor ligada, o valor recebido depois dela (números com todas as casas decimais, objetos e superfícies pelo nome)."

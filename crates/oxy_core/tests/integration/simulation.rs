@@ -2350,7 +2350,7 @@ fn the_bot_refuses_what_it_cannot_play() {
         ),
         (
             json!({"entity": "nada", "path": point}),
-            "bot: nenhuma cena do projeto tem o objeto nada",
+            "bot: \"nada\" não é o ID nem o nome de um objeto do projeto",
         ),
         (json!({"entity": "$2", "path": point}), "$2"),
         (json!({"entity": BODY, "path": []}), "ao menos um ponto"),
@@ -2360,7 +2360,8 @@ fn the_bot_refuses_what_it_cannot_play() {
         ),
         (
             json!({"entity": BODY, "path": [[0, 0, 0], {"object": "nada"}]}),
-            "ponto 1 do caminho (o 2º): nenhuma cena do projeto tem o objeto nada",
+            "bot: object do ponto 1 do caminho (o 2º): \"nada\" não é o ID nem o nome de um \
+             objeto da cena",
         ),
         (
             json!({"entity": BODY, "path": point, "radius": 0}),
@@ -2753,7 +2754,7 @@ fn a_bot_waits_for_its_characters_scene_and_counts_start_from_it() {
     )
     .unwrap_err();
     assert!(
-        error.contains("bot: nenhuma cena do projeto tem o objeto ninguém"),
+        error.contains("bot: \"ninguém\" não é o ID nem o nome de um objeto do projeto"),
         "{error}"
     );
     let control = project
@@ -2930,14 +2931,11 @@ fn logic_that_holds_the_runner_is_told_apart_from_a_wall() {
         })
         .unwrap_or_else(|| panic!("{:?}", report.events))
         .time;
-    // It let go once the hold kept it from coming nearer for stuck_after (1.5 s).
+    // It let go in the step the hold began, not stuck_after (1.5 s) later.
     let done = played.done_at.unwrap();
-    assert!(
-        done - crossed > 1.4 && done - crossed < 2.5,
-        "{crossed} {done}"
-    );
+    assert_eq!(done, crossed);
     let stopped = report.stopped_at.as_ref().unwrap();
-    assert!(stopped.reason == "bot" && near(stopped.time, done));
+    assert!(stopped.reason == "bot" && stopped.time == done);
     assert_eq!(
         stopped.detail,
         "A lógica travou o movimento de Corredor (motivos: chegada) a caminho do último ponto do \
@@ -2999,6 +2997,190 @@ fn logic_that_holds_the_runner_is_told_apart_from_a_wall() {
     assert!(bot(&free).done_at.is_some());
     let value = serde_json::to_value(bot(&free)).unwrap();
     assert!(value.get("held_by").is_none(), "{value}");
+}
+
+#[test]
+fn a_run_that_stops_as_the_hold_begins_already_reports_the_path_done() {
+    // A run that stops in the step the line holds the runner, or a moment after, as one
+    // waiting for a result screen to settle: the bot is done already, with the reasons.
+    let mut project = course();
+    hold_line(&mut project, -7., "chegada");
+    let path = json!({"entity": BODY, "path": [[0, 0, -3], [0, 0, -12]]});
+    for then in [None, Some(0.2)] {
+        let mut until = json!({"event": {"kind": "area_enter", "object": "Linha"}});
+        if let Some(then) = then {
+            until["then_seconds"] = json!(then);
+        }
+        let report = run(
+            &project,
+            json!({"seconds": 8.0, "until": until, "bot": path}),
+        );
+        let stopped = report.stopped_at.as_ref().unwrap();
+        assert_eq!(stopped.reason, "event", "{stopped:?}");
+        let played = bot(&report);
+        let done = played
+            .done_at
+            .unwrap_or_else(|| panic!("{then:?}: {played:?}"));
+        assert_eq!(done, stopped.time, "{then:?}");
+        assert_eq!(played.held_by, ["chegada"]);
+        assert!(played.stuck.is_none());
+    }
+}
+
+/// The course, reloaded by its own logic when "reiniciar" is pressed, as a restart button does.
+fn course_with_restart() -> Project {
+    let mut project = course();
+    project
+        .input_bindings
+        .insert("reiniciar".into(), "R".into());
+    let course_id = project.start_scene.clone();
+    let mut restart = Entity::new("Reinício", None);
+    let pressed = node(
+        &mut restart,
+        "event.input",
+        &[("action", text("reiniciar"))],
+    );
+    let reload = node(&mut restart, "action.scene", &[("scene", text(&course_id))]);
+    link(&mut restart, &pressed, &reload);
+    project.scenes[0].entities.push(restart);
+    project
+}
+fn restart_at(at: f64) -> serde_json::Value {
+    json!([{"type": "press", "at": at, "action": "reiniciar"},
+           {"type": "release", "at": at + 0.1, "action": "reiniciar"}])
+}
+
+#[test]
+fn a_bot_starts_its_path_over_when_its_scene_starts_again() {
+    let project = course_with_restart();
+    let path = json!({"entity": BODY, "start": 0.5, "path": [[0, 0, -4], [3, 0, -4]]});
+    // Done, then the course restarts: a second run from the first point, start counted from
+    // the restart.
+    let report = run(
+        &project,
+        json!({"seconds": 9.0, "bot": path, "inputs": restart_at(4.)}),
+    );
+    let reload = &report.scene_changes[0];
+    assert!(reload.reload && near(reload.time, 4.), "{report:?}");
+    let played = bot(&report);
+    assert_eq!(played.earlier.len(), 1, "{played:?}");
+    let first = &played.earlier[0];
+    assert_eq!(first.started_at, Some(0.5));
+    let indices: Vec<usize> = first.reached.iter().map(|p| p.index).collect();
+    assert_eq!(indices, [0, 1], "{first:?}");
+    assert!(first.done_at.unwrap() < reload.time && first.stuck.is_none());
+    // The latest run: taken over half a second after the restart, from the start again.
+    let started = played.started_at.unwrap();
+    assert!((started - reload.time - 0.5).abs() < 1e-3, "{played:?}");
+    let indices: Vec<usize> = played.reached.iter().map(|p| p.index).collect();
+    assert_eq!(indices, [0, 1], "{played:?}");
+    assert!(played.reached[0].time > started);
+    let done = played.done_at.unwrap();
+    let lap = first.done_at.unwrap() - first.started_at.unwrap();
+    assert!((done - started - lap).abs() < 0.05, "{lap} {done}");
+    assert!(played.stuck.is_none());
+    let value = serde_json::to_value(played).unwrap();
+    assert_eq!(value["earlier"][0]["reached"][1]["index"], 1);
+
+    // A restart halfway: the run it cut short has neither done_at nor stuck.
+    let report = run(
+        &project,
+        json!({"seconds": 6.0, "bot": path, "inputs": restart_at(1.)}),
+    );
+    let played = bot(&report);
+    let cut = &played.earlier[0];
+    assert!(cut.done_at.is_none() && cut.stuck.is_none(), "{cut:?}");
+    assert!(cut.reached.len() < 2, "{cut:?}");
+    assert!(played.done_at.is_some(), "{played:?}");
+    // Without a restart there is one run, and earlier stays out of the report.
+    let once = run(&project, json!({"seconds": 4.0, "bot": path}));
+    let value = serde_json::to_value(bot(&once)).unwrap();
+    assert!(value.get("earlier").is_none(), "{value}");
+}
+
+#[test]
+fn bots_watches_spawns_and_stops_take_objects_by_name() {
+    let mut project = course();
+    project.scenes[0]
+        .entity_mut(BODY)
+        .unwrap()
+        .attributes
+        .insert("Voltas".into(), Value::Number(0.));
+    let report = run(
+        &project,
+        json!({"seconds": 8.0, "until": {"bot": "done"}, "samples_at": [0.0],
+               "spawn": {"entity": "corredor", "position": [2, 0.02, 3]},
+               "watch": [{"id": "Corredor", "fields": ["position"]}],
+               "bot": {"entity": " CORREDOR ", "path": [
+                   {"object": "meta", "at": [0, -1, -3]},
+                   {"at": [3, 0, -3],
+                    "wait_for": {"object": "Meta", "within": 4, "height": 3}}]}}),
+    );
+    let played = bot(&report);
+    assert_eq!(played.entity.id, BODY);
+    assert!(played.done_at.is_some(), "{played:?}");
+    assert_eq!(played.reached.len(), 2, "{played:?}");
+    assert!(across(played.reached[0].position, [0., 0., -3.]) <= 0.6);
+    let watched = &report.watched[0];
+    assert_eq!(
+        (watched.id.as_str(), watched.name.as_str()),
+        (BODY, "Corredor")
+    );
+    let start = watched.samples[0].position.unwrap();
+    assert!(across(start, [2., 0., 3.]) < 0.01, "{start:?}");
+    // until's objects too.
+    let report = run(
+        &project,
+        json!({"seconds": 1.0, "until": {"entity_absent": "olhos",
+               "attribute": {"entity": "Corredor", "name": "Voltas", "op": "==", "value": 0}}}),
+    );
+    assert_eq!(
+        report.stopped_at.unwrap().detail,
+        "Corredor.Voltas == 0 (valor 0)"
+    );
+    let report = run(
+        &project,
+        json!({"seconds": 3.0, "spawn": {"entity": BODY, "position": [0, 0.02, 4]},
+               "until": {"event": {"kind": "area_enter", "object": "META"}},
+               "inputs": [{"type": "movement", "at": 0, "value": [0, 1]}]}),
+    );
+    let stopped = report.stopped_at.unwrap();
+    assert!(stopped.detail.contains("Meta"), "{stopped:?}");
+    // A name two objects share names them; one no object has is refused.
+    let mut twice = project.clone();
+    let other = Entity::new("Meta", None);
+    let other_id = other.id.clone();
+    twice.scenes[0].entities.push(other);
+    let error = headless::simulate(
+        &twice,
+        &request(json!({"seconds": 1.0, "bot": {"entity": "Corredor",
+                        "path": [{"object": "Meta"}]}})),
+    )
+    .unwrap_err();
+    assert!(
+        error.starts_with(
+            "bot: object do ponto 0 do caminho (o 1º): há 2 objetos chamados \"Meta\" na cena"
+        ) && error.contains(GOAL)
+            && error.contains(&format!("{other_id} (na raiz da cena)")),
+        "{error}"
+    );
+    for (asked, expected) in [
+        (
+            json!({"seconds": 1.0, "watch": ["nada"]}),
+            "watch: \"nada\" não é o ID nem o nome de um objeto do projeto",
+        ),
+        (
+            json!({"seconds": 1.0, "spawn": {"entity": "nada", "position": [0, 0, 0]}}),
+            "spawn: \"nada\" não é o ID nem o nome de um objeto da cena",
+        ),
+        (
+            json!({"seconds": 1.0, "until": {"event": {"kind": "land", "object": "Meta"}}}),
+            "until: event.object: há 2 objetos chamados \"Meta\"",
+        ),
+    ] {
+        let error = headless::simulate(&twice, &request(asked)).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
 }
 
 /// Two docks 10 m apart over nothing, the near one where the runner stands (z from 5 to -5) and
@@ -3218,7 +3400,8 @@ fn a_wait_for_that_never_comes_true_gives_up_waiting_and_bad_ones_are_refused() 
     for (wait, expected) in [
         (
             json!({"object": "nada"}),
-            "ponto 1 do caminho (o 2º): nenhuma cena do projeto tem o objeto nada",
+            "bot: wait_for.object do ponto 1 do caminho (o 2º): \"nada\" não é o ID nem o nome \
+             de um objeto da cena",
         ),
         (
             json!({"object": ferry, "within": -1}),
@@ -3255,6 +3438,14 @@ fn a_wait_for_that_never_comes_true_gives_up_waiting_and_bad_ones_are_refused() 
         ),
         "{error}"
     );
+    // By a name only another scene has, the same.
+    let error = headless::simulate(
+        &elsewhere,
+        &request(json!({"seconds": 1.0, "bot": {"entity": BODY,
+            "path": [{"at": [0, 0, -2], "wait_for": {"object": "boia"}}]}})),
+    )
+    .unwrap_err();
+    assert!(error.contains("Boia está na cena Outra"), "{error}");
 }
 
 #[test]
@@ -3699,6 +3890,13 @@ fn until_compares_attributes_with_values_of_their_type() {
         "{}",
         stopped.detail
     );
+    // Or with its name, the object by name too.
+    let by_name = run(
+        &project,
+        json!({"seconds": 2.0, "until": {"attribute":
+            {"entity": "jogador", "name": "alvo", "op": "==", "value": "Inimigo"}}}),
+    );
+    assert_eq!(by_name.stopped_at.unwrap().time, stopped.time);
     // A value of another type would never match, so it is refused.
     for (value, expected) in [
         (
@@ -3711,7 +3909,7 @@ fn until_compares_attributes_with_values_of_their_type() {
         ),
         (
             json!({"entity": player_id, "name": "alvo", "op": "==", "value": "nada"}),
-            "until: objeto nada não existe",
+            "until: attribute.value: \"nada\" não é o ID nem o nome de um objeto do projeto",
         ),
     ] {
         let error = headless::simulate(
@@ -3777,10 +3975,12 @@ fn the_report_lays_out_the_game_interface_at_the_end() {
     assert_eq!(ui[0]["kind"], "Bar");
     assert_eq!(ui[0]["text"], "Vida 40", "the value the logic set");
     assert_eq!(ui[0]["fraction"], 0.4);
+    // Laid out in the window the exported game opens, the player's 1280 × 720 by default.
+    assert_eq!(report.view_size, [1280, 720]);
     assert_eq!(
         ui[0]["rect"],
-        json!([756., 480., 180., 36.]),
-        "960x540 view"
+        json!([1076., 660., 180., 36.]),
+        "1280x720 view"
     );
     assert_eq!(ui[0]["visible"], true);
     assert_eq!(ui[1]["name"], "Continuar");
@@ -3793,6 +3993,33 @@ fn the_report_lays_out_the_game_interface_at_the_end() {
     assert_eq!(early.ui[0].fraction, Some(1.));
     let wide = run(&project, json!({"seconds": 0.1, "view_size": [1920, 1080]}));
     assert_eq!(wide.ui[0].rect, [1716., 1020., 180., 36.]);
+    assert_eq!(wide.view_size, [1920, 1080]);
+    // The size asked for wins over the window, which set_game_settings changes, in setup too;
+    // a window too big for a view is scaled down to fit, keeping its shape.
+    let mut windowed = project.clone();
+    windowed.game.window = [800, 600];
+    let small = run(&windowed, json!({"seconds": 0.1}));
+    assert_eq!(
+        (small.view_size, small.ui[0].rect),
+        ([800, 600], [596., 540., 180., 36.])
+    );
+    let asked = run(&windowed, json!({"seconds": 0.1, "view_size": [960, 540]}));
+    assert_eq!(asked.ui[0].rect, [756., 480., 180., 36.]);
+    let setup = json!([{"op": "set_game_settings", "window": [1024, 768]}]);
+    let set = run(&project, json!({"seconds": 0.1, "setup": setup}));
+    assert_eq!(set.view_size, [1024, 768]);
+    // A side left out is the window's, as setup leaves it.
+    let tall = run(
+        &project,
+        json!({"seconds": 0.1, "setup": setup, "view_size": [null, 900]}),
+    );
+    assert_eq!(tall.view_size, [1024, 900]);
+    windowed.game.window = [7680, 4320];
+    assert_eq!(headless::game_view(&windowed), [4096, 2304]);
+    assert_eq!(
+        run(&windowed, json!({"seconds": 0.1})).view_size,
+        [4096, 2304]
+    );
     let without = run(&project, json!({"seconds": 0.1, "ui": false}));
     assert!(without.ui.is_empty());
     assert!(serde_json::to_value(&without).unwrap().get("ui").is_none());

@@ -33,7 +33,6 @@ impl Runtime {
         };
         let target = |rt: &Runtime, budget: &mut usize| rt.target(graph, node, context, budget, 0);
         let mut outputs = Vec::new();
-        let mut new_trajectory = None;
         match node.operation.as_str() {
             "character.intent" => {
                 let id = target(self, budget)?;
@@ -137,7 +136,8 @@ impl Runtime {
                     } else {
                         None
                     };
-                    let destination = self.teleport_character(
+                    // The flow goes on after the teleport, as any flow already running.
+                    self.teleport_character(
                         &id,
                         position,
                         TeleportOptions {
@@ -146,9 +146,7 @@ impl Runtime {
                             look,
                             search_radius,
                         },
-                    )?;
-                    new_trajectory = Some((id.clone(), self.characters.states[&id].trajectory));
-                    Ok::<_, String>(destination)
+                    )
                 })();
                 outputs.extend([
                     ("success", Value::Bool(result.is_ok())),
@@ -287,9 +285,6 @@ impl Runtime {
                 ]);
             }
             _ => return Ok(false),
-        }
-        if let Some(trajectory) = new_trajectory {
-            context.trajectory = Some(trajectory);
         }
         if !outputs.is_empty() {
             let stored = Arc::make_mut(&mut context.outputs);

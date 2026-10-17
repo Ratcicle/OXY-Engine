@@ -422,6 +422,8 @@ pub struct CharacterState {
     pub(crate) jump_consumed: bool,
     pub(crate) slide_elapsed: f32,
     pub(crate) slide_latched: bool,
+    /// Which trajectory the character is on: each teleport starts a new one, and the events of
+    /// the old one that have not run yet are dropped.
     pub(crate) trajectory: u64,
 }
 #[derive(Clone, Debug)]

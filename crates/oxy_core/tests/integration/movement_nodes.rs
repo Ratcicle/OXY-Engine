@@ -242,6 +242,204 @@ fn teleport_node_cancels_old_sensor_exit_but_keeps_its_own_continuation() {
     assert!(r.logs[0].contains("teleporte concluído"));
 }
 
+/// A sensor box named `name` at `x` (3 m tall and deep), `width` across X, whose logic is
+/// `chain`: Ao entrar na área, then each node after the one before.
+fn area(name: &str, x: f32, width: f32, chain: &[Node]) -> Entity {
+    let mut area = Entity::new(name, None);
+    area.transform.position = [x, 1., 0.];
+    area.physics3d = Some(Collider3d {
+        shape: CollisionShape::Box {
+            size: [width, 3., 3.],
+        },
+        sensor: true,
+        ..Default::default()
+    });
+    let enter = node("event.area_enter", &[]);
+    area.graph.nodes.push(enter.clone());
+    let mut previous = enter;
+    for next in chain {
+        wire(&mut area.graph, &previous, "exec", next, "exec");
+        area.graph.nodes.push(next.clone());
+        previous = next.clone();
+    }
+    area
+}
+fn wait(seconds: f64) -> Node {
+    node("control.wait", &[("seconds", Value::Number(seconds))])
+}
+fn message(text: &str) -> Node {
+    node("debug.message", &[("message", Value::Text(text.into()))])
+}
+fn said(r: &Runtime, text: &str) -> bool {
+    r.logs.iter().any(|line| line.ends_with(text))
+}
+
+#[test]
+fn a_teleport_lets_the_waits_of_flows_already_running_go_on() {
+    // The character starts in a trigger that hides a tile, waits and shows it again, and its
+    // own landing logic waits too; it is teleported away while both wait.
+    let (mut p, id) = fixture();
+    let trigger = area(
+        "Gatilho",
+        0.,
+        2.,
+        &[
+            wait(0.45),
+            message("ladrilho escondido"),
+            wait(3.),
+            message("ladrilho de volta"),
+        ],
+    );
+    p.scenes[0].entities.push(trigger);
+    let land = node("event.character", &[("kind", Value::Text("land".into()))]);
+    let (pause, after) = (wait(1.), message("depois do pouso"));
+    let e = p.scenes[0].entity_mut(&id).unwrap();
+    e.transform.position[1] = 0.5;
+    e.graph.nodes = vec![land.clone(), pause.clone(), after.clone()];
+    wire(&mut e.graph, &land, "exec", &pause, "exec");
+    wire(&mut e.graph, &pause, "exec", &after, "exec");
+    validate_project(&p).unwrap();
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    ticks(&mut r, 30);
+    assert!(said(&r, "ladrilho escondido"), "{:?}", r.logs);
+    assert!(!said(&r, "depois do pouso"), "{:?}", r.logs);
+    r.teleport_character(&id, Vec3::new(20., 0.02, 0.), TeleportOptions::default())
+        .unwrap();
+    // The landing's flow ends 1 s after the landing at the start, before the one after the
+    // teleport could.
+    ticks(&mut r, 54);
+    assert!(said(&r, "depois do pouso"), "{:?}", r.logs);
+    ticks(&mut r, 180);
+    assert!(said(&r, "ladrilho de volta"), "{:?}", r.logs);
+
+    // The same with the teleport made by logic: a fall zone further on, which the character
+    // runs into while the trigger waits to show the tile again.
+    let (mut p, id) = fixture();
+    p.scenes[0].entities.push(area(
+        "Gatilho",
+        0.,
+        2.,
+        &[
+            wait(0.45),
+            message("ladrilho escondido"),
+            wait(3.),
+            message("ladrilho de volta"),
+        ],
+    ));
+    let teleport = node(
+        "character.teleport",
+        &[("position", Value::Vector3([20., 0.02, 0.]))],
+    );
+    let mut zone = area("Zona de queda", -1.5, 0.5, &[]);
+    let enter = zone.graph.nodes[0].clone();
+    wire(&mut zone.graph, &enter, "exec", &teleport, "exec");
+    wire(&mut zone.graph, &enter, "context", &teleport, "target");
+    zone.graph.nodes.push(teleport);
+    p.scenes[0].entities.push(zone);
+    validate_project(&p).unwrap();
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    ticks(&mut r, 36);
+    assert!(said(&r, "ladrilho escondido"), "{:?}", r.logs);
+    r.set_character_velocity(&id, Vec3::new(-12., 0., 0.))
+        .unwrap();
+    ticks(&mut r, 30);
+    assert!(
+        r.character_state(&id).unwrap().position.x > 19.,
+        "teleported"
+    );
+    ticks(&mut r, 240);
+    assert!(said(&r, "ladrilho de volta"), "{:?}", r.logs);
+    assert_eq!(r.logs.len(), 2, "{:?}", r.logs);
+    // The catalog says so.
+    assert!(description("control.wait").contains("Um teleporte não cancela a espera"));
+    let teleport = description("character.teleport");
+    assert!(
+        teleport.contains("Descarta os eventos do trajeto abandonado que ainda não executaram")
+            && teleport.contains("A lógica que já começou, esperas incluídas, continua"),
+        "{teleport}"
+    );
+}
+
+#[test]
+fn a_teleport_drops_what_the_abandoned_path_crossed_in_the_same_step() {
+    // In one step the character crosses a fall zone and, past it, a marker; the zone teleports
+    // it and waits. The marker's entry belongs to the path left behind and never runs; the
+    // zone's own flow goes on, its wait included.
+    let (mut p, id) = fixture();
+    let teleport = node(
+        "character.teleport",
+        &[("position", Value::Vector3([10., 0.02, 0.]))],
+    );
+    let mut zone = area(
+        "Zona de queda",
+        -1.,
+        0.02,
+        &[
+            teleport.clone(),
+            message("teleporte concluído"),
+            wait(0.5),
+            message("depois da espera"),
+        ],
+    );
+    let enter = zone.graph.nodes[0].clone();
+    wire(&mut zone.graph, &enter, "context", &teleport, "target");
+    p.scenes[0].entities.push(zone);
+    p.scenes[0]
+        .entities
+        .push(area("Marco", -1.5, 0.3, &[message("trajeto abandonado")]));
+    validate_project(&p).unwrap();
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    r.set_character_velocity(&id, Vec3::new(-120., 0., 0.))
+        .unwrap();
+    ticks(&mut r, 1);
+    assert!(r.character_state(&id).unwrap().position.x > 9.9);
+    ticks(&mut r, 60);
+    assert!(said(&r, "teleporte concluído"), "{:?}", r.logs);
+    assert!(said(&r, "depois da espera"), "{:?}", r.logs);
+    assert!(!said(&r, "trajeto abandonado"), "{:?}", r.logs);
+    assert_eq!(r.logs.len(), 2, "{:?}", r.logs);
+}
+
+#[test]
+fn an_input_runs_in_every_object_with_the_node_even_a_character_without_automatic_actions() {
+    // The game has one input in this version: a character that obeys only its nodes hears the
+    // action too, as any other object.
+    fn hears(entity: &mut Entity, text: &str) {
+        let pressed = node("event.input", &[("action", Value::Text("acenar".into()))]);
+        let said = message(text);
+        wire(&mut entity.graph, &pressed, "exec", &said, "exec");
+        entity.graph.nodes.extend([pressed, said]);
+    }
+    let (mut p, id) = fixture();
+    p.input_bindings.insert("acenar".into(), "K".into());
+    let e = p.scenes[0].entity_mut(&id).unwrap();
+    e.character3d.as_mut().unwrap().automatic_input = false;
+    hears(e, "o personagem ouviu");
+    let mut sign = Entity::new("Placa", None);
+    hears(&mut sign, "a placa ouviu");
+    p.scenes[0].entities.push(sign);
+    validate_project(&p).unwrap();
+    let mut r = Runtime::new(&p, &p.start_scene).unwrap();
+    let wave = std::collections::BTreeSet::from(["acenar".to_string()]);
+    let frame = InputFrame {
+        pressed: wave.clone(),
+        held: wave,
+        ..Default::default()
+    };
+    r.advance(FIXED_DT, &frame);
+    assert!(
+        said(&r, "o personagem ouviu") && said(&r, "a placa ouviu"),
+        "{:?}",
+        r.logs
+    );
+    let input = description("event.input");
+    assert!(
+        input.contains("em todo objeto que tem o nó")
+            && input.contains("num personagem 3D com as ações automáticas desligadas"),
+        "{input}"
+    );
+}
+
 /// A character from the fixture, and a "Zona de queda" whose step logic teleports it into the
 /// floor (occupied, no search) through `teleports` nodes; the first `read` of them give Sucesso
 /// to a branch, the others are read by no one.

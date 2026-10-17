@@ -38,8 +38,9 @@ use std::{
 pub const MAX_SECONDS: f64 = 600.;
 /// Most entries one report list keeps; older ones are dropped and counted in `truncated`.
 pub const MAX_ENTRIES: usize = 300;
-/// Game view the interface is laid out in when a request gives no size, in pixels.
-pub const VIEW_SIZE: [u32; 2] = [960, 540];
+/// Smallest and largest side of the game view a run lays out the interface in, in pixels.
+pub const MIN_VIEW: u32 = 16;
+pub const MAX_VIEW: u32 = 4096;
 /// Most samples a watched object reports, the final state included.
 pub const MAX_SAMPLES: usize = 120;
 /// Steps a run keeps to spread `samples` over the time it ran when `until` or Sair do jogo stops
@@ -149,7 +150,8 @@ pub enum AttributeFilter {
     Names(Vec<String>),
 }
 
-/// An object to report: its ID, or `{id, fields?, attributes?}`.
+/// An object to report: its ID or name (see [`Project::find_entity`]), or `{id, fields?,
+/// attributes?}`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(try_from = "Json")]
 pub struct Watch {
@@ -195,7 +197,7 @@ impl TryFrom<Json> for Watch {
     }
 }
 
-/// Places an object before the run, in world space.
+/// Places an object of the start scene (by ID or name) before the run, in world space.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Spawn {
@@ -260,7 +262,8 @@ pub struct AttributeCondition {
     pub name: String,
     pub op: Comparison,
     /// A plain number, boolean or text, or a tagged value such as `{"Number": 3}`, of the
-    /// attribute's type. For an object or surface attribute, a text is the ID (`"$N"` too).
+    /// attribute's type. For an object attribute, a text is the object, by ID or name (`"$N"`
+    /// too); for a surface one, its ID.
     #[serde(deserialize_with = "plain_or_tagged")]
     pub value: Value,
 }
@@ -420,10 +423,11 @@ pub struct SimulationRequest {
     pub actions: ActionsMode,
     #[serde(default)]
     pub actions_filter: ActionFilter,
-    /// Size in pixels of the game view that lays out `ui` (16 to 4096 a side); `VIEW_SIZE`
-    /// when absent.
+    /// Width and height in pixels of the game view that lays out `ui` ([`MIN_VIEW`] to
+    /// [`MAX_VIEW`] a side); a side absent is the window's of the exported game (see
+    /// [`game_view`]) of the copy the run starts from, setup included.
     #[serde(default)]
-    pub view_size: Option<[u32; 2]>,
+    pub view_size: [Option<u32>; 2],
     /// Reports the game interface at the end; on unless `false`.
     #[serde(default = "on")]
     pub ui: bool,
@@ -442,8 +446,8 @@ pub struct SimulationRequest {
     #[serde(default, deserialize_with = "plain_or_tagged_values")]
     pub save: Option<BTreeMap<String, Value>>,
     /// Plays one 3D character along a path of points, in place of the movement inputs, once
-    /// the character's scene runs (any scene of the project); its IDs may be `"$N"` from setup.
-    /// The report's `bot` says how it went.
+    /// the character's scene runs (any scene of the project); its objects go by ID, name or
+    /// `"$N"` from setup. The report's `bot` says how it went.
     #[serde(default)]
     pub bot: Option<Bot>,
 }
@@ -697,7 +701,9 @@ pub struct PauseEvent {
     pub paused: bool,
 }
 
-/// How the request's bot went.
+/// How the request's bot went. The fields are those of its latest run: each new start of its
+/// character's scene after it took over (a reload, or the game coming back to it) starts the
+/// path over, and the run so far goes to `earlier`.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct BotReport {
     /// The character it played.
@@ -708,8 +714,8 @@ pub struct BotReport {
     pub started_at: Option<f64>,
     /// The points it reached, in order.
     pub reached: Vec<BotPoint>,
-    /// When it left the last point, its wait and jump there done; or when it let go of a
-    /// character that logic held on the way to the last point (see `held_by`).
+    /// When it left the last point, its wait and jump there done; or when logic began holding
+    /// the character on the way to the last point (see `held_by`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_at: Option<f64>,
     /// Where it gave up.
@@ -718,6 +724,24 @@ pub struct BotReport {
     /// The reasons logic held the character's movement by (Bloquear / liberar entrada) when the
     /// bot let go: with `stuck` reason held, or with `done_at` when the hold began on the way
     /// to the last point.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub held_by: Vec<String>,
+    /// The runs before the latest, oldest first (the most recent `MAX_ENTRIES`): one that a new
+    /// start of the scene cut short has neither `done_at` nor `stuck`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub earlier: Vec<BotRunReport>,
+}
+/// A run of the bot along its path that a new start of its character's scene ended, with the
+/// fields of [`BotReport`].
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BotRunReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<f64>,
+    pub reached: Vec<BotPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_at: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<BotStuck>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub held_by: Vec<String>,
 }
@@ -787,6 +811,9 @@ pub struct SimulationReport {
     /// clicks (see [`Runtime::wants_relative_mouse`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_free: Option<bool>,
+    /// The game view in pixels that `ui` rects and clicks at a point are measured in: each side
+    /// the one asked for, else the game window's (see [`game_view`]).
+    pub view_size: [u32; 2],
     pub watched: Vec<Watched>,
     /// The game variables at the end, by name, or "name · key" for the value of a key: the
     /// first `MAX_ENTRIES` of [`Runtime::variable_values`].
@@ -812,6 +839,20 @@ pub struct SimulationReport {
 /// Simulation time rounded to 0.1 ms, which keeps reports short.
 fn rounded(time: f64) -> f64 {
     (time * 10_000.).round() / 10_000.
+}
+
+/// The game view of a run that asks for no size: the inside of the window the exported game
+/// opens (`set_game_settings`, else the player's default), so the interface is laid out as the
+/// player lays it out. A window wider or taller than [`MAX_VIEW`] is scaled down to fit,
+/// keeping its shape.
+pub fn game_view(project: &Project) -> [u32; 2] {
+    let window = project.game.window;
+    let largest = window[0].max(window[1]);
+    if largest <= MAX_VIEW {
+        return window;
+    }
+    let scale = f64::from(MAX_VIEW) / f64::from(largest);
+    window.map(|side| ((f64::from(side) * scale).round() as u32).max(MIN_VIEW))
 }
 
 /// `"$N"` stands for the first ID created by setup command N, `"$N.M"` for the M-th,
@@ -1789,12 +1830,12 @@ impl Stop {
         applied: &[Applied],
         bot: Option<&Bot>,
     ) -> Result<Self, String> {
-        let entity = |id: &str| {
+        // Objects by ID, name or "$N".
+        let entity = |text: &str, what: &str| {
+            let text = resolve(text, applied)?;
             project
-                .scenes
-                .iter()
-                .find_map(|s| s.entity(id))
-                .ok_or_else(|| format!("until: objeto {id} não existe no projeto"))
+                .find_entity(&text, &format!("until: {what}"))
+                .map(|(_, e)| e)
         };
         let scene = match &until.scene_change {
             None | Some(SceneCondition::Any(false)) => None,
@@ -1811,8 +1852,7 @@ impl Stop {
         let attribute = match &until.attribute {
             None => None,
             Some(condition) => {
-                let id = resolve(&condition.entity, applied)?;
-                let target = entity(&id)?;
+                let target = entity(&condition.entity, "attribute.entity")?;
                 let Some(current) = target.attributes.get(&condition.name) else {
                     return Err(format!(
                         "until: atributo {} não existe em {}",
@@ -1829,9 +1869,7 @@ impl Stop {
                 let value = match (current, &condition.value) {
                     (Value::Object(_), Value::Text(id)) if id.is_empty() => Value::Object(None),
                     (Value::Object(_), Value::Text(id) | Value::Object(Some(id))) => {
-                        let id = resolve(id, applied)?;
-                        entity(&id)?;
-                        Value::Object(Some(id))
+                        Value::Object(Some(entity(id, "attribute.value")?.id.clone()))
                     }
                     (Value::Surface(_), Value::Text(id)) if id.is_empty() => Value::Surface(None),
                     (Value::Surface(_), Value::Text(id) | Value::Surface(Some(id))) => {
@@ -1854,7 +1892,7 @@ impl Stop {
                 }
                 Some((
                     AttributeCondition {
-                        entity: id,
+                        entity: target.id.clone(),
                         value,
                         ..condition.clone()
                     },
@@ -1895,26 +1933,17 @@ impl Stop {
         };
         let absent = match &until.entity_absent {
             None => None,
-            Some(id) => {
-                let id = resolve(id, applied)?;
-                let name = project
-                    .scene(start)
-                    .and_then(|s| s.entity(&id))
-                    .ok_or_else(|| format!("until: objeto {id} não está na cena inicial"))?
-                    .name
-                    .clone();
-                Some((id, name))
+            Some(text) => {
+                let scene = project.scene(start).ok_or("Cena inicial não existe")?;
+                let absent = scene.find_entity(&resolve(text, applied)?, "until: entity_absent")?;
+                Some((absent.id.clone(), absent.name.clone()))
             }
         };
         let event = match &until.event {
             None => None,
             Some(condition) => {
                 let object = match &condition.object {
-                    Some(id) => {
-                        let id = resolve(id, applied)?;
-                        entity(&id)?;
-                        Some(id)
-                    }
+                    Some(text) => Some(entity(text, "event.object")?.id.clone()),
                     None => None,
                 };
                 Some((condition.kind, object))
@@ -2097,12 +2126,27 @@ struct BotRun {
     bot: Bot,
     state: BotState,
     report: BotReport,
+    earlier: Recent<BotRunReport>,
 }
 impl BotRun {
-    /// The scenes a step started, for the bot waiting for its character's.
+    /// The scenes a step started, for the bot waiting for its character's, or starting its
+    /// path over when that scene starts again: the run so far goes to `earlier`.
     fn scenes(&mut self, runtime: &Runtime, happened: &Happened) {
-        if !happened.scenes.is_empty() {
-            self.state.scene_started(runtime, &self.bot);
+        if !happened.scenes.is_empty() && self.state.scene_started(runtime, &self.bot) {
+            let report = &mut self.report;
+            self.earlier.push(BotRunReport {
+                started_at: report.started_at.take(),
+                reached: std::mem::take(&mut report.reached),
+                done_at: report.done_at.take(),
+                stuck: report.stuck.take(),
+                held_by: std::mem::take(&mut report.held_by),
+            });
+        }
+    }
+    fn finish(self, truncated: &mut BTreeMap<&'static str, usize>) -> BotReport {
+        BotReport {
+            earlier: self.earlier.finish("bot_earlier", truncated),
+            ..self.report
         }
     }
     /// Plays the coming step and records what happened; how the bot ended, if it did now.
@@ -2205,17 +2249,7 @@ impl BotRun {
                 self.report.held_by = held_by;
                 return Some((BotEnd::Stuck, detail));
             }
-            Some(BotEvent::Released { held_by }) => {
-                let detail = format!(
-                    "A lógica travou o movimento de {name} (motivos: {}) a caminho do último \
-                     ponto do bot ({}); o caminho conta como feito",
-                    held_by.join(", "),
-                    self.bot.path.len() - 1
-                );
-                self.report.done_at = Some(time);
-                self.report.held_by = held_by;
-                return Some((BotEnd::Done, detail));
-            }
+            Some(BotEvent::Released { held_by }) => return Some(self.release(held_by, time)),
             None => {}
         }
         if self.state.done() && self.report.done_at.is_none() {
@@ -2226,6 +2260,25 @@ impl BotRun {
             ));
         }
         None
+    }
+    /// After the step: logic that began holding the character in it on the way to the last
+    /// point ends the path in this step (see [`bot::released`]).
+    fn released(&mut self, runtime: &Runtime) -> Option<(BotEnd, String)> {
+        let held_by = bot::released(runtime, &self.bot, &mut self.state)?;
+        Some(self.release(held_by, rounded(runtime.time)))
+    }
+    /// The path done at `time` because logic holds the character by `held_by`.
+    fn release(&mut self, held_by: Vec<String>, time: f64) -> (BotEnd, String) {
+        let detail = format!(
+            "A lógica travou o movimento de {} (motivos: {}) a caminho do último ponto do bot \
+             ({}); o caminho conta como feito",
+            self.report.entity.name,
+            held_by.join(", "),
+            self.bot.path.len() - 1
+        );
+        self.report.done_at = Some(time);
+        self.report.held_by = held_by;
+        (BotEnd::Done, detail)
     }
 }
 
@@ -2297,33 +2350,12 @@ pub type PlannedInputs = (Vec<TimedInput>, Vec<(f64, Direct)>);
 /// case) of exactly one. An ID no object has is refused, but for the copies `action.spawn`
 /// makes, which exist only while the game runs ([`random::is_derived_id`]).
 fn clicked(project: &Project, text: &str) -> Result<Id, String> {
-    let objects = || {
-        project
-            .scenes
-            .iter()
-            .flat_map(|s| s.entities.iter().map(move |e| (s, e)))
-    };
-    if objects().any(|(_, e)| e.id == text) || random::is_derived_id(text) {
+    if random::is_derived_id(text) {
         return Ok(text.into());
     }
-    let wanted = text.trim().to_lowercase();
-    let named: Vec<_> = objects()
-        .filter(|(_, e)| e.name.trim().to_lowercase() == wanted)
-        .collect();
-    match named.as_slice() {
-        [(_, e)] => Ok(e.id.clone()),
-        [] => Err(format!(
-            "click: \"{text}\" não é o ID nem o nome de um objeto do projeto"
-        )),
-        many => Err(format!(
-            "click: há {} objetos chamados \"{text}\"; use o ID: {}",
-            many.len(),
-            many.iter()
-                .map(|(s, e)| format!("{} (cena {})", e.id, s.name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
+    project
+        .find_entity(text, "click")
+        .map(|(_, entity)| entity.id.clone())
 }
 
 /// `inputs` for a game whose clock reads `start`, each `at` counted from it: presses, releases,
@@ -2590,9 +2622,15 @@ pub fn run(
             random::MAX_SEED
         ));
     }
-    let view_size = request.view_size.unwrap_or(VIEW_SIZE);
-    if view_size.iter().any(|v| !(16..=4096).contains(v)) {
-        return Err("A vista do jogo deve ter entre 16 e 4096 pixels de lado".into());
+    if request
+        .view_size
+        .iter()
+        .flatten()
+        .any(|side| !(MIN_VIEW..=MAX_VIEW).contains(side))
+    {
+        return Err(format!(
+            "A vista do jogo deve ter entre {MIN_VIEW} e {MAX_VIEW} pixels de lado"
+        ));
     }
     // Setup and spawn change only this copy.
     let mut copy = Cow::Borrowed(project);
@@ -2613,22 +2651,49 @@ pub fn run(
         return Err(format!("Cena {start} não existe"));
     }
     if let Some(spawn) = &request.spawn {
-        let entity = resolve(&spawn.entity, &applied)?;
+        let scene = copy.scene(&start).expect("checked above");
+        let entity = scene
+            .find_entity(&resolve(&spawn.entity, &applied)?, "spawn")?
+            .id
+            .clone();
         place(copy.to_mut(), &start, spawn, &entity)?;
     }
     let source: &Project = &copy;
+    let (window, [width, height]) = (game_view(source), request.view_size);
+    let view_size = [width.unwrap_or(window[0]), height.unwrap_or(window[1])];
     let bot = request
         .bot
         .as_ref()
         .map(|bot| {
             let mut bot = bot.clone();
-            bot.entity = resolve(&bot.entity, &applied)?;
-            for point in &mut bot.path {
+            let (scene, character) = source.find_entity(&resolve(&bot.entity, &applied)?, "bot")?;
+            bot.entity = character.id.clone();
+            // A point's objects are of the character's scene: a name is looked for there, and
+            // an ID (or a name only another scene has) is left for the check to place.
+            let point_object = |text: &str, what: String| {
+                let text = resolve(text, &applied)?;
+                if source.scenes.iter().any(|s| s.entity(&text).is_some()) {
+                    return Ok(text);
+                }
+                if scene.entities_named(&text).is_empty()
+                    && let Ok((_, elsewhere)) = source.find_entity(&text, &what)
+                {
+                    return Ok(elsewhere.id.clone());
+                }
+                scene.find_entity(&text, &what).map(|e| e.id.clone())
+            };
+            for (index, point) in bot.path.iter_mut().enumerate() {
+                let what = |field: &str| {
+                    format!(
+                        "bot: {field} do ponto {index} do caminho (o {}º)",
+                        index + 1
+                    )
+                };
                 if let Some(object) = &mut point.object {
-                    *object = resolve(object, &applied)?;
+                    *object = point_object(object, what("object"))?;
                 }
                 if let Some(wait) = &mut point.wait_for {
-                    wait.object = resolve(&wait.object, &applied)?;
+                    wait.object = point_object(&wait.object, what("wait_for.object"))?;
                 }
             }
             bot.check(source)?;
@@ -2643,12 +2708,8 @@ pub fn run(
         .watch
         .iter()
         .map(|watch| {
-            let id = resolve(&watch.id, &applied)?;
-            let entity = source
-                .scenes
-                .iter()
-                .find_map(|s| s.entity(&id))
-                .ok_or_else(|| format!("Objeto observado {id} não existe no projeto"))?;
+            let (_, entity) = source.find_entity(&resolve(&watch.id, &applied)?, "watch")?;
+            let id = entity.id.clone();
             let mut fields: BTreeSet<Field> = watch.fields.as_ref().map_or_else(
                 || [Field::Position, Field::Visible, Field::Attributes].into(),
                 |fields| fields.iter().copied().collect(),
@@ -2750,7 +2811,9 @@ pub fn run(
             done_at: None,
             stuck: None,
             held_by: Vec::new(),
+            earlier: Vec::new(),
         },
+        earlier: Recent::default(),
         bot,
     });
     let mut twin = Twin {
@@ -2784,6 +2847,7 @@ pub fn run(
         camera: None,
         ui: Vec::new(),
         cursor_free: None,
+        view_size,
         watched: watches
             .iter()
             .map(|(watch, name)| Watched {
@@ -2898,7 +2962,7 @@ pub fn run(
         if let Some(bot) = &mut bot {
             bot.scenes(&runtime, &happened);
         }
-        happened.bot = bot_ended;
+        happened.bot = bot_ended.or_else(|| bot.as_mut().and_then(|bot| bot.released(&runtime)));
         twin.compare(recorder.lookup(&runtime), step);
         ended = settle(&runtime, &happened, step, &mut stopped, &mut end);
         sampler.end = end;
@@ -2913,7 +2977,7 @@ pub fn run(
         stopped.ended_at = Some(rounded(runtime.time));
     }
     report.stopped_at = stopped;
-    report.bot = bot.map(|bot| bot.report);
+    report.bot = bot.map(|bot| bot.finish(&mut report.truncated));
     report.paused = runtime.game_paused();
     let end = {
         let lookup = recorder.lookup(&runtime);

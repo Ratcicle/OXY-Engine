@@ -3,9 +3,10 @@
 //! presses the character's own input actions (jump, sprint, crouch), as a person at the
 //! controls would, so the game's bindings and logic run as in play. It walks straight at each
 //! point: where it stops coming nearer it gives up and says why, instead of solving the level.
-//! The character may be in any scene: the bot takes over once that scene runs. A point may
-//! make it stand until an object, such as a moving platform, comes within reach, and logic that
-//! holds the character (Bloquear / liberar entrada) is told apart from a wall.
+//! The character may be in any scene: the bot takes over once that scene runs, and starts its
+//! path over each time that scene starts again. A point may make it stand until an object, such
+//! as a moving platform, comes within reach, and logic that holds the character (Bloquear /
+//! liberar entrada) is told apart from a wall.
 use crate::{
     character::{CharacterConfig, CharacterState, axis_toward},
     document::{Id, Project, Scene, SceneKind},
@@ -47,8 +48,9 @@ pub struct Bot {
     #[serde(default = "default_radius")]
     pub radius: f32,
     /// Seconds after the character's scene starts that it takes over, as an input's `at`: from
-    /// the latest start of that scene before it took over (the run's start for the start
-    /// scene, unless the game leaves and reopens it first).
+    /// the latest start of that scene (the run's start for the start scene, unless the game
+    /// leaves and reopens it first). Once it took over, a new start of the scene starts the path
+    /// over, counted the same way.
     #[serde(default)]
     pub start: f64,
     /// Seconds of game time without coming [`PROGRESS`] nearer to its point before it gives up.
@@ -356,9 +358,9 @@ pub enum BotEvent {
         last_support: Option<Id>,
         held_by: Vec<String>,
     },
-    /// Logic held the character's movement on its way to the last point, since after it reached
-    /// the point before (or took over), for `stuck_after` seconds: the game took over at the end
-    /// of the path, which counts as done. `held_by` are the reasons.
+    /// Logic began holding the character's movement on its way to the last point, after it
+    /// reached the point before (or took over): the game took over at the end of the path,
+    /// which counts as done from the step the hold began. `held_by` are the reasons.
     Released { held_by: Vec<String> },
 }
 
@@ -423,7 +425,13 @@ pub struct BotState {
 impl BotState {
     /// A bot about to play, in the scene `runtime` starts with.
     pub fn new(runtime: &Runtime, bot: &Bot) -> Self {
-        let mut state = Self {
+        let mut state = Self::waiting();
+        state.scene_started(runtime, bot);
+        state
+    }
+    /// A bot that has not taken over yet, before any scene.
+    fn waiting() -> Self {
+        Self {
             scene_start: None,
             started: None,
             next: 0,
@@ -442,20 +450,29 @@ impl BotState {
             cleared: None,
             done: false,
             stuck: false,
-        };
-        state.scene_started(runtime, bot);
-        state
+        }
     }
     /// The running scene started, by a change or a reload: until the bot takes over, its
-    /// `start` counts from the latest start of the character's scene.
-    pub fn scene_started(&mut self, runtime: &Runtime, bot: &Bot) {
+    /// `start` counts from the latest start of the character's scene. Once it took over, a new
+    /// start of that scene (a reload, or the game coming back to it) starts its path over from
+    /// the first point, `start` counted from that start, as a second run: true then. The
+    /// actions it held stay held until its next step lets go of them.
+    pub fn scene_started(&mut self, runtime: &Runtime, bot: &Bot) -> bool {
+        let here = runtime.scene().entity(&bot.entity).is_some();
         if self.started.is_none() {
-            self.scene_start = runtime
-                .scene()
-                .entity(&bot.entity)
-                .is_some()
-                .then_some(runtime.time);
+            self.scene_start = here.then_some(runtime.time);
+            return false;
         }
+        if !here {
+            return false;
+        }
+        *self = Self {
+            scene_start: Some(runtime.time),
+            held: std::mem::take(&mut self.held),
+            tapped: std::mem::take(&mut self.tapped),
+            ..Self::waiting()
+        };
+        true
     }
     /// It went through the whole path: it reached the last point, waited and jumped there.
     pub fn done(&self) -> bool {
@@ -517,12 +534,10 @@ impl BotState {
                     .is_some_and(|(_, feet)| position.y < feet - FALL_DROP))
     }
     /// Gives up on the character at `position`, `distance` metres from its point: it fell when
-    /// in the air long enough or low enough, logic holds it when it blocks its movement (on the
-    /// way to the last point, since after the point before: the path is done), else something
-    /// blocks it.
+    /// in the air long enough or low enough, logic holds it when it blocks its movement, else
+    /// something blocks it.
     fn give_up(
         &mut self,
-        bot: &Bot,
         character: &CharacterState,
         position: Vec3,
         distance: f32,
@@ -534,13 +549,6 @@ impl BotState {
         } else {
             character.movement_blocks.iter().cloned().collect()
         };
-        if !held_by.is_empty()
-            && self.next + 1 == bot.path.len()
-            && self.held_since.is_some_and(|since| since > self.last_reach)
-        {
-            self.done = true;
-            return BotEvent::Released { held_by };
-        }
         self.stuck = true;
         BotEvent::Stuck {
             index: self.next,
@@ -556,6 +564,17 @@ impl BotState {
             last_support: self.last_support(),
             held_by,
         }
+    }
+    /// On the way to the last point, logic that began holding the character after it reached
+    /// the point before (or took over) took it where the path leads: the path is done, and
+    /// these are the reasons.
+    fn release(&mut self, bot: &Bot, character: &CharacterState) -> Option<Vec<String>> {
+        let begun_after = self.held_since.is_some_and(|since| since > self.last_reach);
+        if self.arrived.is_some() || self.next + 1 != bot.path.len() || !begun_after {
+            return None;
+        }
+        self.done = true;
+        Some(character.movement_blocks.iter().cloned().collect())
     }
     /// Stands for the `wait_for` of point `index`: Ok(true) when the point has none or its
     /// object came within reach of where the bot stands (`from`), and the bot then heads for
@@ -658,6 +677,22 @@ pub fn steer(
     event
 }
 
+/// After the step [`steer`] played: when logic began holding the character in it on the way to
+/// the last point, the path is done in that step (the next `steer` would only find it a step
+/// later, and a run that stops now would never hear it); the reasons logic holds it by. Not in
+/// the game pause, when the bot takes no step.
+pub fn released(runtime: &Runtime, bot: &Bot, state: &mut BotState) -> Option<Vec<String>> {
+    if state.started.is_none() || state.finished() || runtime.game_paused() {
+        return None;
+    }
+    let character = runtime.character_state(&bot.entity)?;
+    if character.movement_blocks.is_empty() {
+        return None;
+    }
+    state.held_since.get_or_insert(runtime.game_time());
+    state.release(bot, character)
+}
+
 fn drive(
     runtime: &Runtime,
     bot: &Bot,
@@ -693,6 +728,11 @@ fn drive(
         state.held_since = None;
     } else {
         state.held_since.get_or_insert(now);
+    }
+    // The hold that ends the path, here a step after `released` finds it, for a caller that
+    // does not ask after each step.
+    if let Some(held_by) = state.release(bot, character) {
+        return Some(BotEvent::Released { held_by });
     }
     let Some(mut target) = bot.path[state.next].position(scene) else {
         steer_axis(frame, config, Vec2::ZERO);
@@ -804,7 +844,7 @@ fn drive(
     if distance <= nearest.0 - PROGRESS {
         *nearest = (distance, now);
     } else if now - nearest.1 >= f64::from(bot.stuck_after) {
-        return Some(state.give_up(bot, character, position, distance, now));
+        return Some(state.give_up(character, position, distance, now));
     }
     actions(config, character, point, state, hold, tap);
     let across = Vec3::new(offset.x, 0., offset.z);

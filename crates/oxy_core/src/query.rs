@@ -374,7 +374,7 @@ pub const FIND_LIMIT: usize = 50;
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeQuery {
     pub fields: BTreeSet<TreeField>,
-    /// Lists this object's children instead of the scene's root objects.
+    /// Lists this object's children (by ID or name) instead of the scene's root objects.
     pub root: Option<Id>,
     /// Levels of children shown below the listed objects; deeper children are only counted.
     pub depth: Option<usize>,
@@ -499,11 +499,7 @@ fn collider_box(view: &SceneView, e: &Entity) -> Option<Json> {
 pub fn scene_tree(project: &Project, scene: &str, query: &TreeQuery) -> Result<Json, String> {
     let scene = project.find_scene(scene, "scene")?;
     let root = match &query.root {
-        Some(id) => Some(
-            scene
-                .entity(id)
-                .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))?,
-        ),
+        Some(text) => Some(scene.find_entity(text, "root")?),
         None => None,
     };
     let mut children: HashMap<Option<&str>, Vec<&Entity>> = HashMap::new();
@@ -657,6 +653,7 @@ pub enum Detail {
 /// Options of `entities`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityQuery {
+    /// Objects of the scene, each by ID or name (see [`Scene::find_entity`]).
     pub ids: Vec<Id>,
     /// Only these parts, besides ID and name: top-level keys or dotted paths such as
     /// "character3d.actions" (numbers index lists).
@@ -762,10 +759,14 @@ pub const ENTITY_FIELDS: [&str; 32] = [
 pub fn entities(project: &Project, scene: &str, query: &EntityQuery) -> Result<Json, String> {
     let scene = project.find_scene(scene, "scene")?;
     let view = SceneView::new(scene);
+    let what = if query.list { "ids" } else { "id" };
     let mut objects = query
         .ids
         .iter()
-        .map(|id| entity_view(project, scene, &view, id, query))
+        .map(|text| {
+            let e = scene.find_entity(text, what)?;
+            entity_view(project, scene, &view, e, query)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(if query.list {
         json!({"objects": objects})
@@ -796,12 +797,10 @@ fn entity_view(
     project: &Project,
     scene: &Scene,
     view: &SceneView,
-    id: &str,
+    e: &Entity,
     query: &EntityQuery,
 ) -> Result<Json, String> {
-    let e = scene
-        .entity(id)
-        .ok_or_else(|| format!("Objeto {id} não existe nesta cena"))?;
+    let id = e.id.as_str();
     let mut value = serde_json::to_value(e).map_err(|e| e.to_string())?;
     name_groups(project, &mut value);
     let map = value

@@ -149,7 +149,8 @@ is refused before the run (the IDs of copies action.spawn makes are taken); a hi
 (itself or a group above it) takes no click, nor does an object that is not in the scene \
 running then, which log lines note (Clique ignorado: X não está na cena atual), and in the game \
 pause only interface elements take clicks; {type: click, at, point: [x, y]}: a click at that \
-pixel of the game view (width × height, from its top-left corner, as ui rects are), which the \
+pixel of the game view (width × height, by default the game window's, from its top-left \
+corner, as ui rects are), which the \
 topmost visible button there takes, as in the game (images and texts take no clicks, so a \
 button under a panel still does; ui covered_by tells what a person sees over a button), and a \
 point on no button is logged (Clique ignorado: nenhum botão visível da interface em (x, y)); \
@@ -174,15 +175,18 @@ controls: each step it gives the movement toward its point (in place of movement
 character's direction actions) and presses the character's own jump, sprint and crouch actions, \
 so logic hears them as in play. The game has one input in this version: the movement reaches \
 every character with automatic input, and characters reading the same jump, sprint or crouch \
-actions get those presses too. entity: ID or \"$N\", a character of any scene: the bot waits \
-until that scene runs (a menu may open it) and takes over start seconds (default 0, the rule of \
-an input's at) after that scene starts, counted from its latest start before the bot took over \
-(scene_changes times; 0 for the start scene); refused when no scene has it, in 2D scenes, \
-without character3d and with automatic_input false. A point is [x, y, z] in the world, y at the \
-feet (a floor's top), or {at?, object? (follows that object of the character's scene as it \
-moves, as a moving platform; at is then an offset in world axes), jump? (pressed once on leaving \
-the point: put it at the take-off spot; running across the way to the next point faster than 1 \
-m/s, the bot first turns toward it on the ground, up to 0.25 s, so the jump goes that way), \
+actions get those presses too. Objects go by ID, by name (any case; a name two objects share is \
+refused with their IDs) or \"$N\". entity: a character of any scene: the bot waits until that \
+scene runs (a menu may open it) and takes over start seconds (default 0, the rule of an input's \
+at) after that scene starts, counted from its latest start (scene_changes times; 0 for the start \
+scene); refused when no scene has it, in 2D scenes, without character3d and with \
+automatic_input false. Once it took over, each new start of that scene (a reload, as a restart \
+button does, or the game coming back to it) starts the path over from the first point, start \
+counted from that start, so one run can test a second go. A point is [x, y, z] in the world, y \
+at the feet (a floor's top), or {at?, object? (follows that object of the character's scene as \
+it moves, as a moving platform; at is then an offset in world axes), jump? (pressed once on \
+leaving the point: put it at the take-off spot; running across the way to the next point faster \
+than 1 m/s, the bot first turns toward it on the ground, up to 0.25 s, so the jump goes that way), \
 sprint?, crouch? (held on the way there and while waiting), wait? (seconds standing there), \
 radius?, wait_for? {object, within? (metres, default 1), height? (metres, default the \
 character's step height), timeout? (seconds, default 30)}: before heading for this point the bot \
@@ -201,16 +205,20 @@ Reached: within radius across the ground (default 0.6 m) and half the body's hei
 straight at each point, never turning the camera or finding a way around walls: when it comes \
 no 0.1 m nearer for stuck_after seconds (default 1.5) it gives up and reports where and why, \
 instead of solving the level. The report adds bot {entity, started_at? (when it took over; \
-absent: its character's scene never ran, or start came after the end), reached [{index, time, \
-position}], done_at? (the last point left, its wait and jump done; or when it let go of a \
-character logic held on the way to the last point, see reason held), stuck? {index, time, \
+absent when the latest run never took over: its character's scene never ran, or start came \
+after the end, a reload's start included, earlier then holding the runs it played), reached \
+[{index, time, position}], done_at? (the last point left, its wait and jump done; or the step logic began \
+holding the character on the way to the last point, see reason held), stuck? {index, time, \
 position, distance, reason, last_support? {id, name}}, held_by? (the reasons, as [\"parada\"], \
 that character.block nodes hold the character's movement by when the bot let go: with reason \
-held, or with done_at)}: reason fell (in the air 1 s or more, or over 1 m below where it last \
-stood), held (no progress while logic holds the character's movement with character.block on \
-the movement channel; on the way to the last point, a hold that began after the bot reached the \
-point before (on a path of one point, after it took over) ends the path instead, with done_at \
-and held_by, as logic that holds the character once it gets where the path leads), blocked (no \
+held, or with done_at), earlier? [{started_at?, reached, done_at?, stuck?, held_by?}] (the runs \
+before the latest, oldest first, when the scene started again; one cut short has neither \
+done_at nor stuck)}: those fields are the latest run's. reason fell (in the air 1 s or more, or \
+over 1 m below where it last stood), held (no progress while logic holds the character's \
+movement with character.block on the movement channel; on the way to the last point, a hold \
+that began after the bot reached the point before (on a path of one point, after it took over) \
+ends the path at once instead, with done_at and held_by from that step, as logic that holds the \
+character once it gets where the path leads), blocked (no \
 progress otherwise, as against a wall), waiting (a wait_for's object did not come within reach \
 before its timeout) or absent (the character, a point's object or a wait_for's object left the \
 running scene, for stuck_after seconds); last_support is the object it last stood on.";
@@ -218,6 +226,13 @@ const SAVE: &str = "The progress earlier runs saved, as a returning player has i
 fresh install): {variable: value}, a persistent game variable by ID or name (\"$N\" from setup \
 too), \"name · key\" for the value of a key, with a plain or tagged value of its type. Unknown \
 and non-persistent variables are refused. A report's save goes here as it is, to chain runs.";
+const VIEW_WIDTH: &str = "Game view width in pixels, 16-4096: the image and the ui rects and \
+click points. Default: the width of the window the exported game opens (oxy_project game.window, \
+set by set_game_settings; 1280 × 720 unless changed), so rects and points match the game; a \
+window over 4096 a side is scaled down to fit, keeping its shape. The answer gives the size \
+used in view_size.";
+const VIEW_HEIGHT: &str = "Game view height in pixels, 16-4096. Default: the height of the game \
+window, as for width.";
 const TREE_FIELDS: &str = "Extra per-object fields: world_position, where its position (its \
 pivot) is in the world, which tells distances across parent groups; rotation (local, degrees, as \
 set_transform takes it); scale (local); dimensions (of its shape); visual_bounds, the world box \
@@ -399,8 +414,8 @@ pub fn definitions() -> Json {
                        "world_position", "rotation", "scale", "dimensions", "visual_bounds",
                        "collider_bounds", "bounds"]}, "description": TREE_FIELDS},
                    "root": {"type": "string", "description":
-                       "Lists this object's children instead of the scene's root objects; the \
-                        answer names it in root {id, name}."},
+                       "Lists this object's children (by ID or name, as oxy_entity's id) instead \
+                        of the scene's root objects; the answer names it in root {id, name}."},
                    "depth": {"type": "integer", "minimum": 0, "description":
                        "Levels of children shown below the listed objects (0: none). Deeper \
                         objects only show children_count. Default: every level."},
@@ -416,9 +431,12 @@ pub fn definitions() -> Json {
             "oxy_entity",
             ENTITY_DESCRIPTION,
             json!({"project": project, "scene": scene,
-                   "id": {"type": "string", "description": "Object ID."},
+                   "id": {"type": "string", "description":
+                       "An object of the scene, by its ID or its name (any case; a name two \
+                        objects of the scene share is refused with their IDs and parents)."},
                    "ids": {"type": "array", "items": {"type": "string"}, "description":
-                       "Several objects of the scene, answered as {objects: [...]}."},
+                       "Several objects of the scene, each by ID or name as id, answered as \
+                        {objects: [...]}."},
                    "fields": {"type": "array", "items": {"type": "string"}, "description":
                        "Only these parts, besides id and name: top-level keys of the answer or \
                         dotted paths such as character3d.actions, transform.position or \
@@ -548,9 +566,11 @@ pub fn definitions() -> Json {
                            "attributes": {"anyOf": [{"type": "boolean"},
                                {"type": "array", "items": {"type": "string"}}]}},
                         "required": ["id"]}]},
-                       "description": "Objects to report: an ID, or {id, fields?, attributes?}. \
-                        fields defaults to position, visible and attributes (world position, XYZ \
-                        rotation in degrees, world scale); character adds velocity, speed, \
+                       "description": "Objects to report: an object, by ID, name (any case; one \
+                        two objects share is refused with their IDs) or \"$N\", or {id, fields?, \
+                        attributes?}. fields defaults to position, visible and attributes \
+                        (world position, XYZ rotation in degrees, world scale); character adds \
+                        velocity, speed, \
                         grounded, posture, sliding, sprinting, support {id, name, surface} and yaw, \
                         look_yaw and pitch in degrees for 3D characters. attributes: false leaves \
                         them out, a list keeps only those names."},
@@ -597,19 +617,22 @@ pub fn definitions() -> Json {
                        "position": {"type": "array", "items": {"type": "number"}},
                        "yaw": {"type": "number", "description": "Degrees around the vertical axis."}},
                        "required": ["entity", "position"],
-                       "description": "Places an object of the start scene at a world position \
-                        (and yaw) on the copy before the run, e.g. the player at a section."},
+                       "description": "Places an object of the start scene (by ID, name or \
+                        \"$N\") at a world position (and yaw) on the copy before the run, e.g. \
+                        the player at a section."},
                    "until": {"type": "object", "properties": {
                        "scene_change": {"anyOf": [{"type": "boolean"}, {"type": "string"}],
                            "description": "true: any scene start, reloads included; or a scene, \
                             by its ID or name."},
                        "log_contains": {"type": "string"},
                        "attribute": {"type": "object", "properties": {
-                           "entity": {"type": "string"}, "name": {"type": "string"},
+                           "entity": {"type": "string", "description":
+                               "The object, by ID, name or \"$N\"."},
+                           "name": {"type": "string"},
                            "op": {"type": "string", "enum": ["==", "!=", "<", "<=", ">", ">="]},
                            "value": {"description": "Number, boolean, text or a tagged value, of \
-                               the attribute's type. For an object or surface attribute, a text \
-                               is its ID (\"$N\" allowed)."}},
+                               the attribute's type. For an object attribute, a text is the \
+                               object, by ID, name or \"$N\"; for a surface one, its ID."}},
                            "required": ["entity", "name", "op", "value"]},
                        "variable": {"type": "object", "properties": {
                            "variable": {"type": "string", "description":
@@ -621,11 +644,13 @@ pub fn definitions() -> Json {
                                the variable's type."}},
                            "required": ["variable", "op", "value"]},
                        "entity_absent": {"type": "string", "description":
-                           "Stops once this object of the start scene no longer exists."},
+                           "Stops once this object of the start scene (by ID, name or \"$N\") no \
+                            longer exists."},
                        "event": {"type": "object", "properties": {
                            "kind": {"type": "string", "enum": ["jump", "land", "leave", "side",
                                "surface", "posture", "area_enter", "area_exit"]},
-                           "object": {"type": "string", "description": "Either side of the event."}},
+                           "object": {"type": "string", "description":
+                               "Either side of the event, by ID, name or \"$N\"."}},
                            "required": ["kind"]},
                        "paused": {"type": "boolean", "description":
                            "true: stops when the game pause starts; false: when it ends (a scene \
@@ -665,11 +690,8 @@ pub fn definitions() -> Json {
                         person's cursor would be free at the end to click them (a game.cursor node \
                         showed it, the game is in its own pause, or the active camera does not turn \
                         with the mouse)."},
-                   "width": {"type": "integer", "description":
-                       "Game view width in pixels, 16-4096 (default 960): the screenshot and the ui \
-                        rectangles."},
-                   "height": {"type": "integer", "description":
-                       "Game view height in pixels, 16-4096 (default 540)."},
+                   "width": {"type": "integer", "description": VIEW_WIDTH},
+                   "height": {"type": "integer", "description": VIEW_HEIGHT},
                    "screenshot": {"type": "boolean", "description":
                        "Also returns the game camera view at the end, with the game interface \
                         drawn, as oxy_screenshot view=game."},
@@ -706,20 +728,20 @@ pub fn definitions() -> Json {
                    "eye": {"description": "view=free: camera position [x, y, z].", "type": "array",
                        "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
                    "target": {"description": "view=free: the point looked at, [x, y, z], or an \
-                       object ID (the center of its shape, or its position without one; \"$N\" \
-                       from setup too).",
+                       object of the scene running then, by ID, name or \"$N\" from setup (the \
+                       center of its shape, or its position without one).",
                        "anyOf": [point, {"type": "string"}]},
                    "fov": {"type": "number", "description":
                        "view=free: vertical field of view in degrees, 10-150 (default 60)."},
                    "ids": {"type": "array", "items": {"type": "string"}, "description":
-                       "view=top|side: objects framed, with their children (default: every \
-                        object with a shape, hidden ones too)."},
+                       "view=top|side: objects framed (by ID, name or \"$N\"), with their \
+                        children (default: every object with a shape, hidden ones too)."},
                    "ui": {"type": "boolean", "description":
                        "view=game: lists the game interface in the text as ui, like oxy_simulate \
                         (default true); false leaves the list out, e.g. for repeated captures. The \
                         image draws the interface either way."},
-                   "width": {"type": "integer", "description": "16-4096 pixels (default 960)."},
-                   "height": {"type": "integer", "description": "16-4096 pixels (default 540)."}}),
+                   "width": {"type": "integer", "description": VIEW_WIDTH},
+                   "height": {"type": "integer", "description": VIEW_HEIGHT}}),
             json!([])
         ),
         tool(
@@ -1097,7 +1119,9 @@ out when none; paused: the state at the end; in the pause the world, waits inclu
 still while logic, input actions and interface clicks go on; a game.quit node ends the run, \
 stopped_at reason quit with the object that asked), the game camera at the end {active, mode, \
 position, forward, fov}, the game interface at the end (ui: texts with their values, bars, buttons; \
-cursor_free: whether a person's cursor would be free to click them), the watched \
+cursor_free: whether a person's cursor would be free to click them; view_size: the game view \
+[width, height] its rects and clicks at a point are measured in, the game window unless width \
+and height say otherwise), the watched \
 objects and the game variables at the end (variables: {name: tagged value, as {\"Number\": 3}}, \
 \"name · key\" for the value of a key; up to 300, the variables' own values before the keys', \
 the rest counted in truncated; left out when the project has none). Each run starts the \
@@ -1132,9 +1156,10 @@ side through orthographic views framing ids: top straight down with -Z up and +X
 level along -Z, or along -X when the framed part is deeper (Z) than wide (X), so the long side \
 spans the image. In 2D scenes top and side both show the scene plane. An image painted in the \
 editor and not saved yet shows as saved: in view=editor on the interface only, in the other \
-views on objects too. The text gives the time, the scene and the camera used (position, \
-forward, and fov or the visible width and height in metres), replay when check_replay is set \
-and bot with a bot.";
+views on objects too. The image is width × height pixels, by default the game window's (see \
+width). The text gives the time, the scene, view_size (the image's size) and the camera used \
+(position, forward, and fov or the visible width and height in metres), replay when \
+check_replay is set and bot with a bot.";
 
 /// Values of oxy_console's origin.
 const CONSOLE_ORIGINS: [&str; 4] = ["editor", "agente", "jogo", "logica"];
@@ -1195,17 +1220,14 @@ fn text_arg(args: &Json, key: &str) -> Option<String> {
     args[key].as_str().map(str::to_owned)
 }
 
-/// The game view size asked for, `headless::VIEW_SIZE` when absent.
-fn view_size(args: &Json) -> [u32; 2] {
-    let side = |key: &str, default: u32| {
+/// The game view size asked for, side by side: the run gives a side left out the game window's,
+/// setup included (see `headless::game_view`).
+fn view_size(args: &Json) -> [Option<u32>; 2] {
+    ["width", "height"].map(|key| {
         args[key]
             .as_u64()
-            .map_or(default, |v| v.min(u64::from(u32::MAX)) as u32)
-    };
-    [
-        side("width", headless::VIEW_SIZE[0]),
-        side("height", headless::VIEW_SIZE[1]),
-    ]
+            .map(|v| v.min(u64::from(u32::MAX)) as u32)
+    })
 }
 
 /// This server as oxy_status reports it: its version and, without git, which build runs: a
@@ -1341,12 +1363,17 @@ impl Shot {
         }
     }
 
-    /// The camera of the capture, with IDs (`"$N"` from setup too) found in the running scene.
+    /// The camera of the capture, with objects (by ID, name or `"$N"` from setup) found in the
+    /// running scene.
     fn resolve(self, runtime: &Runtime, setup: &[Applied]) -> Result<ShotView, String> {
         let scene = runtime.scene();
+        let object = |text: &str, what: &str| {
+            let text = headless::resolve(text, setup)?;
+            scene.find_entity(&text, what).map(|e| e.id.clone())
+        };
         let ids = |ids: Vec<String>| {
             ids.iter()
-                .map(|id| headless::resolve(id, setup))
+                .map(|id| object(id, "ids"))
                 .collect::<Result<Vec<_>, _>>()
         };
         let framed = |ids: Vec<Id>| oxy_render::offscreen::framed_bounds(scene, &ids);
@@ -1355,18 +1382,12 @@ impl Shot {
             Self::Free { eye, target, fov } => {
                 let target = match target {
                     Aim::Point(point) => Vec3::from(point),
-                    Aim::Object(id) => {
-                        let id = headless::resolve(&id, setup)?;
+                    Aim::Object(text) => {
+                        let id = object(&text, "target")?;
                         match framed(vec![id.clone()]) {
                             Ok(bounds) => (bounds.min + bounds.max) * 0.5,
                             // Groups and cameras are aimed at by their position.
-                            Err(_) => scene
-                                .world_matrix(&id)
-                                .map_err(|_| {
-                                    format!("Objeto {id} não existe na cena {}", scene.name)
-                                })?
-                                .w_axis
-                                .truncate(),
+                            Err(_) => scene.world_matrix(&id)?.w_axis.truncate(),
                         }
                     }
                 };
@@ -1925,7 +1946,7 @@ impl Tools {
                 .transpose()
                 .map_err(invalid("Filtro de ações inválido"))?
                 .unwrap_or_default(),
-            view_size: Some(view_size(args)),
+            view_size: view_size(args),
             ui: args["ui"].as_bool().unwrap_or(true),
             seed: arg("seed")
                 .map(serde_json::from_value)
@@ -1951,8 +1972,13 @@ impl Tools {
         let (project, root) = self.document(&target)?;
         let (report, mut runtime) = headless::run(&project, &request)?;
         let image = if args["screenshot"].as_bool() == Some(true) {
-            let (png, _) =
-                self.render_view(&mut runtime, root.as_deref(), args, &ShotView::Game)?;
+            let (png, _) = self.render_view(
+                &mut runtime,
+                root.as_deref(),
+                args,
+                &ShotView::Game,
+                report.view_size,
+            )?;
             Some(png)
         } else {
             None
@@ -2003,7 +2029,8 @@ impl Tools {
         let (project, root) = self.document(&target)?;
         let (report, mut runtime) = headless::run(&project, &request)?;
         let shot = shot.resolve(&runtime, &report.setup)?;
-        let (image, camera) = self.render_view(&mut runtime, root.as_deref(), args, &shot)?;
+        let size = report.view_size;
+        let (image, camera) = self.render_view(&mut runtime, root.as_deref(), args, &shot, size)?;
         let mut text = json!({
             "view": view,
             "time": (runtime.time * 10_000.).round() / 10_000.,
@@ -2012,8 +2039,9 @@ impl Tools {
                 Some(game) if shot == ShotView::Game => {
                     serde_json::to_value(game).map_err(|e| e.to_string())?
                 }
-                _ => camera_text(&camera, view_size(args)),
+                _ => camera_text(&camera, size),
             },
+            "view_size": size,
             "colliders": colliders,
         });
         if let Some(stopped) = &report.stopped_at {
@@ -2036,13 +2064,14 @@ impl Tools {
         Ok(output)
     }
 
-    /// PNG (base64) of the running game through `view`, and the camera used.
+    /// PNG (base64) of the running game through `view`, `size` pixels, and the camera used.
     fn render_view(
         &mut self,
         runtime: &mut Runtime,
         root: Option<&Path>,
         args: &Json,
         view: &ShotView,
+        size: [u32; 2],
     ) -> Result<(String, CameraState), String> {
         if self.gpu.is_none() {
             let rs = oxy_render::offscreen::headless_state()?;
@@ -2058,7 +2087,7 @@ impl Tools {
             renderer,
             runtime,
             &root,
-            view_size(args),
+            size,
             view,
             *view == ShotView::Game,
             args["colliders"].as_bool() == Some(true),
@@ -2226,12 +2255,19 @@ mod tests {
         assert!(bot.contains("stuck? {index, time, position, distance, reason, last_support?"));
         for text in [
             "a character of any scene: the bot waits until that scene runs",
-            "counted from its latest start before the bot took over",
+            "counted from its latest start (scene_changes times",
+            "Objects go by ID, by name (any case; a name two objects share is refused with \
+             their IDs) or \"$N\"",
+            "each new start of that scene (a reload, as a restart button does, or the game \
+             coming back to it) starts the path over from the first point",
+            "earlier? [{started_at?, reached, done_at?, stuck?, held_by?}]",
+            "those fields are the latest run's",
             "reason fell (in the air 1 s or more, or over 1 m below where it last stood)",
             "blocked (no progress otherwise",
             "the bot first turns toward it on the ground, up to 0.25 s",
-            "started_at? (when it took over; absent: its character's scene never ran, or start \
-             came after the end)",
+            "started_at? (when it took over; absent when the latest run never took over: its \
+             character's scene never ran, or start came after the end, a reload's start \
+             included, earlier then holding the runs it played)",
         ] {
             assert!(bot.contains(text), "{text}");
         }
@@ -2247,8 +2283,8 @@ mod tests {
             "no fixed waits that depend on when the bot gets there",
             "held_by? (the reasons, as [\"parada\"]",
             "held (no progress while logic holds the character's movement with character.block",
-            "ends the path instead, with done_at and held_by, as logic that holds the character \
-             once it gets where the path leads",
+            "ends the path at once instead, with done_at and held_by from that step, as logic \
+             that holds the character once it gets where the path leads",
             "waiting (a wait_for's object did not come within reach before its timeout)",
             "absent (the character, a point's object or a wait_for's object left the running \
              scene, for stuck_after seconds)",
@@ -4077,9 +4113,21 @@ mod tests {
         assert!(
             free(Aim::Object("fantasma".into()))
                 .unwrap_err()
-                .contains("fantasma")
+                .contains("target: \"fantasma\" não é o ID nem o nome de um objeto da cena")
         );
         assert!(free(Aim::Object("$5".into())).unwrap_err().contains("$5"));
+        // By name, as the other inputs.
+        let ShotView::Free { target, .. } = free(Aim::Object("alvo".into())).unwrap() else {
+            panic!("free view expected");
+        };
+        assert!(target.abs_diff_eq(Vec3::new(4., 1., -6.), 1e-4), "{target}");
+        let ShotView::Top(named) = Shot::Top(vec!["Alvo".into()])
+            .resolve(&runtime, &applied)
+            .unwrap()
+        else {
+            panic!("top view expected");
+        };
+        assert!(((named.min + named.max) * 0.5).abs_diff_eq(Vec3::new(4., 1., -6.), 1e-4));
         let ShotView::Top(bounds) = Shot::Top(vec!["$0".into()])
             .resolve(&runtime, &applied)
             .unwrap()
@@ -4126,13 +4174,29 @@ mod tests {
                 .call("oxy_simulate", &args)
                 .map(|output| serde_json::from_str(&output.text).unwrap())
         };
+        // By default, the window the exported game opens: the player's 1280 × 720.
         let default = report(json!({})).unwrap();
+        assert_eq!(default["view_size"], json!([1280, 720]));
         assert_eq!(default["ui"][0]["text"], "Tempo: 3");
-        assert_eq!(default["ui"][0]["rect"], json!([756.0, 480.0, 180.0, 36.0]));
+        assert_eq!(
+            default["ui"][0]["rect"],
+            json!([1076.0, 660.0, 180.0, 36.0])
+        );
         assert_eq!(default["ui"][0]["text_size"], 24.0);
         assert_eq!(default["ui"][0]["text_align"], "Right");
         let small = report(json!({"width": 640, "height": 360})).unwrap();
+        assert_eq!(small["view_size"], json!([640, 360]));
         assert_eq!(small["ui"][0]["rect"], json!([436.0, 300.0, 180.0, 36.0]));
+        // A side left out is the window's; the window set_game_settings gives counts, setup's
+        // too.
+        let narrow = report(json!({"width": 640})).unwrap();
+        assert_eq!(narrow["view_size"], json!([640, 720]));
+        let setup = json!([{"op": "set_game_settings", "window": [800, 600]}]);
+        let set = report(json!({"setup": setup})).unwrap();
+        assert_eq!(set["view_size"], json!([800, 600]));
+        assert_eq!(set["ui"][0]["rect"], json!([596.0, 540.0, 180.0, 36.0]));
+        let tall = report(json!({"height": 900, "setup": setup})).unwrap();
+        assert_eq!(tall["view_size"], json!([800, 900]));
         assert!(report(json!({"ui": false})).unwrap().get("ui").is_none());
         let error = report(json!({"width": 5})).unwrap_err();
         assert!(error.contains("16 e 4096"), "{error}");
@@ -5469,6 +5533,86 @@ mod tests {
     }
 
     #[test]
+    fn files_take_objects_by_name_in_reads_and_in_the_bots_points() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-objects-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let project = editing::blank_project("Objetos", SceneKind::ThreeD).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_entity", "kind": {"type": "preset", "preset": "first_person"},
+                 "name": "Herói"},
+                {"op": "create_entity", "kind": {"type": "shape", "shape": "Cube"},
+                 "name": "Balsa", "position": [0.0, -0.5, -3.0]},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Gatilho"},
+                {"op": "create_entity", "kind": {"type": "group"}, "name": "Gatilho"},
+            ]}),
+        )
+        .unwrap();
+        let id = |command: &str| {
+            applied["created"][command][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let (hero, ferry) = (id("0"), id("1"));
+        let read = call("oxy_entity", json!({"id": "herói", "fields": ["name"]})).unwrap();
+        assert_eq!(read, json!({"id": hero, "name": "Herói"}));
+        let both = call(
+            "oxy_entity",
+            json!({"ids": ["Balsa", hero], "fields": ["name"]}),
+        )
+        .unwrap();
+        assert_eq!(both["objects"][0]["id"], json!(ferry));
+        let error = call("oxy_entity", json!({"id": "gatilho"})).unwrap_err();
+        assert!(
+            error.starts_with("id: há 2 objetos chamados \"gatilho\" na cena Cena 3D; use o ID: ")
+                && error.contains(&id("2"))
+                && error.contains(&id("3")),
+            "{error}"
+        );
+        let tree = call("oxy_scene", json!({"root": "Herói"})).unwrap();
+        assert_eq!(tree["root"]["id"], json!(hero));
+        // The bot's character, its points' objects and its wait_for, as the other inputs.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.5, "ui": false, "watch": ["Balsa"],
+                   "bot": {"entity": "herói", "path": [
+                       {"object": "balsa", "at": [0.0, 0.0, 0.0],
+                        "wait_for": {"object": "BALSA", "within": 10.0, "height": 10.0}}]}}),
+        )
+        .unwrap();
+        assert_eq!(report["bot"]["entity"]["id"], json!(hero));
+        assert_eq!(report["watched"][0]["id"], json!(ferry));
+        let error = call(
+            "oxy_simulate",
+            json!({"seconds": 0.5, "bot": {"entity": hero, "path": [
+                [0.0, 0.0, 0.0], {"at": [0.0, 0.0, -2.0], "wait_for": {"object": "Gatilho"}}]}}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with(
+                "bot: wait_for.object do ponto 1 do caminho (o 2º): há 2 objetos chamados \
+                 \"Gatilho\" na cena Cena 3D; use o ID: "
+            ),
+            "{error}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn status_tells_which_server_answers_and_descriptions_say_what_takes_names() {
         let server = server_info();
         assert_eq!(server["version"], export::engine_version());
@@ -5526,7 +5670,34 @@ mod tests {
         let entity = schema("oxy_entity");
         let fields = entity["fields"]["description"].as_str().unwrap();
         assert!(fields.contains("camera_control camera_rig"), "{fields}");
+        // Objects by name wherever a tool takes one.
+        let text = |value: &Json| value.as_str().unwrap().to_owned();
+        assert!(text(&entity["id"]["description"]).contains("by its ID or its name"));
+        assert!(text(&entity["ids"]["description"]).contains("by ID or name"));
+        let tree = schema("oxy_scene");
+        assert!(text(&tree["root"]["description"]).contains("by ID or name"));
+        let shot = schema("oxy_screenshot");
+        for option in ["target", "ids"] {
+            assert!(
+                text(&shot[option]["description"]).contains("name"),
+                "{option}"
+            );
+        }
         let simulate = schema("oxy_simulate");
+        assert!(BOT.contains("Objects go by ID, by name"));
+        assert!(text(&simulate["watch"]["description"]).contains("by ID, name"));
+        assert!(text(&simulate["spawn"]["description"]).contains("by ID, name"));
+        let stops = &simulate["until"]["properties"];
+        for field in [
+            &stops["attribute"]["properties"]["entity"],
+            &stops["entity_absent"],
+            &stops["event"]["properties"]["object"],
+        ] {
+            assert!(
+                text(&field["description"]).contains("by ID, name"),
+                "{field}"
+            );
+        }
         let until = &simulate["until"]["properties"]["scene_change"]["description"];
         assert!(until.as_str().unwrap().contains("by its ID or name"));
         let play = schema("oxy_play");

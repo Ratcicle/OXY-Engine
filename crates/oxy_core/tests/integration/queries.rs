@@ -282,7 +282,10 @@ fn big_scenes_are_read_part_by_part() {
     );
 
     for (args, expected) in [
-        (json!({"root": "fantasma"}), "Objeto fantasma não existe"),
+        (
+            json!({"root": "fantasma"}),
+            "root: \"fantasma\" não é o ID nem o nome de um objeto da cena",
+        ),
         (json!({"fields": ["altura"]}), "fields inválido"),
         (json!({"depth": -1}), "depth inválido"),
         (json!({"limit": "dez"}), "limit inválido"),
@@ -666,6 +669,45 @@ fn entities_add_where_they_are_and_can_be_cut_to_the_parts_asked_for() {
     assert_eq!(parsed.ids, ["a", "b"]);
     assert!(parsed.list);
     assert_eq!(parsed.graph, Detail::Summary);
+}
+
+#[test]
+fn objects_and_tree_roots_are_read_by_name_and_a_shared_name_names_the_candidates() {
+    let (mut project, scene, [group, platform, checkpoint]) = section();
+    let read = |project: &Project, args: Json| {
+        query::entities(project, &scene, &EntityQuery::parse(&args).unwrap())
+    };
+    // Any case, without the spaces around it, as clicks take names.
+    let one = read(&project, json!({"id": " plataforma ", "fields": ["name"]})).unwrap();
+    assert_eq!(one, json!({"id": platform, "name": "Plataforma"}));
+    let many = read(
+        &project,
+        json!({"ids": ["Seção", &checkpoint], "fields": ["name"]}),
+    )
+    .unwrap();
+    assert_eq!(names(&many["objects"]), ["Seção", "Ponto de controle"]);
+    assert_eq!(many["objects"][0]["id"], json!(group));
+    let tree = query::answer(&project, &scene, "scene_tree", &json!({"root": "seção"})).unwrap();
+    assert_eq!(tree["root"]["id"], json!(group));
+    assert_eq!(names(&tree["objects"]), ["Plataforma", "Ponto de controle"]);
+    let error = read(&project, json!({"id": "Rampa"})).unwrap_err();
+    assert_eq!(
+        error,
+        "id: \"Rampa\" não é o ID nem o nome de um objeto da cena Cena 3D"
+    );
+    // A second Plataforma, at the root: the name no longer picks one.
+    let other = Entity::new("Plataforma", Some(Primitive::Cube));
+    let other_id = other.id.clone();
+    project.scene_mut(&scene).unwrap().entities.push(other);
+    let error = read(&project, json!({"ids": ["plataforma"]})).unwrap_err();
+    assert_eq!(
+        error,
+        format!(
+            "ids: há 2 objetos chamados \"plataforma\" na cena Cena 3D; use o ID: {platform} (em \
+             Seção), {other_id} (na raiz da cena)"
+        )
+    );
+    assert!(read(&project, json!({"id": &other_id})).is_ok());
 }
 
 #[test]

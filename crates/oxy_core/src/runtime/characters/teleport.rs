@@ -205,13 +205,11 @@ impl Runtime {
             };
         }
         self.step_input = InputFrame::default();
+        // The events its old path made that have not run yet (landings, contacts, area
+        // crossings, its own step and input events) go: they no longer happened, and the step's
+        // input is spent. Flows already running, waits included, go on, whoever owns them; a
+        // wait holds no events, only flows that started.
         self.ready.retain(|task| {
-            task.context
-                .trajectory
-                .as_ref()
-                .is_none_or(|(target, _)| target != id)
-        });
-        self.waiting.retain(|task| {
             task.context
                 .trajectory
                 .as_ref()

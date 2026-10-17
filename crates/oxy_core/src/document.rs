@@ -429,6 +429,44 @@ impl Scene {
             e.id == id
         })
     }
+    /// The objects called `name`, in any case and without the spaces around it.
+    pub fn entities_named(&self, name: &str) -> Vec<&Entity> {
+        let wanted = name.trim().to_lowercase();
+        self.entities
+            .iter()
+            .filter(|e| e.name.trim().to_lowercase() == wanted)
+            .collect()
+    }
+    /// The object `text` names in this scene: its ID, or the name of exactly one of its objects
+    /// (see [`Self::entities_named`]). `what` is the field that gave it; a name several objects
+    /// share is refused with their IDs and where each one is.
+    pub fn find_entity(&self, text: &str, what: &str) -> Result<&Entity, String> {
+        if let Some(entity) = self.entity(text) {
+            return Ok(entity);
+        }
+        match self.entities_named(text).as_slice() {
+            [one] => Ok(one),
+            [] => Err(format!(
+                "{what}: \"{text}\" não é o ID nem o nome de um objeto da cena {}",
+                self.name
+            )),
+            many => Err(format!(
+                "{what}: há {} objetos chamados \"{text}\" na cena {}; use o ID: {}",
+                many.len(),
+                self.name,
+                many.iter()
+                    .map(|e| {
+                        let parent = e.parent.as_deref().and_then(|p| self.entity(p));
+                        match parent {
+                            Some(parent) => format!("{} (em {})", e.id, parent.name),
+                            None => format!("{} (na raiz da cena)", e.id),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
     pub fn world_matrix(&self, id: &str) -> Result<Mat4, String> {
         let mut current = Some(id);
         let mut visited = HashSet::new();
@@ -903,6 +941,33 @@ impl Project {
                 "{what} recebeu \"{text}\", o nome de {} cenas; use o ID: {}",
                 many.len(),
                 scene_list(many.iter().copied())
+            )),
+        }
+    }
+    /// The object `text` names in any scene, with its scene: its ID, or the name (any case,
+    /// without the spaces around it) of exactly one object of the project. `what` is the field
+    /// that gave it; a name several objects share is refused with their IDs and scenes.
+    pub fn find_entity(&self, text: &str, what: &str) -> Result<(&Scene, &Entity), String> {
+        if let Some(found) = self.scenes.iter().find_map(|s| Some((s, s.entity(text)?))) {
+            return Ok(found);
+        }
+        let named: Vec<(&Scene, &Entity)> = self
+            .scenes
+            .iter()
+            .flat_map(|s| s.entities_named(text).into_iter().map(move |e| (s, e)))
+            .collect();
+        match named.as_slice() {
+            [one] => Ok(*one),
+            [] => Err(format!(
+                "{what}: \"{text}\" não é o ID nem o nome de um objeto do projeto"
+            )),
+            many => Err(format!(
+                "{what}: há {} objetos chamados \"{text}\"; use o ID: {}",
+                many.len(),
+                many.iter()
+                    .map(|(s, e)| format!("{} (cena {})", e.id, s.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
         }
     }
