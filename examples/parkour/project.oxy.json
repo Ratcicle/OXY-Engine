@@ -3968,6 +3968,70 @@
                     "Text": "show"
                   }
                 }
+              },
+              {
+                "id": "97e29b45-cfcc-437e-8340-b75baa872bf0",
+                "operation": "event.pause",
+                "position": [
+                  0.0,
+                  570.0
+                ],
+                "params": {
+                  "when": {
+                    "Text": "pause"
+                  }
+                }
+              },
+              {
+                "id": "965b8080-b10b-4659-af49-1234f9f5056d",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  570.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "b200ee7f-74ab-4195-aeb9-48e798060952"
+                  }
+                }
+              },
+              {
+                "id": "5a944aff-69d5-439c-9802-0a7bf41babaa",
+                "operation": "action.component",
+                "position": [
+                  520.0,
+                  570.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "ea5c8da7-fb9b-4de2-ba29-e39f93563334"
+                  }
+                }
+              },
+              {
+                "id": "7b9c9d02-03ec-4b80-888e-2da96fc477d1",
+                "operation": "game.pause",
+                "position": [
+                  780.0,
+                  570.0
+                ],
+                "params": {
+                  "mode": {
+                    "Text": "resume"
+                  }
+                }
               }
             ],
             "edges": [
@@ -4096,6 +4160,24 @@
                 "from_port": "exec",
                 "to_node": "14b87b1d-7b22-4fa4-9e56-f378b7681c4a",
                 "to_port": "exec"
+              },
+              {
+                "from_node": "97e29b45-cfcc-437e-8340-b75baa872bf0",
+                "from_port": "exec",
+                "to_node": "965b8080-b10b-4659-af49-1234f9f5056d",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "965b8080-b10b-4659-af49-1234f9f5056d",
+                "from_port": "exec",
+                "to_node": "5a944aff-69d5-439c-9802-0a7bf41babaa",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "5a944aff-69d5-439c-9802-0a7bf41babaa",
+                "from_port": "exec",
+                "to_node": "7b9c9d02-03ec-4b80-888e-2da96fc477d1",
+                "to_port": "exec"
               }
             ]
           },
@@ -4162,7 +4244,7 @@
               440.0,
               390.0
             ],
-            "text": "Texto",
+            "text": "",
             "color": [
               0.04,
               0.06,
@@ -4235,13 +4317,6 @@
           "visible": true,
           "layer": 0,
           "attributes": {
-            "Checkpoint": {
-              "Vector3": [
-                0.0,
-                0.02,
-                3.0
-              ]
-            },
             "Checkpoint atual": {
               "Number": 0.0
             },
@@ -4256,6 +4331,20 @@
             },
             "Jogador local": {
               "Bool": true
+            },
+            "Ponto de largada": {
+              "Vector3": [
+                0.0,
+                0.02,
+                3.0
+              ]
+            },
+            "Ponto de retorno": {
+              "Vector3": [
+                0.0,
+                0.02,
+                3.0
+              ]
             },
             "Quedas": {
               "Number": 0.0
@@ -4351,8 +4440,8 @@
                 "id": "e5d971e5-37c6-44fc-bc9b-62d30e8adb39",
                 "operation": "attribute.get",
                 "position": [
-                  0.0,
-                  1318.0
+                  780.0,
+                  0.0
                 ],
                 "params": {
                   "attribute": {
@@ -4368,7 +4457,7 @@
                 "operation": "attribute.get",
                 "position": [
                   0.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "attribute": {
@@ -4383,8 +4472,8 @@
                 "id": "562c2a81-94e6-4197-ab94-3dd4ab3f3093",
                 "operation": "scene.current",
                 "position": [
-                  260.0,
-                  0.0
+                  520.0,
+                  156.0
                 ],
                 "params": {}
               },
@@ -4392,8 +4481,8 @@
                 "id": "b550d62f-14f2-4c64-ab8e-81f74fb5dd64",
                 "operation": "variable.get",
                 "position": [
-                  520.0,
-                  0.0
+                  780.0,
+                  268.0
                 ],
                 "params": {
                   "key": {
@@ -4409,7 +4498,7 @@
                 "operation": "attribute.get",
                 "position": [
                   520.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "attribute": {
@@ -4434,7 +4523,7 @@
                 "operation": "character.block",
                 "position": [
                   260.0,
-                  112.0
+                  0.0
                 ],
                 "params": {
                   "blocked": {
@@ -4456,7 +4545,7 @@
                 "operation": "transform.read",
                 "position": [
                   260.0,
-                  290.0
+                  178.0
                 ],
                 "params": {
                   "space": {
@@ -4472,11 +4561,11 @@
                 "operation": "attribute.set",
                 "position": [
                   520.0,
-                  112.0
+                  0.0
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -4490,8 +4579,8 @@
                 "id": "a198e714-9c05-4276-be8b-3695c464c0b2",
                 "operation": "condition.branch",
                 "position": [
-                  780.0,
-                  134.0
+                  1040.0,
+                  0.0
                 ],
                 "params": {
                   "condition": {
@@ -4503,8 +4592,8 @@
                 "id": "7c234e36-cf76-4368-9545-31e62b5d06d7",
                 "operation": "condition.compare",
                 "position": [
-                  780.0,
-                  0.0
+                  1040.0,
+                  112.0
                 ],
                 "params": {
                   "a": {
@@ -4522,8 +4611,8 @@
                 "id": "74757293-c7db-4e1c-b701-58df9f193f2f",
                 "operation": "condition.branch",
                 "position": [
-                  1040.0,
-                  112.0
+                  1300.0,
+                  0.0
                 ],
                 "params": {
                   "condition": {
@@ -4535,8 +4624,8 @@
                 "id": "0958f790-ff66-48f9-9d34-56fd550be67b",
                 "operation": "text.time",
                 "position": [
-                  1040.0,
-                  0.0
+                  1300.0,
+                  112.0
                 ],
                 "params": {
                   "format": {
@@ -4551,7 +4640,7 @@
                 "id": "e673bdac-d105-406f-9618-df26cc1e6dcf",
                 "operation": "attribute.set",
                 "position": [
-                  1300.0,
+                  1560.0,
                   0.0
                 ],
                 "params": {
@@ -4571,7 +4660,7 @@
                 "operation": "event.step",
                 "position": [
                   0.0,
-                  614.0
+                  548.0
                 ],
                 "params": {}
               },
@@ -4580,7 +4669,7 @@
                 "operation": "condition.compare",
                 "position": [
                   260.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "a": {
@@ -4599,7 +4688,7 @@
                 "operation": "condition.branch",
                 "position": [
                   520.0,
-                  748.0
+                  682.0
                 ],
                 "params": {
                   "condition": {
@@ -4612,7 +4701,7 @@
                 "operation": "control.sequence",
                 "position": [
                   780.0,
-                  882.0
+                  816.0
                 ],
                 "params": {}
               },
@@ -4621,7 +4710,7 @@
                 "operation": "variable.get",
                 "position": [
                   520.0,
-                  860.0
+                  794.0
                 ],
                 "params": {
                   "key": {
@@ -4637,7 +4726,7 @@
                 "operation": "attribute.get",
                 "position": [
                   520.0,
-                  972.0
+                  906.0
                 ],
                 "params": {
                   "attribute": {
@@ -4653,7 +4742,7 @@
                 "operation": "condition.compare",
                 "position": [
                   780.0,
-                  1128.0
+                  1062.0
                 ],
                 "params": {
                   "a": {
@@ -4672,7 +4761,7 @@
                 "operation": "condition.branch",
                 "position": [
                   1040.0,
-                  994.0
+                  928.0
                 ],
                 "params": {
                   "condition": {
@@ -4685,7 +4774,7 @@
                 "operation": "attribute.set",
                 "position": [
                   1300.0,
-                  992.0
+                  1038.0
                 ],
                 "params": {
                   "attribute": {
@@ -4704,7 +4793,7 @@
                 "operation": "condition.branch",
                 "position": [
                   1560.0,
-                  836.0
+                  904.0
                 ],
                 "params": {
                   "condition": {
@@ -4717,7 +4806,7 @@
                 "operation": "condition.compare",
                 "position": [
                   1560.0,
-                  948.0
+                  770.0
                 ],
                 "params": {
                   "a": {
@@ -4736,7 +4825,7 @@
                 "operation": "condition.branch",
                 "position": [
                   1820.0,
-                  614.0
+                  548.0
                 ],
                 "params": {
                   "condition": {
@@ -4749,7 +4838,7 @@
                 "operation": "action.sound",
                 "position": [
                   2080.0,
-                  614.0
+                  548.0
                 ],
                 "params": {
                   "asset": {
@@ -4765,7 +4854,7 @@
                 "operation": "action.sound",
                 "position": [
                   2080.0,
-                  748.0
+                  682.0
                 ],
                 "params": {
                   "asset": {
@@ -4781,7 +4870,7 @@
                 "operation": "variable.get",
                 "position": [
                   780.0,
-                  1016.0
+                  950.0
                 ],
                 "params": {
                   "key": {
@@ -4797,7 +4886,7 @@
                 "operation": "condition.branch",
                 "position": [
                   1040.0,
-                  882.0
+                  816.0
                 ],
                 "params": {
                   "condition": {
@@ -4810,7 +4899,7 @@
                 "operation": "character.block",
                 "position": [
                   1300.0,
-                  814.0
+                  748.0
                 ],
                 "params": {
                   "blocked": {
@@ -4832,7 +4921,7 @@
                 "operation": "attribute.set",
                 "position": [
                   1560.0,
-                  680.0
+                  614.0
                 ],
                 "params": {
                   "attribute": {
@@ -4851,7 +4940,7 @@
                 "operation": "condition.compare",
                 "position": [
                   520.0,
-                  614.0
+                  548.0
                 ],
                 "params": {
                   "a": {
@@ -4870,7 +4959,7 @@
                 "operation": "condition.branch",
                 "position": [
                   780.0,
-                  770.0
+                  704.0
                 ],
                 "params": {
                   "condition": {
@@ -4883,7 +4972,7 @@
                 "operation": "math.binary",
                 "position": [
                   780.0,
-                  636.0
+                  570.0
                 ],
                 "params": {
                   "a": {
@@ -4902,7 +4991,7 @@
                 "operation": "attribute.set",
                 "position": [
                   1040.0,
-                  726.0
+                  660.0
                 ],
                 "params": {
                   "attribute": {
@@ -4921,7 +5010,7 @@
                 "operation": "text.time",
                 "position": [
                   1040.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "format": {
@@ -4937,7 +5026,7 @@
                 "operation": "attribute.set",
                 "position": [
                   1300.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "attribute": {
@@ -4956,7 +5045,7 @@
                 "operation": "condition.compare",
                 "position": [
                   780.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "a": {
@@ -4975,7 +5064,7 @@
                 "operation": "condition.branch",
                 "position": [
                   1040.0,
-                  614.0
+                  548.0
                 ],
                 "params": {
                   "condition": {
@@ -4988,7 +5077,7 @@
                 "operation": "attribute.set",
                 "position": [
                   1300.0,
-                  658.0
+                  592.0
                 ],
                 "params": {
                   "attribute": {
@@ -5007,7 +5096,7 @@
                 "operation": "character.block",
                 "position": [
                   1560.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "blocked": {
@@ -5029,7 +5118,7 @@
                 "operation": "condition.branch",
                 "position": [
                   1820.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "condition": {
@@ -5042,7 +5131,7 @@
                 "operation": "game.cursor",
                 "position": [
                   2080.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "mode": {
@@ -5055,7 +5144,7 @@
                 "operation": "action.component",
                 "position": [
                   2340.0,
-                  502.0
+                  436.0
                 ],
                 "params": {
                   "component": {
@@ -5073,8 +5162,8 @@
                 "id": "53df258a-0034-4df0-9d97-4fb2e02af1f0",
                 "operation": "action.sound",
                 "position": [
-                  2600.0,
-                  502.0
+                  2860.0,
+                  436.0
                 ],
                 "params": {
                   "asset": {
@@ -5089,8 +5178,8 @@
                 "id": "1ea5672e-e921-4801-9236-8df3509dff21",
                 "operation": "condition.compare",
                 "position": [
-                  2600.0,
-                  636.0
+                  2860.0,
+                  570.0
                 ],
                 "params": {
                   "a": {
@@ -5108,8 +5197,8 @@
                 "id": "1114e561-c3d1-49c3-962e-90cdbe5d9d6c",
                 "operation": "condition.branch",
                 "position": [
-                  2860.0,
-                  770.0
+                  3120.0,
+                  436.0
                 ],
                 "params": {
                   "condition": {
@@ -5121,8 +5210,8 @@
                 "id": "f3d9978f-8afd-4610-b750-8c00550523cd",
                 "operation": "condition.compare",
                 "position": [
-                  2860.0,
-                  636.0
+                  3380.0,
+                  436.0
                 ],
                 "params": {
                   "a": {
@@ -5140,8 +5229,8 @@
                 "id": "ce98adf8-4cfc-47ab-9ee9-a59c5c4ae375",
                 "operation": "condition.branch",
                 "position": [
-                  3120.0,
-                  614.0
+                  3640.0,
+                  436.0
                 ],
                 "params": {
                   "condition": {
@@ -5153,8 +5242,8 @@
                 "id": "0d5051ec-5352-4362-af82-d41a4146a6cb",
                 "operation": "variable.set",
                 "position": [
-                  3380.0,
-                  658.0
+                  3900.0,
+                  436.0
                 ],
                 "params": {
                   "key": {
@@ -5172,8 +5261,8 @@
                 "id": "0b8edd32-f924-45d5-8e2b-1eb9e6dfe5e0",
                 "operation": "save.write",
                 "position": [
-                  3640.0,
-                  658.0
+                  4160.0,
+                  436.0
                 ],
                 "params": {}
               },
@@ -5181,8 +5270,8 @@
                 "id": "4418750b-4e2a-4504-a7a6-26b46a42a334",
                 "operation": "attribute.get",
                 "position": [
-                  3640.0,
-                  748.0
+                  2860.0,
+                  816.0
                 ],
                 "params": {
                   "attribute": {
@@ -5197,8 +5286,8 @@
                 "id": "818e8468-cb76-4c7c-a8f2-48a9cb1a9ef9",
                 "operation": "attribute.set",
                 "position": [
-                  3900.0,
-                  502.0
+                  4420.0,
+                  436.0
                 ],
                 "params": {
                   "attribute": {
@@ -5216,8 +5305,8 @@
                 "id": "e1e3a1ce-1196-45db-a713-3cc7ff806fab",
                 "operation": "action.component",
                 "position": [
-                  4160.0,
-                  502.0
+                  4680.0,
+                  436.0
                 ],
                 "params": {
                   "component": {
@@ -5235,8 +5324,8 @@
                 "id": "75878294-b2bc-4094-a099-7af51337312a",
                 "operation": "math.binary",
                 "position": [
-                  2860.0,
-                  502.0
+                  3380.0,
+                  570.0
                 ],
                 "params": {
                   "a": {
@@ -5254,8 +5343,8 @@
                 "id": "fe587e35-085c-4658-a5d8-8a18e9e1953d",
                 "operation": "text.time",
                 "position": [
-                  3120.0,
-                  502.0
+                  3640.0,
+                  548.0
                 ],
                 "params": {
                   "format": {
@@ -5270,8 +5359,8 @@
                 "id": "986e654b-8648-44cd-8657-95c81a68135b",
                 "operation": "attribute.set",
                 "position": [
-                  3380.0,
-                  502.0
+                  3900.0,
+                  592.0
                 ],
                 "params": {
                   "attribute": {
@@ -5289,8 +5378,8 @@
                 "id": "bf3cc1ee-371e-4938-b8a9-6e45afc3322f",
                 "operation": "action.component",
                 "position": [
-                  3640.0,
-                  502.0
+                  4160.0,
+                  526.0
                 ],
                 "params": {
                   "component": {
@@ -5309,7 +5398,7 @@
                 "operation": "event.character",
                 "position": [
                   0.0,
-                  1430.0
+                  1252.0
                 ],
                 "params": {
                   "kind": {
@@ -5325,7 +5414,7 @@
                 "operation": "condition.branch",
                 "position": [
                   260.0,
-                  1318.0
+                  1252.0
                 ],
                 "params": {
                   "condition": {
@@ -5338,7 +5427,7 @@
                 "operation": "action.sound",
                 "position": [
                   520.0,
-                  1318.0
+                  1252.0
                 ],
                 "params": {
                   "asset": {
@@ -5354,7 +5443,7 @@
                 "operation": "event.character",
                 "position": [
                   0.0,
-                  2126.0
+                  2060.0
                 ],
                 "params": {
                   "kind": {
@@ -5370,7 +5459,7 @@
                 "operation": "condition.branch",
                 "position": [
                   260.0,
-                  2126.0
+                  2194.0
                 ],
                 "params": {
                   "condition": {
@@ -5383,7 +5472,7 @@
                 "operation": "condition.compare",
                 "position": [
                   260.0,
-                  2238.0
+                  2060.0
                 ],
                 "params": {
                   "a": {
@@ -5402,7 +5491,7 @@
                 "operation": "condition.branch",
                 "position": [
                   520.0,
-                  2126.0
+                  2060.0
                 ],
                 "params": {
                   "condition": {
@@ -5415,7 +5504,7 @@
                 "operation": "action.sound",
                 "position": [
                   780.0,
-                  2126.0
+                  2060.0
                 ],
                 "params": {
                   "asset": {
@@ -5431,7 +5520,7 @@
                 "operation": "event.input",
                 "position": [
                   0.0,
-                  2822.0
+                  2868.0
                 ],
                 "params": {
                   "action": {
@@ -5447,7 +5536,7 @@
                 "operation": "game.read",
                 "position": [
                   0.0,
-                  3000.0
+                  3046.0
                 ],
                 "params": {}
               },
@@ -5456,7 +5545,7 @@
                 "operation": "condition.branch",
                 "position": [
                   260.0,
-                  2822.0
+                  2868.0
                 ],
                 "params": {
                   "condition": {
@@ -5469,7 +5558,7 @@
                 "operation": "condition.compare",
                 "position": [
                   260.0,
-                  2934.0
+                  2980.0
                 ],
                 "params": {
                   "a": {
@@ -5488,7 +5577,7 @@
                 "operation": "condition.branch",
                 "position": [
                   520.0,
-                  2822.0
+                  2868.0
                 ],
                 "params": {
                   "condition": {
@@ -5501,11 +5590,11 @@
                 "operation": "attribute.get",
                 "position": [
                   520.0,
-                  2934.0
+                  2980.0
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -5517,7 +5606,7 @@
                 "operation": "character.teleport",
                 "position": [
                   780.0,
-                  2822.0
+                  2868.0
                 ],
                 "params": {
                   "keep_velocity": {
@@ -5552,6 +5641,200 @@
                     "Number": 0.0
                   }
                 }
+              },
+              {
+                "id": "082a30bb-f60a-4f4b-a18d-9a2f9ffc0329",
+                "operation": "attribute.set",
+                "position": [
+                  780.0,
+                  112.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Ponto de largada"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Number": 100.0
+                  }
+                }
+              },
+              {
+                "id": "3428da90-4d4b-4393-b3a1-3f0aadd934b6",
+                "operation": "action.component",
+                "position": [
+                  2600.0,
+                  436.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "d05b4893-bc07-43d2-ade5-d681d8555dde"
+                  }
+                }
+              },
+              {
+                "id": "cce762da-963f-4556-940f-b665975382f0",
+                "operation": "condition.compare",
+                "position": [
+                  3120.0,
+                  548.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 0.0
+                  },
+                  "operator": {
+                    "Text": "=="
+                  }
+                }
+              },
+              {
+                "id": "85baca71-492d-4372-b4c5-d7e5237d5ab3",
+                "operation": "condition.branch",
+                "position": [
+                  3380.0,
+                  704.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "bd63379c-6b12-4f71-8061-fb0f3e6994a3",
+                "operation": "action.component",
+                "position": [
+                  3640.0,
+                  660.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "f89ea8d1-b1d4-4a60-96e1-856930a8d970"
+                  }
+                }
+              },
+              {
+                "id": "78a4da72-acf4-8506-a05b-a6cdfdfcc728",
+                "operation": "attribute.get",
+                "position": [
+                  1300.0,
+                  926.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Jogador local"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "7dfbd962-be67-815b-a0fe-6e3b4911eff1",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  1892.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Jogador local"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "a3622f5f-d328-89b6-8aa4-cd975a010538",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  2700.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Jogador local"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "cd4e48b6-f1e3-8d90-936c-1c0499dda3fa",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  3136.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Etapa"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "affa8247-2c2b-8b5c-951f-8587152856f1",
+                "operation": "scene.current",
+                "position": [
+                  2340.0,
+                  592.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "08e931fc-3623-8e22-bdce-2140fe78d80b",
+                "operation": "variable.get",
+                "position": [
+                  2600.0,
+                  592.0
+                ],
+                "params": {
+                  "key": {
+                    "Text": ""
+                  },
+                  "variable": {
+                    "Text": "dd4edb55-5e1c-4d26-b81e-026f55d144fe"
+                  }
+                }
+              },
+              {
+                "id": "d4710145-02e6-8b8b-bbc9-6a26b0cfb5ef",
+                "operation": "text.time",
+                "position": [
+                  2860.0,
+                  704.0
+                ],
+                "params": {
+                  "format": {
+                    "Text": "mm:ss.cc"
+                  },
+                  "seconds": {
+                    "Number": 0.0
+                  }
+                }
               }
             ],
             "edges": [
@@ -5559,6 +5842,12 @@
                 "from_node": "562c2a81-94e6-4197-ab94-3dd4ab3f3093",
                 "from_port": "name",
                 "to_node": "b550d62f-14f2-4c64-ab8e-81f74fb5dd64",
+                "to_port": "key"
+              },
+              {
+                "from_node": "affa8247-2c2b-8b5c-951f-8587152856f1",
+                "from_port": "name",
+                "to_node": "08e931fc-3623-8e22-bdce-2140fe78d80b",
                 "to_port": "key"
               },
               {
@@ -5578,12 +5867,6 @@
                 "from_port": "position",
                 "to_node": "a3f94bd4-62ee-4efb-8734-433b01e55992",
                 "to_port": "value"
-              },
-              {
-                "from_node": "a3f94bd4-62ee-4efb-8734-433b01e55992",
-                "from_port": "exec",
-                "to_node": "a198e714-9c05-4276-be8b-3695c464c0b2",
-                "to_port": "exec"
               },
               {
                 "from_node": "e5d971e5-37c6-44fc-bc9b-62d30e8adb39",
@@ -5613,6 +5896,12 @@
                 "from_node": "b550d62f-14f2-4c64-ab8e-81f74fb5dd64",
                 "from_port": "value",
                 "to_node": "0958f790-ff66-48f9-9d34-56fd550be67b",
+                "to_port": "seconds"
+              },
+              {
+                "from_node": "08e931fc-3623-8e22-bdce-2140fe78d80b",
+                "from_port": "value",
+                "to_node": "d4710145-02e6-8b8b-bbc9-6a26b0cfb5ef",
                 "to_port": "seconds"
               },
               {
@@ -5694,7 +5983,7 @@
                 "to_port": "exec"
               },
               {
-                "from_node": "e5d971e5-37c6-44fc-bc9b-62d30e8adb39",
+                "from_node": "78a4da72-acf4-8506-a05b-a6cdfdfcc728",
                 "from_port": "value",
                 "to_node": "66aa84f6-b401-4a83-a2a6-f54bbc6f5f3a",
                 "to_port": "condition"
@@ -5850,7 +6139,7 @@
                 "to_port": "exec"
               },
               {
-                "from_node": "e5d971e5-37c6-44fc-bc9b-62d30e8adb39",
+                "from_node": "78a4da72-acf4-8506-a05b-a6cdfdfcc728",
                 "from_port": "value",
                 "to_node": "a96f3731-c926-40e4-a46e-43d37a1bb36d",
                 "to_port": "condition"
@@ -5868,13 +6157,7 @@
                 "to_port": "exec"
               },
               {
-                "from_node": "86e4c4e7-0ded-4869-9d67-664470ee45b8",
-                "from_port": "exec",
-                "to_node": "53df258a-0034-4df0-9d97-4fb2e02af1f0",
-                "to_port": "exec"
-              },
-              {
-                "from_node": "b550d62f-14f2-4c64-ab8e-81f74fb5dd64",
+                "from_node": "08e931fc-3623-8e22-bdce-2140fe78d80b",
                 "from_port": "value",
                 "to_node": "1ea5672e-e921-4801-9236-8df3509dff21",
                 "to_port": "a"
@@ -5898,16 +6181,10 @@
                 "to_port": "a"
               },
               {
-                "from_node": "b550d62f-14f2-4c64-ab8e-81f74fb5dd64",
+                "from_node": "08e931fc-3623-8e22-bdce-2140fe78d80b",
                 "from_port": "value",
                 "to_node": "f3d9978f-8afd-4610-b750-8c00550523cd",
                 "to_port": "b"
-              },
-              {
-                "from_node": "1114e561-c3d1-49c3-962e-90cdbe5d9d6c",
-                "from_port": "else",
-                "to_node": "ce98adf8-4cfc-47ab-9ee9-a59c5c4ae375",
-                "to_port": "exec"
               },
               {
                 "from_node": "f3d9978f-8afd-4610-b750-8c00550523cd",
@@ -5928,7 +6205,7 @@
                 "to_port": "exec"
               },
               {
-                "from_node": "562c2a81-94e6-4197-ab94-3dd4ab3f3093",
+                "from_node": "affa8247-2c2b-8b5c-951f-8587152856f1",
                 "from_port": "name",
                 "to_node": "0d5051ec-5352-4362-af82-d41a4146a6cb",
                 "to_port": "key"
@@ -5970,7 +6247,7 @@
                 "to_port": "a"
               },
               {
-                "from_node": "b550d62f-14f2-4c64-ab8e-81f74fb5dd64",
+                "from_node": "08e931fc-3623-8e22-bdce-2140fe78d80b",
                 "from_port": "value",
                 "to_node": "75878294-b2bc-4094-a099-7af51337312a",
                 "to_port": "b"
@@ -6006,7 +6283,7 @@
                 "to_port": "exec"
               },
               {
-                "from_node": "e5d971e5-37c6-44fc-bc9b-62d30e8adb39",
+                "from_node": "7dfbd962-be67-815b-a0fe-6e3b4911eff1",
                 "from_port": "value",
                 "to_node": "324b35ed-ec3b-44e6-a438-e05cdbdb3f95",
                 "to_port": "condition"
@@ -6024,7 +6301,7 @@
                 "to_port": "exec"
               },
               {
-                "from_node": "e5d971e5-37c6-44fc-bc9b-62d30e8adb39",
+                "from_node": "a3622f5f-d328-89b6-8aa4-cd975a010538",
                 "from_port": "value",
                 "to_node": "f97f6f9a-a30c-4301-ae98-808a0649d43d",
                 "to_port": "condition"
@@ -6066,7 +6343,7 @@
                 "to_port": "condition"
               },
               {
-                "from_node": "fc1f2f71-d2de-47ca-9e0b-3f843701451e",
+                "from_node": "cd4e48b6-f1e3-8d90-936c-1c0499dda3fa",
                 "from_port": "value",
                 "to_node": "55aa2796-f4a3-4993-8b57-d745335b8a46",
                 "to_port": "a"
@@ -6094,6 +6371,72 @@
                 "from_port": "value",
                 "to_node": "4e040ec2-8a82-4bf9-bc58-f93095efc1e3",
                 "to_port": "position"
+              },
+              {
+                "from_node": "a3f94bd4-62ee-4efb-8734-433b01e55992",
+                "from_port": "exec",
+                "to_node": "082a30bb-f60a-4f4b-a18d-9a2f9ffc0329",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "82b63b25-4d3a-42f0-b48c-c012b7c6e6bc",
+                "from_port": "position",
+                "to_node": "082a30bb-f60a-4f4b-a18d-9a2f9ffc0329",
+                "to_port": "value"
+              },
+              {
+                "from_node": "082a30bb-f60a-4f4b-a18d-9a2f9ffc0329",
+                "from_port": "exec",
+                "to_node": "a198e714-9c05-4276-be8b-3695c464c0b2",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "86e4c4e7-0ded-4869-9d67-664470ee45b8",
+                "from_port": "exec",
+                "to_node": "3428da90-4d4b-4393-b3a1-3f0aadd934b6",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "3428da90-4d4b-4393-b3a1-3f0aadd934b6",
+                "from_port": "exec",
+                "to_node": "53df258a-0034-4df0-9d97-4fb2e02af1f0",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "4418750b-4e2a-4504-a7a6-26b46a42a334",
+                "from_port": "value",
+                "to_node": "cce762da-963f-4556-940f-b665975382f0",
+                "to_port": "a"
+              },
+              {
+                "from_node": "d4710145-02e6-8b8b-bbc9-6a26b0cfb5ef",
+                "from_port": "text",
+                "to_node": "cce762da-963f-4556-940f-b665975382f0",
+                "to_port": "b"
+              },
+              {
+                "from_node": "1114e561-c3d1-49c3-962e-90cdbe5d9d6c",
+                "from_port": "else",
+                "to_node": "85baca71-492d-4372-b4c5-d7e5237d5ab3",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "cce762da-963f-4556-940f-b665975382f0",
+                "from_port": "result",
+                "to_node": "85baca71-492d-4372-b4c5-d7e5237d5ab3",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "85baca71-492d-4372-b4c5-d7e5237d5ab3",
+                "from_port": "else",
+                "to_node": "ce98adf8-4cfc-47ab-9ee9-a59c5c4ae375",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "85baca71-492d-4372-b4c5-d7e5237d5ab3",
+                "from_port": "then",
+                "to_node": "bd63379c-6b12-4f71-8061-fb0f3e6994a3",
+                "to_port": "exec"
               }
             ]
           },
@@ -12260,7 +12603,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -12305,8 +12652,8 @@
                 "id": "3e72637d-edec-4724-9d37-b9dd54b7d4a2",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -12318,8 +12665,8 @@
                 "id": "2f309bae-015e-40ff-8c12-63bb040daa15",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12337,8 +12684,8 @@
                 "id": "d44a3e02-f10b-4c2b-a989-b2e12a3c90b5",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12356,8 +12703,8 @@
                 "id": "a65f4366-8669-4433-87df-23787646ff19",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -12369,8 +12716,8 @@
                 "id": "b7591725-f1f6-4020-a4e7-277e21633f28",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12388,8 +12735,8 @@
                 "id": "3ce43415-bb76-4984-83b9-6d058f446c6b",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12402,15 +12749,123 @@
                     "Object": "92eba92e-5b0b-4247-99de-644cb3b2ece9"
                   }
                 }
+              },
+              {
+                "id": "fcd0a07f-0d4b-4619-8cf2-25159dd1fba8",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "2f4f1e34-43f7-4527-b1af-5e34fbfe8305",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "9fc6cce0-e778-49b1-8011-4f409c609d68",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "4742a199-ca9e-4435-85a6-d94965fc433c",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "c6a17130-23f7-472d-869b-e66f78482917",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "9618c417-d223-4be8-893d-f102c96296cd",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "4dad4ca3-8063-4a6e-a6f9-a6e58e6128a6",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "af4baa8d-d6e5-4827-b961-77ec7c7c1103",
-                "from_port": "exec",
-                "to_node": "3e72637d-edec-4724-9d37-b9dd54b7d4a2",
-                "to_port": "exec"
-              },
               {
                 "from_node": "3e72637d-edec-4724-9d37-b9dd54b7d4a2",
                 "from_port": "exec",
@@ -12439,6 +12894,48 @@
                 "from_node": "b7591725-f1f6-4020-a4e7-277e21633f28",
                 "from_port": "exec",
                 "to_node": "3ce43415-bb76-4984-83b9-6d058f446c6b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "af4baa8d-d6e5-4827-b961-77ec7c7c1103",
+                "from_port": "exec",
+                "to_node": "fcd0a07f-0d4b-4619-8cf2-25159dd1fba8",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "3ce43415-bb76-4984-83b9-6d058f446c6b",
+                "from_port": "exec",
+                "to_node": "2f4f1e34-43f7-4527-b1af-5e34fbfe8305",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "fcd0a07f-0d4b-4619-8cf2-25159dd1fba8",
+                "from_port": "exec",
+                "to_node": "9fc6cce0-e778-49b1-8011-4f409c609d68",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "4742a199-ca9e-4435-85a6-d94965fc433c",
+                "from_port": "exec",
+                "to_node": "9618c417-d223-4be8-893d-f102c96296cd",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "c6a17130-23f7-472d-869b-e66f78482917",
+                "from_port": "value",
+                "to_node": "9618c417-d223-4be8-893d-f102c96296cd",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "9618c417-d223-4be8-893d-f102c96296cd",
+                "from_port": "then",
+                "to_node": "4dad4ca3-8063-4a6e-a6f9-a6e58e6128a6",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "4dad4ca3-8063-4a6e-a6f9-a6e58e6128a6",
+                "from_port": "exec",
+                "to_node": "3e72637d-edec-4724-9d37-b9dd54b7d4a2",
                 "to_port": "exec"
               }
             ]
@@ -12582,7 +13079,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -12627,8 +13128,8 @@
                 "id": "63285424-d5ed-4f08-a147-45eeb93db6ce",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -12640,8 +13141,8 @@
                 "id": "620cedf9-ebbd-4707-ab72-d32fd001c086",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12659,8 +13160,8 @@
                 "id": "64df0e92-db11-4744-90f0-09e5ca3d0266",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12678,8 +13179,8 @@
                 "id": "e35696ab-2732-4f02-8479-ee28ea17f98f",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -12691,8 +13192,8 @@
                 "id": "4468dea9-ae95-4fe3-93d4-c03aff7229f2",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12710,8 +13211,8 @@
                 "id": "03f4db00-c718-475e-9342-b8b7f5eca77c",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12724,15 +13225,123 @@
                     "Object": "bf68fac5-4e73-410d-9176-e81c9040655e"
                   }
                 }
+              },
+              {
+                "id": "07933d32-b40e-429a-a9f8-ba8c0c12132f",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "d6a44003-11ef-4b57-bc5b-a1d9ef05ccac",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "b3367545-dc05-4003-aefa-594a8ba7260e",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "16e82a3a-d541-4c82-8f38-44f41e8f0535",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "819841e9-66ce-4909-9966-ec3fde5d614f",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "f52dda27-c554-4a57-a553-0521016c638f",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "9fd76967-d09b-4a41-9679-162122f73711",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "bdc9ceac-4697-495a-8261-a4216ab36e77",
-                "from_port": "exec",
-                "to_node": "63285424-d5ed-4f08-a147-45eeb93db6ce",
-                "to_port": "exec"
-              },
               {
                 "from_node": "63285424-d5ed-4f08-a147-45eeb93db6ce",
                 "from_port": "exec",
@@ -12761,6 +13370,48 @@
                 "from_node": "4468dea9-ae95-4fe3-93d4-c03aff7229f2",
                 "from_port": "exec",
                 "to_node": "03f4db00-c718-475e-9342-b8b7f5eca77c",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "bdc9ceac-4697-495a-8261-a4216ab36e77",
+                "from_port": "exec",
+                "to_node": "07933d32-b40e-429a-a9f8-ba8c0c12132f",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "03f4db00-c718-475e-9342-b8b7f5eca77c",
+                "from_port": "exec",
+                "to_node": "d6a44003-11ef-4b57-bc5b-a1d9ef05ccac",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "07933d32-b40e-429a-a9f8-ba8c0c12132f",
+                "from_port": "exec",
+                "to_node": "b3367545-dc05-4003-aefa-594a8ba7260e",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "16e82a3a-d541-4c82-8f38-44f41e8f0535",
+                "from_port": "exec",
+                "to_node": "f52dda27-c554-4a57-a553-0521016c638f",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "819841e9-66ce-4909-9966-ec3fde5d614f",
+                "from_port": "value",
+                "to_node": "f52dda27-c554-4a57-a553-0521016c638f",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "f52dda27-c554-4a57-a553-0521016c638f",
+                "from_port": "then",
+                "to_node": "9fd76967-d09b-4a41-9679-162122f73711",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "9fd76967-d09b-4a41-9679-162122f73711",
+                "from_port": "exec",
+                "to_node": "63285424-d5ed-4f08-a147-45eeb93db6ce",
                 "to_port": "exec"
               }
             ]
@@ -12904,7 +13555,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -12949,8 +13604,8 @@
                 "id": "5416169f-f866-4ae9-9fa7-8927a1385be3",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -12962,8 +13617,8 @@
                 "id": "a587b4e4-a8bc-470a-b72e-87ef6352dcd7",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -12981,8 +13636,8 @@
                 "id": "55555aa8-7f9a-4a59-9bff-94657f0dea0d",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13000,8 +13655,8 @@
                 "id": "212144b3-0792-4089-a57a-f5fe41964793",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -13013,8 +13668,8 @@
                 "id": "2d5660a4-97dc-4301-87f8-d0959b868c6e",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13032,8 +13687,8 @@
                 "id": "d27a680b-c58d-4484-b05f-c5d140c739fb",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13046,15 +13701,123 @@
                     "Object": "8f496f46-afa0-4ece-9787-eeae1e95aaae"
                   }
                 }
+              },
+              {
+                "id": "69bc0047-147e-4d6d-bde0-512d83135b03",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "55044227-ed52-4867-8e94-8867d7658a0a",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "24c9f17d-5368-4cc5-a9b0-e1a374e55612",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "dd7eb71b-eadf-4837-a90d-abd3d6e149b4",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "85a9351d-c438-4dec-b697-f19ab1e43d57",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "f0c72cfd-7dd8-4b4a-b5a1-8c6ee6a2a691",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "f1b49edc-384b-4d0b-b6ab-ad09acbae5c7",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "f3300fb9-4517-4e86-974a-47bdd5c259b5",
-                "from_port": "exec",
-                "to_node": "5416169f-f866-4ae9-9fa7-8927a1385be3",
-                "to_port": "exec"
-              },
               {
                 "from_node": "5416169f-f866-4ae9-9fa7-8927a1385be3",
                 "from_port": "exec",
@@ -13083,6 +13846,48 @@
                 "from_node": "2d5660a4-97dc-4301-87f8-d0959b868c6e",
                 "from_port": "exec",
                 "to_node": "d27a680b-c58d-4484-b05f-c5d140c739fb",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f3300fb9-4517-4e86-974a-47bdd5c259b5",
+                "from_port": "exec",
+                "to_node": "69bc0047-147e-4d6d-bde0-512d83135b03",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "d27a680b-c58d-4484-b05f-c5d140c739fb",
+                "from_port": "exec",
+                "to_node": "55044227-ed52-4867-8e94-8867d7658a0a",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "69bc0047-147e-4d6d-bde0-512d83135b03",
+                "from_port": "exec",
+                "to_node": "24c9f17d-5368-4cc5-a9b0-e1a374e55612",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "dd7eb71b-eadf-4837-a90d-abd3d6e149b4",
+                "from_port": "exec",
+                "to_node": "f0c72cfd-7dd8-4b4a-b5a1-8c6ee6a2a691",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "85a9351d-c438-4dec-b697-f19ab1e43d57",
+                "from_port": "value",
+                "to_node": "f0c72cfd-7dd8-4b4a-b5a1-8c6ee6a2a691",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "f0c72cfd-7dd8-4b4a-b5a1-8c6ee6a2a691",
+                "from_port": "then",
+                "to_node": "f1b49edc-384b-4d0b-b6ab-ad09acbae5c7",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f1b49edc-384b-4d0b-b6ab-ad09acbae5c7",
+                "from_port": "exec",
+                "to_node": "5416169f-f866-4ae9-9fa7-8927a1385be3",
                 "to_port": "exec"
               }
             ]
@@ -13226,7 +14031,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -13271,8 +14080,8 @@
                 "id": "f47fb35e-f1f9-41ad-aa25-f629870035f0",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -13284,8 +14093,8 @@
                 "id": "1e7fce79-e31e-4ab0-854b-39d3cb1f3995",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13303,8 +14112,8 @@
                 "id": "ba514e2e-ee73-4da6-b3bb-045af46ab4e0",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13322,8 +14131,8 @@
                 "id": "5ac003d7-3bc6-45c9-a4b6-39ecbe3d540a",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -13335,8 +14144,8 @@
                 "id": "da15efa4-6d47-4e38-b854-724c6a2ab7ce",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13354,8 +14163,8 @@
                 "id": "07c656ed-541d-47f8-a31d-03fc14e1b41e",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13368,15 +14177,123 @@
                     "Object": "cb8863ce-4ad9-473c-9e76-c4c7a3223d94"
                   }
                 }
+              },
+              {
+                "id": "71890bba-0880-4ce2-85d6-13fe4ff4aecb",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "7e5b7613-ff14-4411-9ad6-57ef92feee72",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "47d301c1-4a7e-427d-bf3a-4bd50f7bcb9e",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "fc636199-249e-4739-a83a-63be59d115e9",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "4ea947cf-fba3-4d70-9311-83e8cd79a200",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "5a16b1b6-dd5f-4487-ac1a-70ec30f841f8",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "f5e1bca9-bc30-4435-94ee-fc3b00ab8544",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "48ef77a8-f524-423b-a364-ec7f4d53cd58",
-                "from_port": "exec",
-                "to_node": "f47fb35e-f1f9-41ad-aa25-f629870035f0",
-                "to_port": "exec"
-              },
               {
                 "from_node": "f47fb35e-f1f9-41ad-aa25-f629870035f0",
                 "from_port": "exec",
@@ -13405,6 +14322,48 @@
                 "from_node": "da15efa4-6d47-4e38-b854-724c6a2ab7ce",
                 "from_port": "exec",
                 "to_node": "07c656ed-541d-47f8-a31d-03fc14e1b41e",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "48ef77a8-f524-423b-a364-ec7f4d53cd58",
+                "from_port": "exec",
+                "to_node": "71890bba-0880-4ce2-85d6-13fe4ff4aecb",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "07c656ed-541d-47f8-a31d-03fc14e1b41e",
+                "from_port": "exec",
+                "to_node": "7e5b7613-ff14-4411-9ad6-57ef92feee72",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "71890bba-0880-4ce2-85d6-13fe4ff4aecb",
+                "from_port": "exec",
+                "to_node": "47d301c1-4a7e-427d-bf3a-4bd50f7bcb9e",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "fc636199-249e-4739-a83a-63be59d115e9",
+                "from_port": "exec",
+                "to_node": "5a16b1b6-dd5f-4487-ac1a-70ec30f841f8",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "4ea947cf-fba3-4d70-9311-83e8cd79a200",
+                "from_port": "value",
+                "to_node": "5a16b1b6-dd5f-4487-ac1a-70ec30f841f8",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "5a16b1b6-dd5f-4487-ac1a-70ec30f841f8",
+                "from_port": "then",
+                "to_node": "f5e1bca9-bc30-4435-94ee-fc3b00ab8544",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f5e1bca9-bc30-4435-94ee-fc3b00ab8544",
+                "from_port": "exec",
+                "to_node": "f47fb35e-f1f9-41ad-aa25-f629870035f0",
                 "to_port": "exec"
               }
             ]
@@ -13548,7 +14507,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -13593,8 +14556,8 @@
                 "id": "e39998bf-18c3-4762-ace3-a29b91af15b5",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -13606,8 +14569,8 @@
                 "id": "b8e2c5e2-0a09-4e06-b18e-12510624b667",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13625,8 +14588,8 @@
                 "id": "f8470641-9b2d-4268-a172-52501706a61d",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13644,8 +14607,8 @@
                 "id": "98cd04e2-ccf0-418a-bdca-64793373611d",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -13657,8 +14620,8 @@
                 "id": "6bf2e69a-fa4e-4103-b0b1-15611f6e8005",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13676,8 +14639,8 @@
                 "id": "85e0e2f9-32e1-4b04-adf8-21e5fd6d11e8",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13690,15 +14653,123 @@
                     "Object": "6678ccc3-098c-4b61-8236-705a453b2188"
                   }
                 }
+              },
+              {
+                "id": "ba5711e7-2490-45d4-a7d5-dfb8ac00c173",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "5fc3b4c9-bbf1-4268-9946-9c585920f383",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "3f42586c-eb5b-400d-8d7e-14b646737a25",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "5b19d0b8-26e7-4848-8652-90082340b666",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "753a59e0-03bf-44ae-9b86-d241d671c688",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "59dfcee2-172c-499c-b4c8-5e5ff17311d7",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "e6ac5d92-1481-4c07-a952-f0d30e79153f",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "133e5ea9-f30c-42c5-935e-5e4770eefb4d",
-                "from_port": "exec",
-                "to_node": "e39998bf-18c3-4762-ace3-a29b91af15b5",
-                "to_port": "exec"
-              },
               {
                 "from_node": "e39998bf-18c3-4762-ace3-a29b91af15b5",
                 "from_port": "exec",
@@ -13727,6 +14798,48 @@
                 "from_node": "6bf2e69a-fa4e-4103-b0b1-15611f6e8005",
                 "from_port": "exec",
                 "to_node": "85e0e2f9-32e1-4b04-adf8-21e5fd6d11e8",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "133e5ea9-f30c-42c5-935e-5e4770eefb4d",
+                "from_port": "exec",
+                "to_node": "ba5711e7-2490-45d4-a7d5-dfb8ac00c173",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "85e0e2f9-32e1-4b04-adf8-21e5fd6d11e8",
+                "from_port": "exec",
+                "to_node": "5fc3b4c9-bbf1-4268-9946-9c585920f383",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "ba5711e7-2490-45d4-a7d5-dfb8ac00c173",
+                "from_port": "exec",
+                "to_node": "3f42586c-eb5b-400d-8d7e-14b646737a25",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "5b19d0b8-26e7-4848-8652-90082340b666",
+                "from_port": "exec",
+                "to_node": "59dfcee2-172c-499c-b4c8-5e5ff17311d7",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "753a59e0-03bf-44ae-9b86-d241d671c688",
+                "from_port": "value",
+                "to_node": "59dfcee2-172c-499c-b4c8-5e5ff17311d7",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "59dfcee2-172c-499c-b4c8-5e5ff17311d7",
+                "from_port": "then",
+                "to_node": "e6ac5d92-1481-4c07-a952-f0d30e79153f",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "e6ac5d92-1481-4c07-a952-f0d30e79153f",
+                "from_port": "exec",
+                "to_node": "e39998bf-18c3-4762-ace3-a29b91af15b5",
                 "to_port": "exec"
               }
             ]
@@ -13870,7 +14983,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -13915,8 +15032,8 @@
                 "id": "70c60346-cc0d-4daf-b601-9a7ce8b6bd47",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -13928,8 +15045,8 @@
                 "id": "a0b042aa-7145-4643-a34c-2926ad81a1bf",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13947,8 +15064,8 @@
                 "id": "4c11a247-6095-4f59-a7f2-76f58e72624a",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13966,8 +15083,8 @@
                 "id": "5587ddb3-06aa-49de-8ef0-0fe805d27770",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -13979,8 +15096,8 @@
                 "id": "19a5c76c-6e39-4478-b3a5-b572f085f00f",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -13998,8 +15115,8 @@
                 "id": "5ab7ce09-86a7-4852-afe2-eaf3202d2696",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14012,15 +15129,123 @@
                     "Object": "0cc9dcca-fa96-43c8-b9d6-d33e2b8e2b9f"
                   }
                 }
+              },
+              {
+                "id": "1b931346-1e3a-4cfe-aaed-bd75c591c82a",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "18b814fc-c790-4a82-b047-cf22ba4a5c96",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "d14fc9e7-a88b-4cc2-bfe1-57bddd178dc1",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "62ba1f94-3e48-4018-8216-a71e9579430e",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "5efe4599-e1a4-4f0e-8dde-ad000f486ddb",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "826c1ce8-0e3e-4c1e-8869-b29f43fdc67e",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "659794af-c258-4ec6-b3c9-2804b00da84f",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "e1ee1534-d991-4f58-b0f5-e45c35eb4298",
-                "from_port": "exec",
-                "to_node": "70c60346-cc0d-4daf-b601-9a7ce8b6bd47",
-                "to_port": "exec"
-              },
               {
                 "from_node": "70c60346-cc0d-4daf-b601-9a7ce8b6bd47",
                 "from_port": "exec",
@@ -14049,6 +15274,48 @@
                 "from_node": "19a5c76c-6e39-4478-b3a5-b572f085f00f",
                 "from_port": "exec",
                 "to_node": "5ab7ce09-86a7-4852-afe2-eaf3202d2696",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "e1ee1534-d991-4f58-b0f5-e45c35eb4298",
+                "from_port": "exec",
+                "to_node": "1b931346-1e3a-4cfe-aaed-bd75c591c82a",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "5ab7ce09-86a7-4852-afe2-eaf3202d2696",
+                "from_port": "exec",
+                "to_node": "18b814fc-c790-4a82-b047-cf22ba4a5c96",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "1b931346-1e3a-4cfe-aaed-bd75c591c82a",
+                "from_port": "exec",
+                "to_node": "d14fc9e7-a88b-4cc2-bfe1-57bddd178dc1",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "62ba1f94-3e48-4018-8216-a71e9579430e",
+                "from_port": "exec",
+                "to_node": "826c1ce8-0e3e-4c1e-8869-b29f43fdc67e",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "5efe4599-e1a4-4f0e-8dde-ad000f486ddb",
+                "from_port": "value",
+                "to_node": "826c1ce8-0e3e-4c1e-8869-b29f43fdc67e",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "826c1ce8-0e3e-4c1e-8869-b29f43fdc67e",
+                "from_port": "then",
+                "to_node": "659794af-c258-4ec6-b3c9-2804b00da84f",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "659794af-c258-4ec6-b3c9-2804b00da84f",
+                "from_port": "exec",
+                "to_node": "70c60346-cc0d-4daf-b601-9a7ce8b6bd47",
                 "to_port": "exec"
               }
             ]
@@ -14192,7 +15459,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -14237,8 +15508,8 @@
                 "id": "89ecc399-4ae7-47d5-8380-17484ffad64f",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -14250,8 +15521,8 @@
                 "id": "74a8673f-b27d-4f63-988e-6bf13cc95f01",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14269,8 +15540,8 @@
                 "id": "299bdde6-8f06-4764-9521-ec7222a42442",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14288,8 +15559,8 @@
                 "id": "72fbbf41-a186-4d52-9b6b-e2d09df0b476",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -14301,8 +15572,8 @@
                 "id": "bdaec9ab-409b-4e83-953a-3f1a08cc879d",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14320,8 +15591,8 @@
                 "id": "20fbdc41-9407-460d-8c82-1c263a608ac6",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14334,15 +15605,123 @@
                     "Object": "de506735-ddef-4129-9035-a6b8e3085b44"
                   }
                 }
+              },
+              {
+                "id": "ec3c4866-0630-4e53-9673-a3743776119c",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "c01e3638-2c33-4b94-82f0-e95b124ba8fe",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "af1ed45c-de47-4ac7-97fb-ef0370fa2c39",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "2a3552fd-8821-40d3-b894-431b0d9a3a0a",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "22467dda-24c7-49ad-a5fb-48fe65b01b64",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "289794fe-dae8-4235-83a0-b57c69db58e9",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "eae40235-f931-453e-9571-d0e4ed7ae6e4",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "f7cf1cbf-63a1-48f6-a802-19e66e01a72e",
-                "from_port": "exec",
-                "to_node": "89ecc399-4ae7-47d5-8380-17484ffad64f",
-                "to_port": "exec"
-              },
               {
                 "from_node": "89ecc399-4ae7-47d5-8380-17484ffad64f",
                 "from_port": "exec",
@@ -14371,6 +15750,48 @@
                 "from_node": "bdaec9ab-409b-4e83-953a-3f1a08cc879d",
                 "from_port": "exec",
                 "to_node": "20fbdc41-9407-460d-8c82-1c263a608ac6",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f7cf1cbf-63a1-48f6-a802-19e66e01a72e",
+                "from_port": "exec",
+                "to_node": "ec3c4866-0630-4e53-9673-a3743776119c",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "20fbdc41-9407-460d-8c82-1c263a608ac6",
+                "from_port": "exec",
+                "to_node": "c01e3638-2c33-4b94-82f0-e95b124ba8fe",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "ec3c4866-0630-4e53-9673-a3743776119c",
+                "from_port": "exec",
+                "to_node": "af1ed45c-de47-4ac7-97fb-ef0370fa2c39",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "2a3552fd-8821-40d3-b894-431b0d9a3a0a",
+                "from_port": "exec",
+                "to_node": "289794fe-dae8-4235-83a0-b57c69db58e9",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "22467dda-24c7-49ad-a5fb-48fe65b01b64",
+                "from_port": "value",
+                "to_node": "289794fe-dae8-4235-83a0-b57c69db58e9",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "289794fe-dae8-4235-83a0-b57c69db58e9",
+                "from_port": "then",
+                "to_node": "eae40235-f931-453e-9571-d0e4ed7ae6e4",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "eae40235-f931-453e-9571-d0e4ed7ae6e4",
+                "from_port": "exec",
+                "to_node": "89ecc399-4ae7-47d5-8380-17484ffad64f",
                 "to_port": "exec"
               }
             ]
@@ -14514,7 +15935,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -14559,8 +15984,8 @@
                 "id": "cc17e5e1-5622-4111-8d2d-d9cdc25f2643",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -14572,8 +15997,8 @@
                 "id": "5fd81c66-ce1c-439d-bda6-93707afa344d",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14591,8 +16016,8 @@
                 "id": "2eaa07af-c72b-4e99-93fc-cb06aaeca84a",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14610,8 +16035,8 @@
                 "id": "7a6baa21-d64d-4040-8395-299e0db8709c",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -14623,8 +16048,8 @@
                 "id": "9607cdfe-18fe-423b-98ed-41288c0d27a1",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14642,8 +16067,8 @@
                 "id": "076c4a76-4c61-4d15-b8f6-5017dddd4bc3",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14656,15 +16081,123 @@
                     "Object": "69325fcc-c6df-4911-8ec4-f3567e0e6484"
                   }
                 }
+              },
+              {
+                "id": "8ced1797-e635-431c-b026-198823a9bb22",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "34c68abd-2d71-403d-a619-35034b2010d4",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "1219e66a-a3a8-4e71-8e76-c7f8cfbf7af3",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "c39145b5-df97-4d9c-b284-2bacc6901aa8",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "61bda1b5-c3b8-41ea-a837-1f88f05ffd7a",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "4cd8ab84-477f-4592-8233-2b4406315a15",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "2f5dc58c-98d7-4edf-81c9-7f6e6e35ddb1",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "ae200d95-a6a1-443e-851c-70d9ddd3ad6c",
-                "from_port": "exec",
-                "to_node": "cc17e5e1-5622-4111-8d2d-d9cdc25f2643",
-                "to_port": "exec"
-              },
               {
                 "from_node": "cc17e5e1-5622-4111-8d2d-d9cdc25f2643",
                 "from_port": "exec",
@@ -14693,6 +16226,48 @@
                 "from_node": "9607cdfe-18fe-423b-98ed-41288c0d27a1",
                 "from_port": "exec",
                 "to_node": "076c4a76-4c61-4d15-b8f6-5017dddd4bc3",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "ae200d95-a6a1-443e-851c-70d9ddd3ad6c",
+                "from_port": "exec",
+                "to_node": "8ced1797-e635-431c-b026-198823a9bb22",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "076c4a76-4c61-4d15-b8f6-5017dddd4bc3",
+                "from_port": "exec",
+                "to_node": "34c68abd-2d71-403d-a619-35034b2010d4",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "8ced1797-e635-431c-b026-198823a9bb22",
+                "from_port": "exec",
+                "to_node": "1219e66a-a3a8-4e71-8e76-c7f8cfbf7af3",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "c39145b5-df97-4d9c-b284-2bacc6901aa8",
+                "from_port": "exec",
+                "to_node": "4cd8ab84-477f-4592-8233-2b4406315a15",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "61bda1b5-c3b8-41ea-a837-1f88f05ffd7a",
+                "from_port": "value",
+                "to_node": "4cd8ab84-477f-4592-8233-2b4406315a15",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "4cd8ab84-477f-4592-8233-2b4406315a15",
+                "from_port": "then",
+                "to_node": "2f5dc58c-98d7-4edf-81c9-7f6e6e35ddb1",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "2f5dc58c-98d7-4edf-81c9-7f6e6e35ddb1",
+                "from_port": "exec",
+                "to_node": "cc17e5e1-5622-4111-8d2d-d9cdc25f2643",
                 "to_port": "exec"
               }
             ]
@@ -14836,7 +16411,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -14881,8 +16460,8 @@
                 "id": "1a6445f5-e366-4cde-9a37-c45d00acf1ae",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -14894,8 +16473,8 @@
                 "id": "902da50d-085e-4b78-aa68-3f8622ad4531",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14913,8 +16492,8 @@
                 "id": "195878a4-4967-4d4c-b149-c77fd4e4c8b1",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14932,8 +16511,8 @@
                 "id": "d2446654-d4cc-40ae-9364-16af41a13fc2",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -14945,8 +16524,8 @@
                 "id": "165b33ec-8d6d-4add-a3d7-e9c58fa3429a",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14964,8 +16543,8 @@
                 "id": "47724fd0-ca5c-4b3f-a31d-821becec8578",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -14978,15 +16557,123 @@
                     "Object": "64271eac-027e-46b0-8e80-59e7a8598602"
                   }
                 }
+              },
+              {
+                "id": "1a3def8c-3417-46cf-9643-e23d50737101",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "21b7ec76-ee1d-48f1-8ca3-e1a79cc5d987",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "910066d1-5b7c-4e29-a80f-e81253258324",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "c8debd5b-11a0-4c21-b08a-ff0610e2a3d4",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "0db10a3e-76ed-4aea-9731-1f0c8fd10620",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "47b252cd-5c17-4dd4-bd7f-35640de44afa",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "a83473de-357e-4ad4-94c0-fe9deac77007",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "7a3d1f45-d227-4e6f-b56b-8ceb82d88ad6",
-                "from_port": "exec",
-                "to_node": "1a6445f5-e366-4cde-9a37-c45d00acf1ae",
-                "to_port": "exec"
-              },
               {
                 "from_node": "1a6445f5-e366-4cde-9a37-c45d00acf1ae",
                 "from_port": "exec",
@@ -15015,6 +16702,48 @@
                 "from_node": "165b33ec-8d6d-4add-a3d7-e9c58fa3429a",
                 "from_port": "exec",
                 "to_node": "47724fd0-ca5c-4b3f-a31d-821becec8578",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "7a3d1f45-d227-4e6f-b56b-8ceb82d88ad6",
+                "from_port": "exec",
+                "to_node": "1a3def8c-3417-46cf-9643-e23d50737101",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "47724fd0-ca5c-4b3f-a31d-821becec8578",
+                "from_port": "exec",
+                "to_node": "21b7ec76-ee1d-48f1-8ca3-e1a79cc5d987",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "1a3def8c-3417-46cf-9643-e23d50737101",
+                "from_port": "exec",
+                "to_node": "910066d1-5b7c-4e29-a80f-e81253258324",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "c8debd5b-11a0-4c21-b08a-ff0610e2a3d4",
+                "from_port": "exec",
+                "to_node": "47b252cd-5c17-4dd4-bd7f-35640de44afa",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "0db10a3e-76ed-4aea-9731-1f0c8fd10620",
+                "from_port": "value",
+                "to_node": "47b252cd-5c17-4dd4-bd7f-35640de44afa",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "47b252cd-5c17-4dd4-bd7f-35640de44afa",
+                "from_port": "then",
+                "to_node": "a83473de-357e-4ad4-94c0-fe9deac77007",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "a83473de-357e-4ad4-94c0-fe9deac77007",
+                "from_port": "exec",
+                "to_node": "1a6445f5-e366-4cde-9a37-c45d00acf1ae",
                 "to_port": "exec"
               }
             ]
@@ -15158,7 +16887,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -15203,8 +16936,8 @@
                 "id": "db8260a1-b01c-4180-9aa2-d14b8b622c79",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -15216,8 +16949,8 @@
                 "id": "98beb4bf-d8a5-47e2-a6f3-24034e227096",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15235,8 +16968,8 @@
                 "id": "2d2ed095-8aae-4b31-b516-2c6bc140d2fa",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15254,8 +16987,8 @@
                 "id": "e8e112b9-0a7b-4bbe-a86a-0927e6e57593",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -15267,8 +17000,8 @@
                 "id": "c19323f0-6b43-49b3-a650-a0d6d4519c42",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15286,8 +17019,8 @@
                 "id": "f17172c8-44da-42ea-999d-63b3b8ffa8bb",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15300,15 +17033,123 @@
                     "Object": "8fe53bcc-ba10-45d3-916f-b1e4bac91a07"
                   }
                 }
+              },
+              {
+                "id": "4b2a7cf2-9933-4231-a685-34d95e9f08a5",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "5cf562fa-b9ed-45dd-9e13-c6608e7b0a89",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "9ce63b61-fbe6-4dea-9d78-1ee13bf905fc",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "dea53203-2955-4867-97e2-0ad2a1234cbe",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "518f2919-f09b-48fc-bf1a-1519e08fa8b5",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "518d83c4-7127-4aa8-b978-ff0e57436d9e",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "62a80b49-589d-49a6-871f-81e2557881ba",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "9d19b19d-a528-4972-8312-c11a4788737a",
-                "from_port": "exec",
-                "to_node": "db8260a1-b01c-4180-9aa2-d14b8b622c79",
-                "to_port": "exec"
-              },
               {
                 "from_node": "db8260a1-b01c-4180-9aa2-d14b8b622c79",
                 "from_port": "exec",
@@ -15337,6 +17178,48 @@
                 "from_node": "c19323f0-6b43-49b3-a650-a0d6d4519c42",
                 "from_port": "exec",
                 "to_node": "f17172c8-44da-42ea-999d-63b3b8ffa8bb",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "9d19b19d-a528-4972-8312-c11a4788737a",
+                "from_port": "exec",
+                "to_node": "4b2a7cf2-9933-4231-a685-34d95e9f08a5",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f17172c8-44da-42ea-999d-63b3b8ffa8bb",
+                "from_port": "exec",
+                "to_node": "5cf562fa-b9ed-45dd-9e13-c6608e7b0a89",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "4b2a7cf2-9933-4231-a685-34d95e9f08a5",
+                "from_port": "exec",
+                "to_node": "9ce63b61-fbe6-4dea-9d78-1ee13bf905fc",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "dea53203-2955-4867-97e2-0ad2a1234cbe",
+                "from_port": "exec",
+                "to_node": "518d83c4-7127-4aa8-b978-ff0e57436d9e",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "518f2919-f09b-48fc-bf1a-1519e08fa8b5",
+                "from_port": "value",
+                "to_node": "518d83c4-7127-4aa8-b978-ff0e57436d9e",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "518d83c4-7127-4aa8-b978-ff0e57436d9e",
+                "from_port": "then",
+                "to_node": "62a80b49-589d-49a6-871f-81e2557881ba",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "62a80b49-589d-49a6-871f-81e2557881ba",
+                "from_port": "exec",
+                "to_node": "db8260a1-b01c-4180-9aa2-d14b8b622c79",
                 "to_port": "exec"
               }
             ]
@@ -15480,7 +17363,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -15525,8 +17412,8 @@
                 "id": "83d9c220-fd59-451b-b843-dae4c6e92a5b",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -15538,8 +17425,8 @@
                 "id": "b3ab0976-e496-4f75-a772-8ced925a3a1d",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15557,8 +17444,8 @@
                 "id": "000790e4-db32-4810-bb0a-691d6b3ec7a9",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15576,8 +17463,8 @@
                 "id": "7251a2bc-97d1-4c25-8654-c8a60e9749df",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -15589,8 +17476,8 @@
                 "id": "04cb31b0-b54c-4154-8ba0-2fe5c48105a2",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15608,8 +17495,8 @@
                 "id": "1c6d5945-43d7-4fc1-abf4-61d83d84d4a5",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15622,15 +17509,123 @@
                     "Object": "0ca66e1f-759c-4457-9e6b-4ce77415553e"
                   }
                 }
+              },
+              {
+                "id": "8ee29104-15f8-404f-b384-ce52a1dda64b",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "e04dc55f-41d4-418f-a80c-66be3eca2728",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "64431861-561c-458a-bd9d-f960145d3719",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "efb75573-f28e-43c4-b8f0-07b464412c7d",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "7b3e7163-f2cb-4a6a-a4f4-06d11bd26603",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "c0d9e978-7813-46cb-b73d-e7654e266571",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "12f2f507-92c0-414b-bfb6-5d7f616984a0",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "cf5799bc-b96a-4099-8f00-9f67b2e6fc91",
-                "from_port": "exec",
-                "to_node": "83d9c220-fd59-451b-b843-dae4c6e92a5b",
-                "to_port": "exec"
-              },
               {
                 "from_node": "83d9c220-fd59-451b-b843-dae4c6e92a5b",
                 "from_port": "exec",
@@ -15659,6 +17654,48 @@
                 "from_node": "04cb31b0-b54c-4154-8ba0-2fe5c48105a2",
                 "from_port": "exec",
                 "to_node": "1c6d5945-43d7-4fc1-abf4-61d83d84d4a5",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "cf5799bc-b96a-4099-8f00-9f67b2e6fc91",
+                "from_port": "exec",
+                "to_node": "8ee29104-15f8-404f-b384-ce52a1dda64b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "1c6d5945-43d7-4fc1-abf4-61d83d84d4a5",
+                "from_port": "exec",
+                "to_node": "e04dc55f-41d4-418f-a80c-66be3eca2728",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "8ee29104-15f8-404f-b384-ce52a1dda64b",
+                "from_port": "exec",
+                "to_node": "64431861-561c-458a-bd9d-f960145d3719",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "efb75573-f28e-43c4-b8f0-07b464412c7d",
+                "from_port": "exec",
+                "to_node": "c0d9e978-7813-46cb-b73d-e7654e266571",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "7b3e7163-f2cb-4a6a-a4f4-06d11bd26603",
+                "from_port": "value",
+                "to_node": "c0d9e978-7813-46cb-b73d-e7654e266571",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "c0d9e978-7813-46cb-b73d-e7654e266571",
+                "from_port": "then",
+                "to_node": "12f2f507-92c0-414b-bfb6-5d7f616984a0",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "12f2f507-92c0-414b-bfb6-5d7f616984a0",
+                "from_port": "exec",
+                "to_node": "83d9c220-fd59-451b-b843-dae4c6e92a5b",
                 "to_port": "exec"
               }
             ]
@@ -15802,7 +17839,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -15847,8 +17888,8 @@
                 "id": "89252ca5-bc99-4390-abca-436e1bb797c3",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -15860,8 +17901,8 @@
                 "id": "54aede01-54f2-46d2-99a9-9c77b1d58ea0",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15879,8 +17920,8 @@
                 "id": "fc97848c-3226-4663-aa34-b546e71ce571",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15898,8 +17939,8 @@
                 "id": "f3a6f393-ea62-4865-a735-c4a5040d93e9",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -15911,8 +17952,8 @@
                 "id": "bbf4177b-8bd2-4cf7-b8dc-7603437a0d7c",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15930,8 +17971,8 @@
                 "id": "fa10664f-3148-4055-95cf-64e5077d9609",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -15944,15 +17985,123 @@
                     "Object": "0bb93c20-dfc0-41ba-9e81-129de327de81"
                   }
                 }
+              },
+              {
+                "id": "d6a9ca1e-b7ce-4eb2-8052-dbad27f38e5f",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "25038f24-aaba-45ff-9c22-77e57755f37b",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "b11e760f-6d3b-45f8-a2d0-4d7403452504",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "9b8d1b0f-8b10-48ff-a7be-0e08f2ed15cd",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "2d863c09-ee07-42f3-8db7-09a2e06df46a",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "48026f96-e403-4477-a960-659b19d6c712",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "b4e1d1b6-8af0-4a6b-9bd2-f41c941c12c0",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
+                  }
+                }
               }
             ],
             "edges": [
-              {
-                "from_node": "aefb4522-9dad-4b98-be3c-95af77b3d189",
-                "from_port": "exec",
-                "to_node": "89252ca5-bc99-4390-abca-436e1bb797c3",
-                "to_port": "exec"
-              },
               {
                 "from_node": "89252ca5-bc99-4390-abca-436e1bb797c3",
                 "from_port": "exec",
@@ -15981,6 +18130,48 @@
                 "from_node": "bbf4177b-8bd2-4cf7-b8dc-7603437a0d7c",
                 "from_port": "exec",
                 "to_node": "fa10664f-3148-4055-95cf-64e5077d9609",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "aefb4522-9dad-4b98-be3c-95af77b3d189",
+                "from_port": "exec",
+                "to_node": "d6a9ca1e-b7ce-4eb2-8052-dbad27f38e5f",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "fa10664f-3148-4055-95cf-64e5077d9609",
+                "from_port": "exec",
+                "to_node": "25038f24-aaba-45ff-9c22-77e57755f37b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "d6a9ca1e-b7ce-4eb2-8052-dbad27f38e5f",
+                "from_port": "exec",
+                "to_node": "b11e760f-6d3b-45f8-a2d0-4d7403452504",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "9b8d1b0f-8b10-48ff-a7be-0e08f2ed15cd",
+                "from_port": "exec",
+                "to_node": "48026f96-e403-4477-a960-659b19d6c712",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "2d863c09-ee07-42f3-8db7-09a2e06df46a",
+                "from_port": "value",
+                "to_node": "48026f96-e403-4477-a960-659b19d6c712",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "48026f96-e403-4477-a960-659b19d6c712",
+                "from_port": "then",
+                "to_node": "b4e1d1b6-8af0-4a6b-9bd2-f41c941c12c0",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "b4e1d1b6-8af0-4a6b-9bd2-f41c941c12c0",
+                "from_port": "exec",
+                "to_node": "89252ca5-bc99-4390-abca-436e1bb797c3",
                 "to_port": "exec"
               }
             ]
@@ -16165,15 +18356,7 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {
-            "Ponto de reserva": {
-              "Vector3": [
-                0.0,
-                0.02,
-                3.0
-              ]
-            }
-          },
+          "attributes": {},
           "collider": null,
           "physics3d": {
             "shape": {
@@ -16223,7 +18406,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -16330,7 +18513,7 @@
                 "operation": "condition.branch",
                 "position": [
                   1300.0,
-                  112.0
+                  0.0
                 ],
                 "params": {
                   "condition": {
@@ -16339,27 +18522,11 @@
                 }
               },
               {
-                "id": "4394a390-42e1-469e-880e-7249020d03bf",
-                "operation": "attribute.get",
-                "position": [
-                  1300.0,
-                  0.0
-                ],
-                "params": {
-                  "attribute": {
-                    "Text": "Ponto de reserva"
-                  },
-                  "target": {
-                    "Object": null
-                  }
-                }
-              },
-              {
                 "id": "3de73880-0abe-41e0-b10e-b732ec618c4e",
                 "operation": "character.teleport",
                 "position": [
                   1560.0,
-                  0.0
+                  112.0
                 ],
                 "params": {
                   "keep_velocity": {
@@ -16399,8 +18566,8 @@
                 "id": "570889dc-c8d9-4840-ad88-11ec19b151ca",
                 "operation": "attribute.get",
                 "position": [
-                  1300.0,
-                  224.0
+                  1560.0,
+                  0.0
                 ],
                 "params": {
                   "attribute": {
@@ -16415,8 +18582,8 @@
                 "id": "12e76d69-816d-4019-86b7-63f07f0b3559",
                 "operation": "math.binary",
                 "position": [
-                  1560.0,
-                  266.0
+                  1820.0,
+                  0.0
                 ],
                 "params": {
                   "a": {
@@ -16434,7 +18601,7 @@
                 "id": "3ac8b5f7-ccf0-435a-b556-a803213e27cf",
                 "operation": "attribute.set",
                 "position": [
-                  1820.0,
+                  2080.0,
                   112.0
                 ],
                 "params": {
@@ -16453,7 +18620,7 @@
                 "id": "e57779b1-ffe8-4b36-970a-bd12535f8d24",
                 "operation": "attribute.get",
                 "position": [
-                  1820.0,
+                  2080.0,
                   0.0
                 ],
                 "params": {
@@ -16469,7 +18636,7 @@
                 "id": "2a2b67b0-70e1-4f42-b4a9-34c1b782fe25",
                 "operation": "condition.branch",
                 "position": [
-                  2080.0,
+                  2340.0,
                   0.0
                 ],
                 "params": {
@@ -16482,7 +18649,7 @@
                 "id": "8318cc2c-1b78-46ad-969e-303e86708869",
                 "operation": "action.sound",
                 "position": [
-                  2340.0,
+                  2600.0,
                   0.0
                 ],
                 "params": {
@@ -16491,6 +18658,61 @@
                   },
                   "volume": {
                     "Number": 1.0
+                  }
+                }
+              },
+              {
+                "id": "960b9587-fd93-4fa5-924a-dd731333ce17",
+                "operation": "attribute.get",
+                "position": [
+                  1300.0,
+                  112.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Ponto de largada"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "bc5e8c92-0650-457f-83dc-ab08143dde3b",
+                "operation": "condition.branch",
+                "position": [
+                  1820.0,
+                  134.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "d59003c9-5667-4e93-9cab-2538cbd1e649",
+                "operation": "debug.message",
+                "position": [
+                  2080.0,
+                  268.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Sem espaço para devolver quem caiu, nem no ponto de retorno nem no ponto de largada"
+                  }
+                }
+              },
+              {
+                "id": "963d112d-4942-42f3-8988-209c8f85fbc8",
+                "operation": "debug.message",
+                "position": [
+                  2340.0,
+                  112.0
+                ],
+                "params": {
+                  "message": {
+                    "Text": "Motivo da recusa do último teleporte"
                   }
                 }
               }
@@ -16575,12 +18797,6 @@
                 "to_port": "target"
               },
               {
-                "from_node": "4394a390-42e1-469e-880e-7249020d03bf",
-                "from_port": "value",
-                "to_node": "3de73880-0abe-41e0-b10e-b732ec618c4e",
-                "to_port": "position"
-              },
-              {
                 "from_node": "a142b06f-5c4b-4058-96a2-8ee6ddcbc088",
                 "from_port": "context",
                 "to_node": "570889dc-c8d9-4840-ad88-11ec19b151ca",
@@ -16601,12 +18817,6 @@
               {
                 "from_node": "90147a18-5b64-481f-b709-b0b96b40f43f",
                 "from_port": "then",
-                "to_node": "3ac8b5f7-ccf0-435a-b556-a803213e27cf",
-                "to_port": "exec"
-              },
-              {
-                "from_node": "3de73880-0abe-41e0-b10e-b732ec618c4e",
-                "from_port": "exec",
                 "to_node": "3ac8b5f7-ccf0-435a-b556-a803213e27cf",
                 "to_port": "exec"
               },
@@ -16645,6 +18855,60 @@
                 "from_port": "then",
                 "to_node": "8318cc2c-1b78-46ad-969e-303e86708869",
                 "to_port": "exec"
+              },
+              {
+                "from_node": "a142b06f-5c4b-4058-96a2-8ee6ddcbc088",
+                "from_port": "context",
+                "to_node": "960b9587-fd93-4fa5-924a-dd731333ce17",
+                "to_port": "target"
+              },
+              {
+                "from_node": "960b9587-fd93-4fa5-924a-dd731333ce17",
+                "from_port": "value",
+                "to_node": "3de73880-0abe-41e0-b10e-b732ec618c4e",
+                "to_port": "position"
+              },
+              {
+                "from_node": "3de73880-0abe-41e0-b10e-b732ec618c4e",
+                "from_port": "exec",
+                "to_node": "bc5e8c92-0650-457f-83dc-ab08143dde3b",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "3de73880-0abe-41e0-b10e-b732ec618c4e",
+                "from_port": "success",
+                "to_node": "bc5e8c92-0650-457f-83dc-ab08143dde3b",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "bc5e8c92-0650-457f-83dc-ab08143dde3b",
+                "from_port": "then",
+                "to_node": "3ac8b5f7-ccf0-435a-b556-a803213e27cf",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "bc5e8c92-0650-457f-83dc-ab08143dde3b",
+                "from_port": "else",
+                "to_node": "d59003c9-5667-4e93-9cab-2538cbd1e649",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "a142b06f-5c4b-4058-96a2-8ee6ddcbc088",
+                "from_port": "context",
+                "to_node": "d59003c9-5667-4e93-9cab-2538cbd1e649",
+                "to_port": "value"
+              },
+              {
+                "from_node": "d59003c9-5667-4e93-9cab-2538cbd1e649",
+                "from_port": "exec",
+                "to_node": "963d112d-4942-42f3-8988-209c8f85fbc8",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "3de73880-0abe-41e0-b10e-b732ec618c4e",
+                "from_port": "error",
+                "to_node": "963d112d-4942-42f3-8988-209c8f85fbc8",
+                "to_port": "value"
               }
             ]
           },
@@ -16857,7 +19121,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -17372,7 +19636,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -17887,7 +20151,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -18402,7 +20666,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -18917,7 +21181,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -19432,7 +21696,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -20686,7 +22950,7 @@
         },
         {
           "id": "e50edfa3-e55a-409e-b62d-c823e1283759",
-          "name": "Checkpoint",
+          "name": "Contador de checkpoints",
           "parent": "315908c5-3c0d-47e8-8c48-c2bd24abf407",
           "transform": {
             "position": [
@@ -20848,7 +23112,7 @@
         {
           "id": "bdc70a48-a30d-4f8f-b427-0925c3872923",
           "name": "Controles",
-          "parent": "315908c5-3c0d-47e8-8c48-c2bd24abf407",
+          "parent": "d05b4893-bc07-43d2-ade5-d681d8555dde",
           "transform": {
             "position": [
               0.0,
@@ -20856,9 +23120,9 @@
               0.0
             ],
             "rotation": [
+              -0.0,
               0.0,
-              0.0,
-              0.0
+              -0.0
             ],
             "scale": [
               1.0,
@@ -21040,6 +23304,92 @@
                     "Object": null
                   }
                 }
+              },
+              {
+                "id": "2d81c1bc-0c46-4c1e-b686-8d61a603baf8",
+                "operation": "action.component",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": "3bd71aba-5e00-4637-be23-9c0343903d87"
+                  }
+                }
+              },
+              {
+                "id": "1e0a8ddd-e06d-4856-ad92-a08fabb475e3",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Etapa"
+                  },
+                  "target": {
+                    "Object": "7065412b-af52-4683-8d27-8e39a1fb157f"
+                  }
+                }
+              },
+              {
+                "id": "59fec879-4f78-4897-86ee-09864b48a11c",
+                "operation": "condition.compare",
+                "position": [
+                  260.0,
+                  368.0
+                ],
+                "params": {
+                  "a": {
+                    "Number": 0.0
+                  },
+                  "b": {
+                    "Number": 3.0
+                  },
+                  "operator": {
+                    "Text": "=="
+                  }
+                }
+              },
+              {
+                "id": "deee1e0b-ccd3-4d65-a909-a63d520ec435",
+                "operation": "condition.branch",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "2dad19af-4e9d-4009-8ee3-21c2ee2ae1bb",
+                "operation": "action.component",
+                "position": [
+                  780.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "visible"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": "3bd71aba-5e00-4637-be23-9c0343903d87"
+                  }
+                }
               }
             ],
             "edges": [
@@ -21053,6 +23403,36 @@
                 "from_node": "7198b273-5bf6-4efc-a34e-e06aa556429f",
                 "from_port": "exec",
                 "to_node": "8876206b-56b6-4044-bfa2-dc5acb49053a",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "2a78b518-8e48-4810-be4f-ad946e369d63",
+                "from_port": "exec",
+                "to_node": "2d81c1bc-0c46-4c1e-b686-8d61a603baf8",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "1e0a8ddd-e06d-4856-ad92-a08fabb475e3",
+                "from_port": "value",
+                "to_node": "59fec879-4f78-4897-86ee-09864b48a11c",
+                "to_port": "a"
+              },
+              {
+                "from_node": "8876206b-56b6-4044-bfa2-dc5acb49053a",
+                "from_port": "exec",
+                "to_node": "deee1e0b-ccd3-4d65-a909-a63d520ec435",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "59fec879-4f78-4897-86ee-09864b48a11c",
+                "from_port": "result",
+                "to_node": "deee1e0b-ccd3-4d65-a909-a63d520ec435",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "deee1e0b-ccd3-4d65-a909-a63d520ec435",
+                "from_port": "then",
+                "to_node": "2dad19af-4e9d-4009-8ee3-21c2ee2ae1bb",
                 "to_port": "exec"
               }
             ]
@@ -22874,7 +25254,7 @@
               200.0,
               130.0
             ],
-            "text": "Texto",
+            "text": "",
             "color": [
               0.04,
               0.06,
@@ -23400,7 +25780,7 @@
         {
           "id": "009ae408-b1e4-4c6b-846f-3d8324cfa8f2",
           "name": "Fundo dos controles",
-          "parent": "315908c5-3c0d-47e8-8c48-c2bd24abf407",
+          "parent": "d05b4893-bc07-43d2-ade5-d681d8555dde",
           "transform": {
             "position": [
               0.0,
@@ -23408,9 +25788,9 @@
               0.0
             ],
             "rotation": [
+              -0.0,
               0.0,
-              0.0,
-              0.0
+              -0.0
             ],
             "scale": [
               1.0,
@@ -23457,7 +25837,7 @@
               716.0,
               36.0
             ],
-            "text": "Texto",
+            "text": "",
             "color": [
               0.04,
               0.06,
@@ -24666,6 +27046,144 @@
           },
           "clips": [],
           "model_source": null
+        },
+        {
+          "id": "d05b4893-bc07-43d2-ade5-d681d8555dde",
+          "name": "Dica dos controles",
+          "parent": "315908c5-3c0d-47e8-8c48-c2bd24abf407",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": true,
+          "layer": 0,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": null,
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
+        },
+        {
+          "id": "f89ea8d1-b1d4-4a60-96e1-856930a8d970",
+          "name": "Recorde igualado",
+          "parent": "3bd71aba-5e00-4637-be23-9c0343903d87",
+          "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "primitive": null,
+          "dimensions": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "segments": 24,
+          "material": {
+            "color": [
+              0.45,
+              0.7,
+              0.8,
+              1.0
+            ],
+            "texture": null,
+            "nearest": true
+          },
+          "visible": false,
+          "layer": 11,
+          "attributes": {},
+          "collider": null,
+          "controller": null,
+          "camera": null,
+          "ui": {
+            "kind": "Text",
+            "anchor": "Center",
+            "position": [
+              0.0,
+              34.0
+            ],
+            "size": [
+              480.0,
+              48.0
+            ],
+            "text": "Recorde igualado!",
+            "color": [
+              0.6,
+              0.9,
+              1.0,
+              1.0
+            ],
+            "texture": null,
+            "binding_object": null,
+            "binding_attribute": "",
+            "max_value": 100.0,
+            "text_align": "Center",
+            "text_size": 36.0
+          },
+          "graph": {
+            "nodes": [],
+            "edges": []
+          },
+          "clips": [],
+          "model_source": null
         }
       ]
     }
@@ -24741,8 +27259,8 @@
       "kind": "Model",
       "model": [
         {
-          "id": "c57257df-f586-415a-a64e-f93ba38004e8",
-          "name": "Ladrilho 1",
+          "id": "85796e29-a2fd-4e1c-9634-3b8fd7ffee8e",
+          "name": "Ladrilho que cai",
           "parent": null,
           "transform": {
             "position": [
@@ -24832,9 +27350,9 @@
           "model_source": null
         },
         {
-          "id": "18e1dbb9-b72b-4b58-8f03-413cd8f2e0b2",
+          "id": "4a3c6bf6-0b1c-4ff9-8c4b-6d81220a9543",
           "name": "Gatilho",
-          "parent": "c57257df-f586-415a-a64e-f93ba38004e8",
+          "parent": "85796e29-a2fd-4e1c-9634-3b8fd7ffee8e",
           "transform": {
             "position": [
               0.0,
@@ -24876,7 +27394,11 @@
           },
           "visible": true,
           "layer": 0,
-          "attributes": {},
+          "attributes": {
+            "Queda pedida": {
+              "Bool": false
+            }
+          },
           "collider": null,
           "physics3d": {
             "shape": {
@@ -24909,7 +27431,7 @@
           "graph": {
             "nodes": [
               {
-                "id": "0c58ee99-ab9f-4d21-96bc-31b84bb2b01b",
+                "id": "001e96ae-6002-4838-98d1-4892e1cb5c2e",
                 "operation": "event.area_enter",
                 "position": [
                   0.0,
@@ -24918,11 +27440,11 @@
                 "params": {}
               },
               {
-                "id": "785b754d-688e-45af-8c76-1baf8de5e703",
+                "id": "0580b04f-77c9-4765-82ef-5e839997da25",
                 "operation": "control.wait",
                 "position": [
-                  260.0,
-                  0.0
+                  780.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -24931,11 +27453,11 @@
                 }
               },
               {
-                "id": "4372ac9c-cbd3-4b27-a204-492af2d7776a",
+                "id": "d733efe7-0c42-421a-9830-06edaf2fb4f1",
                 "operation": "action.component",
                 "position": [
-                  520.0,
-                  0.0
+                  1040.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -24945,16 +27467,16 @@
                     "Bool": false
                   },
                   "target": {
-                    "Object": "c57257df-f586-415a-a64e-f93ba38004e8"
+                    "Object": "85796e29-a2fd-4e1c-9634-3b8fd7ffee8e"
                   }
                 }
               },
               {
-                "id": "017aea10-bd2e-46b5-9637-308138b9ec6f",
+                "id": "2e828a5b-b227-44f9-9dba-644c2510ae6d",
                 "operation": "action.component",
                 "position": [
-                  780.0,
-                  0.0
+                  1300.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -24964,16 +27486,16 @@
                     "Bool": false
                   },
                   "target": {
-                    "Object": "c57257df-f586-415a-a64e-f93ba38004e8"
+                    "Object": "85796e29-a2fd-4e1c-9634-3b8fd7ffee8e"
                   }
                 }
               },
               {
-                "id": "015fa345-9dd1-424c-9e9c-5e470a32d312",
+                "id": "a70578eb-64a8-43ff-a9d0-5b8b53d4793d",
                 "operation": "control.wait",
                 "position": [
-                  1040.0,
-                  0.0
+                  1560.0,
+                  212.0
                 ],
                 "params": {
                   "seconds": {
@@ -24982,11 +27504,11 @@
                 }
               },
               {
-                "id": "4bdcc1b1-ec21-46b2-ac47-bd3c7d8a308b",
+                "id": "0f80fe9b-2577-4a7e-b75d-a2568992b156",
                 "operation": "action.component",
                 "position": [
-                  1300.0,
-                  0.0
+                  1820.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -24996,16 +27518,16 @@
                     "Bool": true
                   },
                   "target": {
-                    "Object": "c57257df-f586-415a-a64e-f93ba38004e8"
+                    "Object": "85796e29-a2fd-4e1c-9634-3b8fd7ffee8e"
                   }
                 }
               },
               {
-                "id": "245cfe0b-7b71-474c-83c6-082847c17949",
+                "id": "27ad3023-8ccd-4962-af22-88b9f950baa5",
                 "operation": "action.component",
                 "position": [
-                  1560.0,
-                  0.0
+                  2080.0,
+                  212.0
                 ],
                 "params": {
                   "component": {
@@ -25015,46 +27537,196 @@
                     "Bool": true
                   },
                   "target": {
-                    "Object": "c57257df-f586-415a-a64e-f93ba38004e8"
+                    "Object": "85796e29-a2fd-4e1c-9634-3b8fd7ffee8e"
+                  }
+                }
+              },
+              {
+                "id": "f5511861-5c69-4017-878d-5ed24b00dc38",
+                "operation": "action.component",
+                "position": [
+                  260.0,
+                  0.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": false
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "d2130de8-f748-434c-8a4a-7c2bd3936994",
+                "operation": "action.component",
+                "position": [
+                  2340.0,
+                  212.0
+                ],
+                "params": {
+                  "component": {
+                    "Text": "collider"
+                  },
+                  "enabled": {
+                    "Bool": true
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "fc2e72c3-1dcf-48a1-b1b2-686f864a22cc",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  0.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "0ecdcee5-6995-41fd-abe1-1d651b8e629d",
+                "operation": "event.step",
+                "position": [
+                  0.0,
+                  212.0
+                ],
+                "params": {}
+              },
+              {
+                "id": "180fdb59-843f-4393-bd32-5ff15ff6eac3",
+                "operation": "attribute.get",
+                "position": [
+                  0.0,
+                  368.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  }
+                }
+              },
+              {
+                "id": "0133af74-93fe-46b4-a1ba-f2b89c5028fa",
+                "operation": "condition.branch",
+                "position": [
+                  260.0,
+                  212.0
+                ],
+                "params": {
+                  "condition": {
+                    "Bool": true
+                  }
+                }
+              },
+              {
+                "id": "485e723f-d15e-4b3c-b008-2b9193792076",
+                "operation": "attribute.set",
+                "position": [
+                  520.0,
+                  212.0
+                ],
+                "params": {
+                  "attribute": {
+                    "Text": "Queda pedida"
+                  },
+                  "target": {
+                    "Object": null
+                  },
+                  "value": {
+                    "Bool": false
                   }
                 }
               }
             ],
             "edges": [
               {
-                "from_node": "0c58ee99-ab9f-4d21-96bc-31b84bb2b01b",
+                "from_node": "0580b04f-77c9-4765-82ef-5e839997da25",
                 "from_port": "exec",
-                "to_node": "785b754d-688e-45af-8c76-1baf8de5e703",
+                "to_node": "d733efe7-0c42-421a-9830-06edaf2fb4f1",
                 "to_port": "exec"
               },
               {
-                "from_node": "785b754d-688e-45af-8c76-1baf8de5e703",
+                "from_node": "d733efe7-0c42-421a-9830-06edaf2fb4f1",
                 "from_port": "exec",
-                "to_node": "4372ac9c-cbd3-4b27-a204-492af2d7776a",
+                "to_node": "2e828a5b-b227-44f9-9dba-644c2510ae6d",
                 "to_port": "exec"
               },
               {
-                "from_node": "4372ac9c-cbd3-4b27-a204-492af2d7776a",
+                "from_node": "2e828a5b-b227-44f9-9dba-644c2510ae6d",
                 "from_port": "exec",
-                "to_node": "017aea10-bd2e-46b5-9637-308138b9ec6f",
+                "to_node": "a70578eb-64a8-43ff-a9d0-5b8b53d4793d",
                 "to_port": "exec"
               },
               {
-                "from_node": "017aea10-bd2e-46b5-9637-308138b9ec6f",
+                "from_node": "a70578eb-64a8-43ff-a9d0-5b8b53d4793d",
                 "from_port": "exec",
-                "to_node": "015fa345-9dd1-424c-9e9c-5e470a32d312",
+                "to_node": "0f80fe9b-2577-4a7e-b75d-a2568992b156",
                 "to_port": "exec"
               },
               {
-                "from_node": "015fa345-9dd1-424c-9e9c-5e470a32d312",
+                "from_node": "0f80fe9b-2577-4a7e-b75d-a2568992b156",
                 "from_port": "exec",
-                "to_node": "4bdcc1b1-ec21-46b2-ac47-bd3c7d8a308b",
+                "to_node": "27ad3023-8ccd-4962-af22-88b9f950baa5",
                 "to_port": "exec"
               },
               {
-                "from_node": "4bdcc1b1-ec21-46b2-ac47-bd3c7d8a308b",
+                "from_node": "001e96ae-6002-4838-98d1-4892e1cb5c2e",
                 "from_port": "exec",
-                "to_node": "245cfe0b-7b71-474c-83c6-082847c17949",
+                "to_node": "f5511861-5c69-4017-878d-5ed24b00dc38",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "27ad3023-8ccd-4962-af22-88b9f950baa5",
+                "from_port": "exec",
+                "to_node": "d2130de8-f748-434c-8a4a-7c2bd3936994",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "f5511861-5c69-4017-878d-5ed24b00dc38",
+                "from_port": "exec",
+                "to_node": "fc2e72c3-1dcf-48a1-b1b2-686f864a22cc",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "0ecdcee5-6995-41fd-abe1-1d651b8e629d",
+                "from_port": "exec",
+                "to_node": "0133af74-93fe-46b4-a1ba-f2b89c5028fa",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "180fdb59-843f-4393-bd32-5ff15ff6eac3",
+                "from_port": "value",
+                "to_node": "0133af74-93fe-46b4-a1ba-f2b89c5028fa",
+                "to_port": "condition"
+              },
+              {
+                "from_node": "0133af74-93fe-46b4-a1ba-f2b89c5028fa",
+                "from_port": "then",
+                "to_node": "485e723f-d15e-4b3c-b008-2b9193792076",
+                "to_port": "exec"
+              },
+              {
+                "from_node": "485e723f-d15e-4b3c-b008-2b9193792076",
+                "from_port": "exec",
+                "to_node": "0580b04f-77c9-4765-82ef-5e839997da25",
                 "to_port": "exec"
               }
             ]
@@ -25071,8 +27743,8 @@
       "kind": "Model",
       "model": [
         {
-          "id": "8343bd26-7d3c-41c9-b848-a7b0bf89c5c4",
-          "name": "Checkpoint 1",
+          "id": "31cb0097-c566-4f0d-8cc0-c9118a3ab433",
+          "name": "Checkpoint",
           "parent": null,
           "transform": {
             "position": [
@@ -25152,7 +27824,7 @@
           "graph": {
             "nodes": [
               {
-                "id": "5e13cb2b-f52d-46a5-89a2-bfbabcb7c311",
+                "id": "4b915646-3803-4dee-9ca8-8faeee36336a",
                 "operation": "event.area_enter",
                 "position": [
                   0.0,
@@ -25161,7 +27833,7 @@
                 "params": {}
               },
               {
-                "id": "7b5136bd-2cfc-413e-b23b-f168f6749c38",
+                "id": "2d1ae99d-be28-4458-ac45-6a29edaad42f",
                 "operation": "attribute.get",
                 "position": [
                   260.0,
@@ -25177,7 +27849,7 @@
                 }
               },
               {
-                "id": "bfa09508-7e14-4edd-a6ad-de1c96a0a06d",
+                "id": "711951e6-1599-4dce-aee7-a4b7a81bdbd9",
                 "operation": "attribute.get",
                 "position": [
                   260.0,
@@ -25193,7 +27865,7 @@
                 }
               },
               {
-                "id": "3e2ee44f-bbbe-45bd-8bfc-b59852ace7e7",
+                "id": "9413a492-0638-4344-99fb-c2b0f74085c6",
                 "operation": "condition.compare",
                 "position": [
                   520.0,
@@ -25212,7 +27884,7 @@
                 }
               },
               {
-                "id": "21d2bd8a-795a-48ae-9614-7952f668a30a",
+                "id": "b5377cb3-dedc-4356-ae57-fa126b921725",
                 "operation": "condition.branch",
                 "position": [
                   780.0,
@@ -25225,7 +27897,7 @@
                 }
               },
               {
-                "id": "2f563236-cb0f-41b6-b5ff-bfa9780c4a45",
+                "id": "55e830c6-b600-48d3-ba35-0ad10a36c4ab",
                 "operation": "transform.read",
                 "position": [
                   520.0,
@@ -25241,7 +27913,7 @@
                 }
               },
               {
-                "id": "007c5ee2-7293-40c9-95be-8125d8965f4b",
+                "id": "7b38ee33-b014-436c-8137-f516fd51ed2b",
                 "operation": "vector3.math",
                 "position": [
                   780.0,
@@ -25268,7 +27940,7 @@
                 }
               },
               {
-                "id": "bc0e3f89-51bb-491d-bb3e-9c748e13dfd4",
+                "id": "af518fdd-357e-4083-8c57-5c0e16b791f2",
                 "operation": "attribute.set",
                 "position": [
                   1040.0,
@@ -25276,7 +27948,7 @@
                 ],
                 "params": {
                   "attribute": {
-                    "Text": "Checkpoint"
+                    "Text": "Ponto de retorno"
                   },
                   "target": {
                     "Object": null
@@ -25287,7 +27959,7 @@
                 }
               },
               {
-                "id": "13d178e1-26d2-49ec-b412-de2ac0ab1c82",
+                "id": "b2562cd1-84f3-4524-b786-fc1c3fb0f561",
                 "operation": "attribute.set",
                 "position": [
                   1300.0,
@@ -25306,7 +27978,7 @@
                 }
               },
               {
-                "id": "0e340d6b-4f82-4675-b6b3-a4322a1a08b8",
+                "id": "5dcf8173-26ae-4656-95e6-e8bb0fc3b269",
                 "operation": "attribute.get",
                 "position": [
                   1300.0,
@@ -25322,7 +27994,7 @@
                 }
               },
               {
-                "id": "122ffe53-77c3-4817-8c1b-757601cf6c48",
+                "id": "3a4d328d-7edd-431c-add0-0171fa9ff085",
                 "operation": "condition.branch",
                 "position": [
                   1560.0,
@@ -25335,7 +28007,7 @@
                 }
               },
               {
-                "id": "5a10a856-0f65-4016-9901-223ef9be95ec",
+                "id": "a224bdd9-d5b1-4f28-bb29-4c1453a2f277",
                 "operation": "action.sound",
                 "position": [
                   1820.0,
@@ -25353,99 +28025,99 @@
             ],
             "edges": [
               {
-                "from_node": "5e13cb2b-f52d-46a5-89a2-bfbabcb7c311",
+                "from_node": "4b915646-3803-4dee-9ca8-8faeee36336a",
                 "from_port": "context",
-                "to_node": "7b5136bd-2cfc-413e-b23b-f168f6749c38",
+                "to_node": "2d1ae99d-be28-4458-ac45-6a29edaad42f",
                 "to_port": "target"
               },
               {
-                "from_node": "7b5136bd-2cfc-413e-b23b-f168f6749c38",
+                "from_node": "2d1ae99d-be28-4458-ac45-6a29edaad42f",
                 "from_port": "value",
-                "to_node": "3e2ee44f-bbbe-45bd-8bfc-b59852ace7e7",
+                "to_node": "9413a492-0638-4344-99fb-c2b0f74085c6",
                 "to_port": "a"
               },
               {
-                "from_node": "bfa09508-7e14-4edd-a6ad-de1c96a0a06d",
+                "from_node": "711951e6-1599-4dce-aee7-a4b7a81bdbd9",
                 "from_port": "value",
-                "to_node": "3e2ee44f-bbbe-45bd-8bfc-b59852ace7e7",
+                "to_node": "9413a492-0638-4344-99fb-c2b0f74085c6",
                 "to_port": "b"
               },
               {
-                "from_node": "5e13cb2b-f52d-46a5-89a2-bfbabcb7c311",
+                "from_node": "4b915646-3803-4dee-9ca8-8faeee36336a",
                 "from_port": "exec",
-                "to_node": "21d2bd8a-795a-48ae-9614-7952f668a30a",
+                "to_node": "b5377cb3-dedc-4356-ae57-fa126b921725",
                 "to_port": "exec"
               },
               {
-                "from_node": "3e2ee44f-bbbe-45bd-8bfc-b59852ace7e7",
+                "from_node": "9413a492-0638-4344-99fb-c2b0f74085c6",
                 "from_port": "result",
-                "to_node": "21d2bd8a-795a-48ae-9614-7952f668a30a",
+                "to_node": "b5377cb3-dedc-4356-ae57-fa126b921725",
                 "to_port": "condition"
               },
               {
-                "from_node": "2f563236-cb0f-41b6-b5ff-bfa9780c4a45",
+                "from_node": "55e830c6-b600-48d3-ba35-0ad10a36c4ab",
                 "from_port": "position",
-                "to_node": "007c5ee2-7293-40c9-95be-8125d8965f4b",
+                "to_node": "7b38ee33-b014-436c-8137-f516fd51ed2b",
                 "to_port": "a"
               },
               {
-                "from_node": "21d2bd8a-795a-48ae-9614-7952f668a30a",
+                "from_node": "b5377cb3-dedc-4356-ae57-fa126b921725",
                 "from_port": "then",
-                "to_node": "bc0e3f89-51bb-491d-bb3e-9c748e13dfd4",
+                "to_node": "af518fdd-357e-4083-8c57-5c0e16b791f2",
                 "to_port": "exec"
               },
               {
-                "from_node": "5e13cb2b-f52d-46a5-89a2-bfbabcb7c311",
+                "from_node": "4b915646-3803-4dee-9ca8-8faeee36336a",
                 "from_port": "context",
-                "to_node": "bc0e3f89-51bb-491d-bb3e-9c748e13dfd4",
+                "to_node": "af518fdd-357e-4083-8c57-5c0e16b791f2",
                 "to_port": "target"
               },
               {
-                "from_node": "007c5ee2-7293-40c9-95be-8125d8965f4b",
+                "from_node": "7b38ee33-b014-436c-8137-f516fd51ed2b",
                 "from_port": "difference",
-                "to_node": "bc0e3f89-51bb-491d-bb3e-9c748e13dfd4",
+                "to_node": "af518fdd-357e-4083-8c57-5c0e16b791f2",
                 "to_port": "value"
               },
               {
-                "from_node": "bc0e3f89-51bb-491d-bb3e-9c748e13dfd4",
+                "from_node": "af518fdd-357e-4083-8c57-5c0e16b791f2",
                 "from_port": "exec",
-                "to_node": "13d178e1-26d2-49ec-b412-de2ac0ab1c82",
+                "to_node": "b2562cd1-84f3-4524-b786-fc1c3fb0f561",
                 "to_port": "exec"
               },
               {
-                "from_node": "5e13cb2b-f52d-46a5-89a2-bfbabcb7c311",
+                "from_node": "4b915646-3803-4dee-9ca8-8faeee36336a",
                 "from_port": "context",
-                "to_node": "13d178e1-26d2-49ec-b412-de2ac0ab1c82",
+                "to_node": "b2562cd1-84f3-4524-b786-fc1c3fb0f561",
                 "to_port": "target"
               },
               {
-                "from_node": "bfa09508-7e14-4edd-a6ad-de1c96a0a06d",
+                "from_node": "711951e6-1599-4dce-aee7-a4b7a81bdbd9",
                 "from_port": "value",
-                "to_node": "13d178e1-26d2-49ec-b412-de2ac0ab1c82",
+                "to_node": "b2562cd1-84f3-4524-b786-fc1c3fb0f561",
                 "to_port": "value"
               },
               {
-                "from_node": "5e13cb2b-f52d-46a5-89a2-bfbabcb7c311",
+                "from_node": "4b915646-3803-4dee-9ca8-8faeee36336a",
                 "from_port": "context",
-                "to_node": "0e340d6b-4f82-4675-b6b3-a4322a1a08b8",
+                "to_node": "5dcf8173-26ae-4656-95e6-e8bb0fc3b269",
                 "to_port": "target"
               },
               {
-                "from_node": "13d178e1-26d2-49ec-b412-de2ac0ab1c82",
+                "from_node": "b2562cd1-84f3-4524-b786-fc1c3fb0f561",
                 "from_port": "exec",
-                "to_node": "122ffe53-77c3-4817-8c1b-757601cf6c48",
+                "to_node": "3a4d328d-7edd-431c-add0-0171fa9ff085",
                 "to_port": "exec"
               },
               {
-                "from_node": "0e340d6b-4f82-4675-b6b3-a4322a1a08b8",
+                "from_node": "5dcf8173-26ae-4656-95e6-e8bb0fc3b269",
                 "from_port": "value",
-                "to_node": "122ffe53-77c3-4817-8c1b-757601cf6c48",
+                "to_node": "3a4d328d-7edd-431c-add0-0171fa9ff085",
                 "to_port": "condition"
               },
               {
-                "from_node": "122ffe53-77c3-4817-8c1b-757601cf6c48",
+                "from_node": "3a4d328d-7edd-431c-add0-0171fa9ff085",
                 "from_port": "then",
-                "to_node": "5a10a856-0f65-4016-9901-223ef9be95ec",
+                "to_node": "a224bdd9-d5b1-4f28-bb29-4c1453a2f277",
                 "to_port": "exec"
               }
             ]
@@ -25454,9 +28126,9 @@
           "model_source": null
         },
         {
-          "id": "40492835-8545-43b2-a9fe-3b78af786bdf",
+          "id": "0c39fb96-94a4-4653-806c-88ce499347fa",
           "name": "Marco esquerdo",
-          "parent": "8343bd26-7d3c-41c9-b848-a7b0bf89c5c4",
+          "parent": "31cb0097-c566-4f0d-8cc0-c9118a3ab433",
           "transform": {
             "position": [
               -1.85,
@@ -25520,9 +28192,9 @@
           "model_source": null
         },
         {
-          "id": "498516a6-43c7-4d23-acfa-52d93bb9d9b3",
+          "id": "f92ca510-cd9c-499b-b5b4-1bbb4dd4d8d1",
           "name": "Marco direito",
-          "parent": "8343bd26-7d3c-41c9-b848-a7b0bf89c5c4",
+          "parent": "31cb0097-c566-4f0d-8cc0-c9118a3ab433",
           "transform": {
             "position": [
               1.85,
