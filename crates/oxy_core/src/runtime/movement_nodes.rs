@@ -151,7 +151,9 @@ pub(super) fn event_values(event: &RuntimeEvent, time: f64) -> Vec<(&'static str
     }
 }
 impl Runtime {
-    pub(super) fn inspect_character(
+    /// The state of the 3D character `id`: the one it moves with, or, before its first step,
+    /// the one it would start from.
+    pub fn inspect_character(
         &self,
         id: &str,
     ) -> Result<std::borrow::Cow<'_, CharacterState>, String> {

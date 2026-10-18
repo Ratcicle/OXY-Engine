@@ -106,7 +106,7 @@ impl Runtime {
                     .vector3()
                     .ok_or("Valor exige Vetor3")?;
                 let jump = boolean(self, "jump", budget)?;
-                self.write_transform(
+                self.write_named_transform(
                     &id,
                     node.text("channel"),
                     node.text("mode"),

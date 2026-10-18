@@ -21,13 +21,11 @@ impl Runtime {
                 let variable = self.declared_variable(node)?;
                 let key = self.variable_key(graph, node, context, budget, depth + 1)?;
                 Ok(self
-                    .run
-                    .variables
-                    .get(&(variable.id.clone(), key))
+                    .variable(&variable.id, &key)
                     .unwrap_or(&variable.value)
                     .clone())
             }
-            "save.state" => Ok(Value::Bool(self.run.save.exists)),
+            "save.state" => Ok(Value::Bool(self.has_saved_progress())),
             "game.read" => Ok(Value::Bool(self.game_paused)),
             // Logic runs only in the running scene, so it is the owner's scene.
             "scene.current" => match output {
@@ -63,72 +61,13 @@ impl Runtime {
     ) -> Result<bool, String> {
         match node.operation.as_str() {
             "variable.set" => {
-                let GameVariable {
-                    id,
-                    name,
-                    value: declared,
-                    ..
-                } = self.declared_variable(node)?.clone();
+                let id = self.declared_variable(node)?.id.clone();
                 let key = self.variable_key(graph, node, context, budget, 0)?;
                 let value = self.input_value(graph, node, "value", context, budget, 0)?;
-                if std::mem::discriminant(&value) != std::mem::discriminant(&declared) {
-                    return Err(format!(
-                        "Valor incompatível com o tipo da variável {name}: ela guarda {}, e o \
-                         Novo valor é {}",
-                        variables::kind(&declared),
-                        variables::kind(&value)
-                    ));
-                }
-                variables::check_value(&value)
-                    .map_err(|error| format!("Variável {name}: {error}"))?;
-                let entry = (id.clone(), key);
-                // The variable's own value is always there; the limit counts the keys.
-                if !entry.1.is_empty() && !self.run.variables.contains_key(&entry) {
-                    let keys = self
-                        .run
-                        .variables
-                        .range((id.clone(), String::new())..)
-                        .take_while(|((owner, _), _)| *owner == id)
-                        .filter(|((_, key), _)| !key.is_empty())
-                        .count();
-                    if keys >= MAX_KEYS {
-                        return Err(format!(
-                            "A variável {name} já guarda valores para {MAX_KEYS} chaves, o limite"
-                        ));
-                    }
-                }
-                self.run.variables.insert(entry, value);
+                self.set_variable(&id, &key, value)?;
             }
-            // The values as they are now, to the host; the run reads them back only in a new run.
-            "save.write" => {
-                let persistent: HashSet<&str> = self
-                    .source
-                    .variables
-                    .iter()
-                    .filter(|v| v.persistent)
-                    .map(|v| v.id.as_str())
-                    .collect();
-                let values: BTreeMap<(Id, String), Value> = self
-                    .run
-                    .variables
-                    .iter()
-                    .filter(|((id, _), _)| persistent.contains(id.as_str()))
-                    .map(|(entry, value)| (entry.clone(), value.clone()))
-                    .collect();
-                self.run.save.apply(SaveRequest::Write(values.clone()));
-                self.request_save(SaveRequest::Write(values));
-            }
-            "save.clear" => {
-                for variable in self.source.variables.iter().filter(|v| v.persistent) {
-                    let id = &variable.id;
-                    self.run.variables.retain(|(owner, _), _| owner != id);
-                    self.run
-                        .variables
-                        .insert((id.clone(), String::new()), variable.value.clone());
-                }
-                self.run.save.apply(SaveRequest::Clear);
-                self.request_save(SaveRequest::Clear);
-            }
+            "save.write" => self.save_progress(),
+            "save.clear" => self.clear_progress(),
             "game.pause" => match node.text("mode") {
                 "pause" => {
                     self.set_game_paused(true);
@@ -144,12 +83,7 @@ impl Runtime {
                 "hide" => self.set_cursor_shown(false),
                 _ => return Err("Ação do cursor desconhecida; use show/hide".into()),
             },
-            "game.quit" => {
-                self.quit_requested = true;
-                if let Some(recording) = &mut self.recording {
-                    recording.quit.get_or_insert_with(|| context.owner.clone());
-                }
-            }
+            "game.quit" => self.quit_game(&context.owner),
             _ => return self.audio_action(graph, node, context, budget),
         }
         Ok(true)
@@ -196,6 +130,125 @@ impl Runtime {
                 .get(&(id.to_owned(), key.to_owned()))
                 .unwrap_or(&declared.value),
         )
+    }
+
+    /// Writes `value` to the game variable `id` under `key` ("" for its own value): a value of
+    /// the variable's type within the limits of `variables::check_value`, under a key of at
+    /// most [`MAX_TEXT`] bytes, one of at most [`MAX_KEYS`] per variable.
+    pub fn set_variable(&mut self, id: &str, key: &str, value: Value) -> Result<(), String> {
+        let GameVariable {
+            id,
+            name,
+            value: declared,
+            ..
+        } = variables::get(&self.source, id)
+            .ok_or("Variável do jogo não encontrada.")?
+            .clone();
+        if key.len() > MAX_TEXT {
+            return Err(format!("A chave passa de {MAX_TEXT} bytes"));
+        }
+        if std::mem::discriminant(&value) != std::mem::discriminant(&declared) {
+            return Err(format!(
+                "Valor incompatível com o tipo da variável {name}: ela guarda {}, e o \
+                 Novo valor é {}",
+                variables::kind(&declared),
+                variables::kind(&value)
+            ));
+        }
+        variables::check_value(&value).map_err(|error| format!("Variável {name}: {error}"))?;
+        let entry = (id.clone(), key.to_owned());
+        // The variable's own value is always there; the limit counts the keys.
+        if !entry.1.is_empty() && !self.run.variables.contains_key(&entry) {
+            let keys = self
+                .run
+                .variables
+                .range((id.clone(), String::new())..)
+                .take_while(|((owner, _), _)| *owner == id)
+                .filter(|((_, key), _)| !key.is_empty())
+                .count();
+            if keys >= MAX_KEYS {
+                return Err(format!(
+                    "A variável {name} já guarda valores para {MAX_KEYS} chaves, o limite"
+                ));
+            }
+        }
+        self.run.variables.insert(entry, value);
+        Ok(())
+    }
+
+    /// Salvar progresso: the values of the persistent variables as they are now, keys included,
+    /// go to the host, which keeps them; the run reads them back only in a new run.
+    pub fn save_progress(&mut self) {
+        let persistent: HashSet<&str> = self
+            .source
+            .variables
+            .iter()
+            .filter(|v| v.persistent)
+            .map(|v| v.id.as_str())
+            .collect();
+        let values: BTreeMap<(Id, String), Value> = self
+            .run
+            .variables
+            .iter()
+            .filter(|((id, _), _)| persistent.contains(id.as_str()))
+            .map(|(entry, value)| (entry.clone(), value.clone()))
+            .collect();
+        self.run.save.apply(SaveRequest::Write(values.clone()));
+        self.request_save(SaveRequest::Write(values));
+    }
+
+    /// Apagar progresso: the persistent variables go back to their declared values, their keys
+    /// dropped, and the host deletes the saved progress.
+    pub fn clear_progress(&mut self) {
+        for variable in self.source.variables.iter().filter(|v| v.persistent) {
+            let id = &variable.id;
+            self.run.variables.retain(|(owner, _), _| owner != id);
+            self.run
+                .variables
+                .insert((id.clone(), String::new()), variable.value.clone());
+        }
+        self.run.save.apply(SaveRequest::Clear);
+        self.request_save(SaveRequest::Clear);
+    }
+
+    /// Whether there is saved progress: the host's, then as `save_progress` and
+    /// `clear_progress` left it.
+    pub fn has_saved_progress(&self) -> bool {
+        self.run.save.exists
+    }
+
+    /// Sair do jogo: the player closes, the editor test stops, a simulation ends. `object` is
+    /// the one whose logic asked; the recording keeps the first.
+    pub fn quit_game(&mut self, object: &str) {
+        self.quit_requested = true;
+        if let Some(recording) = &mut self.recording {
+            recording.quit.get_or_insert_with(|| object.to_owned());
+        }
+    }
+
+    /// Mudar de cena from logic: `change_scene`, keeping what the step asked to play only up to
+    /// its first change. A sound played right before the first change of the step is heard;
+    /// those of a scene that starts and ends within the step are not, nor its effect loops,
+    /// which the change ended.
+    pub fn change_scene_from_logic(&mut self, scene: &str) -> Result<(), String> {
+        self.change_scene(scene)?;
+        match self.sounds_before_change {
+            Some(kept) => self.sounds.truncate(kept),
+            None => self.sounds_before_change = Some(self.sounds.len()),
+        }
+        if let Some(recording) = &mut self.recording {
+            match self.audio_before_change {
+                Some(kept) => {
+                    let mut index = 0;
+                    recording.audio.retain(|change| {
+                        index += 1;
+                        index <= kept || change.lasts()
+                    });
+                }
+                None => self.audio_before_change = Some(recording.audio.len()),
+            }
+        }
+        Ok(())
     }
 
     /// The values the game variables hold now, by the variable's name, or "name · key" for the

@@ -46,11 +46,14 @@ mod characters;
 mod game_nodes;
 mod math_nodes;
 mod movement_nodes;
+mod operations;
 mod state_hash;
 mod transforms;
 pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
+pub use operations::ObjectComponent;
 pub use state_hash::{StateDifference, StateDigest, StatePart};
+pub use transforms::{TransformPart, TransformSpace};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
@@ -1072,10 +1075,7 @@ impl Runtime {
                 .ok_or("Constante sem valor".into()),
             "attribute.get" => {
                 let target = self.target(graph, node, context, budget, depth + 1)?;
-                self.entity(&target)
-                    .ok_or("Objeto de leitura ausente")?
-                    .attributes
-                    .get(node.text("attribute"))
+                self.attribute(&target, node.text("attribute"))?
                     .cloned()
                     .ok_or_else(|| {
                         format!(
@@ -1200,32 +1200,7 @@ impl Runtime {
             "attribute.set" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
-                if !value.is_finite() {
-                    return Err("Novo valor de atributo não finito.".into());
-                }
-                if let Some(id) = value.surface()
-                    && !self.project.surfaces.iter().any(|s| s.id == id)
-                {
-                    return Err("Nova referência de superfície não existe.".into());
-                }
-                if let Value::Object(Some(id)) = &value
-                    && self.entity(id).is_none()
-                {
-                    return Err("Nova referência de atributo não existe".into());
-                }
-                let entity = self
-                    .entity_mut(&target)
-                    .ok_or("Objeto de escrita não existe")?;
-                let old = entity
-                    .attributes
-                    .get(node.text("attribute"))
-                    .ok_or("Crie primeiro o atributo no painel de propriedades")?;
-                if std::mem::discriminant(old) != std::mem::discriminant(&value) {
-                    return Err("Valor incompatível com o tipo do atributo".into());
-                }
-                entity
-                    .attributes
-                    .insert(node.text("attribute").into(), value);
+                self.set_attribute(&target, node.text("attribute"), value)?;
             }
             "action.damage" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
@@ -1233,102 +1208,29 @@ impl Runtime {
                     .input_value(&graph, node, "amount", &context, budget, 0)?
                     .number()
                     .ok_or("Dano precisa ser numérico")?;
-                if !amount.is_finite() || amount < 0.0 {
-                    return Err("Dano deve ser um número não negativo".into());
-                }
+                operations::check_damage(amount)?;
                 let hits = context
                     .hits
                     .as_ref()
                     .ok_or("Ativação sem contexto de acerto")?;
+                // Once per activation and target, unless the node says otherwise.
                 if !node.boolean("once", true) || !hits.lock().unwrap().contains(&target) {
-                    let entity = self
-                        .entity_mut(&target)
-                        .ok_or("Alvo do dano foi removido")?;
-                    let value = entity
-                        .attributes
-                        .get_mut(node.text("attribute"))
-                        .ok_or("Alvo não possui o atributo de dano configurado")?;
-                    if let Value::Number(value) = value {
-                        *value = (*value - amount).max(0.0);
-                    } else {
-                        return Err("Atributo de dano precisa ser numérico".into());
-                    }
+                    self.damage(&target, node.text("attribute"), amount)?;
                     hits.lock().unwrap().insert(target);
                 }
             }
             "action.animation" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
-                let entity = self.entity(&target).ok_or("Objeto animado ausente")?;
-                let clip = entity
-                    .clips
-                    .iter()
-                    .find(|clip| clip.id == node.text("clip"))
-                    .ok_or("ID de clip não existe no objeto")?;
-                let clip_id = clip.id.clone();
-                if node.boolean("restart", true)
-                    || !self
-                        .animations
-                        .get(&target)
-                        .is_some_and(|player| player.playing && player.clip_id == clip_id)
-                {
-                    self.animations
-                        .insert(target, AnimationPlayer::new(clip_id));
-                }
+                self.play_animation(&target, node.text("clip"), node.boolean("restart", true))?;
             }
             "action.spawn" => {
                 let template = self.target(&graph, node, &context, budget, 0)?;
-                self.physics_dirty = true;
-                self.index.take();
-                self.input_modes.take();
-                self.event_operations.take();
-                let key = (context.owner.clone(), node.id.clone());
-                let count = self.run.spawns.get(&key).copied().unwrap_or(0);
-                let root = self
-                    .scene_mut_internal()
-                    .duplicate_subtree_with(&template, &mut spawn_ids(&key, count))?;
-                self.run.spawns.insert(key, count + 1);
-                // The editor duplicate offset is not part of a runtime spawn's explicit offset.
-                let delta = Vec3::new(
-                    node.number("x", 0.0) as f32 - 0.5,
+                let offset = Vec3::new(
+                    node.number("x", 0.0) as f32,
                     node.number("y", 0.0) as f32,
                     node.number("z", 0.0) as f32,
                 );
-                let descendants: HashSet<_> = self.scene().descendants(&root).into_iter().collect();
-                if let Some(mut recording) = self.recording.take() {
-                    recording.spawned.extend(
-                        self.scene()
-                            .entities
-                            .iter()
-                            .filter(|entity| descendants.contains(&entity.id))
-                            .map(|entity| SpawnedObject {
-                                id: entity.id.clone(),
-                                name: entity.name.clone(),
-                                graph: entity.graph.clone(),
-                            }),
-                    );
-                    self.recording = Some(recording);
-                }
-                let entity = self.entity_mut(&root).unwrap();
-                entity.transform.position =
-                    (Vec3::from(entity.transform.position) + delta).to_array();
-                for entity in self
-                    .scene_mut_internal()
-                    .entities
-                    .iter_mut()
-                    .filter(|entity| descendants.contains(&entity.id))
-                {
-                    for track in entity
-                        .clips
-                        .iter_mut()
-                        .flat_map(|clip| &mut clip.tracks)
-                        .filter(|track| track.target == root)
-                    {
-                        for key in &mut track.keyframes {
-                            key.transform.position =
-                                (Vec3::from(key.transform.position) + delta).to_array();
-                        }
-                    }
-                }
+                let root = self.spawn_copy(&template, offset, (&context.owner, &node.id))?;
                 Arc::make_mut(&mut context.outputs).insert(
                     (node.id.clone(), "created".into()),
                     Value::Object(Some(root)),
@@ -1342,69 +1244,18 @@ impl Runtime {
                 }
             }
             "action.component" => {
+                // The physics view is refreshed even when the target or the component fails.
                 self.physics_dirty = true;
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let enabled = node.boolean("enabled", true);
-                match node.text("component") {
-                    // The 2D box and the 3D collider or area alike; an old document may have both.
-                    "collider" => {
-                        let entity = self.entity_mut(&target).ok_or("Objeto ausente")?;
-                        if entity.collider.is_none() && entity.physics3d.is_none() {
-                            return Err("Objeto não tem colisor nem área".into());
-                        }
-                        let was = entity.collider.as_ref().is_some_and(|c| c.enabled)
-                            || entity.physics3d.as_ref().is_some_and(|c| c.enabled);
-                        if let Some(collider) = &mut entity.collider {
-                            collider.enabled = enabled;
-                        }
-                        if let Some(collider) = &mut entity.physics3d {
-                            collider.enabled = enabled;
-                        }
-                        // Turned back on, an area starts a new activation that whoever is inside
-                        // enters afresh, even when it was off only within this step. Turned off,
-                        // its occupancy ends without an exit.
-                        if enabled && !was {
-                            self.activate_area(&target);
-                            self.overlap_pairs.retain(|(area, _)| area != &target);
-                            self.characters.forget_area(&target);
-                        }
-                        if !enabled {
-                            self.area_activations.remove(&target); self.area_hits.remove(&target);
-                        }
-                    }
-                    "controller" => self.entity_mut(&target).ok_or("Objeto ausente")?.controller.as_mut().ok_or("Objeto não tem controlador")?.enabled = enabled,
-                    "visible" => self.entity_mut(&target).ok_or("Objeto ausente")?.visible = enabled,
-                    "behavior" => {
-                        if self.entity(&target).is_none() { return Err("Objeto ausente".into()); }
-                        if enabled { self.disabled_behaviors.remove(&target); } else { self.disabled_behaviors.insert(target.clone()); self.waiting.retain(|task| task.owner != target); }
-                    }
-                    "animation" => { if let Some(player) = self.animations.get_mut(&target) { player.playing = enabled; } }
-                    "platform" => self.entity_mut(&target).ok_or("Objeto ausente")?.platform.as_mut().ok_or("Objeto não tem plataforma móvel")?.enabled = enabled,
-                    _ => return Err("Componente desconhecido; use collider/controller/visible/behavior/animation/platform".into()),
-                }
+                let component = ObjectComponent::from_id(node.text("component")).ok_or(
+                    "Componente desconhecido; use collider/controller/visible/behavior/animation/platform",
+                )?;
+                self.set_component_enabled(&target, component, enabled)?;
             }
             "action.scene" => {
                 let scene = self.scene_destination(&graph, node, &context, budget)?;
-                self.change_scene(&scene)?;
-                // A sound played right before the first change of the step is heard; those
-                // of a scene that starts and ends within the step are not, nor its effect
-                // loops, which the change ended.
-                match self.sounds_before_change {
-                    Some(kept) => self.sounds.truncate(kept),
-                    None => self.sounds_before_change = Some(self.sounds.len()),
-                }
-                if let Some(recording) = &mut self.recording {
-                    match self.audio_before_change {
-                        Some(kept) => {
-                            let mut index = 0;
-                            recording.audio.retain(|change| {
-                                index += 1;
-                                index <= kept || change.lasts()
-                            });
-                        }
-                        None => self.audio_before_change = Some(recording.audio.len()),
-                    }
-                }
+                self.change_scene_from_logic(&scene)?;
                 return Ok(());
             }
             _ => {

@@ -16,94 +16,147 @@ impl Runtime {
         match node.operation.as_str() {
             "action.sound" => {
                 let asset = self.audio_asset(node)?;
-                self.sounds.push(SoundRequest {
-                    asset,
-                    volume: node.number("volume", 1.0).clamp(0.0, 1.0) as f32,
-                });
+                self.play_sound(&asset, node.number("volume", 1.0))?;
             }
             "action.sound_loop" => {
                 let asset = self.audio_asset(node)?;
-                let (channel, name) = match node.text("channel") {
-                    "music" => (Channel::Music, "music"),
-                    "effects" => (Channel::Effects, "effects"),
+                let channel = match node.text("channel") {
+                    "music" => Channel::Music,
+                    "effects" => Channel::Effects,
                     _ => return Err("Canal desconhecido; use music/effects".into()),
                 };
                 let volume = self.volume(graph, node, context, budget)?;
-                let fade = fade(node)?;
-                let change = self
-                    .run
-                    .audio
-                    .play_loop(&asset, channel, volume, fade, self.time)?;
-                // A request that changes nothing, as a restarted scene asking for its music
-                // again, is not reported.
-                if change != LoopChange::Unchanged {
-                    let started = change == LoopChange::Started;
-                    let generation = self
-                        .run
-                        .audio
-                        .voice(&asset, channel)
-                        .map_or(0, |voice| voice.generation);
-                    self.record_audio(AudioChange {
-                        kind: ChangeKind::Loop,
-                        asset: Some(asset),
-                        channel: name,
-                        volume,
-                        fade: if started { fade } else { 0. },
-                        started,
-                        generation,
-                    });
-                }
+                let fade = fade(node.number("fade", 0.))?;
+                self.play_sound_loop(&asset, channel, volume, fade)?;
             }
             "action.sound_stop" => {
                 let asset = match node.text("asset") {
                     "" => None,
                     _ => Some(self.audio_asset(node)?),
                 };
-                let (channels, name): (&[Channel], _) = match node.text("channel") {
-                    "music" => (&[Channel::Music], "music"),
-                    "effects" => (&[Channel::Effects], "effects"),
-                    "all" => (&[Channel::Music, Channel::Effects], "all"),
+                let channel = match node.text("channel") {
+                    "music" => Some(Channel::Music),
+                    "effects" => Some(Channel::Effects),
+                    "all" => None,
                     _ => return Err("Canal desconhecido; use music/effects/all".into()),
                 };
-                let fade = fade(node)?;
-                if self
-                    .run
-                    .audio
-                    .stop(asset.as_deref(), channels, fade, self.time)
-                {
-                    self.record_audio(AudioChange {
-                        kind: ChangeKind::Stop,
-                        asset,
-                        channel: name,
-                        volume: 0.,
-                        fade,
-                        started: false,
-                        generation: 0,
-                    });
-                }
+                let fade = fade(node.number("fade", 0.))?;
+                self.stop_sounds(asset.as_deref(), channel, fade)?;
             }
             "action.volume" => {
-                let channel = crate::graph::VOLUME_CHANNELS
-                    .iter()
-                    .map(|(id, _)| *id)
-                    .find(|id| *id == node.text("channel"))
-                    .ok_or("Canal de volume desconhecido; use master/music/effects")?;
+                let channel = volume_channel(node.text("channel"))?;
                 let volume = self.volume(graph, node, context, budget)?;
-                if self.run.audio.settings.set(channel, volume)? {
-                    self.record_audio(AudioChange {
-                        kind: ChangeKind::Volume,
-                        asset: None,
-                        channel,
-                        volume,
-                        fade: 0.,
-                        started: false,
-                        generation: 0,
-                    });
-                }
+                self.set_volume(channel, volume)?;
             }
             _ => return self.math_action(graph, node, context, budget),
         }
         Ok(true)
+    }
+
+    /// Plays the audio asset `asset` once, on the effects, at `volume`, a finite number kept
+    /// within 0 and 1.
+    pub fn play_sound(&mut self, asset: &str, volume: f64) -> Result<(), String> {
+        let asset = self.audio_asset_id(asset)?;
+        if !volume.is_finite() {
+            return Err("Volume precisa ser um número finito".into());
+        }
+        self.sounds.push(SoundRequest {
+            asset,
+            volume: volume.clamp(0.0, 1.0) as f32,
+        });
+        Ok(())
+    }
+
+    /// Plays the audio asset `asset` in a loop on `channel` at `volume` (kept within 0 and 1),
+    /// fading in over `fade` seconds (0 to [`MAX_FADE`]), as [`AudioState::play_loop`] does.
+    pub fn play_sound_loop(
+        &mut self,
+        asset: &str,
+        channel: Channel,
+        volume: f64,
+        fade: f64,
+    ) -> Result<(), String> {
+        let asset = self.audio_asset_id(asset)?;
+        let volume = level(volume)?;
+        let fade = self::fade(fade)?;
+        let change = self
+            .run
+            .audio
+            .play_loop(&asset, channel, volume, fade, self.time)?;
+        // A request that changes nothing, as a restarted scene asking for its music again, is
+        // not reported.
+        if change != LoopChange::Unchanged {
+            let started = change == LoopChange::Started;
+            let generation = self
+                .run
+                .audio
+                .voice(&asset, channel)
+                .map_or(0, |voice| voice.generation);
+            self.record_audio(AudioChange {
+                kind: ChangeKind::Loop,
+                asset: Some(asset),
+                channel: match channel {
+                    Channel::Music => "music",
+                    Channel::Effects => "effects",
+                },
+                volume,
+                fade: if started { fade } else { 0. },
+                started,
+                generation,
+            });
+        }
+        Ok(())
+    }
+
+    /// Stops the loops of the audio asset `asset`, or every loop without one, on `channel`, or
+    /// on both channels without one, fading out over `fade` seconds (0 to [`MAX_FADE`]).
+    pub fn stop_sounds(
+        &mut self,
+        asset: Option<&str>,
+        channel: Option<Channel>,
+        fade: f64,
+    ) -> Result<(), String> {
+        let asset = asset.map(|id| self.audio_asset_id(id)).transpose()?;
+        let (channels, name): (&[Channel], _) = match channel {
+            Some(Channel::Music) => (&[Channel::Music], "music"),
+            Some(Channel::Effects) => (&[Channel::Effects], "effects"),
+            None => (&[Channel::Music, Channel::Effects], "all"),
+        };
+        let fade = self::fade(fade)?;
+        if self
+            .run
+            .audio
+            .stop(asset.as_deref(), channels, fade, self.time)
+        {
+            self.record_audio(AudioChange {
+                kind: ChangeKind::Stop,
+                asset,
+                channel: name,
+                volume: 0.,
+                fade,
+                started: false,
+                generation: 0,
+            });
+        }
+        Ok(())
+    }
+
+    /// Sets the volume of `channel` (master, music or effects) to `volume`, kept within 0 and 1.
+    pub fn set_volume(&mut self, channel: &str, volume: f64) -> Result<(), String> {
+        let channel = volume_channel(channel)?;
+        let volume = level(volume)?;
+        if self.run.audio.settings.set(channel, volume)? {
+            self.record_audio(AudioChange {
+                kind: ChangeKind::Volume,
+                asset: None,
+                channel,
+                volume,
+                fade: 0.,
+                started: false,
+                generation: 0,
+            });
+        }
+        Ok(())
     }
 
     pub(super) fn audio_data(
@@ -139,13 +192,18 @@ impl Runtime {
             "" => Err(format!(
                 "{label} sem áudio escolhido: escolha o áudio no nó"
             )),
-            id => match self.project.asset(id) {
-                None => Err("Asset de áudio não existe".into()),
-                Some(asset) if asset.kind != crate::document::AssetKind::Audio => {
-                    Err("Asset selecionado não é áudio".into())
-                }
-                Some(asset) => Ok(asset.id.clone()),
-            },
+            id => self.audio_asset_id(id),
+        }
+    }
+
+    /// The WAV asset `id` of the project.
+    fn audio_asset_id(&self, id: &str) -> Result<Id, String> {
+        match self.project.asset(id) {
+            None => Err("Asset de áudio não existe".into()),
+            Some(asset) if asset.kind != crate::document::AssetKind::Audio => {
+                Err("Asset selecionado não é áudio".into())
+            }
+            Some(asset) => Ok(asset.id.clone()),
         }
     }
 
@@ -157,11 +215,11 @@ impl Runtime {
         context: &Context,
         budget: &mut usize,
     ) -> Result<f64, String> {
-        self.input_value(graph, node, "volume", context, budget, 0)?
-            .number()
-            .filter(|volume| volume.is_finite())
-            .map(|volume| volume.clamp(0., 1.) + 0.)
-            .ok_or_else(|| "Volume precisa ser um número finito".into())
+        level(
+            self.input_value(graph, node, "volume", context, budget, 0)?
+                .number()
+                .ok_or("Volume precisa ser um número finito")?,
+        )
     }
 
     fn record_audio(&mut self, change: AudioChange) {
@@ -187,13 +245,29 @@ impl Runtime {
     }
 }
 
-/// A node's Transição, in seconds.
-fn fade(node: &Node) -> Result<f64, String> {
-    let fade = node.number("fade", 0.);
+/// A fade in or out, in seconds.
+fn fade(fade: f64) -> Result<f64, String> {
     if !fade.is_finite() || !(0.0..=MAX_FADE).contains(&fade) {
         return Err(format!(
             "Transição deve estar entre 0 e {MAX_FADE} segundos"
         ));
     }
     Ok(fade)
+}
+
+/// A volume, kept within 0 and 1.
+fn level(volume: f64) -> Result<f64, String> {
+    if !volume.is_finite() {
+        return Err("Volume precisa ser um número finito".into());
+    }
+    Ok(volume.clamp(0., 1.) + 0.)
+}
+
+/// The volume channel `channel` names: master, music or effects.
+fn volume_channel(channel: &str) -> Result<&'static str, String> {
+    crate::graph::VOLUME_CHANNELS
+        .iter()
+        .map(|(id, _)| *id)
+        .find(|id| *id == channel)
+        .ok_or_else(|| "Canal de volume desconhecido; use master/music/effects".into())
 }
