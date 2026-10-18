@@ -3,10 +3,11 @@ use crate::{
     document::{Asset, AssetKind, GameSettings, Id, Project, new_id, validate_project},
     migration::MigrationError,
     painting::PaintImage,
+    script::{self, ScriptFile, ScriptSources},
     texture_cache::TextureCache,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
@@ -86,6 +87,20 @@ pub enum PersistenceError {
     /// A folder a new project may not go in (see [`create_project`]).
     #[error("{0}")]
     ProjectFolder(String),
+    /// An object attaches a script the project's `scripts` folder lacks.
+    #[error("{object}: o script {path} não existe na pasta do projeto")]
+    ScriptMissing { object: String, path: String },
+    #[error("O script {0} tem mais de 1 MB")]
+    ScriptTooLarge(String),
+    #[error("O script {0} não é texto UTF-8")]
+    ScriptNotText(String),
+    #[error("Falha ao ler o script {path}: {source}")]
+    ScriptRead { path: String, source: io::Error },
+    #[error("Nome de arquivo inválido na pasta scripts: {0}")]
+    ScriptName(String),
+    /// A copy would replace a different file of the `scripts` folder where it goes.
+    #[error("A pasta escolhida já contém um arquivo diferente: {0}. Escolha uma pasta vazia.")]
+    ScriptConflict(String),
 }
 impl From<PersistenceError> for String {
     fn from(error: PersistenceError) -> Self {
@@ -326,8 +341,8 @@ pub fn save_cached_bundle(
     save_cached_bundle_from(path, project, images, None)
 }
 
-/// Save an independent copy, including lazily loaded PNG/WAV resources.
-/// Source files are only read. All destination writes share one transaction.
+/// Save an independent copy, including lazily loaded PNG/WAV resources and every file of the
+/// `scripts` folder. Source files are only read. All destination writes share one transaction.
 pub fn save_cached_copy(
     path: &Path,
     project: &Project,
@@ -390,6 +405,20 @@ fn save_cached_bundle_from(
             writes.push((target, bytes));
         } else {
             validate_asset_header(asset, &target)?;
+        }
+    }
+    if let Some(source_root) = source_root {
+        // The whole folder goes as it is, attached or not: a script may require any other.
+        for (path, source) in scripts_folder_files(source_root)? {
+            let bytes = fs::read(&source).map_err(|source| PersistenceError::CopySource {
+                name: path.clone(),
+                source,
+            })?;
+            let target = resolve_asset_path(root, &path)?;
+            if target.exists() && fs::read(&target)? != bytes {
+                return Err(PersistenceError::ScriptConflict(path));
+            }
+            writes.push((target, bytes));
         }
     }
     writes.extend(crate::migration::backup(&path)?);
@@ -559,6 +588,85 @@ fn validate_asset_file(asset: &Asset, path: &Path) -> Result<(), PersistenceErro
         AssetKind::Model => {}
     }
     Ok(())
+}
+/// Every file in the `scripts` folder of the project at `root` or in the folder's subfolders, by
+/// its path from the project's folder with `/`; none without the folder. Links in it are not
+/// followed, so nothing outside it is read.
+fn scripts_folder_files(root: &Path) -> Result<BTreeMap<String, PathBuf>, PersistenceError> {
+    let mut found = BTreeMap::new();
+    let folder = resolve_asset_path(root, script::FOLDER)?;
+    if !folder.is_dir() {
+        return Ok(found);
+    }
+    let listing = || io_context("Falha ao ler a pasta scripts");
+    let mut pending = vec![(folder, script::FOLDER.to_owned())];
+    while let Some((folder, name)) = pending.pop() {
+        for entry in fs::read_dir(&folder).map_err(listing())? {
+            let entry = entry.map_err(listing())?;
+            let kind = entry.file_type().map_err(listing())?;
+            let file = entry.file_name();
+            let Some(file) = file.to_str() else {
+                return Err(PersistenceError::ScriptName(format!(
+                    "{name}/{}",
+                    file.to_string_lossy()
+                )));
+            };
+            let path = format!("{name}/{file}");
+            if kind.is_dir() {
+                pending.push((entry.path(), path));
+            } else if kind.is_file() {
+                found.insert(path, entry.path());
+            }
+        }
+    }
+    Ok(found)
+}
+/// The script files of the project at `root`: the `.luau` files of its `scripts` folder, by path
+/// (see [`crate::script`]).
+fn script_files(root: &Path) -> Result<BTreeMap<String, PathBuf>, PersistenceError> {
+    let mut files = scripts_folder_files(root)?;
+    files.retain(|path, _| {
+        Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == script::EXTENSION)
+    });
+    Ok(files)
+}
+/// The scripts of the project at `root`, read from its `scripts` folder (none without it): each
+/// must be UTF-8 text of up to 1 MB.
+pub fn load_scripts(root: &Path) -> Result<ScriptSources, PersistenceError> {
+    let mut sources = ScriptSources::default();
+    for (path, file) in script_files(root)? {
+        let read = |source| PersistenceError::ScriptRead {
+            path: path.clone(),
+            source,
+        };
+        if fs::metadata(&file).map_err(read)?.len() > script::MAX_BYTES {
+            return Err(PersistenceError::ScriptTooLarge(path));
+        }
+        let bytes = fs::read(&file).map_err(read)?;
+        let text =
+            String::from_utf8(bytes).map_err(|_| PersistenceError::ScriptNotText(path.clone()))?;
+        sources.files.insert(path, ScriptFile::new(text));
+    }
+    Ok(sources)
+}
+/// Checks that every script an object attaches, in a scene or a model, is in the `scripts`
+/// folder at `root`, for the project's checks to report. Opening and saving do not ask for it:
+/// a script renamed or deleted outside OXY must not keep the project from opening or saving.
+/// The folder is read only when some object attaches a script.
+pub fn validate_script_files(project: &Project, root: &Path) -> Result<(), PersistenceError> {
+    if !script::any_attached(project) {
+        return Ok(());
+    }
+    let files = script_files(root)?;
+    match script::first_missing(project, |path| files.contains_key(path)) {
+        Some((object, path)) => Err(PersistenceError::ScriptMissing {
+            object,
+            path: path.to_owned(),
+        }),
+        None => Ok(()),
+    }
 }
 pub(crate) fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
     let meta = fs::metadata(path).map_err(|source| PersistenceError::AssetMissing {

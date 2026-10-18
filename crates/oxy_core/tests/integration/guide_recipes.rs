@@ -44,12 +44,17 @@ fn all_embedded_recipes_are_valid_editable_documents() {
         let json = serde_json::to_vec(&p).unwrap();
         assert_eq!(oxy_core::migration::read(&json).unwrap(), p);
     }
-    // The recipes of the game nodes come in the current format, without warnings.
+    // The recipes of the game nodes come with every node parameter (in the format of the frozen
+    // node registry or later), without warnings.
     for i in [12, 13] {
         let p = guide_recipes::load(i).unwrap();
         let bytes = guide_recipes::recipes()[i].bytes;
         let saved: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-        assert_eq!(saved["schema_version"], oxy_core::document::SCHEMA_VERSION);
+        let version = saved["schema_version"].as_u64().unwrap();
+        assert!(
+            version >= oxy_core::migration::NODE_REGISTRY_SCHEMA,
+            "{version}"
+        );
         let warnings = oxy_core::command::warnings(&p);
         assert!(warnings.is_empty(), "{warnings:?}");
     }

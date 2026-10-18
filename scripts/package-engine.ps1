@@ -91,10 +91,10 @@ como estava antes da primeira mudança de cada sessão em project.oxy.json.agent
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
-Projetos antigos (schema 1 a 4) são convertidos em memória, sem alterar o original
+Projetos antigos (schema 1 a 5) são convertidos em memória, sem alterar o original
 ao abrir. Ao salvar convertido, a OXY preserva um backup do documento original.
-O schema 5 requer OXY Engine 0.6 ou mais recente: a 0.5.x e versões anteriores
-não abrem projetos salvos pela 0.6.
+O schema 6 requer OXY Engine 0.7 ou mais recente: a 0.6.x e versões anteriores
+não abrem projetos salvos pela 0.7.
 Sem instalador, atualização automática ou assinatura digital.
 "@
 [IO.File]::WriteAllText((Join-Path $destinationPath 'LEIA-ME.txt'), $instructions, [Text.Encoding]::UTF8)

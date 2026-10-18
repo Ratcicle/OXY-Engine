@@ -13,7 +13,7 @@ $projectResolved = (Resolve-Path -LiteralPath $projectCandidate).Path
 $manifestPath = if (Test-Path -LiteralPath $projectResolved -PathType Container) { Join-Path $projectResolved 'project.oxy.json' } else { $projectResolved }
 $dataRoot = Split-Path $manifestPath -Parent
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.schema_version -notin @(1,2,3,4,5)) { throw 'Versão incompatível: o pacote aceita schema_version 1 a 5.' }
+if ($manifest.schema_version -notin @(1,2,3,4,5,6)) { throw 'Versão incompatível: o pacote aceita schema_version 1 a 6.' }
 $destinationPath = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($Destination)) { $Destination } else { Join-Path $workspace $Destination }))
 if ($destinationPath.TrimEnd('\','/') -eq $workspace.TrimEnd('\','/') -or $destinationPath.TrimEnd('\','/') -eq $dataRoot.TrimEnd('\','/')) { throw 'Escolha uma pasta de pacote separada do projeto e do repositório.' }
 if ($destinationPath.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($destinationPath).TrimEnd('\','/')) { throw 'A raiz de um disco não pode ser pasta de pacote.' }
@@ -26,6 +26,18 @@ foreach ($asset in $manifest.assets) {
     $source = (Resolve-Path -LiteralPath (Join-Path $dataRoot $relative)).Path
     if (!$source.StartsWith($dataRoot.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Asset sai da pasta de dados: $relative" }
     $files += [PSCustomObject]@{ Source = $source; Relative = $relative }
+}
+# The scripts folder goes whole, as the export takes it: objects name its files and a script may
+# require any other. Links in it are not followed, so nothing outside the project is packed.
+$scriptsRoot = Join-Path $dataRoot 'scripts'
+$scriptFolders = [Collections.Generic.Queue[string]]::new()
+if ((Test-Path -LiteralPath $scriptsRoot -PathType Container) -and !((Get-Item -LiteralPath $scriptsRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { $scriptFolders.Enqueue($scriptsRoot) }
+while ($scriptFolders.Count) {
+    foreach ($entry in Get-ChildItem -LiteralPath $scriptFolders.Dequeue() -Force) {
+        if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        if ($entry.PSIsContainer) { $scriptFolders.Enqueue($entry.FullName) }
+        else { $files += [PSCustomObject]@{ Source = $entry.FullName; Relative = $entry.FullName.Substring($dataRoot.TrimEnd('\','/').Length + 1) } }
+    }
 }
 if (!$SkipBuild) {
     $buildArgs = @('build','-p','oxy_player','--locked')

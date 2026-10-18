@@ -2,6 +2,7 @@
 //! by the bot of the agents' guide (docs/agentes-mcp.md). Its graphs use most of the runtime's
 //! operations, so the state at the end pins down what they do, step by step.
 use oxy_core::{
+    document::Project,
     headless::{self, SimulationRequest},
     persistence,
 };
@@ -78,12 +79,9 @@ fn bot_path() -> serde_json::Value {
     serde_json::Value::Array(path)
 }
 
-#[test]
-fn shipped_parkour_reaches_the_finish_in_the_same_state_and_replays_identically() {
-    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/parkour")
-        .join(persistence::PROJECT_FILE);
-    let project = persistence::load_project(&file).unwrap();
+/// Plays the parkour `project` from the menu to the finish line and checks what 0.6.0 did: the
+/// bot gets there at the same moment, in [`FINISH_STATE`], and the replay is identical.
+pub(crate) fn assert_reaches_the_finish(project: &Project) {
     let request: SimulationRequest = serde_json::from_value(json!({
         "seconds": 200,
         "seed": 0,
@@ -98,7 +96,7 @@ fn shipped_parkour_reaches_the_finish_in_the_same_state_and_replays_identically(
         }
     }))
     .unwrap();
-    let report = headless::simulate(&project, &request).unwrap();
+    let report = headless::simulate(project, &request).unwrap();
     let bot = report.bot.as_ref().unwrap();
     assert!(bot.stuck.is_none(), "{:?}", bot.stuck);
     assert!(
@@ -110,4 +108,12 @@ fn shipped_parkour_reaches_the_finish_in_the_same_state_and_replays_identically(
     assert!(replay.identical, "{replay:?}");
     assert_eq!(replay.steps, 3513);
     assert_eq!(report.state_hash, FINISH_STATE);
+}
+
+#[test]
+fn shipped_parkour_reaches_the_finish_in_the_same_state_and_replays_identically() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/parkour")
+        .join(persistence::PROJECT_FILE);
+    assert_reaches_the_finish(&persistence::load_project(&file).unwrap());
 }

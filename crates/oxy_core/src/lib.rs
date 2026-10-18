@@ -36,6 +36,7 @@ pub mod random;
 pub mod runtime;
 pub mod save;
 pub mod scene_view;
+pub mod script;
 pub mod spatial;
 pub mod surface;
 pub mod texture_cache;

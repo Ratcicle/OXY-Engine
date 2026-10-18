@@ -2,6 +2,10 @@
 use crate::document::{Project, SCHEMA_VERSION};
 use std::path::{Path, PathBuf};
 
+/// The schema whose node parameters are the registry's: the node registry is frozen since 0.7,
+/// so only older documents lack parameters, and a later one that lacks some is broken.
+pub const NODE_REGISTRY_SCHEMA: u64 = 5;
+
 /// Why a document could not be read or converted. Messages are shown to the user as-is.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
@@ -74,11 +78,12 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), MigrationErro
     if version < 4 {
         for_each_entity_list(&mut value, migrate_movement)?;
     }
-    if version < u64::from(SCHEMA_VERSION) {
+    if version < NODE_REGISTRY_SCHEMA {
         // Registry-driven: every older document gets the node parameters added since.
         for_each_entity_list(&mut value, fill_node_params)?;
-        value["schema_version"] = SCHEMA_VERSION.into();
     }
+    // 5 to 6 adds the objects' scripts, which documents leave out while there are none.
+    value["schema_version"] = SCHEMA_VERSION.into();
     let project = serde_json::from_value(value).map_err(MigrationError::InvalidDocument)?;
     Ok((
         project,

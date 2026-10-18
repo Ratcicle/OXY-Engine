@@ -8,7 +8,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 pub type Id = String;
 /// The IDs a copy took: each original object, node and animation (and scene) to its copy.
 pub type CopyMap = HashMap<Id, Id>;
@@ -317,6 +317,9 @@ pub struct Entity {
     pub camera: Option<Camera>,
     pub ui: Option<UiElement>,
     pub graph: Graph,
+    /// The scripts the object runs, in this order; left out of the document while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<crate::script::ScriptRef>,
     pub clips: Vec<Clip>,
     pub model_source: Option<Id>,
 }
@@ -348,6 +351,7 @@ impl Entity {
             camera: None,
             ui: None,
             graph: Graph::default(),
+            scripts: Vec::new(),
             clips: Vec::new(),
             model_source: None,
         }
@@ -1423,6 +1427,7 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
         e.graph
             .validate(&owned_ids)
             .map_err(|error| format!("Lógica de {}: {error}", e.name))?;
+        crate::script::validate(&e.scripts).map_err(|error| format!("{}: {error}", e.name))?;
     }
     Ok(())
 }

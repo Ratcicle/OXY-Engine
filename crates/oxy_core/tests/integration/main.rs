@@ -43,5 +43,6 @@ mod saved_progress;
 mod saved_validation_projects;
 mod scene_views;
 mod scenes;
+mod scripts_format;
 mod simulation;
 mod step_budget;
