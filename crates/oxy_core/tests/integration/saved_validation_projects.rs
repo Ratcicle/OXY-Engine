@@ -66,7 +66,7 @@ fn saved_card_graph_checks_cost_and_preserves_edit_document() {
         runtime
             .logs
             .iter()
-            .any(|line| line.contains("Energia insuficiente"))
+            .any(|line| line.text.contains("Energia insuficiente"))
     );
 }
 
@@ -156,7 +156,7 @@ fn saved_2d_project_collects_opens_door_and_hits_through_marker() {
         !runtime
             .logs
             .iter()
-            .any(|line| line.contains("interrompido"))
+            .any(|line| line.text.contains("interrompido"))
     );
 }
 
@@ -207,6 +207,6 @@ fn saved_textured_3d_hierarchy_uses_same_runtime_and_hit_rules() {
         !runtime
             .logs
             .iter()
-            .any(|line| line.contains("interrompido"))
+            .any(|line| line.text.contains("interrompido"))
     );
 }

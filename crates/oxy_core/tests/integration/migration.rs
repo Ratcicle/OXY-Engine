@@ -168,7 +168,11 @@ fn a_diagnostic_message_from_before_its_value_input_reads_and_runs_unchanged() {
         assert_eq!(node.params.keys().collect::<Vec<_>>(), ["message"]);
         let runtime = oxy_core::runtime::Runtime::new(&converted, &converted.start_scene).unwrap();
         assert_eq!(runtime.logs.len(), 1, "{:?}", runtime.logs);
-        assert!(runtime.logs[0].ends_with("] Olá"), "{:?}", runtime.logs);
+        assert!(
+            runtime.logs[0].text.ends_with("] Olá"),
+            "{:?}",
+            runtime.logs
+        );
     }
 }
 

@@ -50,8 +50,17 @@ fn press_release_once_held_once_per_fixed_step_and_pause_cancels_pending() {
             ..Default::default()
         },
     );
-    assert_eq!(rt.logs.iter().filter(|l| l.ends_with("pressed")).count(), 1);
-    assert_eq!(rt.logs.iter().filter(|l| l.ends_with("held")).count(), 3);
+    assert_eq!(
+        rt.logs
+            .iter()
+            .filter(|l| l.text.ends_with("pressed"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        rt.logs.iter().filter(|l| l.text.ends_with("held")).count(),
+        3
+    );
     rt.advance(
         FIXED_DT * 3.,
         &InputFrame {
@@ -60,7 +69,10 @@ fn press_release_once_held_once_per_fixed_step_and_pause_cancels_pending() {
         },
     );
     assert_eq!(
-        rt.logs.iter().filter(|l| l.ends_with("released")).count(),
+        rt.logs
+            .iter()
+            .filter(|l| l.text.ends_with("released"))
+            .count(),
         1
     );
     let before = rt.logs.clone();

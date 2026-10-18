@@ -542,7 +542,11 @@ fn the_runtime_counts_every_log_and_trace_it_writes() {
     .unwrap();
     let mut runtime = Runtime::new(&project, &scene).unwrap();
     assert_eq!(runtime.logs.len(), 1);
-    assert!(runtime.logs[0].ends_with("] Olá"), "{:?}", runtime.logs);
+    assert!(
+        runtime.logs[0].text.ends_with("] Olá"),
+        "{:?}",
+        runtime.logs
+    );
     assert_eq!(runtime.logs_written(), 1);
     assert_eq!(runtime.traces_written(), runtime.traces.len() as u64);
     assert!(runtime.traces_written() >= 2);

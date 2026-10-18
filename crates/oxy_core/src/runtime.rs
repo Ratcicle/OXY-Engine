@@ -57,6 +57,8 @@ pub use transforms::{TransformPart, TransformSpace};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
+/// The logic work of each fixed step, in nodes run and data read (a new runtime's scene start
+/// has its own): the flows left when it runs out go on in the next step.
 pub const MAX_NODE_WORK: usize = 1024;
 /// The longest Esperar sem bloquear waits, in seconds: a day.
 pub const MAX_WAIT: f64 = 86_400.;
@@ -108,6 +110,20 @@ pub enum RuntimeEvent {
     },
     /// The game pause started (true) or ended.
     Pause(bool),
+}
+/// A line of the runtime's log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogLine {
+    pub text: String,
+    /// The script line that wrote it; none for the engine's own lines and the nodes'.
+    pub script: Option<ScriptLocation>,
+}
+/// A line of a script file, which errors and the Console name as `scripts/porta.luau:12`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ScriptLocation {
+    /// The file's path in the project, with forward slashes.
+    pub path: String,
+    pub line: u32,
 }
 #[derive(Clone, Debug)]
 pub struct NodeTrace {
@@ -173,8 +189,14 @@ struct Context {
 struct Task {
     due: f64,
     owner: Id,
-    node: Id,
+    target: TaskTarget,
     context: Context,
+}
+/// What a task runs, for its owner.
+#[derive(Clone, Debug)]
+enum TaskTarget {
+    /// A node of the owner's graph.
+    Node(Id),
 }
 #[derive(Default)]
 struct EventCatalog {
@@ -248,7 +270,7 @@ pub struct Runtime {
     index: OnceLock<Result<SceneIndex, String>>,
     graphs: HashMap<Id, Arc<PreparedGraph>>,
     pub paused: bool,
-    pub logs: Vec<String>,
+    pub logs: Vec<LogLine>,
     pub traces: Vec<NodeTrace>,
     /// Lines ever added to `logs` and `traces`, those dropped or taken included: a host that
     /// reads them across frames finds the new ones with [`Runtime::logs_written`].
@@ -621,7 +643,6 @@ impl Runtime {
         }
         self.accumulator = (self.accumulator + elapsed.min(0.25)).min(FIXED_DT * MAX_STEPS as f32);
         let mut steps = 0;
-        let mut budget = MAX_NODE_WORK;
         while self.accumulator + f32::EPSILON >= FIXED_DT && steps < MAX_STEPS {
             let mut frame = InputFrame {
                 held: input.held.clone(),
@@ -637,10 +658,7 @@ impl Runtime {
             if self.cursor_shown {
                 frame.look = [0.; 2];
             }
-            crate::metrics::timed(
-                || self.fixed_step(&frame, &mut budget),
-                |c, ns| c.fixed_step_ns += ns,
-            );
+            crate::metrics::timed(|| self.fixed_step(&frame), |c, ns| c.fixed_step_ns += ns);
             self.settle_audio_changes();
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
@@ -650,8 +668,10 @@ impl Runtime {
     /// One step. In the game pause only the clock, input events, logic and activations run:
     /// the camera, Ao passo, movement, animations and areas wait, and so do waits, whose due
     /// times are in game time. A pause that logic starts in the first logic phase skips the
-    /// world phase of that same step; one it ends takes effect on the next step.
-    fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
+    /// world phase of that same step; one it ends takes effect on the next step. Both logic
+    /// phases share the step's own work budget, so a run does the same at any frame rate.
+    fn fixed_step(&mut self, input: &InputFrame) {
+        let mut budget = MAX_NODE_WORK;
         self.step_input = input.clone();
         self.query_work = 0;
         self.sounds_before_change = None;
@@ -683,7 +703,7 @@ impl Runtime {
                 self.emit(RuntimeEvent::InputReleased(action.clone()));
             }
         }
-        crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
+        crate::metrics::timed(|| self.process_tasks(&mut budget), |c, ns| c.tasks_ns += ns);
         if paused || self.game_paused {
             self.collect_activations();
             return;
@@ -717,7 +737,7 @@ impl Runtime {
                 c.character_sensors_ns += ns;
             },
         );
-        crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
+        crate::metrics::timed(|| self.process_tasks(&mut budget), |c, ns| c.tasks_ns += ns);
         self.collect_activations();
     }
     pub fn queue_timed_input(
@@ -749,7 +769,10 @@ impl Runtime {
     }
     pub(crate) fn log(&mut self, message: String) {
         self.logs_written += 1;
-        self.logs.push(message);
+        self.logs.push(LogLine {
+            text: message,
+            script: None,
+        });
         if self.logs.len() > 500 {
             self.logs.drain(..100);
         }
@@ -917,7 +940,7 @@ impl Runtime {
                     found.push(Task {
                         due: self.game_time(),
                         owner: entity.id.clone(),
-                        node: node.id.clone(),
+                        target: TaskTarget::Node(node.id.clone()),
                         context: Context {
                             owner: entity.id.clone(),
                             other,
@@ -976,7 +999,7 @@ impl Runtime {
                 continue;
             }
             let owner = task.owner.clone();
-            let node = task.node.clone();
+            let TaskTarget::Node(node) = task.target.clone();
             let result = self.execute(task, budget);
             if let Err(error) = result {
                 self.log(format!(
@@ -1121,7 +1144,7 @@ impl Runtime {
                 tasks.push(Task {
                     due: self.game_time() + delay,
                     owner: context.owner.clone(),
-                    node: edge.to_node.clone(),
+                    target: TaskTarget::Node(edge.to_node.clone()),
                     context: context.clone(),
                 });
             }
@@ -1149,7 +1172,8 @@ impl Runtime {
             self.graphs.insert(task.owner.clone(), graph.clone());
             graph
         };
-        let node = graph.node(&task.node).ok_or("Nó não encontrado")?;
+        let TaskTarget::Node(node) = &task.target;
+        let node = graph.node(node).ok_or("Nó não encontrado")?;
         let mut context = task.context;
         self.traces_written += 1;
         self.traces.push(NodeTrace {
@@ -2058,7 +2082,11 @@ mod tests {
         project.scenes.push(other);
         let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
         let count = |runtime: &Runtime, text: &str| {
-            runtime.logs.iter().filter(|l| l.ends_with(text)).count()
+            runtime
+                .logs
+                .iter()
+                .filter(|l| l.text.ends_with(text))
+                .count()
         };
         let height =
             |runtime: &Runtime| runtime.scene().entity(&faller).unwrap().transform.position[1];
@@ -2115,7 +2143,7 @@ mod tests {
         assert_eq!(count(&runtime, "oculto"), 0);
         let ignored = "Clique ignorado: Escondido está oculto (ele mesmo ou um grupo acima dele).";
         assert!(
-            runtime.logs.iter().any(|l| l == ignored),
+            runtime.logs.iter().any(|l| l.text == ignored),
             "{:?}",
             runtime.logs
         );
@@ -2297,7 +2325,7 @@ mod tests {
             runtime
                 .logs
                 .iter()
-                .any(|line| line.contains(&id) && line.contains("incompatível"))
+                .any(|line| line.text.contains(&id) && line.text.contains("incompatível"))
         );
         assert_eq!(
             runtime.scene().entity(&id).unwrap().attributes["contador"],
@@ -2307,28 +2335,36 @@ mod tests {
     #[test]
     fn task_budget_bounds_large_graph_without_blocking_fixed_steps() {
         let mut project = Project::new("Orçamento");
-        let mut entity = Entity::new("Fluxo longo", None);
-        let start = Node::new("event.click", [0.0; 2]);
-        let mut previous = start.clone();
-        entity.graph.nodes.push(start);
-        for index in 0..MAX_NODE_WORK + 20 {
-            let next = Node::new("debug.message", [index as f32, 0.0]);
-            connect(&mut entity.graph, &previous, "exec", &next, "exec");
-            previous = next.clone();
-            entity.graph.nodes.push(next);
+        // Together longer than the work of the most steps an advance takes, since each step
+        // has its own.
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let mut entity = Entity::new("Fluxo longo", None);
+            let start = Node::new("event.click", [0.0; 2]);
+            let mut previous = start.clone();
+            entity.graph.nodes.push(start);
+            for index in 0..MAX_NODE_WORK * MAX_STEPS / 3 + 20 {
+                let next = Node::new("debug.message", [index as f32, 0.0]);
+                connect(&mut entity.graph, &previous, "exec", &next, "exec");
+                previous = next.clone();
+                entity.graph.nodes.push(next);
+            }
+            ids.push(entity.id.clone());
+            project.scenes[0].entities.push(entity);
         }
-        let id = entity.id.clone();
-        project.scenes[0].entities.push(entity);
         let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
-        runtime.click(&id);
+        for id in &ids {
+            runtime.click(id);
+        }
         runtime.advance(0.2, &InputFrame::default());
         assert_eq!(runtime.pending_tasks(), 1);
         assert!(runtime.time >= f64::from(FIXED_DT) * 7.9);
+        assert_eq!(runtime.traces_written(), (MAX_NODE_WORK * MAX_STEPS) as u64);
         assert!(
             runtime
                 .logs
                 .iter()
-                .any(|line| line.contains("Limite de trabalho"))
+                .any(|line| line.text.contains("Limite de trabalho"))
         );
         runtime.advance(FIXED_DT, &InputFrame::default());
         assert_eq!(runtime.pending_tasks(), 0);

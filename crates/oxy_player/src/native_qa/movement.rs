@@ -55,7 +55,10 @@ impl MovementPlayerQa {
         }
         let rt = self.player.runtime.as_ref().ok_or("Runtime ausente")?;
         if !rt.logs.is_empty() {
-            return Err(format!("{:?}", rt.logs));
+            return Err(format!(
+                "{:?}",
+                rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
+            ));
         }
         if !self.events.is_empty() || rt.time < self.until {
             return Ok(());

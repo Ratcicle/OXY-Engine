@@ -37,7 +37,10 @@ impl NativeQa {
         let (paused, game_paused) =
             runtime.map_or((false, false), |rt| (rt.paused, rt.game_paused()));
         let fired = runtime.map_or(0, |rt| {
-            rt.logs.iter().filter(|l| l.ends_with("] disparo")).count()
+            rt.logs
+                .iter()
+                .filter(|l| l.text.ends_with("] disparo"))
+                .count()
         });
         let state = format!(
             "teste pausado {paused}, jogo pausado {game_paused}, captura {capture}, mouse preso \

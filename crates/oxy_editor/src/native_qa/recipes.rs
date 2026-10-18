@@ -73,7 +73,7 @@ impl NativeQa {
         if !pass {
             return Err(format!(
                 "Receita não atingiu resultado: {label}; logs {:?}",
-                runtime.logs
+                runtime.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
             ));
         }
         if self

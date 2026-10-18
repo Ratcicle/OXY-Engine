@@ -534,7 +534,7 @@ impl eframe::App for Player {
                             }
                             if let Some(runtime) = &self.runtime {
                                 for log in &runtime.logs {
-                                    ui.label(log);
+                                    ui.label(&log.text);
                                 }
                             }
                         });

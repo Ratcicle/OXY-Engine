@@ -25,7 +25,10 @@ impl NativeQa {
                     || state.support.is_none()
                     || !rt.logs.is_empty()
                 {
-                    return Err(format!("Postura/apoio: {state:?}; {:?}", rt.logs));
+                    return Err(format!(
+                        "Postura/apoio: {state:?}; {:?}",
+                        rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
+                    ));
                 }
                 let shape = rt
                     .physics_world()
@@ -67,7 +70,10 @@ impl NativeQa {
                     ));
                 }
                 if !rt.logs.is_empty() {
-                    return Err(format!("{:?}", rt.logs));
+                    return Err(format!(
+                        "{:?}",
+                        rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
+                    ));
                 }
             }
             "fp_paused" => {

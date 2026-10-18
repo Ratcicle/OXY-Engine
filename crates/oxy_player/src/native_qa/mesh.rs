@@ -61,7 +61,7 @@ impl MeshPlayerQa {
         if runtime
             .logs
             .iter()
-            .any(|line| line.contains("Comportamento interrompido"))
+            .any(|line| line.text.contains("Comportamento interrompido"))
         {
             return Err("Runtime interrompeu o grafo da peça".into());
         }

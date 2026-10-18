@@ -6,7 +6,10 @@ impl NativeQa {
         let camera = rt.active_camera().ok_or("Câmera ausente")?;
         let pose = rt.game_camera_pose().ok_or("Pose ausente")?;
         if !rt.logs.is_empty() {
-            return Err(format!("{:?}", rt.logs));
+            return Err(format!(
+                "{:?}",
+                rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
+            ));
         }
         match label {
             "camera3d_tp" => {

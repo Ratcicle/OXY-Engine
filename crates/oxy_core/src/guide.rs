@@ -178,7 +178,7 @@ mod tests {
             runtime
                 .logs
                 .iter()
-                .filter(|l| l.contains("Minha primeira ação funciona!"))
+                .filter(|l| l.text.contains("Minha primeira ação funciona!"))
                 .count(),
             1
         );

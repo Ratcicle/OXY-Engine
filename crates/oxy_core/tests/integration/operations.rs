@@ -350,7 +350,8 @@ fn refusal(mut owner: Entity, kind: SceneKind, action: Node) -> Vec<String> {
     owner.graph.nodes = vec![start, action];
     project.scenes[0].entities = vec![owner];
     validate_project(&project).unwrap();
-    Runtime::new(&project, &project.start_scene).unwrap().logs
+    let runtime = Runtime::new(&project, &project.start_scene).unwrap();
+    runtime.logs.into_iter().map(|l| l.text).collect()
 }
 fn refused_with(logs: &[String], message: &str) {
     assert!(

@@ -230,7 +230,7 @@ impl NativePlayerQa {
                     runtime
                         .logs
                         .iter()
-                        .any(|line| line.contains("Comportamento interrompido"))
+                        .any(|line| line.text.contains("Comportamento interrompido"))
                 }) {
                     return Err("Runtime interrompeu um comportamento".into());
                 }

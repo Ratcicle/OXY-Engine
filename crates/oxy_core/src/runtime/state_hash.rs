@@ -266,9 +266,11 @@ impl Runtime {
                 let Task {
                     due,
                     owner,
-                    node,
+                    target,
                     context,
                 } = task;
+                // A node's task reads as it did before tasks had targets; others add their own.
+                let TaskTarget::Node(node) = target;
                 let Context {
                     owner: runs_as,
                     other,

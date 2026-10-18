@@ -6,6 +6,7 @@
 //! stops. The Console panel itself is unchanged.
 use super::*;
 use oxy_core::query::{ConsoleOrigin, ConsoleQuery};
+use oxy_core::runtime::{LogLine, ScriptLocation};
 use serde_json::{Value as Json, json};
 use std::collections::{HashSet, VecDeque};
 
@@ -29,6 +30,8 @@ struct Line {
     text: String,
     warning: bool,
     source: Option<Source>,
+    /// The script line a game line came from.
+    script: Option<ScriptLocation>,
 }
 
 pub(crate) struct ConsoleFeed {
@@ -66,7 +69,14 @@ fn unseen<T>(kept: &[T], written: u64, seen: u64) -> &[T] {
 }
 
 impl ConsoleFeed {
-    fn push(&mut self, origin: ConsoleOrigin, text: String, warning: bool, source: Option<Source>) {
+    fn push(
+        &mut self,
+        origin: ConsoleOrigin,
+        text: String,
+        warning: bool,
+        source: Option<Source>,
+        script: Option<ScriptLocation>,
+    ) {
         self.last_seq += 1;
         let (list, kept) = if origin == ConsoleOrigin::Logica {
             (&mut self.logic, LOGIC_KEPT)
@@ -79,6 +89,7 @@ impl ConsoleFeed {
             text,
             warning,
             source,
+            script,
         });
         while list.len() > kept {
             list.pop_front();
@@ -101,8 +112,10 @@ impl ConsoleFeed {
         for message in unseen(&console.messages, written, self.editor_seen) {
             let warning = warnings.contains(message.as_str());
             match message.strip_prefix(agent::AGENT_PREFIX) {
-                Some(text) => self.push(ConsoleOrigin::Agente, text.to_owned(), warning, None),
-                None => self.push(ConsoleOrigin::Editor, message.clone(), warning, None),
+                Some(text) => {
+                    self.push(ConsoleOrigin::Agente, text.to_owned(), warning, None, None)
+                }
+                None => self.push(ConsoleOrigin::Editor, message.clone(), warning, None, None),
             }
         }
         self.editor_seen = written;
@@ -116,22 +129,7 @@ impl ConsoleFeed {
         };
         let written = rt.logs_written();
         for line in unseen(&rt.logs, written, self.game_seen) {
-            // "[object / node] message" from debug.message, or a node's error: the IDs go
-            // to their own fields.
-            match oxy_core::headless::node_line(line) {
-                Some((object, node, message)) => self.push(
-                    ConsoleOrigin::Jogo,
-                    message.to_owned(),
-                    false,
-                    Some(Source {
-                        object: object.to_owned(),
-                        name: name(object),
-                        node: Some(node.to_owned()),
-                        operation: None,
-                    }),
-                ),
-                None => self.push(ConsoleOrigin::Jogo, line.clone(), false, None),
-            }
+            self.copy_log(line, name);
         }
         self.game_seen = written;
         let written = rt.traces_written();
@@ -155,10 +153,31 @@ impl ConsoleFeed {
                         node: Some(trace.node.clone()),
                         operation: Some(trace.operation.clone()),
                     }),
+                    None,
                 );
             }
         }
         self.logic_seen = written;
+    }
+    /// A play test's log line, with the script line it came from. "[object / node] message"
+    /// from debug.message, or a node's error: the IDs go to their own fields.
+    fn copy_log(&mut self, line: &LogLine, name: impl Fn(&str) -> String) {
+        let script = line.script.clone();
+        match oxy_core::headless::node_line(&line.text) {
+            Some((object, node, message)) => self.push(
+                ConsoleOrigin::Jogo,
+                message.to_owned(),
+                false,
+                Some(Source {
+                    object: object.to_owned(),
+                    name: name(object),
+                    node: Some(node.to_owned()),
+                    operation: None,
+                }),
+                script,
+            ),
+            None => self.push(ConsoleOrigin::Jogo, line.text.clone(), false, None, script),
+        }
     }
     /// The lines `query` asks for, oldest first, with `last_seq` for the next read, `session`,
     /// and `omitted` when the limit left older ones out.
@@ -194,6 +213,9 @@ impl ConsoleFeed {
                     if let Some(operation) = &source.operation {
                         entry["operation"] = json!(operation);
                     }
+                }
+                if let Some(script) = &line.script {
+                    entry["script"] = json!(script);
                 }
                 entry
             })
@@ -236,7 +258,7 @@ mod tests {
     fn feed(lines: &[(ConsoleOrigin, &str)]) -> ConsoleFeed {
         let mut feed = ConsoleFeed::default();
         for (origin, text) in lines {
-            feed.push(*origin, (*text).into(), false, None);
+            feed.push(*origin, (*text).into(), false, None, None);
         }
         feed
     }
@@ -342,6 +364,7 @@ mod tests {
                     node: Some("no".into()),
                     operation: Some("event.step".into()),
                 }),
+                None,
             );
         }
         let all = feed.answer(&ConsoleQuery::parse(&json!({"limit": 10_000})).unwrap());
@@ -352,7 +375,7 @@ mod tests {
         assert_eq!(lines[1]["operation"], "event.step");
         assert_eq!(lines[1]["node"], "no");
         feed.clear();
-        feed.push(ConsoleOrigin::Editor, "Depois".into(), true, None);
+        feed.push(ConsoleOrigin::Editor, "Depois".into(), true, None, None);
         let after = feed.answer(&ConsoleQuery::parse(&json!({})).unwrap());
         assert_eq!(
             after["lines"],
@@ -458,5 +481,30 @@ mod tests {
             runtime.logs_written() + runtime.traces_written()
         );
         assert!(runtime.logs_written() >= 9, "{}", runtime.logs_written());
+    }
+
+    #[test]
+    fn game_lines_keep_the_script_line_they_came_from() {
+        let mut feed = ConsoleFeed::default();
+        let name = |id: &str| id.to_owned();
+        let line = |text: &str, script: Option<ScriptLocation>| LogLine {
+            text: text.into(),
+            script,
+        };
+        feed.copy_log(&line("Abriu", None), name);
+        let script = ScriptLocation {
+            path: "scripts/porta.luau".into(),
+            line: 12,
+        };
+        feed.copy_log(&line("Porta aberta", Some(script)), name);
+        let read = feed.answer(&ConsoleQuery::parse(&json!({})).unwrap());
+        assert_eq!(
+            read["lines"],
+            json!([
+                {"seq": 1, "origin": "jogo", "text": "Abriu"},
+                {"seq": 2, "origin": "jogo", "text": "Porta aberta",
+                 "script": {"path": "scripts/porta.luau", "line": 12}},
+            ])
+        );
     }
 }

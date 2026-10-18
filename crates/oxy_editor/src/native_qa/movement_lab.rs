@@ -41,7 +41,10 @@ impl NativeQa {
         }
         let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
         if !rt.logs.is_empty() {
-            return Err(format!("{:?}", rt.logs));
+            return Err(format!(
+                "{:?}",
+                rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
+            ));
         }
         if label == "lab3d_scale_running" {
             return if count == 50

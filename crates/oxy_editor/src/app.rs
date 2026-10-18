@@ -1316,7 +1316,11 @@ impl Editor {
             })
             .collect();
         if let Some(rt) = &self.play.runtime {
-            lines.extend(rt.logs.iter().map(|line| ("Jogo", line.clone(), false)));
+            lines.extend(
+                rt.logs
+                    .iter()
+                    .map(|line| ("Jogo", line.text.clone(), false)),
+            );
             let operations = oxy_core::graph::registry();
             for trace in rt.traces.iter().rev().take(5).rev() {
                 let operation = operations

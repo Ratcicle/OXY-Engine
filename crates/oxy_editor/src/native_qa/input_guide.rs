@@ -64,7 +64,7 @@ impl NativeQa {
                 let count = rt
                     .logs
                     .iter()
-                    .filter(|l| l.contains("Minha primeira ação funciona!"))
+                    .filter(|l| l.text.contains("Minha primeira ação funciona!"))
                     .count();
                 if (label == "m2_held" && count < 2) || (label != "m2_held" && count != 1) {
                     return Err(format!("{label}: {count} mensagens"));

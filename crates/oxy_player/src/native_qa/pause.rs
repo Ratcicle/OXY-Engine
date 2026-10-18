@@ -80,7 +80,7 @@ impl PausePlayerQa {
         let fired = rt
             .logs
             .iter()
-            .filter(|line| line.ends_with("] disparo"))
+            .filter(|line| line.text.ends_with("] disparo"))
             .count();
         let captured = oxy_render::input::cursor_captured(ctx);
         let engine_window = self.label("Jogo pausado").is_some();
@@ -174,7 +174,7 @@ impl PausePlayerQa {
                 if fired != 0 {
                     return Err(format!(
                         "Cliques nos botões viraram Disparar: {:?}",
-                        rt.logs
+                        rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
                     ));
                 }
                 let center = ctx.content_rect().center();
@@ -185,7 +185,7 @@ impl PausePlayerQa {
                 if fired != 1 {
                     return Err(format!(
                         "Clique no jogo deveria Disparar uma vez: {:?}",
-                        rt.logs
+                        rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
                     ));
                 }
                 self.tap(Key::Escape);

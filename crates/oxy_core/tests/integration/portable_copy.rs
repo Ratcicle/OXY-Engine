@@ -119,7 +119,7 @@ fn shipped_parkour_opens_as_a_copy_with_its_sounds_and_plays() {
             runtime.advance(FIXED_DT, &InputFrame::default());
         }
         assert!(
-            !runtime.logs.iter().any(|l| l.contains("interrompido")),
+            !runtime.logs.iter().any(|l| l.text.contains("interrompido")),
             "{}: {:?}",
             scene.name,
             runtime.logs

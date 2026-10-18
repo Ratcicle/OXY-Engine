@@ -239,7 +239,7 @@ fn teleport_node_cancels_old_sensor_exit_but_keeps_its_own_continuation() {
     ticks(&mut r, 1);
     assert!(r.character_state(&id).unwrap().position.x > 9.9);
     assert_eq!(r.logs.len(), 1, "{:?}", r.logs);
-    assert!(r.logs[0].contains("teleporte concluído"));
+    assert!(r.logs[0].text.contains("teleporte concluído"));
 }
 
 /// A sensor box named `name` at `x` (3 m tall and deep), `width` across X, whose logic is
@@ -271,7 +271,7 @@ fn message(text: &str) -> Node {
     node("debug.message", &[("message", Value::Text(text.into()))])
 }
 fn said(r: &Runtime, text: &str) -> bool {
-    r.logs.iter().any(|line| line.ends_with(text))
+    r.logs.iter().any(|line| line.text.ends_with(text))
 }
 
 #[test]
@@ -482,7 +482,10 @@ fn an_unread_failure_is_logged_once_per_node_by_name() {
     let line = "Zona de queda · Teleportar com segurança falhou: Destino ocupado; personagem \
                 mantido na posição anterior.";
     // Two nodes, one line each, however often they fail.
-    assert_eq!(r.logs, [line, line]);
+    assert_eq!(
+        r.logs.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+        [line, line]
+    );
     assert!(r.character_state(&id).unwrap().position.y > 0.);
     // Read by a branch, a failure is the logic's to handle: nothing is logged.
     let (p, _, _) = failing_teleports(1, 1);
@@ -499,7 +502,8 @@ fn an_unread_failure_is_logged_once_per_node_by_name() {
             r.change_scene(&p.start_scene).unwrap();
         }
         ticks(&mut r, 3);
-        (r.logs.clone(), r.state_hash())
+        let logs: Vec<_> = r.logs.iter().map(|l| l.text.clone()).collect();
+        (logs, r.state_hash())
     };
     assert_eq!(run(false), run(false));
     assert_eq!(run(true).0, [line]);
@@ -547,7 +551,7 @@ fn a_diagnostic_message_writes_the_value_it_is_given() {
     let texts: Vec<&str> = r
         .logs
         .iter()
-        .map(|line| line.split_once("] ").unwrap().1)
+        .map(|line| line.text.split_once("] ").unwrap().1)
         .collect();
     // Wired to Motivo de recusa, the failure is read: no line of its own.
     assert_eq!(
@@ -933,7 +937,7 @@ fn moved(
     validate_project(&p).unwrap();
     let r = Runtime::new(&p, &p.start_scene).unwrap();
     match r.logs.first() {
-        Some(error) => Err(error.clone()),
+        Some(error) => Err(error.text.clone()),
         None => Ok((
             group.matrix(),
             piece.clone(),
@@ -1373,7 +1377,7 @@ fn transform_write_refuses_a_character_and_what_a_playing_clip_poses() {
     r.advance(FIXED_DT, &pressing("mexer"));
     assert_eq!(r.logs.len(), 2, "{:?}", r.logs);
     assert!(
-        r.logs[0].contains(
+        r.logs[0].text.contains(
             "Jogador é um personagem 3D: mova-o com Teleportar com segurança e gire-o com \
              Definir giro horizontal do personagem"
         ),
@@ -1381,7 +1385,7 @@ fn transform_write_refuses_a_character_and_what_a_playing_clip_poses() {
         r.logs
     );
     assert!(
-        r.logs[1].contains(
+        r.logs[1].text.contains(
             "Hélice é movido pela animação Sobe e desce, que está tocando: pause-a com Ativar / \
              desativar componente (Reprodução da animação) ou mova um grupo acima dele"
         ),
@@ -1595,7 +1599,9 @@ fn a_write_marked_as_a_jump_drops_the_riders_without_launching_them() {
     );
     assert_eq!(r.logs.len(), 1, "{:?}", r.logs);
     assert!(
-        r.logs[0].contains("Apoio em Plataforma liberado sem herdar velocidade"),
+        r.logs[0]
+            .text
+            .contains("Apoio em Plataforma liberado sem herdar velocidade"),
         "{:?}",
         r.logs
     );

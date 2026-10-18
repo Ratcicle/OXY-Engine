@@ -22,7 +22,10 @@ use crate::{
     input_actions,
     input_timeline::{InputChange, InputTimeline, TimedInput},
     random,
-    runtime::{FIXED_DT, InputFrame, NodeTrace, Recording, Runtime, RuntimeOptions},
+    runtime::{
+        FIXED_DT, InputFrame, LogLine, NodeTrace, Recording, Runtime, RuntimeOptions,
+        ScriptLocation,
+    },
     save::{self, SaveRequest, SaveSlot},
     variables,
 };
@@ -582,6 +585,9 @@ pub struct Log {
     pub object: Option<Named>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<NodeRef>,
+    /// The script line that wrote it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<ScriptLocation>,
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct NodeRef {
@@ -953,13 +959,16 @@ fn is_id(bytes: &[u8]) -> bool {
 
 /// A runtime log line as an entry with names: object and node IDs become fields, and IDs of
 /// objects and scenes left in the text become their names. `traces` are the step's own: they
-/// name the node of a spawned copy that is already gone.
-fn log_entry(lookup: Lookup, traces: &[NodeTrace], time: f64, line: &str) -> Log {
+/// name the node of a spawned copy that is already gone. A script's line keeps its file and
+/// line.
+fn log_entry(lookup: Lookup, traces: &[NodeTrace], time: f64, log: &LogLine) -> Log {
+    let line = log.text.as_str();
     let mut entry = Log {
         time: rounded(time),
         text: line.into(),
         object: None,
         node: None,
+        script: log.script.clone(),
     };
     if let Some((object, node, message)) = node_line(line)
         && let Some(name) = lookup.name(object)
@@ -1277,7 +1286,7 @@ impl Recorder<'_> {
         for line in logs {
             let entry = log_entry(self.lookup(runtime), &traces, time, &line);
             happened.logs.push(entry.text.clone());
-            happened.logs.push(line);
+            happened.logs.push(line.text);
             self.logs.push(entry);
         }
         for trace in traces {
@@ -3043,6 +3052,13 @@ mod tests {
         project.scenes[0].entities.push(entity);
         (project, id, node_id)
     }
+    /// A line the engine or a node wrote, as the runtime keeps it.
+    fn line(text: impl Into<String>) -> LogLine {
+        LogLine {
+            text: text.into(),
+            script: None,
+        }
+    }
 
     #[test]
     fn log_lines_name_their_object_and_node() {
@@ -3054,7 +3070,7 @@ mod tests {
             source: &project,
             spawned: &spawned,
         };
-        let debug = log_entry(lookup, &[], 0.5, &format!("[{id} / {node}] Abriu"));
+        let debug = log_entry(lookup, &[], 0.5, &line(format!("[{id} / {node}] Abriu")));
         assert_eq!(debug.text, "Abriu");
         assert_eq!(debug.object.as_ref().unwrap().name, "Porta");
         assert_eq!(debug.node.as_ref().unwrap().operation, "debug.message");
@@ -3062,27 +3078,56 @@ mod tests {
             lookup,
             &[],
             0.5,
-            &format!("Objeto {id} / nó {node}: Divisão por zero. Comportamento interrompido."),
+            &line(format!(
+                "Objeto {id} / nó {node}: Divisão por zero. Comportamento interrompido."
+            )),
         );
         assert_eq!(
             failure.text,
             "Divisão por zero. Comportamento interrompido."
         );
         assert_eq!(failure.node.unwrap().id, node);
-        let character = log_entry(lookup, &[], 0.5, &format!("Personagem {id}: sem chão"));
+        let character = log_entry(
+            lookup,
+            &[],
+            0.5,
+            &line(format!("Personagem {id}: sem chão")),
+        );
         assert_eq!(character.text, "Personagem Porta: sem chão");
         assert_eq!(character.object.unwrap().id, id);
         let scene = &project.start_scene;
-        let camera = log_entry(lookup, &[], 0., &format!("Câmera {scene}: aviso"));
+        let camera = log_entry(lookup, &[], 0., &line(format!("Câmera {scene}: aviso")));
         assert_eq!(
             camera.text,
             format!("Câmera {}: aviso", project.scenes[0].name)
         );
         assert!(camera.object.is_none());
-        let plain = log_entry(lookup, &[], 0., "Limite de tarefas");
+        let plain = log_entry(lookup, &[], 0., &line("Limite de tarefas"));
+        // Lines without a script read as before; a script's line keeps its file and line.
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({"time": 0., "text": "Limite de tarefas"})
+        );
         assert_eq!(
             (plain.text.as_str(), plain.object),
             ("Limite de tarefas", None)
+        );
+        let scripted = log_entry(
+            lookup,
+            &[],
+            0.5,
+            &LogLine {
+                script: Some(ScriptLocation {
+                    path: "scripts/porta.luau".into(),
+                    line: 12,
+                }),
+                ..line(format!("{id} abriu"))
+            },
+        );
+        assert_eq!(scripted.text, "Porta abriu");
+        assert_eq!(
+            serde_json::to_value(&scripted).unwrap()["script"],
+            serde_json::json!({"path": "scripts/porta.luau", "line": 12})
         );
     }
 
@@ -3178,7 +3223,12 @@ mod tests {
             operation: "debug.message".into(),
             time: 0.5,
         }];
-        let entry = log_entry(lookup, &traces, 0.5, &format!("[{copy} / {node}] acertou"));
+        let entry = log_entry(
+            lookup,
+            &traces,
+            0.5,
+            &line(format!("[{copy} / {node}] acertou")),
+        );
         assert_eq!(entry.text, "acertou");
         assert_eq!(entry.object.unwrap().name, "Bala (cópia)");
         assert_eq!(entry.node.unwrap().operation, "debug.message");

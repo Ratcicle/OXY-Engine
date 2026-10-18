@@ -357,7 +357,7 @@ fn main() {
                 },
             );
         }
-        equivalence.push(serde_json::json!({"scenario":mode,"entities":runtime.scene().entities.iter().map(|e|(&e.id,&e.parent,&e.transform,&e.attributes)).collect::<Vec<_>>(),"logs":runtime.logs,"trace":runtime.traces.iter().map(|t|(&t.object,&t.node,&t.operation,t.time)).collect::<Vec<_>>()}));
+        equivalence.push(serde_json::json!({"scenario":mode,"entities":runtime.scene().entities.iter().map(|e|(&e.id,&e.parent,&e.transform,&e.attributes)).collect::<Vec<_>>(),"logs":runtime.logs.iter().map(|l|&l.text).collect::<Vec<_>>(),"trace":runtime.traces.iter().map(|t|(&t.object,&t.node,&t.operation,t.time)).collect::<Vec<_>>()}));
     }
     println!("{}",serde_json::to_string_pretty(&serde_json::json!({"method":"CPU only; seed 0; 16-piece chains; all pieces collidable and animated; 3 warmups, up to 101 samples, 3s soft cap; picking and overlays at 1280x720 logical points; preview includes scene clone and actual sampling/preparation; no GPU timing","rows":rows,"cycles":cycles,"soak":soak,"equivalence":equivalence})).unwrap());
 }
