@@ -94,12 +94,12 @@ impl Runtime {
             .ok_or("Objeto de escrita não existe")?;
         let old = entity
             .attributes
-            .get(name)
+            .get_mut(name)
             .ok_or("Crie primeiro o atributo no painel de propriedades")?;
         if std::mem::discriminant(old) != std::mem::discriminant(&value) {
             return Err("Valor incompatível com o tipo do atributo".into());
         }
-        entity.attributes.insert(name.into(), value);
+        *old = value;
         Ok(())
     }
 

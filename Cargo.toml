@@ -23,6 +23,7 @@ rfd = "=0.15.4"
 hound = "=3.5.1"
 rapier3d = { version = "=0.35.3", default-features = false, features = ["dim3", "f32", "std"] }
 cpal = "=0.18.2"
+mlua = { version = "=0.12.2", features = ["luau"] }
 oxy_core = { path = "crates/oxy_core" }
 oxy_render = { path = "crates/oxy_render" }
 oxy_audio = { path = "crates/oxy_audio" }

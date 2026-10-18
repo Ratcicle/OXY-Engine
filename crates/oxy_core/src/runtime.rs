@@ -4,14 +4,16 @@
 //! - Per run: survives `change_scene` and dies with the `Runtime` (Parar, a new player run).
 //!   The clock (`time`), activation serials, the host pause, logs and traces with their
 //!   counters, the host queues (`sounds`, `save_requests`, `scene_starts`, `recording`), the
-//!   quit request and `run`, the `RunState` (draws, copy counts, game variables, saved
-//!   progress, time spent in the game pause, music and volumes) that new run-wide state goes
-//!   into. `stop` resets `run`.
+//!   quit request, the scripts' sources with the Luau VM that caches their modules (`stop`
+//!   drops it), and `run`, the `RunState` (draws, copy counts, game variables, saved progress,
+//!   time spent in the game pause, music and volumes, script errors told) that new run-wide
+//!   state goes into. `stop` resets `run`.
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
-//!   stopped behaviors, area pairs, activations, hit leases, the game pause, the cursor shown
-//!   by logic and the effect loops (kept with the music in `run`, which `change_scene` ends).
+//!   stopped behaviors and scripts, area pairs, activations, hit leases, the game pause, the
+//!   cursor shown by logic and the effect loops (kept with the music in `run`, which
+//!   `change_scene` ends).
 //! - Per object: the entries of per-scene structures keyed by an object, pruned in
 //!   `remove_object` when it goes (the cameras' lazily, at the next presentation), and the
 //!   run's counts of an object made during the run (see `forget_copies`).
@@ -47,6 +49,7 @@ mod game_nodes;
 mod math_nodes;
 mod movement_nodes;
 mod operations;
+mod scripts;
 mod state_hash;
 mod transforms;
 pub use characters::SensorCrossing;
@@ -236,6 +239,9 @@ pub(crate) struct RunState {
     audio: crate::audio::AudioState,
     /// The (owner, node) actions whose failure no one read and the log already told.
     failures_logged: BTreeSet<(Id, Id)>,
+    /// The script errors the log told, by object (empty for a script that did not load) and
+    /// place, with the line told and how many times each happened: a repeat only counts.
+    script_errors: BTreeMap<(Id, scripts::ErrorPlace), (String, u64)>,
 }
 impl RunState {
     /// A run's start: the draws from `seed`, every variable at its declared value.
@@ -262,6 +268,9 @@ pub struct RuntimeOptions {
     /// The progress saved by earlier runs, which starts the persistent game variables before
     /// the scene start logic; none is a fresh install. Hosts read it from disk (see `save`).
     pub save: Option<crate::save::SaveSlot>,
+    /// The project's scripts (see `persistence::load_scripts`); objects attaching one that is
+    /// not here run without it.
+    pub scripts: Arc<crate::script::ScriptSources>,
 }
 
 pub struct Runtime {
@@ -329,6 +338,12 @@ pub struct Runtime {
     serial: u64,
     stopped: bool,
     run: RunState,
+    /// The scripts the run's objects attach, as the host gave them.
+    script_sources: Arc<crate::script::ScriptSources>,
+    /// The Luau VM, once a scene attaches a script: a cache of compiled modules, never state.
+    scripts: Option<crate::script::ScriptHost>,
+    /// (object, script) pairs a limit of work or memory stopped.
+    disabled_scripts: BTreeSet<(Id, String)>,
 }
 
 impl Runtime {
@@ -403,12 +418,16 @@ impl Runtime {
             stopped: false,
             // Before the scene start logic, which may read the variables.
             run: RunState::new(project, options.seed),
+            script_sources: options.scripts,
+            scripts: None,
+            disabled_scripts: BTreeSet::new(),
         };
         if let Some(slot) = options.save {
             runtime.load_save(slot);
         }
         runtime.initialize_character_states()?;
         runtime.begin_camera_input(&InputFrame::default());
+        runtime.start_scripts();
         runtime.emit(RuntimeEvent::SceneStart);
         let mut budget = MAX_NODE_WORK;
         runtime.process_tasks(&mut budget);
@@ -432,7 +451,7 @@ impl Runtime {
             .as_ref()
             .ok()
     }
-    fn entity(&self, id: &str) -> Option<&crate::document::Entity> {
+    pub(crate) fn entity(&self, id: &str) -> Option<&crate::document::Entity> {
         self.index()?
             .position(id)
             .map(|i| &self.scene().entities[i])
@@ -517,6 +536,7 @@ impl Runtime {
             ("bodies", self.bodies.is_empty()),
             ("animations", self.animations.is_empty()),
             ("disabled_behaviors", self.disabled_behaviors.is_empty()),
+            ("disabled_scripts", self.disabled_scripts.is_empty()),
             ("overlap_pairs", self.overlap_pairs.is_empty()),
             ("area_activations", self.area_activations.is_empty()),
             ("damage_hits", self.damage_hits.is_empty()),
@@ -551,6 +571,8 @@ impl Runtime {
         self.sounds.clear();
         self.animations.clear();
         self.disabled_behaviors.clear();
+        self.disabled_scripts.clear();
+        self.scripts = None;
         self.area_hits.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -672,6 +694,9 @@ impl Runtime {
     /// phases share the step's own work budget, so a run does the same at any frame rate.
     fn fixed_step(&mut self, input: &InputFrame) {
         let mut budget = MAX_NODE_WORK;
+        if let Some(host) = &self.scripts {
+            host.begin_step();
+        }
         self.step_input = input.clone();
         self.query_work = 0;
         self.sounds_before_change = None;
@@ -768,10 +793,14 @@ impl Runtime {
         self.traces_written
     }
     pub(crate) fn log(&mut self, message: String) {
+        self.log_at(message, None);
+    }
+    /// A log line, with the script line that wrote it.
+    pub(crate) fn log_at(&mut self, message: String, script: Option<ScriptLocation>) {
         self.logs_written += 1;
         self.logs.push(LogLine {
             text: message,
-            script: None,
+            script,
         });
         if self.logs.len() > 500 {
             self.logs.drain(..100);
@@ -1369,6 +1398,11 @@ impl Runtime {
         self.bodies.retain(|owner, _| !ids.contains(owner));
         self.animations.retain(|owner, _| !ids.contains(owner));
         self.disabled_behaviors.retain(|owner| !ids.contains(owner));
+        self.disabled_scripts
+            .retain(|(owner, _)| !ids.contains(owner));
+        if let Some(host) = &self.scripts {
+            host.forget(&ids);
+        }
         self.overlap_pairs
             .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
         self.damage_hits.retain(|(a, _), hits| {
@@ -1401,6 +1435,9 @@ impl Runtime {
         self.run.rolls.retain(|(owner, _), _| keep(owner));
         self.run.spawns.retain(|(owner, _), _| keep(owner));
         self.run.failures_logged.retain(|(owner, _)| keep(owner));
+        self.run
+            .script_errors
+            .retain(|(owner, _), _| owner.is_empty() || keep(owner));
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();
@@ -1434,6 +1471,7 @@ impl Runtime {
         self.bodies.clear();
         self.animations.clear();
         self.disabled_behaviors.clear();
+        self.disabled_scripts.clear();
         self.overlap_pairs.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -1458,6 +1496,7 @@ impl Runtime {
         self.query_work = 0;
         self.initialize_character_states()?;
         self.begin_camera_input(&InputFrame::default());
+        self.start_scripts();
         self.emit(RuntimeEvent::SceneStart);
         Ok(())
     }

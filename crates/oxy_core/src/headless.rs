@@ -2802,6 +2802,7 @@ pub fn run(
         record: true,
         seed: request.seed,
         save,
+        ..Default::default()
     };
     let mut runtime = Runtime::with_options(source, &start, options.clone())?;
     let mut bot = bot.map(|bot| BotRun {

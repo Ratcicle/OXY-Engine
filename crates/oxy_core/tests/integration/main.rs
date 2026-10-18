@@ -44,5 +44,6 @@ mod saved_validation_projects;
 mod scene_views;
 mod scenes;
 mod scripts_format;
+mod scripts_host;
 mod simulation;
 mod step_budget;

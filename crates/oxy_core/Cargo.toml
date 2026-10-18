@@ -16,4 +16,5 @@ glam.workspace = true
 image.workspace = true
 thiserror.workspace = true
 hound.workspace = true
+mlua.workspace = true
 rapier3d.workspace = true

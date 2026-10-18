@@ -16,6 +16,10 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+      # Luau is C++ with exceptions and cc passes no /EH flag to MSVC by itself; cc writes each
+      # compiler command to the build script output, which the step after the build checks.
+      LUAU_CXXFLAGS: /EHsc
+      CC_ENABLE_DEBUG_OUTPUT: 1
     steps:
       - uses: actions/checkout@v7
         with:
@@ -33,6 +37,9 @@ jobs:
           if ($env:RELEASE_TAG -ne "v$version") { throw "Tag $env:RELEASE_TAG não corresponde à versão $version do editor." }
       - name: Compilar com runtime C estático
         run: cargo build --workspace --release --locked --target x86_64-pc-windows-msvc
+      - name: Luau compilado com /EHsc
+        shell: pwsh
+        run: ./scripts/check-luau-ehsc.ps1 -BuildDirectory target/x86_64-pc-windows-msvc/release/build
       - name: Testar
         run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
       - name: Gerar ZIP e checksum

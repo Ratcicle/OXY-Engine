@@ -3,9 +3,62 @@
 //! file keeps only each object's references, in the order they run. A script is known, in the
 //! project, logs and agents, by its path from the project's folder with `/`, as
 //! `scripts/porta.luau`. Values per object stay in its attributes.
+//!
+//! The host runs them in Luau through mlua (`host`, `sandbox`, `load`, `handles`), one VM per
+//! `Runtime`, created only when its scene attaches a script. The VM keeps the compiled modules,
+//! frozen, and nothing of the game, which lives in the engine's state. Its `unsafe` code keeps
+//! two rules:
+//! - Aliasing: a call lends the VM the `Runtime` through a pointer that a guard sets from a
+//!   `&mut Runtime` it keeps borrowed until the call ends, so the caller cannot touch the
+//!   `Runtime` meanwhile; the host is out of the `Runtime` (`Option::take`) during the call, so
+//!   nothing reaches the VM through it; Luau runs on one thread and no function scripts call
+//!   calls back into Luau while it holds the `Runtime`, so one reference lives at a time.
+//!   Outside a call the pointer is null and the functions that reach the world refuse.
+//! - C++ exceptions: the Luau of mlua-sys raises errors as C++ exceptions, and a foreign
+//!   exception reaching a `catch_unwind` aborts the process. So no call of Luau's C API that
+//!   can raise (an error, an allocation) sits inside a `catch_unwind`: Rust work behind the
+//!   panic barriers touches no Lua stack (or only mlua's safe API, which catches the exceptions
+//!   itself), raw C code runs inside `exec_raw` or a C function Luau calls, and errors are
+//!   raised after the Rust values are dropped. The VM is created with
+//!   `catch_rust_panics(false)`, so a script's `pcall` never hides a panic, and each door marks
+//!   the host when it catches one (`coroutine.resume` still swallows them).
 use crate::{document::Project, input_actions::every_entity};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+
+mod bytecode;
+mod errors;
+mod handles;
+mod host;
+#[cfg(test)]
+mod host_tests;
+mod load;
+mod sandbox;
+
+pub use errors::{ScriptError, ScriptErrorKind};
+pub(crate) use handles::collision;
+pub use host::ScriptCall;
+pub(crate) use host::ScriptHost;
+
+/// What [`check`] reads from a script that loads. Provisional, as [`check`].
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScriptCheck {
+    /// The global paths the script reads, as `math.floor`, for the lint of names.
+    pub imports: Vec<String>,
+}
+
+/// Compiles `source` as the script `path` (`scripts/porta.luau`) and checks it the way loading
+/// does before running anything: syntax and top-level locals some function writes.
+/// Provisional: the lint of names and the checks of the tools build on it in a later stage;
+/// only tests call it now.
+#[doc(hidden)]
+pub fn check(path: &str, source: &str) -> Result<ScriptCheck, ScriptError> {
+    let (_, report) = load::check(path, source)?;
+    Ok(ScriptCheck {
+        imports: report.imports.into_iter().collect(),
+    })
+}
 
 /// The scripts' folder, in the project's folder (`data` in an exported game).
 pub const FOLDER: &str = "scripts";
@@ -34,6 +87,15 @@ pub struct ScriptSources {
 impl ScriptSources {
     pub fn get(&self, path: &str) -> Option<&ScriptFile> {
         self.files.get(path)
+    }
+    /// Sources given in memory, as tests and tools write them: (path, text).
+    pub fn from_texts<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+        Self {
+            files: files
+                .into_iter()
+                .map(|(path, text)| (path.to_owned(), ScriptFile::new(text.to_owned())))
+                .collect(),
+        }
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

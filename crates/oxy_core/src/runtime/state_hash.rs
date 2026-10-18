@@ -13,9 +13,10 @@ use std::fmt::{self, Write as _};
 
 /// The state in parts, each with its hash. The run's own come first (scene, time, input,
 /// tasks, areas, characters, random, variables.<name> for each game variable, save, audio,
-/// camera), then each object's in scene order: transform, visible, attributes.<name>, document
-/// (its whole document form), character, platform, body (2D movement), animation and behavior
-/// (stopped by an error or by logic).
+/// camera, script_errors), then each object's in scene order: transform, visible,
+/// attributes.<name>, document (its whole document form), character, platform, body (2D
+/// movement), animation, behavior (stopped by an error or by logic) and scripts (those a limit
+/// stopped). Parts a project without scripts never has are left out, not written empty.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateDigest {
     pub parts: Vec<StatePart>,
@@ -228,6 +229,10 @@ impl Runtime {
             area_hits,
             serial,
             run,
+            // The project's scripts, as the project itself, and the VM, a cache of modules.
+            script_sources: _,
+            scripts: _,
+            disabled_scripts,
         } = self;
         let RunState {
             seed,
@@ -238,6 +243,7 @@ impl Runtime {
             paused_for,
             audio,
             failures_logged,
+            script_errors,
         } = run;
         let mut digest = StateDigest::default();
         digest.add(None, "scene", |s| {
@@ -326,6 +332,10 @@ impl Runtime {
         digest.add(None, "camera", |s| {
             let _ = cameras.write_digest(self.scene(), s);
         });
+        // The script errors told so far, which no later line repeats; absent without any.
+        digest.add_some(None, "script_errors", |s| {
+            (!script_errors.is_empty()).then(|| write!(s, "{script_errors:?}"))
+        });
         for entity in &self.scene().entities {
             let id = Some(&entity.id);
             // The parts the logic changes most come before the whole, which then names
@@ -358,6 +368,17 @@ impl Runtime {
             });
             digest.add_some(id, "behavior", |_| {
                 disabled_behaviors.contains(&entity.id).then_some(Ok(()))
+            });
+            digest.add_some(id, "scripts", |s| {
+                if disabled_scripts.is_empty() {
+                    return None;
+                }
+                let stopped: Vec<&String> = disabled_scripts
+                    .range((entity.id.clone(), String::new())..)
+                    .take_while(|(owner, _)| *owner == entity.id)
+                    .map(|(_, path)| path)
+                    .collect();
+                (!stopped.is_empty()).then(|| write!(s, "{stopped:?}"))
             });
         }
         digest
