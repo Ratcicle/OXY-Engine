@@ -16,7 +16,8 @@ use std::fmt::{self, Write as _};
 /// camera, script_errors), then each object's in scene order: transform, visible,
 /// attributes.<name>, document (its whole document form), character, platform, body (2D
 /// movement), animation, behavior (stopped by an error or by logic) and scripts (those a limit
-/// stopped). Parts a project without scripts never has are left out, not written empty.
+/// stopped). Parts a project without scripts never has are left out, not written empty, and so
+/// is what scripts add to a part (their tasks, timer numbers, draws and copies).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateDigest {
     pub parts: Vec<StatePart>,
@@ -229,15 +230,22 @@ impl Runtime {
             area_hits,
             serial,
             run,
-            // The project's scripts, as the project itself, and the VM, a cache of modules.
+            // The project's scripts, as the project itself, and the VM with what each module
+            // hears, a cache of modules.
             script_sources: _,
             scripts: _,
+            script_callbacks: _,
+            // Counted from the timer tasks, which are read below.
+            timer_room: _,
             disabled_scripts,
         } = self;
         let RunState {
             seed,
             rolls,
             spawns,
+            script_rolls,
+            script_spawns,
+            timers,
             variables,
             save,
             paused_for,
@@ -275,8 +283,6 @@ impl Runtime {
                     target,
                     context,
                 } = task;
-                // A node's task reads as it did before tasks had targets; others add their own.
-                let TaskTarget::Node(node) = target;
                 let Context {
                     owner: runs_as,
                     other,
@@ -288,9 +294,20 @@ impl Runtime {
                 let hits = hits
                     .as_ref()
                     .map(|hits| sorted(hits.lock().unwrap().iter().cloned()));
-                s.debug(&(
-                    due, owner, node, runs_as, other, activation, outputs, hits, trajectory,
-                ));
+                // A node's task reads as it did before tasks had targets; a script's adds its
+                // own: the script, the function, what it passes and its timer.
+                match target {
+                    TaskTarget::Node(node) => s.debug(&(
+                        due, owner, node, runs_as, other, activation, outputs, hits, trajectory,
+                    )),
+                    TaskTarget::Script(script) => s.debug(&(
+                        due, owner, script, runs_as, other, activation, outputs, hits, trajectory,
+                    )),
+                };
+            }
+            // The last number a script's timer got, which names the next one.
+            if *timers > 0 {
+                s.debug(timers);
             }
         });
         digest.add(None, "areas", |s| {
@@ -308,6 +325,9 @@ impl Runtime {
         });
         digest.add(None, "random", |s| {
             s.debug(seed).debug(rolls).debug(spawns);
+            if !script_rolls.is_empty() || !script_spawns.is_empty() {
+                s.debug(script_rolls).debug(script_spawns);
+            }
         });
         // One part per variable, in the order the project declares them, with every key's value.
         for declared in &self.source.variables {

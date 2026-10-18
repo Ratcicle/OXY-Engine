@@ -3,9 +3,10 @@
 //! the world (R2); freeze in depth everything the module reaches (R1). The module is kept for
 //! the life of the VM: nothing of the game lives in it.
 use super::bytecode;
-use super::errors::{ScriptError, describe};
+use super::errors::{ScriptError, closest, describe};
 use super::host::{Module, Phase, Shared, suspended_error};
 use super::sandbox::compiler;
+use super::{Callback, Callbacks, LATER_CALLBACKS};
 use mlua::chunk::ChunkMode;
 use mlua::{Function, Lua, Table, Value as LuaValue, ffi};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -131,7 +132,33 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
             _ => None,
         })
         .collect::<BTreeMap<String, Function>>();
-    Ok(Rc::new(Module { table, functions }))
+    let mut names = HashMap::new();
+    let mut callbacks = Callbacks::default();
+    let mut unknown = Vec::new();
+    for (name, f) in &functions {
+        names
+            .entry(f.to_pointer() as usize)
+            .or_insert_with(|| name.as_str().into());
+        if let Some(callback) = Callback::ALL.into_iter().find(|c| c.name() == name) {
+            callbacks.insert(callback);
+        } else if name.starts_with("on_") && !LATER_CALLBACKS.contains(&name.as_str()) {
+            let known = Callback::ALL.map(Callback::name).into_iter();
+            let line = f.info().line_defined.unwrap_or(0) as u32;
+            unknown.push((
+                name.clone(),
+                line,
+                closest(name, known.chain(LATER_CALLBACKS)),
+            ));
+        }
+    }
+    Ok(Rc::new(Module {
+        path: path.into(),
+        table,
+        functions,
+        names,
+        callbacks,
+        unknown,
+    }))
 }
 
 /// A module's top running: the host "loading" and the module on the stack of requires, both

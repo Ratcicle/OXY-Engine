@@ -7,9 +7,12 @@
 //! `lua_tolstring` and the method with `lua_namecallatom`, without creating mlua values.
 //!
 //! The surface scripts reach here is provisional (stage 2): the object's `name`, `attr`,
-//! `exists()` and `has_attribute(name)`. The API of game scripts comes with its own table.
+//! `exists()`, `has_attribute(name)` and the timers of `timers` (`self:after(...)` and the
+//! others, written with mlua and called from the table of methods). The API of game scripts
+//! comes with its own table.
 use super::errors::closest;
 use super::host::{Shared, door, locate_raw, peek};
+use super::timers;
 use crate::document::Value;
 use crate::runtime::Runtime;
 use mlua::{Function, LightUserData, Lua, Table, ffi};
@@ -53,31 +56,50 @@ pub(crate) fn collision(runtime: &Runtime, a: &str, b: &str) -> String {
     )
 }
 
-const OBJECT_MEMBERS: [&str; 4] = ["name", "attr", "exists", "has_attribute"];
+const OBJECT_MEMBERS: [&str; 9] = [
+    "name",
+    "attr",
+    "exists",
+    "has_attribute",
+    "after",
+    "every",
+    "sequence",
+    "schedule",
+    "cancel",
+];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Method {
     Exists = 1,
     HasAttribute = 2,
+    /// One of `timers::METHODS`, an mlua function in the table of methods.
+    Timer = 3,
 }
 
-const METHODS: [(&CStr, Method); 2] = [
+const METHODS: [(&CStr, Method); 7] = [
     (c"exists", Method::Exists),
     (c"has_attribute", Method::HasAttribute),
+    (c"after", Method::Timer),
+    (c"every", Method::Timer),
+    (c"sequence", Method::Timer),
+    (c"schedule", Method::Timer),
+    (c"cancel", Method::Timer),
 ];
+const _: () = assert!(timers::METHODS.len() == 5);
 
-fn method(name: &[u8]) -> Option<Method> {
-    METHODS
-        .iter()
-        .find(|(n, _)| n.to_bytes() == name)
-        .map(|(_, m)| *m)
+fn method(name: &[u8]) -> Option<(&'static CStr, Method)> {
+    METHODS.iter().find(|(n, _)| n.to_bytes() == name).copied()
 }
 
 /// Installs the metatable of light userdata, frozen.
 pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     let me = LightUserData(Rc::as_ptr(shared) as *mut c_void);
     let methods = lua.create_table()?;
+    timers::install(lua, shared, &methods)?;
     for (name, method) in METHODS {
+        if method == Method::Timer {
+            continue;
+        }
         // SAFETY: the two arguments become the closure's upvalues and the closure is left as
         // the only value. `Shared` outlives the VM (the host closes the VM first).
         let f: Function = unsafe {
@@ -91,14 +113,14 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     // SAFETY: as above.
     let (index, newindex, namecall, tostring): (Function, Function, Function, Function) = unsafe {
         (
-            lua.exec_raw((me, methods), |l| {
+            lua.exec_raw((me, methods.clone()), |l| {
                 ffi::lua_pushcclosurek(l, object_index, c"Object.__index".as_ptr(), 2, None);
             })?,
             lua.exec_raw(me, |l| {
                 ffi::lua_pushcclosurek(l, object_newindex, c"Object.__newindex".as_ptr(), 1, None);
             })?,
-            lua.exec_raw(me, |l| {
-                ffi::lua_pushcclosurek(l, object_namecall, c"Object.__namecall".as_ptr(), 1, None);
+            lua.exec_raw((me, methods), |l| {
+                ffi::lua_pushcclosurek(l, object_namecall, c"Object.__namecall".as_ptr(), 2, None);
             })?,
             lua.exec_raw(me, |l| {
                 ffi::lua_pushcclosurek(l, object_tostring, c"Object.__tostring".as_ptr(), 1, None);
@@ -186,7 +208,7 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
                     let id = handles.get(&key).ok_or_else(gone)?;
                     Out::Text(runtime.entity(id).ok_or_else(gone)?.name.clone())
                 }
-                other => match METHODS.iter().find(|(n, _)| n.to_bytes() == other) {
+                other => match method(other) {
                     Some((name, _)) => Out::Method(name),
                     None => return Err(unknown_member(other)),
                 },
@@ -305,6 +327,7 @@ fn run(
             let name = utf8(name)?;
             Ok(entity.ok_or_else(gone)?.attributes.contains_key(name))
         }
+        Method::Timer => Err("método de temporizador fora da tabela de métodos".into()),
     }
 }
 
@@ -471,7 +494,22 @@ unsafe fn run_method(l: *mut ffi::lua_State, shared: &Shared, method: Method) ->
     }
 }
 
-/// `obj:method(...)`. Upvalue: the `Shared`.
+/// A method of the table of methods (upvalue 2 of the running closure), called with the
+/// object and the arguments as they came; its errors unwind from it.
+///
+/// # Safety
+/// Called from a C function Luau runs, with nothing of Rust to drop.
+unsafe fn call_listed(l: *mut ffi::lua_State, name: &CStr) -> c_int {
+    unsafe {
+        let n = ffi::lua_gettop(l);
+        ffi::lua_rawgetfield(l, ffi::lua_upvalueindex(2), name.as_ptr());
+        ffi::lua_insert(l, 1);
+        ffi::lua_call(l, n, ffi::LUA_MULTRET);
+        ffi::lua_gettop(l)
+    }
+}
+
+/// `obj:method(...)`. Upvalues: the `Shared` and the table of methods.
 unsafe extern "C-unwind" fn object_namecall(l: *mut ffi::lua_State) -> c_int {
     unsafe {
         let shared = shared_of(l);
@@ -482,7 +520,8 @@ unsafe extern "C-unwind" fn object_namecall(l: *mut ffi::lua_State) -> c_int {
             CStr::from_ptr(atom).to_bytes()
         };
         match method(name) {
-            Some(m) => run_method(l, shared, m),
+            Some((name, Method::Timer)) => call_listed(l, name),
+            Some((_, m)) => run_method(l, shared, m),
             None => raise(l, shared, not_a_method(name)),
         }
     }

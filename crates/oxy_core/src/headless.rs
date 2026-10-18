@@ -35,6 +35,7 @@ use serde_json::Value as Json;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    sync::Arc,
 };
 
 /// Longest simulation one request may ask for.
@@ -2594,6 +2595,18 @@ pub fn run(
     project: &Project,
     request: &SimulationRequest,
 ) -> Result<(SimulationReport, Runtime), String> {
+    run_with_scripts(project, Default::default(), request)
+}
+
+/// `run` with the project's scripts (see `persistence::load_scripts`), which its objects run;
+/// the replay check's twin runs them in a VM of its own. Provisional: the tools pass the
+/// scripts of the project's folder in a later stage of 0.7.
+#[doc(hidden)]
+pub fn run_with_scripts(
+    project: &Project,
+    scripts: Arc<crate::script::ScriptSources>,
+    request: &SimulationRequest,
+) -> Result<(SimulationReport, Runtime), String> {
     if !request.seconds.is_finite() || request.seconds <= 0. || request.seconds > MAX_SECONDS {
         return Err(format!(
             "Informe uma duração entre 0 e {MAX_SECONDS} segundos"
@@ -2802,7 +2815,7 @@ pub fn run(
         record: true,
         seed: request.seed,
         save,
-        ..Default::default()
+        scripts,
     };
     let mut runtime = Runtime::with_options(source, &start, options.clone())?;
     let mut bot = bot.map(|bot| BotRun {

@@ -3,7 +3,7 @@
 //! docs of [`crate::script`] for the borrow and the C++ exception rules this file keeps).
 use super::errors::{ScriptError, ScriptErrorKind, describe};
 use super::handles::{self, MARK_OBJECT};
-use super::{FOLDER, ScriptSources, load, sandbox};
+use super::{Callbacks, FOLDER, ScriptArg, ScriptSources, load, sandbox};
 use crate::document::{Id, Value};
 use crate::runtime::{Runtime, ScriptLocation};
 use mlua::thread::ThreadStatus;
@@ -50,6 +50,8 @@ pub(crate) enum Limit {
     CallWork,
     StepWork,
     Memory,
+    /// The queue had no room for another timer (see `timers::TimerRoom`).
+    Timers,
 }
 
 impl Limit {
@@ -61,6 +63,11 @@ impl Limit {
             Self::Memory => format!(
                 "os scripts passaram do limite de memória ({} MB)",
                 limits.memory / (1024 * 1024)
+            ),
+            Self::Timers => format!(
+                "a fila não tem lugar para mais temporizadores (até {} chamadas e {} MB de texto                  guardados)",
+                crate::runtime::MAX_TASKS,
+                super::timers::ROOM_TEXT / (1024 * 1024)
             ),
         }
     }
@@ -76,10 +83,27 @@ pub(crate) enum Phase {
     Running,
 }
 
-/// A module as loaded: its frozen table and its functions by name.
+/// A module as loaded: its frozen table, its functions by name and what of them the engine
+/// calls by itself.
 pub(crate) struct Module {
+    /// The script's path, shared by its tasks.
+    pub path: Arc<str>,
     pub table: Table,
     pub functions: BTreeMap<String, Function>,
+    /// The name of each function by its address, which a timer keeps in its place (the first
+    /// name in order when two hold the same function).
+    pub names: HashMap<usize, Arc<str>>,
+    pub callbacks: Callbacks,
+    /// Functions named `on_*` that hear nothing, with their line and the callback meant.
+    pub unknown: Vec<(String, u32, Option<&'static str>)>,
+}
+
+impl std::fmt::Debug for Module {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Module")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the host's functions share, captured by each of them as an `Rc` (not through
@@ -89,6 +113,8 @@ pub(crate) struct Shared {
     pub phase: Cell<Phase>,
     /// The handle key of the object running, while a call runs.
     caller: Cell<Option<u64>>,
+    /// The module whose function runs, while a call runs.
+    module: RefCell<Option<Rc<Module>>>,
     pub limits: Cell<Limits>,
     units: Cell<u64>,
     step_units: Cell<u64>,
@@ -119,6 +145,7 @@ impl Shared {
             runtime: Cell::new(std::ptr::null_mut()),
             phase: Cell::new(Phase::Idle),
             caller: Cell::new(None),
+            module: RefCell::default(),
             limits: Cell::new(LIMITS),
             units: Cell::new(0),
             step_units: Cell::new(0),
@@ -138,7 +165,12 @@ impl Shared {
 
     /// Lends `runtime` for one call: the guard keeps the `&mut` borrowed until it drops, so the
     /// caller cannot touch the `Runtime` while the VM may reach it.
-    fn enter<'a>(&'a self, runtime: &'a mut Runtime, owner: u64) -> CallGuard<'a> {
+    fn enter<'a>(
+        &'a self,
+        runtime: &'a mut Runtime,
+        owner: u64,
+        module: &Rc<Module>,
+    ) -> CallGuard<'a> {
         assert!(
             self.runtime.get().is_null() && self.phase.get() == Phase::Idle,
             "chamada de script dentro de outra"
@@ -146,6 +178,7 @@ impl Shared {
         self.runtime.set(runtime);
         self.phase.set(Phase::Running);
         self.caller.set(Some(owner));
+        *self.module.borrow_mut() = Some(module.clone());
         self.start_count();
         self.units.set(1);
         CallGuard {
@@ -164,6 +197,16 @@ impl Shared {
     /// The object running, while a call runs.
     pub(crate) fn caller(&self) -> Option<Id> {
         self.caller.get().and_then(|key| self.id(key))
+    }
+
+    /// The handle key of the object running, while a call runs.
+    pub(crate) fn caller_key(&self) -> Option<u64> {
+        self.caller.get()
+    }
+
+    /// The module whose function runs, while a call runs.
+    pub(crate) fn module(&self) -> Option<Rc<Module>> {
+        self.module.borrow().clone()
     }
 
     pub(crate) fn id(&self, key: u64) -> Option<Id> {
@@ -244,6 +287,7 @@ impl Drop for CallGuard<'_> {
         self.shared.runtime.set(std::ptr::null_mut());
         self.shared.phase.set(Phase::Idle);
         self.shared.caller.set(None);
+        self.shared.module.take();
     }
 }
 
@@ -434,11 +478,14 @@ impl ScriptHost {
         self.shared.step_interrupts.set(0);
     }
 
-    /// Loads `path` unless it already was: its error, and whether this load was the first.
-    pub(crate) fn load(&self, path: &str) -> (Result<(), ScriptError>, bool) {
-        let first = !self.shared.modules.borrow().contains_key(path);
-        let result = load::module(&self.lua, &self.shared, path).map(|_| ());
-        (result, first)
+    /// Whether the step's work for scripts ran out: no other call starts in it.
+    pub(crate) fn step_spent(&self) -> bool {
+        self.shared.step_spent()
+    }
+
+    /// The module `path`, loading it unless it already was (its error too).
+    pub(crate) fn load(&self, path: &str) -> Result<Rc<Module>, ScriptError> {
+        load::module(&self.lua, &self.shared, path)
     }
 
     /// Registers the objects of a new scene, dropping the handles of the last one; the pairs
@@ -463,23 +510,20 @@ impl ScriptHost {
             .retain(|_, id| !ids.contains(id));
     }
 
-    /// Runs `function` of the module `path` for `owner`, as `Module.function(self, ...args)`.
+    /// Runs `function` of `module` for `owner`, as `Module.function(self, ...args)`.
     pub(crate) fn call(
         &self,
         runtime: &mut Runtime,
         owner: &str,
-        path: &str,
+        module: &Rc<Module>,
         function: &str,
-        args: &[Value],
+        args: &[ScriptArg],
     ) -> ScriptCall {
         let s = &*self.shared;
         if s.step_spent() {
             return ScriptCall::Deferred;
         }
-        let module = match load::module(&self.lua, s, path) {
-            Ok(module) => module,
-            Err(_) => return ScriptCall::Skipped,
-        };
+        let path = &*module.path;
         let Some(f) = module.functions.get(function) else {
             return ScriptCall::Failed(ScriptError::new(
                 path,
@@ -494,7 +538,7 @@ impl ScriptHost {
             Err(e) => return ScriptCall::Failed(s.failure(&e, path, defined())),
         };
         let (result, suspended) = {
-            let _guard = s.enter(runtime, key);
+            let _guard = s.enter(runtime, key, module);
             let result = f.call::<()>(values);
             (result, s.suspended_coroutine())
         };
@@ -519,23 +563,37 @@ impl ScriptHost {
         &self,
         runtime: &Runtime,
         owner: &str,
-        args: &[Value],
+        args: &[ScriptArg],
     ) -> mlua::Result<(u64, MultiValue)> {
         let me = self.key(runtime, owner)?;
         let mut values = MultiValue::with_capacity(args.len() + 1);
         values.push_back(object(me));
         for arg in args {
             values.push_back(match arg {
-                Value::Number(n) => LuaValue::Number(*n),
-                Value::Bool(b) => LuaValue::Boolean(*b),
-                Value::Text(text) => LuaValue::String(self.lua.create_string(text)?),
-                Value::Vector3([x, y, z]) => LuaValue::Vector(mlua::Vector::new(*x, *y, *z)),
-                Value::Vector2([x, y]) => LuaValue::Vector(mlua::Vector::new(*x, *y, 0.)),
-                Value::Object(Some(id)) => object(self.key(runtime, id)?),
-                Value::Object(None) | Value::Surface(_) => LuaValue::Nil,
+                ScriptArg::Nil => LuaValue::Nil,
+                ScriptArg::Value(value) => self.value(runtime, value)?,
+                ScriptArg::Record(fields) => {
+                    let table = self.lua.create_table_with_capacity(0, fields.len())?;
+                    for (name, value) in fields {
+                        table.raw_set(*name, self.value(runtime, value)?)?;
+                    }
+                    LuaValue::Table(table)
+                }
             });
         }
         Ok((me, values))
+    }
+
+    fn value(&self, runtime: &Runtime, value: &Value) -> mlua::Result<LuaValue> {
+        Ok(match value {
+            Value::Number(n) => LuaValue::Number(*n),
+            Value::Bool(b) => LuaValue::Boolean(*b),
+            Value::Text(text) => LuaValue::String(self.lua.create_string(text)?),
+            Value::Vector3([x, y, z]) => LuaValue::Vector(mlua::Vector::new(*x, *y, *z)),
+            Value::Vector2([x, y]) => LuaValue::Vector(mlua::Vector::new(*x, *y, 0.)),
+            Value::Object(Some(id)) => object(self.key(runtime, id)?),
+            Value::Object(None) | Value::Surface(_) => LuaValue::Nil,
+        })
     }
 
     fn key(&self, runtime: &Runtime, id: &str) -> mlua::Result<u64> {

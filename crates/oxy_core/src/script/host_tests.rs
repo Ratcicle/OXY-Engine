@@ -904,15 +904,16 @@ fn a_panic_in_a_host_function_is_an_engine_error_whatever_the_script_does() {
     // it and it resumes in Rust: the guard clears the pointer as it unwinds.
     let host = test_host(&[(PATH, source)]);
     host.begin_scene(rt.scene().entities.iter().map(|e| e.id.as_str()));
+    let module = host.load(PATH).unwrap();
     let panic = catch_unwind(AssertUnwindSafe(|| {
-        host.call(&mut rt, &id, PATH, "raw", &[])
+        host.call(&mut rt, &id, &module, "raw", &[])
     }))
     .unwrap_err();
     assert_eq!(panic.downcast_ref::<&str>(), Some(&"pânico cru"));
     assert!(peek(host.shared()).is_none());
     assert_eq!(host.shared().phase.get(), Phase::Idle);
     assert_eq!(
-        host.call(&mut rt, &id, PATH, "write", &[]),
+        host.call(&mut rt, &id, &module, "write", &[]),
         ScriptCall::Done
     );
 }
@@ -1065,8 +1066,8 @@ fn require_serves_frozen_modules_from_the_scripts_folder() {
             .contains("tabela travada")
     );
     let host = rt.script_host().unwrap();
-    host.load("scripts/fases/nivel.luau").0.unwrap();
-    let e = host.load("scripts/a.luau").0.unwrap_err();
+    host.load("scripts/fases/nivel.luau").unwrap();
+    let e = host.load("scripts/a.luau").unwrap_err();
     assert!(
         e.message
             .contains("require circular: scripts/a.luau → scripts/b.luau → scripts/a.luau"),
@@ -1085,7 +1086,7 @@ fn require_serves_frozen_modules_from_the_scripts_folder() {
         let path = format!("scripts/req{}.luau", name.len());
         let source = format!("\nreturn require('{name}')");
         let host = ScriptHost::new(sources(&[(&path, &source)])).unwrap();
-        let e = host.load(&path).0.unwrap_err();
+        let e = host.load(&path).unwrap_err();
         assert!(e.message.contains(message), "{name}: {e}");
         assert_eq!(e.line, 2, "{name}: {e}");
     }

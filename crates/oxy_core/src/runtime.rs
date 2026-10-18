@@ -4,10 +4,11 @@
 //! - Per run: survives `change_scene` and dies with the `Runtime` (Parar, a new player run).
 //!   The clock (`time`), activation serials, the host pause, logs and traces with their
 //!   counters, the host queues (`sounds`, `save_requests`, `scene_starts`, `recording`), the
-//!   quit request, the scripts' sources with the Luau VM that caches their modules (`stop`
-//!   drops it), and `run`, the `RunState` (draws, copy counts, game variables, saved progress,
-//!   time spent in the game pause, music and volumes, script errors told) that new run-wide
-//!   state goes into. `stop` resets `run`.
+//!   quit request, the scripts' sources with the Luau VM that caches their modules and what
+//!   each module hears (`stop` drops both), and `run`, the `RunState` (draws, copy counts and
+//!   timer numbers of the graph and of scripts, game variables, saved progress, time spent in
+//!   the game pause, music and volumes, script errors told) that new run-wide state goes
+//!   into. `stop` resets `run`.
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
@@ -38,6 +39,7 @@ use crate::{
 };
 use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
@@ -65,6 +67,9 @@ pub const MAX_STEPS: usize = 8;
 pub const MAX_NODE_WORK: usize = 1024;
 /// The longest Esperar sem bloquear waits, in seconds: a day.
 pub const MAX_WAIT: f64 = 86_400.;
+/// Tasks queued at once: past them the queued ones are dropped, and a script's new timer is
+/// refused (the calls still to come of its sequences count as tasks).
+pub(crate) const MAX_TASKS: usize = 16384;
 /// Save requests a host may leave queued before they are folded (see `request_save`).
 const MAX_SAVE_REQUESTS: usize = 64;
 
@@ -110,6 +115,8 @@ pub enum RuntimeEvent {
     Animation {
         object: Id,
         marker: String,
+        /// The name of the clip whose marker it is.
+        clip: String,
     },
     /// The game pause started (true) or ended.
     Pause(bool),
@@ -195,17 +202,29 @@ struct Task {
     target: TaskTarget,
     context: Context,
 }
+impl Task {
+    fn is_node(&self) -> bool {
+        matches!(self.target, TaskTarget::Node(_))
+    }
+}
 /// What a task runs, for its owner.
 #[derive(Clone, Debug)]
 enum TaskTarget {
     /// A node of the owner's graph.
     Node(Id),
+    /// A function of a script the owner attaches: a callback an event calls or a timer's.
+    Script(crate::script::ScriptTask),
 }
 #[derive(Default)]
 struct EventCatalog {
+    /// The events the scene hears, its scripts' included, as the graph names them.
     operations: HashSet<String>,
     /// Scene order; invalidated with the existing event/structural revision.
     owners: Vec<usize>,
+    /// For each of `owners`, the scripts it attaches that hear an event, in its list's order.
+    scripts: Vec<Vec<(Arc<str>, crate::script::Callbacks)>>,
+    /// Whether a script hears on_input, which takes the release of every action.
+    input: bool,
 }
 #[derive(Clone, Copy, Debug, Default)]
 struct BodyState {
@@ -226,6 +245,13 @@ pub(crate) struct RunState {
     /// Copies made so far by each (owner, Criar cópia node), which name the IDs of the next
     /// one (see `spawn_ids`). The seed plays no part.
     spawns: BTreeMap<(Id, Id), u64>,
+    /// The scripts' draws so far, by (owner, script, stream), apart from the graph's: one more
+    /// draw in a script changes no one else's numbers.
+    script_rolls: BTreeMap<(Id, String, String), u64>,
+    /// The scripts' copies so far, by (owner, script).
+    script_spawns: BTreeMap<(Id, String), u64>,
+    /// The last number a script's timer got.
+    timers: u64,
     /// The game variables' values by (variable, key): the empty key is the variable's own
     /// value, which starts at the declared one; a key never written reads the declared value.
     variables: BTreeMap<(Id, String), Value>,
@@ -342,6 +368,12 @@ pub struct Runtime {
     script_sources: Arc<crate::script::ScriptSources>,
     /// The Luau VM, once a scene attaches a script: a cache of compiled modules, never state.
     scripts: Option<crate::script::ScriptHost>,
+    /// What each script attached so far hears, by path, with the path its tasks share (none
+    /// for one that did not load, told once); read even while a call holds the VM.
+    script_callbacks: HashMap<String, Option<(Arc<str>, crate::script::Callbacks)>>,
+    /// What the queued script timers hold beyond their tasks, counted by the timers
+    /// themselves.
+    timer_room: Rc<crate::script::TimerRoom>,
     /// (object, script) pairs a limit of work or memory stopped.
     disabled_scripts: BTreeSet<(Id, String)>,
 }
@@ -420,6 +452,8 @@ impl Runtime {
             run: RunState::new(project, options.seed),
             script_sources: options.scripts,
             scripts: None,
+            script_callbacks: HashMap::new(),
+            timer_room: Rc::default(),
             disabled_scripts: BTreeSet::new(),
         };
         if let Some(slot) = options.save {
@@ -573,6 +607,7 @@ impl Runtime {
         self.disabled_behaviors.clear();
         self.disabled_scripts.clear();
         self.scripts = None;
+        self.script_callbacks.clear();
         self.area_hits.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -724,7 +759,7 @@ impl Runtime {
             }
         }
         for action in &input.released {
-            if self.input_mode_used(action, 2) {
+            if self.input_mode_used(action, 2) || self.event_catalog().input {
                 self.emit(RuntimeEvent::InputReleased(action.clone()));
             }
         }
@@ -867,19 +902,25 @@ impl Runtime {
         // own strong leases; completed activations cannot accumulate here.
         self.damage_hits.retain(|_, hits| hits.strong_count() > 0);
     }
+    /// Queues the tasks of `event`: in scene order, each object's graph nodes that hear it and
+    /// then, in the order of its list, its scripts' callbacks.
     pub fn emit(&mut self, event: RuntimeEvent) {
         if self.stopped {
             return;
         }
         let generated_activation = self.next_serial();
         let mut found = Vec::new();
-        for &index in &self.event_catalog().owners {
+        let catalog = self.event_catalog();
+        for (slot, &index) in catalog.owners.iter().enumerate() {
             let entity = &self.scene().entities[index];
             crate::metrics::count(|c| c.event_entity_visits += 1);
-            if self.disabled_behaviors.contains(&entity.id) {
-                continue;
-            }
-            for node in &entity.graph.nodes {
+            // A graph that stopped hears nothing; the object's scripts still do.
+            let nodes: &[Node] = if self.disabled_behaviors.contains(&entity.id) {
+                &[]
+            } else {
+                &entity.graph.nodes
+            };
+            for node in nodes {
                 let matches = match &event {
                     RuntimeEvent::FixedStep => node.operation == "event.step",
                     RuntimeEvent::Movement(record) => {
@@ -915,7 +956,7 @@ impl Runtime {
                     RuntimeEvent::AreaExit { area, .. } => {
                         entity.id == *area && node.operation == "event.area_exit"
                     }
-                    RuntimeEvent::Animation { object, marker } => {
+                    RuntimeEvent::Animation { object, marker, .. } => {
                         entity.id == *object
                             && node.operation == "event.animation"
                             && node.text("marker") == marker
@@ -926,42 +967,8 @@ impl Runtime {
                     }
                 };
                 if matches {
-                    let (other, activation) = match &event {
-                        RuntimeEvent::Movement(record) => {
-                            (Some(record.object.clone()), generated_activation)
-                        }
-                        RuntimeEvent::AreaEnter {
-                            other, activation, ..
-                        }
-                        | RuntimeEvent::AreaExit {
-                            other, activation, ..
-                        } => (Some(other.clone()), *activation),
-                        RuntimeEvent::Click(id) => (Some(id.clone()), generated_activation),
-                        RuntimeEvent::Animation { object, .. } => {
-                            (Some(object.clone()), generated_activation)
-                        }
-                        _ => (Some(entity.id.clone()), generated_activation),
-                    };
-                    let trajectory = match &event {
-                        RuntimeEvent::Movement(record) => {
-                            Some((record.object.clone(), record.state.trajectory))
-                        }
-                        RuntimeEvent::AreaEnter { other, .. }
-                        | RuntimeEvent::AreaExit { other, .. } => self
-                            .characters
-                            .states
-                            .get(other)
-                            .map(|s| (other.clone(), s.trajectory)),
-                        RuntimeEvent::FixedStep
-                        | RuntimeEvent::Input(_)
-                        | RuntimeEvent::InputHeld(_)
-                        | RuntimeEvent::InputReleased(_) => self
-                            .characters
-                            .states
-                            .get(&entity.id)
-                            .map(|s| (entity.id.clone(), s.trajectory)),
-                        _ => None,
-                    };
+                    let (other, activation, trajectory) =
+                        self.event_context(&event, &entity.id, generated_activation);
                     let values = movement_nodes::event_values(&event, self.game_time())
                         .into_iter()
                         .map(|(key, value)| ((node.id.clone(), key.into()), value))
@@ -981,12 +988,22 @@ impl Runtime {
                     });
                 }
             }
+            self.script_event_tasks(
+                &event,
+                entity,
+                &catalog.scripts[slot],
+                generated_activation,
+                &mut found,
+            );
         }
         for task in &mut found {
-            task.context.hits = Some(self.lease(&task.owner, task.context.activation));
+            // A graph's flow holds the hits of its activation; scripts deal no damage yet.
+            if task.is_node() {
+                task.context.hits = Some(self.lease(&task.owner, task.context.activation));
+            }
         }
         self.ready.extend(found);
-        if self.ready.len() + self.waiting.len() > 16384 {
+        if self.ready.len() + self.waiting.len() > MAX_TASKS {
             self.log(
                 "Limite global de tarefas excedido; comportamentos pendentes foram cancelados."
                     .into(),
@@ -994,6 +1011,47 @@ impl Runtime {
             self.ready.clear();
             self.waiting.clear();
         }
+    }
+    /// What a flow of `event` run for `owner` reads as its context object, its activation and
+    /// the character trajectory it hangs on.
+    fn event_context(
+        &self,
+        event: &RuntimeEvent,
+        owner: &Id,
+        generated_activation: u64,
+    ) -> (Option<Id>, u64, Option<(Id, u64)>) {
+        let (other, activation) = match event {
+            RuntimeEvent::Movement(record) => (Some(record.object.clone()), generated_activation),
+            RuntimeEvent::AreaEnter {
+                other, activation, ..
+            }
+            | RuntimeEvent::AreaExit {
+                other, activation, ..
+            } => (Some(other.clone()), *activation),
+            RuntimeEvent::Click(id) => (Some(id.clone()), generated_activation),
+            RuntimeEvent::Animation { object, .. } => (Some(object.clone()), generated_activation),
+            _ => (Some(owner.clone()), generated_activation),
+        };
+        let trajectory = match event {
+            RuntimeEvent::Movement(record) => {
+                Some((record.object.clone(), record.state.trajectory))
+            }
+            RuntimeEvent::AreaEnter { other, .. } | RuntimeEvent::AreaExit { other, .. } => self
+                .characters
+                .states
+                .get(other)
+                .map(|s| (other.clone(), s.trajectory)),
+            RuntimeEvent::FixedStep
+            | RuntimeEvent::Input(_)
+            | RuntimeEvent::InputHeld(_)
+            | RuntimeEvent::InputReleased(_) => self
+                .characters
+                .states
+                .get(owner)
+                .map(|s| (owner.clone(), s.trajectory)),
+            _ => None,
+        };
+        (other, activation, trajectory)
     }
     fn process_tasks(&mut self, budget: &mut usize) {
         if *budget == 0 {
@@ -1024,20 +1082,40 @@ impl Runtime {
             {
                 continue;
             }
-            if self.disabled_behaviors.contains(&task.owner) || self.entity(&task.owner).is_none() {
-                continue;
-            }
-            let owner = task.owner.clone();
-            let TaskTarget::Node(node) = task.target.clone();
-            let result = self.execute(task, budget);
-            if let Err(error) = result {
-                self.log(format!(
-                    "Objeto {} / nó {}: {error}. Comportamento interrompido.",
-                    owner, node
-                ));
-                self.disabled_behaviors.insert(owner.clone());
-                self.ready.retain(|queued| queued.owner != owner);
-                self.waiting.retain(|queued| queued.owner != owner);
+            match &task.target {
+                TaskTarget::Node(node) => {
+                    if self.disabled_behaviors.contains(&task.owner)
+                        || self.entity(&task.owner).is_none()
+                    {
+                        continue;
+                    }
+                    let owner = task.owner.clone();
+                    let node = node.clone();
+                    let result = self.execute(task, budget);
+                    if let Err(error) = result {
+                        self.log(format!(
+                            "Objeto {} / nó {}: {error}. Comportamento interrompido.",
+                            owner, node
+                        ));
+                        self.disabled_behaviors.insert(owner.clone());
+                        // The graph's tasks: the object's scripts go on.
+                        self.ready
+                            .retain(|queued| queued.owner != owner || !queued.is_node());
+                        self.waiting
+                            .retain(|queued| queued.owner != owner || !queued.is_node());
+                    }
+                }
+                TaskTarget::Script(_) => {
+                    if self.entity(&task.owner).is_none() {
+                        continue;
+                    }
+                    // The step's work for scripts ran out: this task and those after it go on
+                    // in the next step, in their order.
+                    if let Some(task) = self.run_script_task(task) {
+                        self.ready.push_front(task);
+                        break;
+                    }
+                }
             }
             if *budget == 0 {
                 if !self.ready.is_empty() {
@@ -1201,7 +1279,9 @@ impl Runtime {
             self.graphs.insert(task.owner.clone(), graph.clone());
             graph
         };
-        let TaskTarget::Node(node) = &task.target;
+        let TaskTarget::Node(node) = &task.target else {
+            unreachable!("only a node's task reaches execute");
+        };
         let node = graph.node(node).ok_or("Nó não encontrado")?;
         let mut context = task.context;
         self.traces_written += 1;
@@ -1434,6 +1514,8 @@ impl Runtime {
         };
         self.run.rolls.retain(|(owner, _), _| keep(owner));
         self.run.spawns.retain(|(owner, _), _| keep(owner));
+        self.run.script_rolls.retain(|(owner, ..), _| keep(owner));
+        self.run.script_spawns.retain(|(owner, _), _| keep(owner));
         self.run.failures_logged.retain(|(owner, _)| keep(owner));
         self.run
             .script_errors
@@ -1666,6 +1748,7 @@ impl Runtime {
                     events.push(RuntimeEvent::Animation {
                         object: owner.clone(),
                         marker,
+                        clip: clip.name.clone(),
                     });
                 }
                 if clip.looping && (player.time / f64::from(clip.duration)).floor() > previous_cycle
@@ -1851,15 +1934,20 @@ pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {
 /// The IDs of copy number `count` made by the Criar cópia node of `(owner, node)`: each comes
 /// from the ID of the original object, clip or node, so a run that makes the same copies gives
 /// them the same IDs, in any order and whatever the seed. An ID the scene already has is
-/// asked again and salted.
-fn spawn_ids((owner, node): &(Id, Id), count: u64) -> impl FnMut(&str) -> Id {
+/// asked again and salted. `domain` tells who copies: `b"oxy.spawn"` for nodes, another for
+/// scripts, whose `(owner, script)` never meets a node's IDs.
+fn spawn_ids(
+    domain: &'static [u8],
+    (owner, node): &(Id, String),
+    count: u64,
+) -> impl FnMut(&str) -> Id {
     let (owner, node) = (owner.clone(), node.clone());
     let mut salts: HashMap<Id, u64> = HashMap::new();
     move |original: &str| {
         let salt = salts.entry(original.into()).or_insert(0);
         let (count, extra) = (count.to_le_bytes(), salt.to_le_bytes());
         let mut parts = vec![
-            b"oxy.spawn".as_slice(),
+            domain,
             owner.as_bytes(),
             node.as_bytes(),
             &count,

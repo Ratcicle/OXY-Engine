@@ -6,8 +6,10 @@
 //!
 //! The host runs them in Luau through mlua (`host`, `sandbox`, `load`, `handles`), one VM per
 //! `Runtime`, created only when its scene attaches a script. The VM keeps the compiled modules,
-//! frozen, and nothing of the game, which lives in the engine's state. Its `unsafe` code keeps
-//! two rules:
+//! frozen, and nothing of the game, which lives in the engine's state: a module's functions
+//! with the fixed names of [`Callback`] hear events as tasks of the runtime, and its timers
+//! (`timers`) are tasks too, which name the function to call. Its `unsafe` code keeps two
+//! rules:
 //! - Aliasing: a call lends the VM the `Runtime` through a pointer that a guard sets from a
 //!   `&mut Runtime` it keeps borrowed until the call ends, so the caller cannot touch the
 //!   `Runtime` meanwhile; the host is out of the `Runtime` (`Option::take`) during the call, so
@@ -22,7 +24,8 @@
 //!   raised after the Rust values are dropped. The VM is created with
 //!   `catch_rust_panics(false)`, so a script's `pcall` never hides a panic, and each door marks
 //!   the host when it catches one (`coroutine.resume` still swallows them).
-use crate::{document::Project, input_actions::every_entity};
+use crate::document::{Project, Value};
+use crate::input_actions::every_entity;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
@@ -34,11 +37,115 @@ mod host;
 mod host_tests;
 mod load;
 mod sandbox;
+#[cfg(test)]
+mod task_tests;
+pub(crate) mod timers;
 
 pub use errors::{ScriptError, ScriptErrorKind};
 pub(crate) use handles::collision;
 pub use host::ScriptCall;
-pub(crate) use host::ScriptHost;
+pub(crate) use host::{Module, ScriptHost};
+pub(crate) use timers::{Repeat, ScriptTask, Share, Timer, TimerRoom, TimerStep};
+
+/// The fixed names a module's table gives the functions that hear events (design §3.6). The
+/// runtime calls them in tasks, on the object's turn in scene order, after its graph and in the
+/// order of its list of scripts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Callback {
+    /// The scene starts, or a copy that attaches the script appears.
+    Start,
+    Step,
+    Input,
+    Click,
+    AreaEnter,
+    AreaExit,
+    Marker,
+    Character,
+    Pause,
+}
+
+impl Callback {
+    pub(crate) const ALL: [Self; 9] = [
+        Self::Start,
+        Self::Step,
+        Self::Input,
+        Self::Click,
+        Self::AreaEnter,
+        Self::AreaExit,
+        Self::Marker,
+        Self::Character,
+        Self::Pause,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Start => "on_start",
+            Self::Step => "on_step",
+            Self::Input => "on_input",
+            Self::Click => "on_click",
+            Self::AreaEnter => "on_area_enter",
+            Self::AreaExit => "on_area_exit",
+            Self::Marker => "on_marker",
+            Self::Character => "on_character",
+            Self::Pause => "on_pause",
+        }
+    }
+
+    /// The graph's event for the same happening, by which the runtime knows what its scene
+    /// hears (whether Esc pauses the game, whether exits are worked out).
+    pub(crate) fn event(self) -> &'static str {
+        match self {
+            Self::Start => "event.scene_start",
+            Self::Step => "event.step",
+            Self::Input => "event.input",
+            Self::Click => "event.click",
+            Self::AreaEnter => "event.area_enter",
+            Self::AreaExit => "event.area_exit",
+            Self::Marker => "event.animation",
+            Self::Character => "event.character",
+            Self::Pause => "event.pause",
+        }
+    }
+}
+
+/// Callback names a module may already define that the engine calls in a later stage or
+/// version (messages in 0.7, players in 0.8): no warning for them.
+pub(crate) const LATER_CALLBACKS: [&str; 4] = [
+    "on_message",
+    "on_request",
+    "on_player_join",
+    "on_player_leave",
+];
+
+/// The callbacks a module defines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Callbacks(u16);
+
+impl Callbacks {
+    pub(crate) fn insert(&mut self, callback: Callback) {
+        self.0 |= 1 << callback as u16;
+    }
+    pub(crate) fn contains(self, callback: Callback) -> bool {
+        self.0 & (1 << callback as u16) != 0
+    }
+    pub(crate) fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+    pub(crate) fn iter(self) -> impl Iterator<Item = Callback> {
+        Callback::ALL.into_iter().filter(move |c| self.contains(*c))
+    }
+}
+
+/// A value a script task passes its function after `self`: the values attributes hold, nil,
+/// and the records of named values the engine builds for an event (`on_character`'s), which
+/// reach the script as a table. Timers carry only the first two, so their data is what the
+/// engine keeps and compares.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ScriptArg {
+    Nil,
+    Value(Value),
+    Record(Vec<(&'static str, Value)>),
+}
 
 /// What [`check`] reads from a script that loads. Provisional, as [`check`].
 #[doc(hidden)]

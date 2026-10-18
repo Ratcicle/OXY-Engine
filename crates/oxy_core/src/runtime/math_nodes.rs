@@ -129,46 +129,52 @@ impl Runtime {
         max: f64,
         integer: bool,
     ) -> Result<f64, String> {
-        if !min.is_finite() {
-            return Err("Mínimo precisa ser um número finito".into());
-        }
-        if !max.is_finite() {
-            return Err("Máximo precisa ser um número finito".into());
-        }
-        check_range(min, max)?;
         let key = (caller.0.to_owned(), caller.1.to_owned());
         let drawn = self.run.rolls.get(&key).copied().unwrap_or(0);
-        let mut rng = Rng::new(random::hash(&[
-            &self.run.seed.to_le_bytes(),
+        let seed = self.run.seed.to_le_bytes();
+        let parts = [
+            &seed,
             key.0.as_bytes(),
             key.1.as_bytes(),
             &drawn.to_le_bytes(),
-        ]));
-        let value = if integer {
-            let (low, high) = (min.ceil(), max.floor());
-            if low > high {
-                return Err(format!(
-                    "Nenhum inteiro entre o mínimo {min} e o máximo {max}"
-                ));
-            }
-            let limit = MAX_SEED as f64;
-            if low < -limit || high > limit {
-                return Err(format!(
-                    "No modo Inteiro, mínimo e máximo precisam estar entre -{MAX_SEED} e \
-                     {MAX_SEED}"
-                ));
-            }
-            rng.int_inclusive(low as i64, high as i64) as f64
-        } else {
-            rng.range(min, max)
-        };
+        ];
+        let value = draw(&parts, min, max, integer)?;
         self.run.rolls.insert(key, drawn + 1);
-        // Adding zero turns -0 into 0, as the number nodes do.
-        Ok(value + 0.0)
+        Ok(value)
+    }
+
+    /// `random_number` for the script `script` that `owner` attaches, from its sequence
+    /// `stream` (the empty name is its own): counted apart from the graph's draws and from
+    /// every other script's and sequence's. Provisional: the script API calls it in a later
+    /// stage; tests now.
+    #[doc(hidden)]
+    pub fn script_random_number(
+        &mut self,
+        owner: &str,
+        script: &str,
+        stream: &str,
+        min: f64,
+        max: f64,
+        integer: bool,
+    ) -> Result<f64, String> {
+        let key = (owner.to_owned(), script.to_owned(), stream.to_owned());
+        let drawn = self.run.script_rolls.get(&key).copied().unwrap_or(0);
+        let seed = self.run.seed.to_le_bytes();
+        let parts = [
+            b"oxy.script".as_slice(),
+            &seed,
+            key.0.as_bytes(),
+            key.1.as_bytes(),
+            key.2.as_bytes(),
+            &drawn.to_le_bytes(),
+        ];
+        let value = draw(&parts, min, max, integer)?;
+        self.run.script_rolls.insert(key, drawn + 1);
+        Ok(value)
     }
 
     /// Draws come from `seed`, a whole number from 0 to [`MAX_SEED`], and every caller's count
-    /// starts over.
+    /// starts over, the scripts' too.
     pub fn set_random_seed(&mut self, seed: f64) -> Result<(), String> {
         if seed.fract() != 0.0 || !(0.0..=MAX_SEED as f64).contains(&seed) {
             return Err(format!(
@@ -177,6 +183,7 @@ impl Runtime {
         }
         self.run.seed = seed as u64;
         self.run.rolls.clear();
+        self.run.script_rolls.clear();
         Ok(())
     }
 
@@ -212,6 +219,38 @@ impl Runtime {
             _ => format!("{sign}{body}.{fraction:0width$}", width = decimals as usize),
         })
     }
+}
+
+/// A number from `min` to `max` (whole with `integer`) of the generator seeded with `parts`.
+fn draw(parts: &[&[u8]], min: f64, max: f64, integer: bool) -> Result<f64, String> {
+    if !min.is_finite() {
+        return Err("Mínimo precisa ser um número finito".into());
+    }
+    if !max.is_finite() {
+        return Err("Máximo precisa ser um número finito".into());
+    }
+    check_range(min, max)?;
+    let mut rng = Rng::new(random::hash(parts));
+    let value = if integer {
+        let (low, high) = (min.ceil(), max.floor());
+        if low > high {
+            return Err(format!(
+                "Nenhum inteiro entre o mínimo {min} e o máximo {max}"
+            ));
+        }
+        let limit = MAX_SEED as f64;
+        if low < -limit || high > limit {
+            return Err(format!(
+                "No modo Inteiro, mínimo e máximo precisam estar entre -{MAX_SEED} e \
+                 {MAX_SEED}"
+            ));
+        }
+        rng.int_inclusive(low as i64, high as i64) as f64
+    } else {
+        rng.range(min, max)
+    };
+    // Adding zero turns -0 into 0, as the number nodes do.
+    Ok(value + 0.0)
 }
 
 /// A range from `min` to `max` has its minimum first.

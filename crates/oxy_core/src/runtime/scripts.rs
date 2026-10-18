@@ -1,10 +1,18 @@
 //! The `Runtime`'s side of scripts (see `crate::script`): the host, kept out of the state as a
-//! cache and created only when a scene attaches a script; the scripts stopped on an object by a
-//! limit (per scene, in the state); and the errors told once per run with how often they
-//! happened (in the run's state, since they decide which lines the log gets).
+//! cache and created only when a scene attaches a script; the callbacks events call and the
+//! timers scripts ask for, which are tasks in the same queues as the graph's (in the state);
+//! the scripts stopped on an object by a limit (per scene, in the state); and the errors told
+//! once per run with how often they happened (in the run's state, since they decide which
+//! lines the log gets).
 use super::*;
-use crate::script::{ScriptCall, ScriptError, ScriptHost};
+use crate::script::{
+    Callback, Callbacks, Module, Repeat, ScriptArg, ScriptCall, ScriptError, ScriptHost,
+    ScriptTask, Share, Timer, TimerStep, timers,
+};
+use std::borrow::Cow;
 use std::collections::btree_map::Entry;
+use std::rc::Rc;
+use std::sync::LazyLock;
 
 /// What tells a repeat of a script error on an object: the script line it happened at, and
 /// whether it stopped the script, whatever values its message carries; the whole text for one
@@ -41,6 +49,53 @@ fn sentence(error: &ScriptError) -> String {
     }
 }
 
+/// The outputs of a script's task: none, shared.
+fn no_outputs() -> Arc<BTreeMap<(Id, String), Value>> {
+    static NONE: LazyLock<Arc<BTreeMap<(Id, String), Value>>> = LazyLock::new(Arc::default);
+    NONE.clone()
+}
+
+/// The callback `event` calls on the scripts of `owner`; none when it is not `owner`'s to hear.
+fn callback_of(event: &RuntimeEvent, owner: &str) -> Option<Callback> {
+    Some(match event {
+        RuntimeEvent::SceneStart => Callback::Start,
+        RuntimeEvent::FixedStep => Callback::Step,
+        RuntimeEvent::Input(_) | RuntimeEvent::InputReleased(_) => Callback::Input,
+        RuntimeEvent::Click(id) if id == owner => Callback::Click,
+        RuntimeEvent::AreaEnter { area, .. } if area == owner => Callback::AreaEnter,
+        RuntimeEvent::AreaExit { area, .. } if area == owner => Callback::AreaExit,
+        RuntimeEvent::Animation { object, .. } if object == owner => Callback::Marker,
+        RuntimeEvent::Movement(record) if record.object == owner => Callback::Character,
+        RuntimeEvent::Pause(_) => Callback::Pause,
+        _ => return None,
+    })
+}
+
+/// What `event` passes its callback after `self`.
+fn callback_args(event: &RuntimeEvent, time: f64) -> Vec<ScriptArg> {
+    let text = |text: &str| ScriptArg::Value(Value::Text(text.to_owned()));
+    match event {
+        RuntimeEvent::FixedStep => vec![ScriptArg::Value(Value::Number(f64::from(FIXED_DT)))],
+        RuntimeEvent::Input(action) => vec![text(action), text("pressed")],
+        RuntimeEvent::InputReleased(action) => vec![text(action), text("released")],
+        RuntimeEvent::AreaEnter { other, .. } | RuntimeEvent::AreaExit { other, .. } => {
+            vec![ScriptArg::Value(Value::Object(Some(other.clone())))]
+        }
+        RuntimeEvent::Animation { marker, clip, .. } => vec![text(marker), text(clip)],
+        // Provisional: the kind and the values the graph's Evento de personagem gives.
+        RuntimeEvent::Movement(record) => {
+            let mut fields = vec![(
+                "kind",
+                Value::Text(movement_nodes::event_kind(&record.event).into()),
+            )];
+            fields.extend(movement_nodes::event_values(event, time));
+            vec![ScriptArg::Record(fields)]
+        }
+        RuntimeEvent::Pause(paused) => vec![ScriptArg::Value(Value::Bool(*paused))],
+        _ => Vec::new(),
+    }
+}
+
 impl Runtime {
     /// Whether the host exists, creating it once a scene needs it. A VM that cannot start is
     /// told in the log, once.
@@ -58,14 +113,10 @@ impl Runtime {
 
     /// At a scene's start, before its start logic: the objects get their handles and each script
     /// they attach loads, in scene order. A script that does not load is told once and its
-    /// objects run without it. A scene without scripts creates no VM.
+    /// objects run without it. A scene without scripts creates no VM. Within a step, the start
+    /// logic of the scene spends that step's work; a new runtime's VM starts with all of it.
     pub(super) fn start_scripts(&mut self) {
-        let mut paths: Vec<String> = Vec::new();
-        for script in self.scene().entities.iter().flat_map(|e| &e.scripts) {
-            if !paths.contains(&script.path) {
-                paths.push(script.path.clone());
-            }
-        }
+        let paths = self.attached_scripts();
         if paths.is_empty() && self.scripts.is_none() {
             return;
         }
@@ -73,8 +124,6 @@ impl Runtime {
             return;
         }
         let host = self.scripts.as_ref().expect("script host");
-        // The start logic has a budget of its own, as the graph's has.
-        host.begin_step();
         let collisions = host.begin_scene(self.scene().entities.iter().map(|e| e.id.as_str()));
         for (a, b) in collisions {
             let text = crate::script::collision(self, &a, &b);
@@ -85,35 +134,251 @@ impl Runtime {
         }
     }
 
-    /// Loads `path` unless it already was; whether it is ready to run.
-    fn load_script(&mut self, path: &str) -> bool {
-        let Some(host) = &self.scripts else {
-            return false;
-        };
-        match host.load(path) {
-            (Ok(()), _) => true,
-            (Err(error), first) => {
-                if first {
-                    let text = format!(
-                        "{} Os objetos com este script ficam sem ele.",
-                        sentence(&error)
-                    );
-                    self.tell_once(
-                        String::new(),
-                        ErrorPlace::of(&error),
-                        text,
-                        error.location(),
-                    );
-                }
-                false
+    /// The scripts the scene's objects attach, each once, in scene order.
+    fn attached_scripts(&self) -> Vec<String> {
+        let mut paths: Vec<String> = Vec::new();
+        for script in self.scene().entities.iter().flat_map(|e| &e.scripts) {
+            if !paths.contains(&script.path) {
+                paths.push(script.path.clone());
             }
         }
+        paths
+    }
+
+    /// The module `path`, loading it unless it already was; none when it does not load or the
+    /// VM is busy with a call. The first time a script reaches the runtime as one an object
+    /// attaches, what it hears is registered, or why it did not load is told, whether or not a
+    /// `require` loaded it before.
+    fn load_script(&mut self, path: &str) -> Option<Rc<Module>> {
+        let loaded = self.scripts.as_ref()?.load(path);
+        if !self.script_callbacks.contains_key(path) {
+            match &loaded {
+                Ok(module) => self.register_script(module),
+                Err(error) => {
+                    self.script_callbacks.insert(path.to_owned(), None);
+                    let text = format!(
+                        "{} Os objetos com este script ficam sem ele.",
+                        sentence(error)
+                    );
+                    self.tell_once(String::new(), ErrorPlace::of(error), text, error.location());
+                }
+            }
+        }
+        loaded.ok()
+    }
+
+    /// The callbacks of an attached script join what the scene hears; its functions named like
+    /// callbacks that are none are told.
+    fn register_script(&mut self, module: &Module) {
+        let path = &*module.path;
+        self.script_callbacks.insert(
+            path.to_owned(),
+            Some((module.path.clone(), module.callbacks)),
+        );
+        // What the scene hears may grow with it.
+        self.event_operations.take();
+        for (name, line, near) in &module.unknown {
+            let hint = near.map_or_else(String::new, |near| format!("; quis dizer {near}?"));
+            let error = ScriptError::new(
+                path,
+                *line,
+                format!("{name} não é um evento dos scripts e nunca roda sozinha{hint}"),
+            );
+            self.tell_once(
+                String::new(),
+                ErrorPlace::of(&error),
+                sentence(&error),
+                error.location(),
+            );
+        }
+    }
+
+    /// What the script `path` hears, loading it if the VM is free; none when it does not load.
+    fn script_heard(&mut self, path: &str) -> Option<(Arc<str>, Callbacks)> {
+        if !self.script_callbacks.contains_key(path) {
+            self.load_script(path);
+        }
+        self.script_callbacks.get(path).cloned().flatten()
+    }
+
+    /// Whether a limit stopped `path` on `owner`.
+    fn script_stopped(&self, owner: &str, path: &str) -> bool {
+        !self.disabled_scripts.is_empty()
+            && self
+                .disabled_scripts
+                .iter()
+                .any(|(o, p)| o == owner && p == path)
+    }
+
+    /// The tasks `event` gives the scripts `entity` attaches (`scripts`, from the catalog), in
+    /// their order, after its graph's.
+    pub(super) fn script_event_tasks(
+        &self,
+        event: &RuntimeEvent,
+        entity: &crate::document::Entity,
+        scripts: &[(Arc<str>, Callbacks)],
+        generated_activation: u64,
+        found: &mut Vec<Task>,
+    ) {
+        let Some(callback) = callback_of(event, &entity.id) else {
+            return;
+        };
+        let mut heard = None;
+        for (script, callbacks) in scripts {
+            if !callbacks.contains(callback) || self.script_stopped(&entity.id, script) {
+                continue;
+            }
+            let ((other, activation, trajectory), args) = heard.get_or_insert_with(|| {
+                (
+                    self.event_context(event, &entity.id, generated_activation),
+                    callback_args(event, self.game_time()),
+                )
+            });
+            found.push(Task {
+                due: self.game_time(),
+                owner: entity.id.clone(),
+                target: TaskTarget::Script(ScriptTask {
+                    script: script.clone(),
+                    function: Cow::Borrowed(callback.name()),
+                    args: args.clone(),
+                    timer: None,
+                }),
+                context: Context {
+                    owner: entity.id.clone(),
+                    other: other.clone(),
+                    activation: *activation,
+                    outputs: no_outputs(),
+                    hits: None,
+                    trajectory: trajectory.clone(),
+                },
+            });
+        }
+    }
+
+    /// The objects of a copy just made (`copied`, the copy's IDs) whose scripts hear on_start
+    /// get it, in scene order, after what is already queued.
+    pub(super) fn start_copied_scripts(&mut self, copied: &HashSet<Id>) {
+        let attached: Vec<(Id, Vec<String>)> = self
+            .scene()
+            .entities
+            .iter()
+            .filter(|e| !e.scripts.is_empty() && copied.contains(&e.id))
+            .map(|e| {
+                (
+                    e.id.clone(),
+                    e.scripts.iter().map(|s| s.path.clone()).collect(),
+                )
+            })
+            .collect();
+        for (owner, paths) in attached {
+            for path in paths {
+                let Some((script, callbacks)) = self.script_heard(&path) else {
+                    continue;
+                };
+                if !callbacks.contains(Callback::Start) || self.script_stopped(&owner, &path) {
+                    continue;
+                }
+                self.ready.push_back(Task {
+                    due: self.game_time(),
+                    owner: owner.clone(),
+                    target: TaskTarget::Script(ScriptTask {
+                        script,
+                        function: Cow::Borrowed(Callback::Start.name()),
+                        args: Vec::new(),
+                        timer: None,
+                    }),
+                    context: Context {
+                        owner: owner.clone(),
+                        other: Some(owner.clone()),
+                        activation: 0,
+                        outputs: no_outputs(),
+                        hits: None,
+                        trajectory: None,
+                    },
+                });
+            }
+        }
+    }
+
+    /// Runs a script's task from the queue; gives it back when the step's work for scripts ran
+    /// out before it. A timer's next call is queued before this one runs, so that the call can
+    /// cancel it.
+    pub(super) fn run_script_task(&mut self, task: Task) -> Option<Task> {
+        let Task {
+            due,
+            owner,
+            target: TaskTarget::Script(script),
+            context,
+        } = task
+        else {
+            unreachable!("only a script's task reaches run_script_task");
+        };
+        if self.script_stopped(&owner, &script.script) {
+            return None;
+        }
+        if self.scripts.as_ref().is_some_and(ScriptHost::step_spent) {
+            let text = "Limite de trabalho dos scripts no passo atingido; demais tarefas retomam \
+                        no próximo passo."
+                .to_owned();
+            self.tell_once(String::new(), ErrorPlace::Text(text.clone()), text, None);
+            return Some(Task {
+                due,
+                owner,
+                target: TaskTarget::Script(script),
+                context,
+            });
+        }
+        let ScriptTask {
+            script: path,
+            function,
+            args,
+            timer,
+        } = script;
+        if let Some(Timer {
+            id,
+            then,
+            mut share,
+        }) = timer
+        {
+            let next = match then {
+                Repeat::Once => None,
+                Repeat::Every(interval) => Some((
+                    interval,
+                    function.clone(),
+                    args.clone(),
+                    Repeat::Every(interval),
+                )),
+                Repeat::Steps(mut rest) => rest.pop_front().map(|step| {
+                    // The next call holds the rest; this one's data leaves with it.
+                    share.give_back(1, timers::text_of(&args));
+                    (
+                        step.delay,
+                        Cow::Owned(step.function.to_string()),
+                        step.args,
+                        Repeat::Steps(rest),
+                    )
+                }),
+            };
+            if let Some((delay, function, args, then)) = next {
+                let task = timer_task(
+                    &owner,
+                    path.clone(),
+                    due + delay,
+                    function,
+                    args,
+                    Timer { id, then, share },
+                );
+                self.waiting.push(task);
+            }
+        }
+        self.call_script_with(&owner, &path, &function, &args);
+        None
     }
 
     /// Runs `function` of the script `path` that `owner` attaches, as
     /// `Module.function(self, ...args)`. An error stops only that call and is told once, with
     /// how often it happened; past a limit of work or memory the script also stops on `owner`.
-    /// Provisional: the entry point the tasks of scripts will use; tests call it directly.
+    /// Provisional: the queue's tasks run through it, and tests call it directly.
     #[doc(hidden)]
     pub fn call_script(
         &mut self,
@@ -122,18 +387,32 @@ impl Runtime {
         function: &str,
         args: &[Value],
     ) -> ScriptCall {
-        let stopped = self
-            .disabled_scripts
-            .iter()
-            .any(|(o, p)| o == owner && p == path);
-        if self.stopped || stopped || self.entity(owner).is_none() {
+        if self.entity(owner).is_none() {
             return ScriptCall::Skipped;
         }
-        if !self.script_host_ready() || !self.load_script(path) {
+        let args: Vec<ScriptArg> = args.iter().cloned().map(ScriptArg::Value).collect();
+        self.call_script_with(owner, path, function, &args)
+    }
+
+    /// `call_script` for an `owner` known to be in the scene.
+    fn call_script_with(
+        &mut self,
+        owner: &str,
+        path: &str,
+        function: &str,
+        args: &[ScriptArg],
+    ) -> ScriptCall {
+        if self.stopped || self.script_stopped(owner, path) {
             return ScriptCall::Skipped;
         }
+        if !self.script_host_ready() {
+            return ScriptCall::Skipped;
+        }
+        let Some(module) = self.load_script(path) else {
+            return ScriptCall::Skipped;
+        };
         let host = self.scripts.take().expect("script host");
-        let call = host.call(self, owner, path, function, args);
+        let call = host.call(self, owner, &module, function, args);
         self.scripts = Some(host);
         if let ScriptCall::Failed(error) = &call {
             self.report_script_error(owner, path, error);
@@ -146,6 +425,13 @@ impl Runtime {
         if stops {
             self.disabled_scripts
                 .insert((owner.to_owned(), path.to_owned()));
+            // Its tasks go; the graph and the object's other scripts go on.
+            let its = |task: &Task| {
+                task.owner == owner
+                    && matches!(&task.target, TaskTarget::Script(s) if &*s.script == path)
+            };
+            self.ready.retain(|task| !its(task));
+            self.waiting.retain(|task| !its(task));
         }
         let object = self
             .entity(owner)
@@ -160,6 +446,72 @@ impl Runtime {
             text,
             error.location(),
         );
+    }
+
+    /// Queues a timer of the script `script` on `owner`: `first` after its delay of game time,
+    /// then what `then` says. Its number, for `self:cancel`; with no `first`, a number for
+    /// nothing. None when the queue has no room for it: the tasks queued and the calls still to
+    /// come of sequences stay within [`MAX_TASKS`], and the text of the timers' data within
+    /// [`timers::ROOM_TEXT`].
+    pub(crate) fn add_script_timer(
+        &mut self,
+        owner: &str,
+        script: &Arc<str>,
+        first: Option<TimerStep>,
+        then: Repeat,
+    ) -> Option<u64> {
+        let rest = match &then {
+            Repeat::Steps(steps) => Some(steps),
+            Repeat::Once | Repeat::Every(_) => None,
+        };
+        let (calls, text) = rest.into_iter().flatten().fold(
+            (
+                0,
+                first.as_ref().map_or(0, |step| timers::text_of(&step.args)),
+            ),
+            |(calls, text), step| (calls + 1, text + timers::text_of(&step.args)),
+        );
+        let queued = self.ready.len() + self.waiting.len() + self.timer_room.calls();
+        if queued + usize::from(first.is_some()) + calls > MAX_TASKS
+            || self.timer_room.text() + text > timers::ROOM_TEXT
+        {
+            return None;
+        }
+        self.run.timers += 1;
+        let id = self.run.timers;
+        if let Some(TimerStep {
+            delay,
+            function,
+            args,
+        }) = first
+        {
+            let due = self.game_time() + delay;
+            let share = Share::new(&self.timer_room, calls, text);
+            let task = timer_task(
+                owner,
+                script.clone(),
+                due,
+                Cow::Owned(function.to_string()),
+                args,
+                Timer { id, then, share },
+            );
+            self.waiting.push(task);
+        }
+        Some(id)
+    }
+
+    /// Drops what is left of the timer `id` on `owner`, whichever of its scripts asked for it
+    /// (the numbers are the run's); whether any of it was still to come.
+    pub(crate) fn cancel_script_timer(&mut self, owner: &str, id: u64) -> bool {
+        let its = |task: &Task| {
+            task.owner == owner
+                && matches!(&task.target, TaskTarget::Script(s)
+                    if s.timer.as_ref().is_some_and(|t| t.id == id))
+        };
+        let before = self.ready.len() + self.waiting.len();
+        self.ready.retain(|task| !its(task));
+        self.waiting.retain(|task| !its(task));
+        self.ready.len() + self.waiting.len() != before
     }
 
     /// Logs `text` the first time `owner` gets an error at `place` in the run and counts every
@@ -202,13 +554,71 @@ impl Runtime {
             .map(|(owner, path)| (owner.as_str(), path.as_str()))
     }
 
+    /// The script timers still to come, as (object, script, number), in queue order.
+    #[doc(hidden)]
+    pub fn script_timers(&self) -> Vec<(&str, &str, u64)> {
+        self.ready
+            .iter()
+            .chain(&self.waiting)
+            .filter_map(|task| match &task.target {
+                TaskTarget::Script(ScriptTask {
+                    script,
+                    timer: Some(timer),
+                    ..
+                }) => Some((task.owner.as_str(), &**script, timer.id)),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn script_host(&self) -> Option<&ScriptHost> {
         self.scripts.as_ref()
     }
 
+    /// A VM made anew loads the attached scripts anew, and what they hear with them.
     #[cfg(test)]
     pub(crate) fn replace_script_host(&mut self, host: ScriptHost) {
         self.scripts = Some(host);
+        self.script_callbacks.clear();
+        self.event_operations.take();
+        for path in self.attached_scripts() {
+            self.load_script(&path);
+        }
+    }
+
+    /// What the queued timers hold beyond their tasks: (calls, bytes of text).
+    #[cfg(test)]
+    pub(crate) fn timer_room(&self) -> (usize, usize) {
+        (self.timer_room.calls(), self.timer_room.text())
+    }
+}
+
+/// A timer's task: no event's context, so no trajectory or activation holds it back.
+fn timer_task(
+    owner: &str,
+    script: Arc<str>,
+    due: f64,
+    function: Cow<'static, str>,
+    args: Vec<ScriptArg>,
+    timer: Timer,
+) -> Task {
+    Task {
+        due,
+        owner: owner.to_owned(),
+        target: TaskTarget::Script(ScriptTask {
+            script,
+            function,
+            args,
+            timer: Some(timer),
+        }),
+        context: Context {
+            owner: owner.to_owned(),
+            other: None,
+            activation: 0,
+            outputs: no_outputs(),
+            hits: None,
+            trajectory: None,
+        },
     }
 }

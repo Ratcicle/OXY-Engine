@@ -5,17 +5,17 @@
 //! limits, the messages and the effects. Nothing in their signatures is a node's, so a method
 //! that a node needs differently (its parameter names, its activation) leaves that to the
 //! node. The layer is:
-//! - objects: `attribute`, `set_attribute`, `damage`, `spawn_copy`, `set_component_enabled`,
-//!   `play_animation`, `object_surface` (here), `remove_object` (`runtime.rs`) and
-//!   `apply_surface` (`movement_nodes/queries.rs`);
+//! - objects: `attribute`, `set_attribute`, `damage`, `spawn_copy` (and `script_spawn_copy`),
+//!   `set_component_enabled`, `play_animation`, `object_surface` (here), `remove_object`
+//!   (`runtime.rs`) and `apply_surface` (`movement_nodes/queries.rs`);
 //! - transforms (`transforms.rs`): `object_pose`, `world_rotation`, `write_transform`;
 //! - the game (`game_nodes.rs`): `change_scene_from_logic`, `variable`, `set_variable`,
 //!   `save_progress`, `clear_progress`, `has_saved_progress`, `game_paused`,
 //!   `set_game_paused`, `toggle_game_pause`, `set_cursor_shown`, `quit_game`, `game_time`;
 //! - sound (`audio_nodes.rs`): `play_sound`, `play_sound_loop`, `stop_sounds`, `set_volume`,
 //!   `audio`;
-//! - draws and time text (`math_nodes.rs`): `random_number`, `set_random_seed`,
-//!   `format_time`;
+//! - draws and time text (`math_nodes.rs`): `random_number` (and `script_random_number`),
+//!   `set_random_seed`, `format_time`;
 //! - input (here): `input_pressed`, `input_held`, `input_released`, `input_look`,
 //!   `input_wheel`, `input_movement`;
 //! - 3D characters (`characters/`, `movement_nodes.rs`, `movement_nodes/actions.rs`), cameras
@@ -32,7 +32,7 @@ pub enum ObjectComponent {
     /// The 2D movement controller.
     Controller,
     Visible,
-    /// The object's own logic.
+    /// The object's own logic graph; its scripts go on.
     Behavior,
     /// The playing of its clip.
     Animation,
@@ -151,7 +151,8 @@ impl Runtime {
     /// and what in it asks, a node's ID) and from how many it made before (see `spawn_ids`), so
     /// a run that makes the same copies gives them the same IDs. The offset is not checked: a
     /// node's offset past the `f32` range has always made a copy at infinity, so a caller that
-    /// can pass a non-finite one, as the script API, refuses it first.
+    /// can pass a non-finite one, as the script API, refuses it first. The copy's objects that
+    /// attach scripts hear on_start once the tasks already queued ran.
     pub fn spawn_copy(
         &mut self,
         template: &str,
@@ -166,11 +167,45 @@ impl Runtime {
         let count = self.run.spawns.get(&key).copied().unwrap_or(0);
         let root = self
             .scene_mut_internal()
-            .duplicate_subtree_with(template, &mut spawn_ids(&key, count))?;
+            .duplicate_subtree_with(template, &mut spawn_ids(b"oxy.spawn", &key, count))?;
         self.run.spawns.insert(key, count + 1);
+        self.place_copy(&root, offset);
+        Ok(root)
+    }
+
+    /// `spawn_copy` asked by the script `script` that `owner` attaches: its copies are counted
+    /// apart from the graph's, by (owner, script), and their IDs never meet a node's. The
+    /// offset is finite. Provisional: the script API calls it in a later stage; tests now.
+    #[doc(hidden)]
+    pub fn script_spawn_copy(
+        &mut self,
+        template: &str,
+        offset: Vec3,
+        owner: &str,
+        script: &str,
+    ) -> Result<Id, String> {
+        if !offset.is_finite() {
+            return Err("O deslocamento da cópia precisa ser finito".into());
+        }
+        self.physics_dirty = true;
+        self.index.take();
+        self.input_modes.take();
+        self.event_operations.take();
+        let key = (owner.to_owned(), script.to_owned());
+        let count = self.run.script_spawns.get(&key).copied().unwrap_or(0);
+        let root = self
+            .scene_mut_internal()
+            .duplicate_subtree_with(template, &mut spawn_ids(b"oxy.script.spawn", &key, count))?;
+        self.run.script_spawns.insert(key, count + 1);
+        self.place_copy(&root, offset);
+        Ok(root)
+    }
+
+    /// A copy just made goes `offset` from its original, is recorded, and its scripts start.
+    fn place_copy(&mut self, root: &Id, offset: Vec3) {
         // The editor duplicate offset is not part of a runtime spawn's explicit offset.
         let delta = Vec3::new(offset.x - 0.5, offset.y, offset.z);
-        let descendants: HashSet<_> = self.scene().descendants(&root).into_iter().collect();
+        let descendants: HashSet<_> = self.scene().descendants(root).into_iter().collect();
         if let Some(mut recording) = self.recording.take() {
             recording.spawned.extend(
                 self.scene()
@@ -185,7 +220,7 @@ impl Runtime {
             );
             self.recording = Some(recording);
         }
-        let entity = self.entity_mut(&root).unwrap();
+        let entity = self.entity_mut(root).unwrap();
         entity.transform.position = (Vec3::from(entity.transform.position) + delta).to_array();
         for entity in self
             .scene_mut_internal()
@@ -197,7 +232,7 @@ impl Runtime {
                 .clips
                 .iter_mut()
                 .flat_map(|clip| &mut clip.tracks)
-                .filter(|track| track.target == root)
+                .filter(|track| track.target == *root)
             {
                 for key in &mut track.keyframes {
                     key.transform.position =
@@ -205,7 +240,7 @@ impl Runtime {
                 }
             }
         }
-        Ok(root)
+        self.start_copied_scripts(&descendants);
     }
 
     /// Turns `component` of `target` on or off.
@@ -263,7 +298,9 @@ impl Runtime {
                     self.disabled_behaviors.remove(target);
                 } else {
                     self.disabled_behaviors.insert(target.into());
-                    self.waiting.retain(|task| task.owner != target);
+                    // The graph's waits: the object's scripts are not its graph.
+                    self.waiting
+                        .retain(|task| task.owner != target || !task.is_node());
                 }
             }
             ObjectComponent::Animation => {
