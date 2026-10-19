@@ -17,6 +17,7 @@ mod physics;
 mod preferences;
 mod properties;
 mod scenes;
+mod script_watch;
 mod spatial_tools;
 mod test_progress;
 mod textures;
@@ -153,6 +154,8 @@ pub(crate) struct PlaySession {
     pub(crate) test_save: oxy_core::save::SaveSlot,
     /// The test's sounds and the Library's Ouvir.
     pub(crate) mixer: oxy_audio::Mixer,
+    /// The watcher of the scripts folder while a test runs scripts (see `script_watch`).
+    pub(crate) script_watch: Option<script_watch::ScriptWatch>,
 }
 impl Default for PlaySession {
     fn default() -> Self {
@@ -168,6 +171,7 @@ impl Default for PlaySession {
             seed: None,
             test_save: Default::default(),
             mixer: Default::default(),
+            script_watch: None,
         }
     }
 }
@@ -182,6 +186,7 @@ impl PlaySession {
     /// Parar: the test ends, and nothing it played goes on.
     pub(crate) fn end(&mut self) {
         self.runtime = None;
+        self.script_watch = None;
         self.capture = false;
         self.driver = Driver::Person;
         self.agent_clicks.clear();
@@ -320,6 +325,9 @@ pub struct Editor {
     attribute_type: u8,
     pub(crate) asset_ui: AssetUi,
     save_requested: bool,
+    /// What agents' writes kept of the scripts they changed in this editor session (see
+    /// `script_files`).
+    agent_scripts_kept: std::collections::HashSet<PathBuf>,
 }
 
 impl Editor {
@@ -463,6 +471,7 @@ impl Editor {
             attribute_type: 0,
             asset_ui: Default::default(),
             save_requested: false,
+            agent_scripts_kept: Default::default(),
         };
         if let Some(error) = preference_error {
             this.warn(error);
@@ -919,11 +928,13 @@ impl Editor {
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
         let scripts = test_scripts(&self.state.project, self.path.as_deref())
             .map_err(|error| format!("Não é possível jogar: {error}."))?;
+        let scripts = std::sync::Arc::new(scripts);
         let options = RuntimeOptions {
-            scripts: std::sync::Arc::new(scripts),
+            scripts: scripts.clone(),
             ..self.play.options(seed)
         };
         let runtime = Runtime::with_options(&self.state.project, scene, options)?;
+        self.watch_test_scripts(scripts);
         self.play.seed = Some(seed);
         self.play.previous_tab = self.tab;
         // The new test's logs count from zero.
@@ -1415,6 +1426,8 @@ impl eframe::App for Editor {
             ctx.set_zoom_factor(self.scale);
         }
         self.agent_frame(ctx);
+        // Between two steps: the scripts saved since the last frame reach the test.
+        self.reload_test_scripts();
         let mut close_requested =
             ctx.input(|i| i.viewport().close_requested()) && !self.allow_close;
         if close_requested && self.export.running() {

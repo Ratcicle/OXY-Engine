@@ -8,6 +8,7 @@ use oxy_core::{
     asset_import::{self, ImportBatch, ImportKind},
     command::{self, Command},
     headless::{self, InputEvent},
+    script_files,
 };
 use serde_json::{Value as Json, json};
 
@@ -133,6 +134,19 @@ impl Editor {
                 for command in commands {
                     self.log(format!("{AGENT_PREFIX}{}", command.label()));
                 }
+                // Whoever writes the scripts in VS Code gets the API's types.
+                if let Some(root) = root.as_deref().filter(|_| command::needs_scripts(commands)) {
+                    match script_files::setup_vscode_when_due(root) {
+                        Ok(Some(setup)) => {
+                            report["vscode"] = setup.json();
+                            for line in setup.console() {
+                                self.log(format!("{AGENT_PREFIX}{line}"));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => command::add_warnings(&mut report, vec![error]),
+                    }
+                }
                 self.after_external_edit();
                 Ok(report)
             }
@@ -142,6 +156,42 @@ impl Editor {
                 let message = error.to_string();
                 self.log(format!("{AGENT_PREFIX}{message}"));
                 Err(message)
+            }
+        }
+    }
+    /// An agent's oxy_scripts on the project open in the editor, whose folder holds its scripts.
+    /// The disk is the truth: a write is no undo step, waits for nothing and reaches a test
+    /// running through its watcher; writes and setting VS Code up are told in the Console.
+    pub(crate) fn agent_script_files(&mut self, params: &Json) -> Result<Json, String> {
+        if self.home.visible {
+            return Err("Nenhum projeto aberto no editor.".into());
+        }
+        let request = script_files::Request::parse(params)?;
+        let Some(root) = self
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_owned)
+        else {
+            return Err(
+                "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; peça \
+                 para a pessoa salvá-lo antes."
+                    .into(),
+            );
+        };
+        let project = Some(&self.state.project);
+        match script_files::answer(&root, project, &request, &mut self.agent_scripts_kept) {
+            Ok(answer) => {
+                for line in answer.console {
+                    self.log(format!("{AGENT_PREFIX}{line}"));
+                }
+                Ok(answer.json)
+            }
+            Err(error) => {
+                if matches!(request, script_files::Request::Write { .. }) {
+                    self.log(format!("{AGENT_PREFIX}{error}"));
+                }
+                Err(error)
             }
         }
     }

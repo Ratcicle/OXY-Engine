@@ -285,9 +285,10 @@ impl Runtime {
     /// text that makes a script that ran before fail; the report says which. Memory follows the
     /// new declarations (a new field at its default, one of another kind back to it, one gone
     /// dropped), and the scripts a limit stopped on an object run there again, as do those that
-    /// require a new text. Nothing goes to the runtime's log. Provisional: the editor calls it
-    /// in a later stage.
-    #[doc(hidden)]
+    /// require a new text. An attribute a new text declares is not created on the objects that
+    /// lack it, since the document does not change during a test: the report warns. Nothing goes
+    /// to the runtime's log, so a reload leaves the state's summary as it was; the editor's test
+    /// calls it when its watcher sees a file of the scripts folder change.
     pub fn reload_scripts(&mut self, sources: Arc<ScriptSources>) -> ScriptReload {
         self.rebuild_scripts(sources, &ScriptHost::new)
             .unwrap_or_else(|error| ScriptReload {
@@ -301,7 +302,6 @@ impl Runtime {
     /// `oxy_simulate`'s `check_vm_reset` looks for. Nothing goes to the log. Why it could not:
     /// the VM did not start (the old one goes on), or scripts that ran do not load in the new
     /// one.
-    #[doc(hidden)]
     pub fn recreate_script_host(&mut self) -> Result<(), String> {
         self.recreate_script_host_with(&ScriptHost::new)
     }
@@ -442,10 +442,13 @@ impl Runtime {
                 continue;
             };
             for (name, line, near) in &new.unknown {
-                let hint = near.map_or_else(String::new, |near| format!("; quis dizer {near}?"));
-                report.warnings.push(format!(
-                    "{path}:{line}: {name} não é um evento dos scripts e nunca roda sozinha{hint}"
-                ));
+                let warning = crate::script::unknown_callback(path, name, *line, *near);
+                report.warnings.push(warning.to_string());
+            }
+            if let Ok(declared) = &new.attributes {
+                report
+                    .warnings
+                    .extend(self.undeclared_on_objects(path, declared));
             }
         }
         // Memory follows what each script declares now, whether its own text changed or that
@@ -493,6 +496,58 @@ impl Runtime {
         self.scripts = Some(host);
         self.script_sources = Arc::new(running);
         Ok(report)
+    }
+
+    /// The attributes a new text of `path` declares that the objects of the scene attaching it
+    /// lack, named with those objects in one warning: during a test the document does not
+    /// change, so they read nil until the script is attached again after it.
+    fn undeclared_on_objects(&self, path: &str, declared: &[(String, Value)]) -> Option<String> {
+        const LISTED: usize = 3;
+        let mut names: Vec<&str> = Vec::new();
+        let mut objects: Vec<&str> = Vec::new();
+        for e in &self.scene().entities {
+            if !e.scripts.iter().any(|s| s.path == path) {
+                continue;
+            }
+            let lacking: Vec<&str> = declared
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .filter(|name| !e.attributes.contains_key(*name))
+                .collect();
+            if lacking.is_empty() {
+                continue;
+            }
+            objects.push(&e.name);
+            for name in lacking {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        let and = |list: &[&str]| match list {
+            [one] => (*one).to_owned(),
+            [first @ .., last] => format!("{} e {last}", first.join(", ")),
+            [] => String::new(),
+        };
+        let who = if objects.len() > LISTED {
+            format!(
+                "{} e mais {} objetos",
+                objects[..LISTED].join(", "),
+                objects.len() - LISTED
+            )
+        } else {
+            and(&objects)
+        };
+        let lack = match objects.len() {
+            0 => return None,
+            1 => "não tem",
+            _ => "não têm",
+        };
+        Some(format!(
+            "{path} declara agora {}, que {who} {lack}: ler dá nil até você parar o teste e \
+             anexar o script de novo, o que cria os atributos que faltam",
+            and(&names)
+        ))
     }
 
     /// Brings the memories of `path` to `schema` after a reload, warning once per field.

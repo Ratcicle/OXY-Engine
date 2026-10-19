@@ -729,7 +729,7 @@ pub const FIELD_ALIASES: [(&str, &str); 7] = [
 ];
 
 /// Top-level parts of `entities`' answer: the object's document form, then what it adds.
-pub const ENTITY_FIELDS: [&str; 32] = [
+pub const ENTITY_FIELDS: [&str; 33] = [
     "id",
     "name",
     "parent",
@@ -752,6 +752,7 @@ pub const ENTITY_FIELDS: [&str; 32] = [
     "camera",
     "ui",
     "graph",
+    "scripts",
     "clips",
     "model_source",
     "rotation_degrees",
@@ -782,6 +783,41 @@ pub fn entities(project: &Project, scene: &str, query: &EntityQuery) -> Result<J
     } else {
         objects.remove(0)
     })
+}
+
+/// Marks with `missing: true`, in an answer of [`entities`], each script an object attaches that
+/// the scripts folder of the project saved in `root` lacks. Nothing changes when the folder
+/// cannot be read.
+pub fn mark_missing_scripts(answer: &mut Json, root: &std::path::Path) {
+    let objects: Vec<&mut Json> = if answer.get("objects").is_some() {
+        match answer.get_mut("objects") {
+            Some(Json::Array(objects)) => objects.iter_mut().collect(),
+            _ => Vec::new(),
+        }
+    } else {
+        vec![answer]
+    };
+    let mut files = None;
+    for object in objects {
+        let Some(Json::Array(scripts)) = object.get_mut("scripts") else {
+            continue;
+        };
+        if files.is_none() {
+            match crate::persistence::script_stamps(root) {
+                Ok(found) => files = Some(found),
+                Err(_) => return,
+            }
+        }
+        let files = files.as_ref().expect("read above");
+        for script in scripts {
+            if script["path"]
+                .as_str()
+                .is_some_and(|p| !files.contains_key(p))
+            {
+                script["missing"] = json!(true);
+            }
+        }
+    }
 }
 
 /// One object as `entities` returns it by default.

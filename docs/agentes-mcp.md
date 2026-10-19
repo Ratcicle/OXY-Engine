@@ -4,6 +4,7 @@ A OXY Engine traz um servidor MCP, o `oxy-mcp.exe`, que deixa agentes de IA como
 - cria um projeto novo, quando você pede, na pasta que você indicar;
 - lê o projeto e consulta o catálogo de nós;
 - edita cenas, objetos, componentes e lógica;
+- escreve, confere e anexa scripts em Luau;
 - importa imagens PNG e sons WAV;
 - valida o projeto;
 - roda o jogo sem janela para testar;
@@ -42,6 +43,7 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 - O agente lê o Console e sabe se você está testando o jogo, para entender o que deu errado no seu teste. Ele também pode testar o jogo no editor enquanto você assiste (veja [Teste ao vivo pelo agente](#teste-ao-vivo-pelo-agente)).
 - Se você estiver arrastando ou digitando, o pedido espera o gesto terminar.
 - Durante um teste do jogo, uma operação de modelagem em prévia ou uma pose provisória da animação, o editor recusa a edição e explica o motivo.
+- A exceção são os scripts: eles são arquivos da pasta `scripts`, e o agente os grava no disco na hora, também ao vivo e durante um teste, que recarrega o que mudou. O Ctrl+Z da OXY não desfaz essas gravações (veja [Scripts com o agente](#scripts-com-o-agente)).
 
 **Arquivos (sem editor aberto).** Com o caminho do projeto, o agente edita os arquivos diretamente:
 - Antes da primeira gravação de cada sessão do servidor (cada vez que o cliente MCP inicia o `oxy-mcp`), o arquivo do projeto é copiado para `project.oxy.json.agente.bak`. As gravações seguintes da mesma sessão não mexem nele: o `.agente.bak` guarda o projeto como estava antes de o agente começar aquela sessão, o ponto para onde dá para voltar, e não só o de antes da última chamada. Se ele for apagado durante a sessão, a gravação seguinte o guarda de novo. As respostas trazem o caminho dele em `previous_version`. Antes, cada `oxy_apply` e cada `oxy_import` substituía a cópia, que acabava guardando só a penúltima versão.
@@ -60,11 +62,12 @@ Para compilar a partir do código-fonte, use `cargo build -p oxy_mcp --release`.
 | `oxy_new_project` | Cria um projeto novo, como o **Novo projeto** do editor, numa pasta nova ou vazia que você indicar; sempre nos arquivos, sem passar pelo editor |
 | `oxy_project` | Cenas (com o fundo de cada uma), recursos (com o arquivo, quem usa cada um e, nos modelos, a raiz e as peças), ações de entrada (com a tecla e quem usa cada uma), superfícies físicas, variáveis do jogo (com o valor inicial e quem usa cada uma), nomes dos grupos de colisão e como o jogo exportado abre (título, janela e tela cheia) |
 | `oxy_scene` | Árvore de objetos da cena e o fundo dela, com componentes e tamanho da lógica; sob pedido, posição no mundo, tamanhos e caixas, e leitura por partes |
-| `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida com os nomes do que os nós usam, os componentes que ainda podem receber e quem aponta para o objeto |
+| `oxy_entity` | Um ou vários objetos, inteiros ou só as partes pedidas, com a posição no mundo, as caixas, a lógica resumida com os nomes do que os nós usam, os scripts que o objeto roda, os componentes que ainda podem receber e quem aponta para o objeto |
 | `oxy_find` | Busca objetos pelo nome em todas as cenas, por páginas |
 | `oxy_catalog` | Nós da lógica (resumidos, ou com portas, parâmetros e valores aceitos para os nós pedidos), componentes, formas, presets (o que cada um cria e as opções), perfis de movimento (com os valores) e as teclas que as ações de entrada aceitam |
 | `oxy_apply` | Aplica um lote de comandos (criar, transformar, componentes, ajuste dos colisores, atributos, nós, ligações, organização da lógica, ações de entrada, superfícies físicas, variáveis do jogo, fundo das cenas, jogo exportado, modelos, cópias entre cenas, animações, perfis de movimento…) |
 | `oxy_import` | Importa imagens PNG e sons WAV como recursos do projeto, um arquivo ou vários de uma vez, e, se pedido, já aplica a imagem num objeto |
+| `oxy_scripts` | Lê, confere e grava os scripts em Luau da pasta `scripts` do projeto, e prepara o VS Code com a extensão luau-lsp |
 | `oxy_export` | Exporta o jogo como o **Exportar jogo** do editor, para a pasta que você indicar, e confere o jogo exportado |
 | `oxy_validate` | Valida o projeto com as regras de salvar e avisa o que o jogo ignoraria ou o que nele pararia com erro |
 | `oxy_simulate` | Roda o jogo sem janela numa cópia do projeto, com entradas programadas, um bot que leva um personagem por um caminho, preparação e condições de parada, e relata trocas de cena, logs, ações, sons, eventos de movimento e áreas, a pausa do jogo, a câmera, a interface do jogo, os objetos observados, as variáveis do jogo, o que toca e o resumo do estado no fim; se pedido, confere que o teste se repete |
@@ -345,6 +348,54 @@ Os comandos de ações de entrada, de superfícies, de variáveis, de recursos (
 - O `character.teleport` descarta só os eventos do trajeto abandonado que ainda não executaram: as aterrissagens, os contatos e as entradas e saídas de áreas que o personagem fez no mesmo passo, e o `event.step` e o `event.input` da lógica dele naquele passo. A lógica que já começou continua, esperas (`control.wait`) incluídas, seja de que objeto for. Antes, o teleporte cancelava também as esperas dos fluxos que o personagem tinha iniciado: um gatilho com `event.area_enter → control.wait → esconder o ladrilho → control.wait → mostrar o ladrilho` nunca mostrava o ladrilho de volta se quem pisou caísse e fosse teleportado no meio da espera.
 - O catálogo do `event.input` diz que ele dispara em todo objeto que tem o nó, inclusive num personagem com `automatic_input` desligado: nesta versão a entrada é uma só para o jogo inteiro.
 
+**Scripts.** `attach_script {entity, path, index?}` anexa ao objeto um script da pasta `scripts` do projeto, na posição `index` da lista dele (no fim, sem `index`), e cria no objeto, no mesmo passo de desfazer, os atributos que o script declara em `Modulo.attributes` e que ele não tem, com o valor padrão. Veja [Scripts com o agente](#scripts-com-o-agente). `detach_script {entity, path}` tira o script e mantém os atributos.
+
+## Scripts com o agente
+
+Na 0.7, a lógica pode ser escrita em Luau, em arquivos `.luau` da pasta `scripts` do projeto (com subpastas e nomes livres, como `scripts/fases/porta.luau`). O grafo de nós continua funcionando, mas não ganha nós novos. Um objeto roda os scripts que anexa, na ordem da lista, depois da lógica de nós dele.
+
+- **O disco é a verdade.** O script é o arquivo, e não existe script "não salvo", nem no editor. O agente grava pelo `oxy_scripts` ou, se tiver ferramentas de arquivo, direto no arquivo; o efeito é o mesmo.
+- **`oxy_scripts`**, pelo `action`:
+  - `read {path}`: o texto, cada linha depois do número dela e de uma tabulação (que não fazem parte do arquivo), e `lines`.
+  - `write {path, text}`: o arquivo inteiro, tudo ou nada. Antes de gravar, o texto é conferido como o jogo carrega o script: a sintaxe, um local do topo alterado dentro de uma função (o valor se perderia ao recarregar) e o topo do módulo rodado sem mexer no mundo, com os outros scripts da pasta para o `require`. Com erro, nada é gravado, e a mensagem traz o arquivo e a linha: `scripts/porta.luau:3: erro de sintaxe: …; nada foi gravado`. As subpastas são criadas. A resposta traz `saved`, `created`, `lines`, `added` e `removed` (as linhas novas e as que saíram) e os avisos.
+  - `check {path?, text?}`: confere um script, um texto como se fosse aquele script (sem gravar) ou, sem `path`, todos os da pasta, e responde `{ok, checked, errors, warnings}`, cada diagnóstico como `scripts/x.luau:LINHA: mensagem`. Os avisos apontam funções com nome de evento que não existe (`on_aera_enter`, que nunca roda) e um `Modulo.attributes` que não é uma tabela de valores padrão, como o jogo avisa onde o script está anexado; um módulo que outros scripts usam com `require` e que nenhum objeto anexa pode ter funções `on_*` e um `attributes` só dele, sem aviso. Os tipos não são conferidos aqui (`types_unavailable`): quem os confere é o VS Code com a extensão luau-lsp.
+  - `vscode`: grava o que o VS Code precisa (veja abaixo).
+- **O Ctrl+Z não desfaz.** Ao vivo, o resto do que o agente faz se desfaz com Ctrl+Z e quem salva é você; a gravação de um script é a exceção: vai para o disco na hora, e o Ctrl+Z da OXY não a desfaz. Para voltar atrás, a primeira mudança de cada arquivo numa sessão guarda o arquivo como estava em `scripts/<arquivo>.luau.agente.bak` (`previous_version` na resposta): nos arquivos, uma vez por sessão do servidor; ao vivo, uma vez por sessão do editor. Se a cópia for apagada, a gravação seguinte a guarda de novo. Um arquivo que a sessão criou não tem cópia. Os `.agente.bak` não são scripts (a extensão é outra), mas a exportação leva a pasta `scripts` inteira: apague-os quando não precisar mais deles.
+- **Ao vivo**, o editor grava o arquivo, e o Console mostra `Agente · Script scripts/porta.luau alterado (+12 -3 linhas)` (ou `criado`). A gravação não espera você terminar um gesto nem parar o teste: é para isso que serve a recarga. Um projeto que nunca foi salvo não tem pasta para os scripts, e o editor recusa.
+- **Recarga no teste do editor.** Durante um teste com scripts, o editor olha a pasta `scripts` a cada 300 ms e lê de novo um arquivo que mudou e ficou parado por duas olhadas (os editores de texto gravam num arquivo temporário e o renomeiam). O texto novo entra entre dois passos, mesmo com o teste pausado, e o jogo continua de onde estava: atributos, memória dos scripts (`self.state`), variáveis e temporizadores ficam como estavam. O Console diz `Script recarregado: scripts/porta.luau (3 objetos)`. Um texto com erro fica de fora, com o arquivo e a linha, e o teste segue com a versão anterior: `Script não recarregado: scripts/porta.luau:12: … O teste segue com a versão anterior.`, também em **Avisos**. Um atributo que o script passou a declarar não é criado durante o teste, porque o projeto não muda no teste: o Console avisa, e anexar o script de novo depois do teste cria o que falta. Os erros dos scripts durante o teste aparecem no Console com o arquivo e a linha, e o `oxy_console` traz também `script: {path, line}`.
+- **Anexar e ler:** o `attach_script` do `oxy_apply` só anexa um arquivo que a pasta tem: escreva-o antes com o `oxy_scripts write`. Um atributo declarado que o objeto já tem com outro tipo fica como está e vem nos avisos. O `oxy_entity` lista os scripts do objeto em `scripts`, com `missing: true` num arquivo que a pasta não tem, e o `oxy_validate` avisa dos scripts anexados que sumiram da pasta.
+- **Testar:** o `oxy_simulate` roda os scripts da pasta, como o teste do editor; os logs e os erros saem com o arquivo e a linha.
+- **VS Code.** O editor de scripts da 0.7 é o VS Code com a extensão **luau-lsp**, conferida na versão 1.70.1 (a sintaxe do arquivo de tipos muda entre versões, e uma mais nova pode não lê-lo): ela completa os nomes da API, mostra a ajuda em português e acusa nomes e tipos errados, como `audio.paly`. O `oxy_scripts vscode`, a primeira gravação de um script num projeto e o primeiro `attach_script` num projeto sem os tipos desta versão gravam sem perguntar (a resposta traz `vscode`, e ao vivo o Console diz o que foi gravado):
+  - `.oxy/tipos/oxy.d.luau`: os tipos da API dos scripts, gravados de novo quando a versão da engine muda (não edite);
+  - `.luaurc`, só se o projeto não tiver um (um que já existe fica como está, e as `notes` avisam se ele não for o da OXY);
+  - no `.vscode/settings.json`, só as chaves `luau-lsp.*` que faltam: a plataforma `standard`, sem sourcemap, `fflags.sync: false` (com `true`, a extensão baixa as flags do Roblox e aceita o que a engine recusa), a definição `@oxy` e os 10 globais que os scripts não têm, como `os` e `math.random`. Uma chave que o arquivo já tem fica como está, e a resposta diz em `notes` o que mudar à mão; um arquivo com comentários não é tocado, e as chaves vão para `.oxy/vscode-settings.json`, para você copiar.
+
+  Abra no VS Code a pasta do projeto, não só o arquivo do script, para a extensão ler esses arquivos.
+- **A API desta versão** (a fatia da 0.7; a completa vem depois): os eventos `on_start(self)`, `on_step(self, dt)`, `on_input(self, acao, fase)` (`"pressed"` ou `"released"`), `on_click(self)`, `on_area_enter(self, other)`, `on_area_exit(self, other)`, `on_marker`, `on_character`, `on_pause` e `on_message(self, nome, valor, de)`; os objetos, com `obj.name`, `obj.attr.Nome` (`nil` se o objeto não tem o atributo; escrever pede um atributo que ele tem, com valor do mesmo tipo), `obj.position`, `obj.world_position`, `obj:exists()`, `obj:has_attribute(nome)`, `self.state` e `obj:send(nome, valor)`; os temporizadores `self:after`, `self:every`, `self:sequence`, `self:schedule` e `self:cancel`; e `audio.play(nome, {volume, audience})`, `vars.get(nome, chave?)`, `vars.set(nome, valor, chave?)`, `print` e `warn`. Os nomes da API são em inglês; os de objetos, atributos, sons, ações e variáveis são os que você deu.
+
+A área de checkpoint do parkour, por exemplo:
+
+```lua
+--!strict
+local Checkpoint = {}
+Checkpoint.attributes = { Ordem = 1 }      -- anexar cria o atributo que falta
+local FEET = vector.create(0, 1.5, 0)      -- do centro da área até o chão
+
+function Checkpoint.on_area_enter(self: Object, other: Object)
+    if not other:has_attribute("Checkpoint atual") then
+        return                             -- uma caixa de física também entra na área
+    end
+    local order = self.attr.Ordem
+    if other.attr["Checkpoint atual"] < order then
+        other.attr["Ponto de retorno"] = self.world_position - FEET
+        other.attr["Checkpoint atual"] = order
+        audio.play("Checkpoint", { volume = 0.9, audience = other })
+    end
+end
+
+return Checkpoint
+```
+
 ## Testes com `oxy_simulate`
 
 O teste roda numa cópia do projeto, na memória. Nada é salvo, e nada muda no editor nem no histórico.
@@ -556,6 +607,7 @@ O que a 0.6 ainda não faz, e o que o agente faz no lugar. A rede, as entradas p
 **Segurança**
 - O canal só aceita conexões do próprio computador (`127.0.0.1`) e exige o token que o editor grava em `%LOCALAPPDATA%\OXY Engine\agents`. Desligar a opção fecha o canal e apaga esse arquivo.
 - A importação lê só arquivos `.png` e `.wav` deste computador, pelo caminho completo, e escreve só na pasta `assets` do projeto.
+- O `oxy_scripts` lê e grava só arquivos `.luau` dentro da pasta `scripts` do projeto (e o `.agente.bak` ao lado de cada um), e o `vscode` grava só `.oxy/`, `.luaurc` e `.vscode/settings.json` na pasta do projeto. Os scripts rodam numa caixa de areia: sem `os`, sem disco, sem rede e sem `require` fora da pasta `scripts`.
 - A criação de projeto escreve só o `project.oxy.json`, numa pasta nova ou vazia que você indicou, nunca na da OXY Engine nem na raiz de um disco.
 - A exportação escreve uma pasta de jogo, com um executável, só onde você indicar: nunca na pasta do projeto, na da OXY Engine ou na raiz de um disco, e só substitui uma exportação anterior do mesmo jogo, quando você pede.
 - Ao vivo, o agente só salva com **Permitir que agentes salvem** ligada, e só o projeto aberto, como o **Salvar** do editor, guardando antes o `.agente.bak`.

@@ -12,6 +12,7 @@ use oxy_core::{
     headless, persistence, query, random,
     runtime::Runtime,
     script::{self, ScriptSources},
+    script_files,
 };
 use oxy_render::{CameraState, offscreen::ShotView};
 use serde_json::{Value as Json, json};
@@ -154,7 +155,8 @@ pub struct Tools {
     gpu: Option<(oxy_render::RenderState, oxy_render::Renderer)>,
     /// The player games are exported with on files; none for the one next to this server.
     player: Option<PathBuf>,
-    /// Project files this session already kept a previous version of.
+    /// Files this session already kept a previous version of: project files, and the scripts
+    /// it wrote (see `script_files`).
     kept: HashSet<PathBuf>,
 }
 
@@ -271,7 +273,9 @@ set_transform takes it); scale (local); dimensions (of its shape); visual_bounds
 {min, max, center} of the collider the game uses (the 3D character body, the 3D collider or the \
 box collider), with sensor: true for areas and enabled: false when off; bounds, both boxes.";
 const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
-radians plus rotation_degrees, material, attributes, components, logic graph, animation clips, \
+radians plus rotation_degrees, material, attributes, components, logic graph, scripts [{path, \
+missing?}] (the Luau files it runs, in order, after its graph; missing: true when the scripts \
+folder lacks the file), animation clips, \
 each keyframe with rotation_degrees too, as set_clip takes it, which update_entity refuses in \
 keyframes, as they keep radians; empty (null) parts are left out) plus world {position, \
 rotation_degrees, scale}, visual_bounds and collider_bounds as oxy_scene describes them, \
@@ -553,6 +557,19 @@ pub fn definitions() -> Json {
                         is an interface element, else in its material; a sprite takes the \
                         image's proportions, keeping its height."}}),
             json!([])
+        ),
+        tool(
+            "oxy_scripts",
+            SCRIPTS_DESCRIPTION,
+            json!({"project": project,
+                   "action": {"type": "string", "enum": script_files::ACTIONS},
+                   "path": {"type": "string", "description":
+                       "A script of the project's scripts folder, as scripts/porta.luau \
+                        (subfolders too)."},
+                   "text": {"type": "string", "description":
+                       "write: the whole text of the file (UTF-8, up to 1 MB). check: a text \
+                        checked as path would be, without saving it."}}),
+            json!(["action"])
         ),
         tool(
             "oxy_export",
@@ -968,8 +985,10 @@ that order, after its logic graph), and gives the object, with their defaults, t
 script declares in Module.attributes that it lacks (one it has keeps its value). A type that \
 differs from the object's or between its scripts, and a script that does not load or declares \
 no table of defaults (its attributes unread), come back in warnings. Again on an attached script: moves it to index and \
-creates what is missing. A file the folder lacks is refused. detach_script {entity, path}: takes \
-it off, keeping the attributes
+creates what is missing. A file the folder lacks is refused (oxy_scripts write creates it). The \
+first attach in a project without this version's VS Code types writes them (vscode in the \
+answer, as oxy_scripts vscode). detach_script {entity, path}: takes it off, keeping the \
+attributes
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}. A box collider takes the shape's dimensions \
 when added and follows the object's scale, not later dimension changes
@@ -1079,6 +1098,37 @@ to the project folder), width and height (images), seconds (sounds), applied_to?
 {imported: [one such entry per file, in the order of paths]}. Use the asset ID in set_material \
 texture, an interface element's ui.texture (update_entity) or the asset parameter of an \
 action.sound (once), action.sound_loop or action.sound_stop node.";
+
+const SCRIPTS_DESCRIPTION: &str = "Luau scripts: the .luau files of the project's scripts \
+folder, which objects run once attached (oxy_apply attach_script; they run after the object's \
+logic graph, which is legacy and still runs). The disk is the truth, live too: a write is saved \
+at once, a test running in the editor reloads it between steps, and Ctrl+Z in the editor does \
+not undo it. read {path}: {path, lines, text}, each line of text after its number and a tab (not \
+part of the file). write {path, text}: the whole file, all-or-nothing: checked as the game loads \
+it (syntax, a top-level local some function changes, the module's top run, the folder's other \
+scripts serving require) and refused as \"scripts/x.luau:LINE: reason\" with nothing written; \
+answers {path, saved, created, lines, added?, removed?, previous_version? (<file>.agente.bak, the \
+file as it was before this session first changed it; live, the editor's session), warnings?, \
+vscode? (the first write or attach_script sets VS Code up)}. check {path?, text?}: a script, text as that script \
+without saving it, or every script: {ok, checked, errors?, warnings?}, each \"scripts/x.luau:LINE: \
+message\"; warnings are functions named like callbacks that are none (they never run) and a \
+Module.attributes that is no table of defaults, except in a module other scripts require and no \
+object attaches; types are not checked (types_unavailable: VS \
+Code checks them). vscode: writes what VS Code with the luau-lsp extension (1.70.1) needs: \
+.oxy/tipos/oxy.d.luau (the API's types), .luaurc when there is none and the luau-lsp keys \
+.vscode/settings.json lacks, never changing a key it has: {written, notes?}. The API of this \
+version: callbacks on_start(self), on_step(self, dt), on_input(self, action, phase \
+\"pressed\"|\"released\"), on_click(self), on_area_enter(self, other), on_area_exit(self, other), \
+on_marker(self, marker, clip), on_character(self, event), on_pause(self, paused), \
+on_message(self, name, value, from); obj.name, obj.attr.Name (nil when absent; writing needs an \
+attribute of that type), obj.position and obj.world_position (vectors in metres, \
+vector.create(x, y, z); writing moves it), obj:exists(), obj:has_attribute(name), self.state \
+(the fields Module.state declares), obj:send(name, value?), self:after(seconds, Module.f, ...), \
+self:every(seconds, Module.f, ...), self:sequence(interval, Module.f, items), \
+self:schedule({ {delay, Module.f, data?}, ... }), self:cancel(id); audio.play(name, {volume?, \
+audience?}); vars.get(name, key?), vars.set(name, value, key?); print and warn. \
+Module.attributes = {Name = default} declares what attach_script gives an object. Objects, \
+attributes, sounds, actions and variables go by the person's names.";
 
 const EXPORT_DESCRIPTION: &str = "Exports the game as the editor's Projeto > Exportar jogo \
 does, into <destination>\\<game name>: the game name is game.title of oxy_project (set with \
@@ -1492,8 +1542,12 @@ impl Tools {
                         "find"
                     }
                 };
-                self.read(args, request, |p, scene| {
-                    query::answer(p, scene, request, args)
+                self.read(args, request, |p, scene, root| {
+                    let mut answer = query::answer(p, scene, request, args)?;
+                    if request == "entity" {
+                        query::mark_missing_scripts(&mut answer, root);
+                    }
+                    Ok(answer)
                 })
             }
             "oxy_validate" => self.validate(args),
@@ -1501,6 +1555,7 @@ impl Tools {
             "oxy_simulate" => self.simulate(args),
             "oxy_screenshot" => self.screenshot(args),
             "oxy_import" => self.import(args),
+            "oxy_scripts" => self.scripts(args),
             "oxy_export" => self.export(args),
             "oxy_select" | "oxy_frame" | "oxy_undo" | "oxy_redo" | "oxy_console" | "oxy_play"
             | "oxy_save" => {
@@ -1711,7 +1766,7 @@ impl Tools {
         &mut self,
         args: &Json,
         method: &str,
-        local: impl FnOnce(&Project, &str) -> Result<Json, String>,
+        local: impl FnOnce(&Project, &str, &Path) -> Result<Json, String>,
     ) -> Result<Output, String> {
         match self.target(args)? {
             Target::Live(port) => {
@@ -1724,7 +1779,8 @@ impl Tools {
             Target::File(file) => {
                 let project = persistence::load_project(&file).map_err(|e| e.to_string())?;
                 let scene = text_arg(args, "scene").unwrap_or_else(|| project.start_scene.clone());
-                local(&project, &scene).map(Output::json)
+                let root = file.parent().unwrap_or(Path::new("."));
+                local(&project, &scene, root).map(Output::json)
             }
         }
     }
@@ -1792,7 +1848,37 @@ impl Tools {
                 persistence::save_project(&file, &project).map_err(|e| e.to_string())?;
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
+                // Whoever writes the scripts in VS Code gets the API's types.
+                if command::needs_scripts(&parsed) {
+                    match script_files::setup_vscode_when_due(&root) {
+                        Ok(Some(setup)) => report["vscode"] = setup.json(),
+                        Ok(None) => {}
+                        Err(error) => command::add_warnings(&mut report, vec![error]),
+                    }
+                }
                 Ok(Output::json(report))
+            }
+        }
+    }
+
+    /// oxy_scripts: the arguments checked first; then the editor answers live, telling its
+    /// Console what an agent wrote, or the project's folder on files.
+    fn scripts(&mut self, args: &Json) -> Result<Output, String> {
+        let request = script_files::Request::parse(args)?;
+        match self.target(args)? {
+            Target::Live(port) => {
+                let mut params = args.clone();
+                if let Some(map) = params.as_object_mut() {
+                    map.remove("project");
+                }
+                self.live(port, "scripts", params).map(Output::json)
+            }
+            Target::File(file) => {
+                let root = file.parent().unwrap_or(Path::new("."));
+                // Which scripts objects attach; the files are answered all the same without it.
+                let project = persistence::load_project_lazy(&file).ok();
+                script_files::answer(root, project.as_ref(), &request, &mut self.kept)
+                    .map(|answer| Output::json(answer.json))
             }
         }
     }
@@ -3195,6 +3281,175 @@ mod tests {
         let error = call("oxy_apply", attach).unwrap_err();
         assert!(error.contains("não existe na pasta do projeto"), "{error}");
         assert!(APPLY_DESCRIPTION.contains("attach_script {entity, path, index?}"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_write_check_and_read_scripts_that_objects_then_attach() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-oxy-scripts-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Roteiros", SceneKind::ThreeD).unwrap();
+        let door = Entity::new("Porta", None);
+        let id = door.id.clone();
+        project.scenes[0].entities.push(door);
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let first = "local M = {}\nM.attributes = { Vezes = 0 }\nfunction M.on_start(self)\n    \
+                     self.attr.Vezes += 1\n    print('vezes', self.attr.Vezes)\nend\nreturn M\n";
+        // A script an agent writes, without file tools: checked, saved, VS Code set up.
+        let written = call(
+            "oxy_scripts",
+            json!({"action": "write", "path": "scripts/contador.luau", "text": first}),
+        )
+        .unwrap();
+        assert_eq!(written["created"], true);
+        assert_eq!(written["lines"], 7);
+        assert_eq!(
+            written["vscode"]["written"],
+            json!([".oxy/tipos/oxy.d.luau", ".luaurc", ".vscode/settings.json"])
+        );
+        assert!(dir.join(".oxy/tipos/oxy.d.luau").is_file());
+        // A text that does not load is refused with its line; the file stays.
+        let error = call(
+            "oxy_scripts",
+            json!({"action": "write", "path": "scripts/contador.luau",
+                   "text": "local M = {}\nfunction M.on_start(self)\nreturn M\n"}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("scripts/contador.luau:4: erro de sintaxe"),
+            "{error}"
+        );
+        assert!(error.ends_with("nada foi gravado"), "{error}");
+        let read = call(
+            "oxy_scripts",
+            json!({"action": "read", "path": "scripts/contador.luau"}),
+        )
+        .unwrap();
+        assert_eq!(read["lines"], 7);
+        assert!(
+            read["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("1\tlocal M = {}\n2\tM.attributes"),
+            "{read}"
+        );
+        // Attached, with the attribute it declares, and run by oxy_simulate. Attaching gives VS
+        // Code the types it lacks, as when the person wrote the script there.
+        std::fs::remove_file(dir.join(".oxy/tipos/oxy.d.luau")).unwrap();
+        let attached = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "attach_script", "entity": &id,
+                                  "path": "scripts/contador.luau"}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            attached["vscode"],
+            json!({"written": [".oxy/tipos/oxy.d.luau"]})
+        );
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        assert_eq!(report["logs"][0]["text"], "Porta · vezes 1");
+        // The session created the file: changing it keeps no copy. Another session keeps the
+        // file as it found it.
+        let second = first.replace("'vezes'", "'contei'");
+        let args = json!({"action": "write", "path": "scripts/contador.luau", "text": second});
+        let written = call("oxy_scripts", args.clone()).unwrap();
+        assert_eq!(
+            (written["added"].as_u64(), written["removed"].as_u64()),
+            (Some(1), Some(1))
+        );
+        assert!(written.get("previous_version").is_none() && written.get("vscode").is_none());
+        let backup = dir.join("scripts").join("contador.luau.agente.bak");
+        assert!(!backup.exists());
+        let mut args = args;
+        args["project"] = json!(dir.display().to_string());
+        args["text"] = json!(first);
+        let written: Json =
+            serde_json::from_str(&Tools::default().call("oxy_scripts", &args).unwrap().text)
+                .unwrap();
+        assert_eq!(
+            written["previous_version"],
+            json!(backup.display().to_string())
+        );
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), second);
+        // check: every script, errors and warnings at their line.
+        std::fs::write(
+            dir.join("scripts/area.luau"),
+            "local M = {}\nfunction M.on_area_entre(self, other) end\nreturn M\n",
+        )
+        .unwrap();
+        // A module other scripts require keeps its own on_* names without warnings.
+        std::fs::write(
+            dir.join("scripts/ajuda.luau"),
+            "local M = {}\nfunction M.on_dano(self) end\nreturn M\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("scripts/usa.luau"),
+            "local Ajuda = require('./ajuda')\nreturn {}\n",
+        )
+        .unwrap();
+        let checked = call("oxy_scripts", json!({"action": "check"})).unwrap();
+        assert_eq!(checked["ok"], true);
+        assert_eq!(
+            checked["checked"],
+            json!([
+                "scripts/ajuda.luau",
+                "scripts/area.luau",
+                "scripts/contador.luau",
+                "scripts/usa.luau"
+            ])
+        );
+        assert_eq!(
+            checked["warnings"].as_array().unwrap().len(),
+            1,
+            "{checked}"
+        );
+        assert!(
+            checked["warnings"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("scripts/area.luau:2: on_area_entre não é um evento"),
+            "{checked}"
+        );
+        // oxy_entity names the scripts and marks one the folder lacks.
+        let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
+        assert_eq!(
+            entity["scripts"],
+            json!([{"path": "scripts/contador.luau"}])
+        );
+        std::fs::rename(
+            dir.join("scripts/contador.luau"),
+            dir.join("scripts/conta.luau"),
+        )
+        .unwrap();
+        let entity = call("oxy_entity", json!({"id": "Porta"})).unwrap();
+        assert_eq!(
+            entity["scripts"],
+            json!([{"path": "scripts/contador.luau", "missing": true}])
+        );
+        // Bad arguments fail before the project is read.
+        let error = Tools::default()
+            .call("oxy_scripts", &json!({"action": "rename"}))
+            .unwrap_err();
+        assert!(error.starts_with("action inválido"), "{error}");
+        let schema = schema("oxy_scripts");
+        assert_eq!(
+            schema["action"]["enum"],
+            json!(["read", "write", "check", "vscode"])
+        );
+        assert!(SCRIPTS_DESCRIPTION.contains("Ctrl+Z in the editor does not undo it"));
+        assert!(ENTITY_DESCRIPTION.contains("scripts [{path, missing?}]"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

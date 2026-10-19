@@ -189,12 +189,7 @@ impl Runtime {
         // What the scene hears may grow with it.
         self.event_operations.take();
         for (name, line, near) in &module.unknown {
-            let hint = near.map_or_else(String::new, |near| format!("; quis dizer {near}?"));
-            let error = ScriptError::new(
-                path,
-                *line,
-                format!("{name} não é um evento dos scripts e nunca roda sozinha{hint}"),
-            );
+            let error = crate::script::unknown_callback(path, name, *line, *near);
             self.tell_once(
                 String::new(),
                 ErrorPlace::of(&error),
@@ -203,11 +198,7 @@ impl Runtime {
             );
         }
         if let Err(message) = &module.attributes {
-            let error = ScriptError::new(
-                path,
-                0,
-                format!("{message}; anexar o script não cria os atributos que ele declara"),
-            );
+            let error = crate::script::undeclared_attributes(path, message);
             self.tell_once(
                 String::new(),
                 ErrorPlace::of(&error),

@@ -47,6 +47,7 @@ mod scripts_api;
 mod scripts_bench;
 mod scripts_commands;
 mod scripts_events;
+mod scripts_files;
 mod scripts_format;
 mod scripts_host;
 mod scripts_state;

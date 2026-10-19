@@ -48,7 +48,7 @@
 use crate::document::{Id, Project, Value};
 use crate::input_actions::every_entity;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 mod api;
 mod bytecode;
@@ -179,20 +179,19 @@ pub(crate) enum ScriptArg {
 }
 
 /// What reloading the scripts did (see `Runtime::reload_scripts`), for the editor's Console:
-/// never the runtime's log, whose lines are part of the state. Provisional, as the reload.
-#[doc(hidden)]
+/// never the runtime's log, whose lines are part of the state.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScriptReload {
     /// The scripts whose new text runs now, by path.
     pub reloaded: Vec<String>,
     /// Why a new text did not load: the old one goes on running (a new file has none).
     pub errors: Vec<ScriptError>,
-    /// Memory fields reset or dropped, functions named like callbacks that are none.
+    /// Memory fields reset or dropped, functions named like callbacks that are none, attributes
+    /// a script now declares that its objects lack.
     pub warnings: Vec<String>,
 }
 
-/// What [`check`] reads from a script that loads. Provisional, as [`check`].
-#[doc(hidden)]
+/// What [`check`] reads from a script that compiles.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScriptCheck {
     /// The global paths the script reads, as `math.floor`, for the lint of names.
@@ -200,16 +199,126 @@ pub struct ScriptCheck {
 }
 
 /// Compiles `source` as the script `path` (`scripts/porta.luau`) and checks it the way loading
-/// does before running anything: syntax and top-level locals some function writes. The export
-/// refuses a script it refuses. Provisional: the lint of names and the checks of the tools
-/// build on it in a later stage.
-#[doc(hidden)]
+/// does before running anything: syntax and top-level locals some function writes. Nothing runs,
+/// so it needs no other script; the export refuses a script it refuses. [`check_loading`] goes
+/// on to run the module's top.
 pub fn check(path: &str, source: &str) -> Result<ScriptCheck, ScriptError> {
     let (_, report) = load::check(path, source)?;
     Ok(ScriptCheck {
         imports: report.imports.into_iter().collect(),
     })
 }
+
+/// What [`check_loading`] found in a script.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptReport {
+    pub path: String,
+    /// Why it does not load: the objects that attach it would run without it.
+    pub error: Option<ScriptError>,
+    /// What loads but is likely a mistake: a function named like a callback that is none,
+    /// which never runs by itself, and a `Module.attributes` that declares nothing attaching
+    /// could create.
+    pub warnings: Vec<ScriptError>,
+}
+
+/// Checks the scripts `paths` of `sources` as the runtime loads them, in one VM of their own
+/// where nothing of the world is reached: [`check`], then the module's top runs (the scripts it
+/// requires load with it) and everything it reaches is frozen, and its memory declaration is
+/// read. A script `sources` lacks does not load. The warnings are those the runtime gives where
+/// the script is attached, so a script no object attaches (`attached` says which some do) that
+/// another script of `sources` requires gets none: it is a module of functions and data, whose
+/// `on_*` names and `attributes` are its own.
+pub fn check_loading<'a>(
+    sources: &ScriptSources,
+    paths: impl IntoIterator<Item = &'a str>,
+    attached: impl Fn(&str) -> bool,
+) -> Vec<ScriptReport> {
+    let host = ScriptHost::new(std::sync::Arc::new(sources.clone()));
+    let mut reports: Vec<ScriptReport> = paths
+        .into_iter()
+        .map(|path| {
+            let mut report = ScriptReport {
+                path: path.to_owned(),
+                error: None,
+                warnings: Vec::new(),
+            };
+            let loaded = match &host {
+                Ok(host) => host.load(path),
+                Err(error) => Err(ScriptError::new(path, 0, error.clone())),
+            };
+            match loaded {
+                Ok(module) => {
+                    for (name, line, near) in &module.unknown {
+                        report
+                            .warnings
+                            .push(unknown_callback(path, name, *line, *near));
+                    }
+                    if let Err(message) = &module.attributes {
+                        report.warnings.push(undeclared_attributes(path, message));
+                    }
+                }
+                Err(error) => report.error = Some(error),
+            }
+            report
+        })
+        .collect();
+    // Which of the scripts no object attaches others require: the tops of all of them tell.
+    if let Ok(host) = &host
+        && reports
+            .iter()
+            .any(|report| !report.warnings.is_empty() && !attached(&report.path))
+    {
+        for path in sources.files.keys() {
+            let _ = host.load(path);
+        }
+        let required = host.required_by_others();
+        for report in &mut reports {
+            if !attached(&report.path) && required.contains(&report.path) {
+                report.warnings.clear();
+            }
+        }
+    }
+    reports
+}
+
+/// The scripts the objects of `project` attach, in scenes and models.
+pub fn attached_paths(project: &Project) -> BTreeSet<String> {
+    every_entity(project)
+        .flat_map(|(_, e)| e.scripts.iter().map(|s| s.path.clone()))
+        .collect()
+}
+
+/// A function of the module `path`, defined at `line`, named like a callback that is none
+/// (`near` the one it likely means): it never runs by itself.
+pub(crate) fn unknown_callback(
+    path: &str,
+    name: &str,
+    line: u32,
+    near: Option<&str>,
+) -> ScriptError {
+    let hint = near.map_or_else(String::new, |near| format!("; quis dizer {near}?"));
+    ScriptError::new(
+        path,
+        line,
+        format!("{name} não é um evento dos scripts e nunca roda sozinha{hint}"),
+    )
+}
+
+/// A `Module.attributes` of the script `path` that is no table of defaults, why in `message`.
+pub(crate) fn undeclared_attributes(path: &str, message: &str) -> ScriptError {
+    ScriptError::new(
+        path,
+        0,
+        format!("{message}; anexar o script não cria os atributos que ele declara"),
+    )
+}
+
+/// The types of the scripts' API for the luau-lsp extension of VS Code (design §5.3, §6.2):
+/// globals and a definitions file of `export type`, `declare name: type` and `declare
+/// function` only, the one form both of Luau's solvers in luau-lsp 1.70.1 read. The vertical
+/// slice of 0.7 has the API its scripts reach; the full API comes with the table it is made
+/// from. Without the header line `script_files` writes before it.
+pub const TYPES: &str = include_str!("script/oxy.d.luau");
 
 /// The scripts' folder, in the project's folder (`data` in an exported game).
 pub const FOLDER: &str = "scripts";
@@ -652,6 +761,150 @@ mod tests {
             missing_by_file(&three)[0].0,
             "Gatilho 1, Gatilho 2 e Gatilho 3: o script scripts/gatilho.luau não existe na pasta \
              do projeto"
+        );
+    }
+
+    /// The names a block of the definitions file declares, from the line `start` to its `}`.
+    fn declared(start: &str) -> Vec<String> {
+        let body = TYPES.split(start).nth(1).expect(start);
+        let body = &body[..body.find("\n}").expect("the block's end")];
+        let mut names: Vec<String> = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("--"))
+            .filter_map(|line| Some(line.split_once(':')?.0.trim().to_owned()))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_types_declare_what_scripts_reach() {
+        let mut members: Vec<String> = handles::OBJECT_MEMBERS.map(String::from).to_vec();
+        members.sort();
+        assert_eq!(declared("export type Object = {"), members);
+        assert_eq!(declared("export type ScriptObject<A, S> = {"), members);
+        // The global tables as the VM has them, and the base functions they declare.
+        let host = ScriptHost::new(std::sync::Arc::default()).unwrap();
+        let globals = host.lua().globals();
+        for table in ["audio", "vars"] {
+            let found: mlua::Table = globals.get(table).unwrap();
+            let mut names: Vec<String> = found
+                .pairs::<String, mlua::Value>()
+                .map(|pair| pair.unwrap().0)
+                .collect();
+            names.sort();
+            assert_eq!(declared(&format!("declare {table}: {{")), names, "{table}");
+        }
+        assert!(TYPES.contains("declare function warn(...: any): ()"));
+        assert!(globals.get::<mlua::Function>("warn").is_ok());
+        // Every callback is listed for the person.
+        for callback in Callback::ALL {
+            assert!(
+                TYPES.contains(&format!("--   {}(self", callback.name())),
+                "{callback:?}"
+            );
+        }
+        // Only the syntax luau-lsp 1.70.1 reads in both solvers (design §5.3).
+        for line in TYPES
+            .lines()
+            .filter(|l| !l.starts_with(' ') && !l.starts_with("--"))
+        {
+            assert!(
+                line.is_empty()
+                    || line == "}"
+                    || line.starts_with("export type ")
+                    || line.starts_with("declare function ")
+                    || (line.starts_with("declare ") && line.ends_with(": {")),
+                "{line}"
+            );
+        }
+        assert!(!TYPES.contains("declare class") && !TYPES.contains("declare extern"));
+    }
+
+    #[test]
+    fn checking_loads_the_scripts_and_tells_what_never_runs() {
+        let sources = ScriptSources::from_texts([
+            (
+                "scripts/porta.luau",
+                "local Dados = require('./dados')\nlocal M = {}\nM.attributes = 3\nfunction \
+                 M.on_aera_enter(self) end\nreturn M\n",
+            ),
+            // A module only required: its on_* names and attributes are its own.
+            (
+                "scripts/dados.luau",
+                "local M = { attributes = { 'forca', 'vida' } }\nfunction M.on_dano(self) \
+                 end\nreturn M\n",
+            ),
+            ("scripts/topo.luau", "audio.play('Bipe')\nreturn {}\n"),
+            ("scripts/sintaxe.luau", "local M = {\nreturn M\n"),
+            ("scripts/sem_tabela.luau", "local x = 1\n"),
+        ]);
+        let reports = check_loading(
+            &sources,
+            [
+                "scripts/porta.luau",
+                "scripts/topo.luau",
+                "scripts/sintaxe.luau",
+                "scripts/sem_tabela.luau",
+                "scripts/nada.luau",
+                "scripts/dados.luau",
+            ],
+            |_| false,
+        );
+        let texts = |report: &ScriptReport| {
+            (
+                report.error.as_ref().map(ToString::to_string),
+                report
+                    .warnings
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            texts(&reports[0]),
+            (
+                None,
+                vec![
+                    "scripts/porta.luau:4: on_aera_enter não é um evento dos scripts e nunca roda \
+                     sozinha; quis dizer on_area_enter?"
+                        .to_owned(),
+                    "scripts/porta.luau: Modulo.attributes precisa ser uma tabela com o valor \
+                     padrão de cada atributo, como { Velocidade = 90 }; anexar o script não cria \
+                     os atributos que ele declara"
+                        .to_owned(),
+                ]
+            )
+        );
+        let error = |i: usize| reports[i].error.clone().unwrap();
+        assert_eq!(
+            error(1).to_string(),
+            "scripts/topo.luau:1: o topo do script não pode mexer no mundo; faça isso em on_start"
+        );
+        assert_eq!(
+            (error(2).line, error(2).path.as_str()),
+            (2, "scripts/sintaxe.luau")
+        );
+        assert!(
+            error(2).message.starts_with("erro de sintaxe"),
+            "{}",
+            error(2)
+        );
+        assert!(error(3).message.contains("return Modulo"), "{}", error(3));
+        assert_eq!(error(4).message, "o script não existe na pasta do projeto");
+        assert_eq!(texts(&reports[5]), (None, Vec::new()));
+        // Alone, the other scripts tell that one requires it; attached, it is warned of.
+        let alone = check_loading(&sources, ["scripts/dados.luau"], |_| false);
+        assert_eq!(texts(&alone[0]), (None, Vec::new()));
+        let attached = check_loading(&sources, ["scripts/dados.luau"], |path| {
+            path == "scripts/dados.luau"
+        });
+        assert_eq!(attached[0].warnings.len(), 2, "{:?}", attached[0].warnings);
+        assert!(
+            attached[0].warnings[0]
+                .message
+                .starts_with("on_dano não é um evento")
         );
     }
 

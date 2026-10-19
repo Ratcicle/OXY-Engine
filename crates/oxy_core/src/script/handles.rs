@@ -83,7 +83,7 @@ pub(crate) fn collision(runtime: &Runtime, a: &str, b: &str) -> String {
     )
 }
 
-const OBJECT_MEMBERS: [&str; 13] = [
+pub(super) const OBJECT_MEMBERS: [&str; 13] = [
     "name",
     "attr",
     "state",

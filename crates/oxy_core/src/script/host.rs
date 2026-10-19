@@ -564,6 +564,17 @@ impl ScriptHost {
         found
     }
 
+    /// The scripts the top of another script required, as they loaded.
+    pub(crate) fn required_by_others(&self) -> BTreeSet<String> {
+        self.shared
+            .requires
+            .borrow()
+            .iter()
+            .flat_map(|(from, required)| required.iter().filter(move |path| *path != from))
+            .cloned()
+            .collect()
+    }
+
     /// Table entries converted between Luau and the engine since the last time this was asked.
     pub(crate) fn take_converted(&self) -> u64 {
         self.shared.converted.take()

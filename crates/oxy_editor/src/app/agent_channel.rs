@@ -6,10 +6,11 @@
 //! requests `{"id": 1, "method": "...", "params": {...}}`, one per line, and receives
 //! `{"id": 1, "result": ...}` or `{"id": 1, "error": "..."}`. Requests run on the UI thread
 //! in the next frame, and edits wait while a person is dragging or typing. Besides edits and
-//! reads, an agent can import PNGs and WAVs (`import`), read the console (`console`), play a
-//! test of the game (`play`), save when the person allowed it (`save`) and export the game
-//! (`export`, answered when the export, on its own thread, is over), and `status` says whether
-//! the game is being tested, and by whom.
+//! reads, an agent can import PNGs and WAVs (`import`), read, check and write the project's
+//! scripts (`scripts`, on the disk at once, a test running or not), read the console
+//! (`console`), play a test of the game (`play`), save when the person allowed it (`save`) and
+//! export the game (`export`, answered when the export, on its own thread, is over), and
+//! `status` says whether the game is being tested, and by whom.
 use super::*;
 use oxy_core::{command, query};
 use serde_json::{Value as Json, json};
@@ -380,6 +381,7 @@ impl Editor {
             }
             "play" => self.agent_play(params),
             "save" => self.agent_save(),
+            "scripts" => self.agent_script_files(params),
             "console" => self.console_answer(params),
             "document" => {
                 self.agent_scene(params)?;
@@ -388,7 +390,13 @@ impl Editor {
             // The same answers, with the same arguments, as the MCP server gives on files.
             "summary" | "scene_tree" | "entity" | "find" => {
                 let scene = self.agent_scene(params)?;
-                query::answer(&self.state.project, &scene, method, params)
+                let mut answer = query::answer(&self.state.project, &scene, method, params)?;
+                if method == "entity"
+                    && let Some(root) = self.path.as_deref().and_then(std::path::Path::parent)
+                {
+                    query::mark_missing_scripts(&mut answer, root);
+                }
+                Ok(answer)
             }
             "catalog" => query::catalog_query(params),
             "validate" => {

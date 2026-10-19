@@ -635,8 +635,19 @@ fn script_files(root: &Path) -> Result<BTreeMap<String, PathBuf>, PersistenceErr
 /// The scripts of the project at `root`, read from its `scripts` folder (none without it): each
 /// must be UTF-8 text of up to 1 MB.
 pub fn load_scripts(root: &Path) -> Result<ScriptSources, PersistenceError> {
+    read_scripts(root, None)
+}
+/// [`load_scripts`] without the script `path`, whose text a write replaces: a file of it that is
+/// not UTF-8 or is over 1 MB does not stop the others from being read.
+pub fn load_scripts_except(root: &Path, path: &str) -> Result<ScriptSources, PersistenceError> {
+    read_scripts(root, Some(path))
+}
+fn read_scripts(root: &Path, skip: Option<&str>) -> Result<ScriptSources, PersistenceError> {
     let mut sources = ScriptSources::default();
     for (path, file) in script_files(root)? {
+        if skip == Some(path.as_str()) {
+            continue;
+        }
         let read = |source| PersistenceError::ScriptRead {
             path: path.clone(),
             source,
@@ -651,6 +662,101 @@ pub fn load_scripts(root: &Path) -> Result<ScriptSources, PersistenceError> {
     }
     Ok(sources)
 }
+/// What tells that a script file changed without reading it: its size and when it was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScriptStamp {
+    pub len: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+/// The stamp of each script file of the project at `root` (the files [`load_scripts`] reads),
+/// by path, from the folder's listing; none without the folder. A file that cannot be looked at
+/// (one that went in the meantime) is left out: reading the folder says why it fails.
+pub fn script_stamps(root: &Path) -> Result<BTreeMap<String, ScriptStamp>, PersistenceError> {
+    Ok(script_files(root)?
+        .into_iter()
+        .filter_map(|(path, file)| {
+            let meta = fs::metadata(file).ok()?;
+            let stamp = ScriptStamp {
+                len: meta.len(),
+                modified: meta.modified().ok(),
+            };
+            Some((path, stamp))
+        })
+        .collect())
+}
+
+/// The text of the script `path` of the project at `root` (`path` as [`script::normalize_path`]
+/// writes it), with the checks of [`load_scripts`]; none when the file does not exist.
+pub fn read_script(root: &Path, path: &str) -> Result<Option<String>, PersistenceError> {
+    if script::normalize_path(path).as_deref() != Ok(path) {
+        return Err(PersistenceError::InvalidAssetPath(path.to_owned()));
+    }
+    let file = resolve_asset_path(root, path)?;
+    let read = |source| PersistenceError::ScriptRead {
+        path: path.to_owned(),
+        source,
+    };
+    let meta = match fs::metadata(&file) {
+        Ok(meta) if meta.is_file() => meta,
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(read(source)),
+    };
+    if meta.len() > script::MAX_BYTES {
+        return Err(PersistenceError::ScriptTooLarge(path.to_owned()));
+    }
+    let bytes = fs::read(&file).map_err(read)?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| PersistenceError::ScriptNotText(path.to_owned()))
+}
+
+/// The copy of a script file an agent keeps beside it, as it was before its session first
+/// changed the file, by the script's path.
+pub fn script_backup_path(path: &str) -> String {
+    format!("{path}.agente.bak")
+}
+
+/// Writes `text` as the script `path` of the project at `root` (`path` as
+/// [`script::normalize_path`] writes it), creating its folders, in one transaction with, when
+/// `backup` is set and the file exists, the copy of it as it was at [`script_backup_path`].
+/// Answers the text the file had, if it existed.
+pub fn write_script(
+    root: &Path,
+    path: &str,
+    text: &str,
+    backup: bool,
+) -> Result<Option<String>, PersistenceError> {
+    if script::normalize_path(path).as_deref() != Ok(path) {
+        return Err(PersistenceError::InvalidAssetPath(path.to_owned()));
+    }
+    if text.len() as u64 > script::MAX_BYTES {
+        return Err(PersistenceError::ScriptTooLarge(path.to_owned()));
+    }
+    let target = resolve_asset_path(root, path)?;
+    let previous = match fs::read(&target) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(PersistenceError::ScriptRead {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    };
+    let mut writes = Vec::new();
+    if let (true, Some(bytes)) = (backup, &previous) {
+        writes.push((
+            resolve_asset_path(root, &script_backup_path(path))?,
+            bytes.clone(),
+        ));
+    }
+    writes.push((target, text.as_bytes().to_vec()));
+    transaction_write(writes)?;
+    Ok(previous.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+}
+
 /// What a missing script asks of the person, to play or export the project again, for a file
 /// `objects` objects attach.
 pub(crate) fn missing_fix(objects: usize) -> &'static str {
