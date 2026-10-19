@@ -27,6 +27,7 @@ use crate::{
         ScriptLocation,
     },
     save::{self, SaveRequest, SaveSlot},
+    script::{ScriptHost, ScriptSources},
     variables,
 };
 use glam::{Mat4, Quat, Vec3};
@@ -443,6 +444,14 @@ pub struct SimulationRequest {
     /// states after every step: the report's `replay` says whether they stayed the same.
     #[serde(default)]
     pub check_replay: bool,
+    /// Runs another copy alongside, with the same inputs, whose scripts' VM is made anew every
+    /// 30 steps and at steps drawn from the step's number, keeping the game's state, and
+    /// compares the two after every step: the report's `vm_reset` says whether they stayed the
+    /// same. A script that keeps anything in its VM between calls, which a reload, a restore or
+    /// the network would lose, makes them differ. Provisional: the tools pass it with the
+    /// project's scripts in a later stage of 0.7.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub check_vm_reset: bool,
     /// The progress a returning player has, which starts the persistent game variables: each
     /// one by ID or name (`"$N"` too), `"name · key"` for the value of a key, with a plain or
     /// tagged value of its type. Absent, the game runs as on a fresh install; the report's
@@ -664,6 +673,10 @@ pub struct ReplayCheck {
     pub steps: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_difference: Option<ReplayDifference>,
+    /// Why the check stopped before the states differed: only the check of a VM made anew, whose
+    /// VM did not start or whose scripts that ran did not load in the new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ReplayDifference {
@@ -785,6 +798,9 @@ pub struct SimulationReport {
     /// The replay check, when asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay: Option<ReplayCheck>,
+    /// The check of a VM made anew, when asked for (see `SimulationRequest::check_vm_reset`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_reset: Option<ReplayCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<StoppedAt>,
     /// Whether the game was in its own pause at the end.
@@ -837,10 +853,31 @@ pub struct SimulationReport {
     /// What plays at the end and the volumes; absent when nothing loops and every volume is 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioReport>,
+    /// What each script file cost in the run, by path; absent without scripts. Wall time,
+    /// which varies from run to run and machine to machine.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub script_time: Vec<ScriptTime>,
     /// Entries dropped per list because it reached `MAX_ENTRIES`; for samples, those of
     /// `sample_every` each watched object dropped past [`MAX_SAMPLES`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub truncated: BTreeMap<&'static str, usize>,
+}
+
+/// What a script file cost (see [`crate::runtime::ScriptCost`]), times rounded to 0.1 µs.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ScriptTime {
+    pub path: String,
+    pub calls: u64,
+    /// Steps it ran in, a scene start counted as one.
+    pub steps: u64,
+    /// Microseconds of those steps: half took this long or less, and the slowest.
+    pub p50_us: f64,
+    pub max_us: f64,
+    /// The most table entries it converted between Luau and the engine in one step.
+    pub most_entries: u64,
+    /// Why it may cost too much.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// Simulation time rounded to 0.1 ms, which keeps reports short.
@@ -2464,13 +2501,52 @@ pub fn plan_inputs(
     Ok((timed, directs))
 }
 
+/// How the check of a VM made anew makes each VM (tests give it doubles).
+type MakeHost = fn(Arc<ScriptSources>) -> Result<ScriptHost, String>;
+
 /// The replay check: a second copy of the game, fed the same clicks and inputs in lockstep and
-/// compared after every step until the two differ.
+/// compared after every step until the two differ. With `remake`, the check of a VM made anew:
+/// the copy's scripts get a new VM now and then (see [`vm_reset_at`]).
 struct Twin {
     runtime: Option<Runtime>,
     check: ReplayCheck,
+    remake: Option<MakeHost>,
+}
+/// Whether the check of a VM made anew makes it after `step` (0: the scene start): every 30
+/// steps and at steps drawn from the step's number, so that no cycle of a script hides.
+fn vm_reset_at(step: usize) -> bool {
+    step.is_multiple_of(30)
+        || random::hash(&[b"oxy.vm_reset", &(step as u64).to_le_bytes()]).is_multiple_of(17)
 }
 impl Twin {
+    fn new(runtime: Option<Runtime>, remake: Option<MakeHost>) -> Self {
+        Self {
+            runtime,
+            check: ReplayCheck {
+                identical: true,
+                steps: 0,
+                first_difference: None,
+                error: None,
+            },
+            remake,
+        }
+    }
+    /// Makes the copy's VM anew after `step`, when its turn comes. A VM that cannot be made
+    /// anew ends the check, which never passes without it.
+    fn reset(&mut self, step: usize) {
+        let (Some(twin), Some(remake)) = (&mut self.runtime, self.remake) else {
+            return;
+        };
+        if !vm_reset_at(step) {
+            return;
+        }
+        if let Err(error) = twin.recreate_script_host_with(&remake) {
+            self.check.identical = false;
+            self.check.steps = step;
+            self.check.error = Some(error);
+            self.runtime = None;
+        }
+    }
     fn direct(&mut self, direct: &Direct) {
         if let Some(twin) = &mut self.runtime {
             direct.apply(twin);
@@ -2604,7 +2680,7 @@ pub fn run(
 #[doc(hidden)]
 pub fn run_with_scripts(
     project: &Project,
-    scripts: Arc<crate::script::ScriptSources>,
+    scripts: Arc<ScriptSources>,
     request: &SimulationRequest,
 ) -> Result<(SimulationReport, Runtime), String> {
     if !request.seconds.is_finite() || request.seconds <= 0. || request.seconds > MAX_SECONDS {
@@ -2839,17 +2915,16 @@ pub fn run_with_scripts(
         earlier: Recent::default(),
         bot,
     });
-    let mut twin = Twin {
-        runtime: request
-            .check_replay
-            .then(|| Runtime::with_options(source, &start, options))
-            .transpose()?,
-        check: ReplayCheck {
-            identical: true,
-            steps: 0,
-            first_difference: None,
-        },
+    let copy = |asked: bool| {
+        asked
+            .then(|| Runtime::with_options(source, &start, options.clone()))
+            .transpose()
     };
+    let mut twin = Twin::new(copy(request.check_replay)?, None);
+    let mut vm_twin = Twin::new(
+        copy(request.check_vm_reset)?,
+        Some(ScriptHost::new as MakeHost),
+    );
     let mut report = SimulationReport {
         seconds: request.seconds,
         start_scene: start.clone(),
@@ -2857,6 +2932,7 @@ pub fn run_with_scripts(
         seed: request.seed,
         state_hash: String::new(),
         replay: None,
+        vm_reset: None,
         stopped_at: None,
         paused: false,
         pauses: Vec::new(),
@@ -2883,6 +2959,7 @@ pub fn run_with_scripts(
         saves: Vec::new(),
         save: None,
         audio: None,
+        script_time: Vec::new(),
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
@@ -2959,6 +3036,8 @@ pub fn run_with_scripts(
         bot.scenes(&runtime, &started);
     }
     twin.compare(recorder.lookup(&runtime), 0);
+    vm_twin.reset(0);
+    vm_twin.compare(recorder.lookup(&runtime), 0);
     let mut ended = settle(&runtime, &started, 0, &mut stopped, &mut end);
     sampler.end = end;
     // Steps run.
@@ -2973,6 +3052,7 @@ pub fn run_with_scripts(
             let (_, direct) = directs.next().unwrap();
             direct.apply(&mut runtime);
             twin.direct(&direct);
+            vm_twin.direct(&direct);
         }
         let mut frame = InputFrame::default();
         timeline.sample(runtime.time + f64::from(FIXED_DT), &mut frame);
@@ -2981,12 +3061,15 @@ pub fn run_with_scripts(
             .and_then(|bot| bot.steer(recorder.lookup(&runtime), &mut frame));
         runtime.advance(FIXED_DT, &frame);
         twin.advance(&frame);
+        vm_twin.advance(&frame);
+        vm_twin.reset(step);
         let mut happened = recorder.collect(&mut runtime);
         if let Some(bot) = &mut bot {
             bot.scenes(&runtime, &happened);
         }
         happened.bot = bot_ended.or_else(|| bot.as_mut().and_then(|bot| bot.released(&runtime)));
         twin.compare(recorder.lookup(&runtime), step);
+        vm_twin.compare(recorder.lookup(&runtime), step);
         ended = settle(&runtime, &happened, step, &mut stopped, &mut end);
         sampler.end = end;
         if !ended {
@@ -3049,6 +3132,20 @@ pub fn run_with_scripts(
     report.final_scene = runtime.scene_id().to_owned();
     report.state_hash = format!("{:016x}", runtime.state_hash());
     report.replay = request.check_replay.then_some(twin.check);
+    report.vm_reset = request.check_vm_reset.then_some(vm_twin.check);
+    report.script_time = runtime
+        .script_costs()
+        .into_iter()
+        .map(|cost| ScriptTime {
+            warning: cost.warning(),
+            path: cost.path,
+            calls: cost.calls,
+            steps: cost.steps,
+            p50_us: (cost.p50_us * 10.).round() / 10.,
+            max_us: (cost.max_us * 10.).round() / 10.,
+            most_entries: cost.most_entries,
+        })
+        .collect();
     Ok((report, runtime))
 }
 
@@ -3313,14 +3410,7 @@ mod tests {
             };
             Runtime::with_options(&project, &project.start_scene, options).unwrap()
         };
-        let twin = |seed| Twin {
-            runtime: Some(start(seed)),
-            check: ReplayCheck {
-                identical: true,
-                steps: 0,
-                first_difference: None,
-            },
-        };
+        let twin = |seed| Twin::new(Some(start(seed)), None);
         let spawned = HashMap::new();
         let compare = |twin: &mut Twin, runtime: &Runtime, steps| {
             let lookup = Lookup {
@@ -3349,6 +3439,7 @@ mod tests {
                 identical: false,
                 steps: 1,
                 first_difference: Some(random),
+                error: None,
             }
         );
         assert!(other.runtime.is_none());
@@ -3381,6 +3472,7 @@ mod tests {
                 }),
                 part: "attributes.Lado".into(),
             }),
+            error: None,
         };
         assert_eq!(copy.check, parted);
         assert!(copy.runtime.is_none());
@@ -3389,6 +3481,117 @@ mod tests {
         copy.advance(&frame);
         compare(&mut copy, &main, 3);
         assert_eq!(copy.check, parted);
+    }
+
+    /// A VM whose `test.count()` keeps a counter in the VM itself, which no game script may do.
+    fn leaky_host(sources: Arc<ScriptSources>) -> Result<ScriptHost, String> {
+        ScriptHost::with_extra(sources, &|lua, base, _| {
+            let test = lua.create_table()?;
+            let count = std::rc::Rc::new(std::cell::Cell::new(0.));
+            test.raw_set(
+                "count",
+                lua.create_function(move |_, ()| {
+                    count.set(count.get() + 1.);
+                    Ok(count.get())
+                })?,
+            )?;
+            base.raw_set("test", test)
+        })
+    }
+
+    #[test]
+    fn the_check_of_a_vm_made_anew_catches_hidden_state_and_never_passes_without_a_new_vm() {
+        const PATH: &str = "scripts/conta.luau";
+        let mut project = Project::new("Oráculo");
+        let mut counter = Entity::new("Contador", None);
+        counter
+            .attributes
+            .insert("Contagem".into(), Value::Number(0.));
+        counter.scripts = vec![crate::script::ScriptRef::new(PATH)];
+        let id = counter.id.clone();
+        project.scenes[0].entities.push(counter);
+        let start = |text: &str| {
+            let sources = Arc::new(ScriptSources::from_texts([(PATH, text)]));
+            let options = RuntimeOptions {
+                scripts: sources.clone(),
+                ..Default::default()
+            };
+            let mut runtime =
+                Runtime::with_options(&project, &project.start_scene, options).unwrap();
+            let host = leaky_host(sources).unwrap();
+            host.begin_scene(runtime.scene().entities.iter().map(|e| e.id.as_str()));
+            runtime.replace_script_host(host);
+            runtime
+        };
+        let spawned = HashMap::new();
+        let compare = |twin: &mut Twin, runtime: &Runtime, steps| {
+            let lookup = Lookup {
+                runtime,
+                source: &project,
+                spawned: &spawned,
+            };
+            twin.compare(lookup, steps);
+        };
+        // Stepped as `run_with_scripts` steps it: a new VM after the start and after the steps
+        // whose turn comes, then the comparison.
+        let check = |text: &str| {
+            let mut main = start(text);
+            let mut renewed = Twin::new(Some(start(text)), Some(leaky_host));
+            renewed.reset(0);
+            compare(&mut renewed, &main, 0);
+            for step in 1..=60 {
+                main.advance(FIXED_DT, &InputFrame::default());
+                renewed.advance(&InputFrame::default());
+                renewed.reset(step);
+                compare(&mut renewed, &main, step);
+            }
+            renewed.check
+        };
+        let hidden = "local M = {}\nfunction M.on_step(self)\n    self.attr.Contagem = \
+                      test.count()\nend\nreturn M\n";
+        // The counter starts over in the new VM: the step after the first one with its turn
+        // gives it away.
+        let first = (1..).find(|&step| vm_reset_at(step)).unwrap();
+        let caught = check(hidden);
+        assert_eq!(
+            (caught.identical, caught.steps, caught.error.as_deref()),
+            (false, first + 1, None)
+        );
+        let difference = caught.first_difference.unwrap();
+        assert_eq!(
+            (difference.object.map(|o| o.id), difference.part.as_str()),
+            (Some(id), "attributes.Contagem")
+        );
+        let kept = "local M = {}\nfunction M.on_step(self)\n    self.attr.Contagem += 1\nend\n\
+                    return M\n";
+        let passed = check(kept);
+        assert!(passed.identical && passed.steps == 60, "{passed:?}");
+
+        // A VM that cannot be made anew ends the check with why, never as identical.
+        fn no_vm(_: Arc<ScriptSources>) -> Result<ScriptHost, String> {
+            Err("não foi possível iniciar os scripts: teste".into())
+        }
+        let mut stuck = Twin::new(Some(start(kept)), Some(no_vm));
+        stuck.reset(0);
+        assert_eq!(
+            stuck.check,
+            ReplayCheck {
+                identical: false,
+                steps: 0,
+                first_difference: None,
+                error: Some("não foi possível iniciar os scripts: teste".into()),
+            }
+        );
+        assert!(stuck.runtime.is_none());
+    }
+
+    #[test]
+    fn a_vm_is_made_anew_every_30_steps_and_at_drawn_steps() {
+        assert!(vm_reset_at(0) && vm_reset_at(30) && vm_reset_at(60));
+        let drawn = (1..300)
+            .filter(|step| step % 30 != 0 && vm_reset_at(*step))
+            .count();
+        assert!((5..40).contains(&drawn), "{drawn}");
     }
 
     #[test]

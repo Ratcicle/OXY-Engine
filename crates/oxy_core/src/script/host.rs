@@ -3,7 +3,8 @@
 //! docs of [`crate::script`] for the borrow and the C++ exception rules this file keeps).
 use super::errors::{ScriptError, ScriptErrorKind, describe};
 use super::handles::{self, MARK_OBJECT};
-use super::{Callbacks, FOLDER, ScriptArg, ScriptSources, load, sandbox};
+use super::memory::{self, Memory};
+use super::{Callbacks, FOLDER, ScriptArg, ScriptSources, load, messages, sandbox};
 use crate::document::{Id, Value};
 use crate::runtime::{Runtime, ScriptLocation};
 use mlua::thread::ThreadStatus;
@@ -52,6 +53,10 @@ pub(crate) enum Limit {
     Memory,
     /// The queue had no room for another timer (see `timers::TimerRoom`).
     Timers,
+    /// The memory of the object went past its bytes (see `memory`).
+    ScriptMemory,
+    /// The script sent too many messages from its object in the step (see `messages`).
+    Messages,
 }
 
 impl Limit {
@@ -65,9 +70,19 @@ impl Limit {
                 limits.memory / (1024 * 1024)
             ),
             Self::Timers => format!(
-                "a fila não tem lugar para mais temporizadores (até {} chamadas e {} MB de texto                  guardados)",
+                "a fila não tem lugar para mais temporizadores (até {} chamadas e {} MB de texto \
+                 guardados)",
                 crate::runtime::MAX_TASKS,
                 super::timers::ROOM_TEXT / (1024 * 1024)
+            ),
+            Self::ScriptMemory => format!(
+                "a memória do script passou de {} KB neste objeto",
+                memory::MAX_BYTES / 1024
+            ),
+            Self::Messages => format!(
+                "o script mandou mais de {} mensagens deste objeto neste passo (objetos \
+                 respondendo uns aos outros sem parar?)",
+                messages::MAX_MESSAGES
             ),
         }
     }
@@ -96,6 +111,8 @@ pub(crate) struct Module {
     pub callbacks: Callbacks,
     /// Functions named `on_*` that hear nothing, with their line and the callback meant.
     pub unknown: Vec<(String, u32, Option<&'static str>)>,
+    /// What `Module.state` declares; none when the script keeps no memory.
+    pub state: Option<Memory>,
 }
 
 impl std::fmt::Debug for Module {
@@ -137,6 +154,12 @@ pub(crate) struct Shared {
     pub known_functions: RefCell<HashSet<usize>>,
     /// Coroutines created in the call (or the top) in progress (R3).
     pub threads: RefCell<Vec<Thread>>,
+    /// Whether the call in progress touched a table of script memory (see `handles`).
+    pub touched: Cell<bool>,
+    /// Table entries converted between Luau and the engine since the host last counted them.
+    converted: Cell<u64>,
+    /// By script, the scripts its top required, as they loaded.
+    pub requires: RefCell<BTreeMap<String, BTreeSet<String>>>,
 }
 
 impl Shared {
@@ -160,7 +183,15 @@ impl Shared {
             stateful: RefCell::default(),
             known_functions: RefCell::default(),
             threads: RefCell::default(),
+            touched: Cell::new(false),
+            converted: Cell::new(0),
+            requires: RefCell::default(),
         }
+    }
+
+    /// Counts table entries converted between Luau and the engine.
+    pub(crate) fn count_converted(&self, entries: u64) {
+        self.converted.set(self.converted.get() + entries);
     }
 
     /// Lends `runtime` for one call: the guard keeps the `&mut` borrowed until it drops, so the
@@ -434,6 +465,8 @@ pub(crate) struct ScriptHost {
     // Declared first so the VM closes before `shared` (whose pointer C functions keep) drops.
     lua: Lua,
     shared: Rc<Shared>,
+    /// The tables of script memory the call in progress touched, by field (see `handles`).
+    touched: Table,
 }
 
 /// Adds functions to the base before it turns read-only (tests).
@@ -451,9 +484,13 @@ impl ScriptHost {
 
     fn build(sources: Arc<ScriptSources>, extra: Extra) -> Result<Self, String> {
         let shared = Rc::new(Shared::new(sources));
-        let lua = sandbox::create(&shared, extra)
+        let (lua, touched) = sandbox::create(&shared, extra)
             .map_err(|e| format!("não foi possível iniciar os scripts: {e}"))?;
-        Ok(Self { lua, shared })
+        Ok(Self {
+            lua,
+            shared,
+            touched,
+        })
     }
 
     #[cfg(test)]
@@ -486,6 +523,46 @@ impl ScriptHost {
     /// The module `path`, loading it unless it already was (its error too).
     pub(crate) fn load(&self, path: &str) -> Result<Rc<Module>, ScriptError> {
         load::module(&self.lua, &self.shared, path)
+    }
+
+    /// The module `path` as it loaded, without loading it; none if it never did.
+    pub(crate) fn loaded(&self, path: &str) -> Option<Result<Rc<Module>, ScriptError>> {
+        self.shared.modules.borrow().get(path).cloned()
+    }
+
+    /// The paths of the modules loaded so far, those that failed included.
+    pub(crate) fn loaded_paths(&self) -> Vec<String> {
+        self.shared.modules.borrow().keys().cloned().collect()
+    }
+
+    /// The modules that did not load, by path, with why.
+    pub(crate) fn failed_modules(&self) -> Vec<(String, ScriptError)> {
+        self.shared
+            .modules
+            .borrow()
+            .iter()
+            .filter_map(|(path, loaded)| Some((path.clone(), loaded.clone().err()?)))
+            .collect()
+    }
+
+    /// The scripts `path` requires, those they require and so on, as they loaded.
+    pub(crate) fn required_by(&self, path: &str) -> BTreeSet<String> {
+        let requires = self.shared.requires.borrow();
+        let mut found = BTreeSet::new();
+        let mut next = vec![path.to_owned()];
+        while let Some(path) = next.pop() {
+            for required in requires.get(&path).into_iter().flatten() {
+                if found.insert(required.clone()) {
+                    next.push(required.clone());
+                }
+            }
+        }
+        found
+    }
+
+    /// Table entries converted between Luau and the engine since the last time this was asked.
+    pub(crate) fn take_converted(&self) -> u64 {
+        self.shared.converted.take()
     }
 
     /// Registers the objects of a new scene, dropping the handles of the last one; the pairs
@@ -542,6 +619,14 @@ impl ScriptHost {
             let result = f.call::<()>(values);
             (result, s.suspended_coroutine())
         };
+        // What the call did to its memory stays, error or not, as what it did to the world.
+        let saved = self
+            .write_back(runtime, owner, module)
+            .map_err(|error| ScriptError {
+                path: path.to_owned(),
+                line: defined(),
+                ..error
+            });
         s.step_units.set(s.step_units.get() + s.units.get());
         if let Some(error) = s
             .engine_error(path, defined)
@@ -550,12 +635,62 @@ impl ScriptHost {
             return ScriptCall::Failed(error);
         }
         if let Err(e) = result {
-            return ScriptCall::Failed(s.failure(&e, path, defined()));
+            let failed = s.failure(&e, path, defined());
+            // A memory past its limit stops the script, whatever stopped the call; a value
+            // refused is said along with the call's error.
+            return ScriptCall::Failed(match saved {
+                Err(refused) if refused.stops_script() => ScriptError {
+                    message: format!(
+                        "{}; a chamada também parou num erro: {failed}",
+                        refused.message
+                    ),
+                    ..refused
+                },
+                Err(refused) => ScriptError {
+                    message: format!(
+                        "{} (a memória também recusou: {})",
+                        failed.message, refused.message
+                    ),
+                    ..failed
+                },
+                Ok(()) => failed,
+            });
         }
         if suspended {
             return ScriptCall::Failed(suspended_error(path, defined()));
         }
+        if let Err(error) = saved {
+            return ScriptCall::Failed(error);
+        }
         ScriptCall::Done
+    }
+
+    /// Writes back the tables of script memory the call touched, emptying the table of touched
+    /// tables; why one was not kept, without its place in the file.
+    fn write_back(
+        &self,
+        runtime: &mut Runtime,
+        owner: &str,
+        module: &Module,
+    ) -> Result<(), ScriptError> {
+        if !self.shared.touched.replace(false) {
+            return Ok(());
+        }
+        // A memory error leaves the table as it was: the next call's first touch empties it.
+        let tables = memory::read_touched(&self.lua, &self.shared, &self.touched)
+            .map_err(|e| self.shared.failure(&e, &module.path, 0))?;
+        let Some(memory) = runtime.script_memory_if_any(owner, &module.path) else {
+            // The object went in the call, and its memory with it.
+            return Ok(());
+        };
+        memory.write_back(tables).map_err(|refusal| {
+            let error = ScriptError::new(&module.path, 0, refusal.message());
+            if refusal.limit {
+                error.with_kind(ScriptErrorKind::Limit)
+            } else {
+                error
+            }
+        })
     }
 
     /// The owner's handle key, and `self` and the arguments as Luau values.
@@ -572,6 +707,7 @@ impl ScriptHost {
             values.push_back(match arg {
                 ScriptArg::Nil => LuaValue::Nil,
                 ScriptArg::Value(value) => self.value(runtime, value)?,
+                ScriptArg::Data(value) => memory::to_lua(&self.lua, &self.shared, value)?,
                 ScriptArg::Record(fields) => {
                     let table = self.lua.create_table_with_capacity(0, fields.len())?;
                     for (name, value) in fields {

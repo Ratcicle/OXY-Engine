@@ -47,6 +47,7 @@ mod scripts_bench;
 mod scripts_events;
 mod scripts_format;
 mod scripts_host;
+mod scripts_state;
 mod scripts_timers;
 mod simulation;
 mod step_budget;

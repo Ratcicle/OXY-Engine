@@ -28,6 +28,14 @@ pub(super) enum ErrorPlace {
 }
 
 impl ErrorPlace {
+    /// Whether the place is in the script `path`.
+    pub(super) fn is_in(&self, path: &str) -> bool {
+        match self {
+            Self::Line { path: p, .. } => p == path,
+            Self::Text(text) => text.starts_with(&format!("{path}:")),
+        }
+    }
+
     fn of(error: &ScriptError) -> Self {
         match error.location() {
             Some(at) => Self::Line {
@@ -50,7 +58,7 @@ fn sentence(error: &ScriptError) -> String {
 }
 
 /// The outputs of a script's task: none, shared.
-fn no_outputs() -> Arc<BTreeMap<(Id, String), Value>> {
+pub(super) fn no_outputs() -> Arc<BTreeMap<(Id, String), Value>> {
     static NONE: LazyLock<Arc<BTreeMap<(Id, String), Value>>> = LazyLock::new(Arc::default);
     NONE.clone()
 }
@@ -135,7 +143,7 @@ impl Runtime {
     }
 
     /// The scripts the scene's objects attach, each once, in scene order.
-    fn attached_scripts(&self) -> Vec<String> {
+    pub(super) fn attached_scripts(&self) -> Vec<String> {
         let mut paths: Vec<String> = Vec::new();
         for script in self.scene().entities.iter().flat_map(|e| &e.scripts) {
             if !paths.contains(&script.path) {
@@ -194,7 +202,7 @@ impl Runtime {
     }
 
     /// What the script `path` hears, loading it if the VM is free; none when it does not load.
-    fn script_heard(&mut self, path: &str) -> Option<(Arc<str>, Callbacks)> {
+    pub(super) fn script_heard(&mut self, path: &str) -> Option<(Arc<str>, Callbacks)> {
         if !self.script_callbacks.contains_key(path) {
             self.load_script(path);
         }
@@ -202,7 +210,7 @@ impl Runtime {
     }
 
     /// Whether a limit stopped `path` on `owner`.
-    fn script_stopped(&self, owner: &str, path: &str) -> bool {
+    pub(super) fn script_stopped(&self, owner: &str, path: &str) -> bool {
         !self.disabled_scripts.is_empty()
             && self
                 .disabled_scripts
@@ -334,11 +342,16 @@ impl Runtime {
             args,
             timer,
         } = script;
+        // A timer whose function a reload took away falls, after telling it once.
+        let vanished = timer.is_some()
+            && self
+                .load_script(&path)
+                .is_some_and(|module| !module.functions.contains_key(&*function));
         if let Some(Timer {
             id,
             then,
             mut share,
-        }) = timer
+        }) = timer.filter(|_| !vanished)
         {
             let next = match then {
                 Repeat::Once => None,
@@ -412,8 +425,12 @@ impl Runtime {
             return ScriptCall::Skipped;
         };
         let host = self.scripts.take().expect("script host");
+        let started = std::time::Instant::now();
         let call = host.call(self, owner, &module, function, args);
+        let spent = started.elapsed();
+        let converted = host.take_converted();
         self.scripts = Some(host);
+        self.count_script_cost(&module.path, spent, converted);
         if let ScriptCall::Failed(error) = &call {
             self.report_script_error(owner, path, error);
         }
@@ -516,7 +533,7 @@ impl Runtime {
 
     /// Logs `text` the first time `owner` gets an error at `place` in the run and counts every
     /// time.
-    fn tell_once(
+    pub(super) fn tell_once(
         &mut self,
         owner: Id,
         place: ErrorPlace,

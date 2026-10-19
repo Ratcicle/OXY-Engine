@@ -3,16 +3,23 @@
 //! and after any restore. The 8 high bits are a mark that gives views of the same object
 //! without allocating (`obj.attr` is the object with the "attributes" mark); `typeof` is
 //! "Object" for all of them. The one metatable of light userdata has `__index`, `__newindex`,
-//! `__namecall` and `__tostring` written in C through `mlua::ffi`: the key is read with
-//! `lua_tolstring` and the method with `lua_namecallatom`, without creating mlua values.
+//! `__namecall`, `__tostring` and `__len` written in C through `mlua::ffi`: the key is read
+//! with `lua_tolstring` and the method with `lua_namecallatom`, without creating mlua values.
+//!
+//! `self.state` is the object with the "memory" mark (see `memory`): its fields go through the
+//! same C functions, and a table read from it or assigned to it stays in a table of touched
+//! tables (an upvalue of `__index` and `__newindex`) until the call ends and the host writes it
+//! back. That table is emptied by the first table a call touches, so nothing of an earlier call
+//! is read from it.
 //!
 //! The surface scripts reach here is provisional (stage 2): the object's `name`, `attr`,
-//! `exists()`, `has_attribute(name)` and the timers of `timers` (`self:after(...)` and the
-//! others, written with mlua and called from the table of methods). The API of game scripts
-//! comes with its own table.
+//! `state`, `exists()`, `has_attribute(name)`, the timers of `timers` (`self:after(...)` and the
+//! others) and `send` of `messages`, both written with mlua and called from the table of
+//! methods. The API of game scripts comes with its own table.
 use super::errors::closest;
-use super::host::{Shared, door, locate_raw, peek};
-use super::timers;
+use super::host::{Limit, Phase, Shared, door, locate_raw, peek};
+use super::memory::{self, Key, Memory, ScriptValue};
+use super::{messages, timers};
 use crate::document::Value;
 use crate::runtime::Runtime;
 use mlua::{Function, LightUserData, Lua, Table, ffi};
@@ -26,7 +33,18 @@ const _: () = assert!(usize::BITS == 64);
 
 pub(crate) const MARK_OBJECT: u64 = 1;
 pub(crate) const MARK_ATTRIBUTES: u64 = 2;
+pub(crate) const MARK_STATE: u64 = 3;
 const KEY_MASK: u64 = (1 << 56) - 1;
+
+/// What a handle with `mark` is, in words.
+pub(crate) fn mark_kind(mark: u64) -> &'static str {
+    match mark {
+        MARK_OBJECT => "objeto",
+        MARK_ATTRIBUTES => "os atributos de um objeto",
+        MARK_STATE => "a memória de um objeto",
+        _ => "valor desconhecido da engine",
+    }
+}
 
 /// The handle key of an object: its ID's portable hash in 56 bits, never 0.
 pub(crate) fn key(id: &str) -> u64 {
@@ -56,9 +74,10 @@ pub(crate) fn collision(runtime: &Runtime, a: &str, b: &str) -> String {
     )
 }
 
-const OBJECT_MEMBERS: [&str; 9] = [
+const OBJECT_MEMBERS: [&str; 11] = [
     "name",
     "attr",
+    "state",
     "exists",
     "has_attribute",
     "after",
@@ -66,38 +85,49 @@ const OBJECT_MEMBERS: [&str; 9] = [
     "sequence",
     "schedule",
     "cancel",
+    "send",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Method {
     Exists = 1,
     HasAttribute = 2,
-    /// One of `timers::METHODS`, an mlua function in the table of methods.
-    Timer = 3,
+    /// One of `timers::METHODS` or `send`, an mlua function in the table of methods.
+    Listed = 3,
 }
 
-const METHODS: [(&CStr, Method); 7] = [
+const METHODS: [(&CStr, Method); 8] = [
     (c"exists", Method::Exists),
     (c"has_attribute", Method::HasAttribute),
-    (c"after", Method::Timer),
-    (c"every", Method::Timer),
-    (c"sequence", Method::Timer),
-    (c"schedule", Method::Timer),
-    (c"cancel", Method::Timer),
+    (c"after", Method::Listed),
+    (c"every", Method::Listed),
+    (c"sequence", Method::Listed),
+    (c"schedule", Method::Listed),
+    (c"cancel", Method::Listed),
+    (c"send", Method::Listed),
 ];
 const _: () = assert!(timers::METHODS.len() == 5);
+
+/// Why `self.state` cannot be measured, walked or copied.
+const STATE_SHAPE: &str = "self.state não se mede, não se percorre e não se copia: o primeiro \
+                           nível da memória é um registro com os campos declarados em \
+                           Modulo.state; guarde uma lista num campo (self.state.itens) para \
+                           usar #, pairs ou table.clone (veja “Memória do script” no Guia)";
 
 fn method(name: &[u8]) -> Option<(&'static CStr, Method)> {
     METHODS.iter().find(|(n, _)| n.to_bytes() == name).copied()
 }
 
-/// Installs the metatable of light userdata, frozen.
-pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
+/// Installs the metatable of light userdata, frozen; the metatable and the table of touched
+/// tables of script memory.
+pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<(Table, Table)> {
     let me = LightUserData(Rc::as_ptr(shared) as *mut c_void);
     let methods = lua.create_table()?;
     timers::install(lua, shared, &methods)?;
+    messages::install(lua, shared, &methods)?;
+    let touched = lua.create_table()?;
     for (name, method) in METHODS {
-        if method == Method::Timer {
+        if method == Method::Listed {
             continue;
         }
         // SAFETY: the two arguments become the closure's upvalues and the closure is left as
@@ -111,19 +141,28 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     }
     methods.set_readonly(true);
     // SAFETY: as above.
-    let (index, newindex, namecall, tostring): (Function, Function, Function, Function) = unsafe {
+    let (index, newindex, namecall, tostring, len): (
+        Function,
+        Function,
+        Function,
+        Function,
+        Function,
+    ) = unsafe {
         (
-            lua.exec_raw((me, methods.clone()), |l| {
-                ffi::lua_pushcclosurek(l, object_index, c"Object.__index".as_ptr(), 2, None);
+            lua.exec_raw((me, methods.clone(), touched.clone()), |l| {
+                ffi::lua_pushcclosurek(l, object_index, c"Object.__index".as_ptr(), 3, None);
             })?,
-            lua.exec_raw(me, |l| {
-                ffi::lua_pushcclosurek(l, object_newindex, c"Object.__newindex".as_ptr(), 1, None);
+            lua.exec_raw((me, touched.clone()), |l| {
+                ffi::lua_pushcclosurek(l, object_newindex, c"Object.__newindex".as_ptr(), 2, None);
             })?,
             lua.exec_raw((me, methods), |l| {
                 ffi::lua_pushcclosurek(l, object_namecall, c"Object.__namecall".as_ptr(), 2, None);
             })?,
             lua.exec_raw(me, |l| {
                 ffi::lua_pushcclosurek(l, object_tostring, c"Object.__tostring".as_ptr(), 1, None);
+            })?,
+            lua.exec_raw(me, |l| {
+                ffi::lua_pushcclosurek(l, object_len, c"Object.__len".as_ptr(), 1, None);
             })?,
         )
     };
@@ -132,11 +171,12 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
     mt.raw_set("__newindex", newindex)?;
     mt.raw_set("__namecall", namecall)?;
     mt.raw_set("__tostring", tostring)?;
+    mt.raw_set("__len", len)?;
     mt.raw_set("__type", "Object")?;
     mt.raw_set("__metatable", "travado")?;
     mt.set_readonly(true);
     lua.set_type_metatable::<LightUserData>(Some(mt.clone()));
-    Ok(mt)
+    Ok((mt, touched))
 }
 
 /// What an access gives back, computed in Rust before anything touches the Lua stack.
@@ -169,8 +209,7 @@ impl In {
             In::Number(_) => "número",
             In::Vector(_) => "vetor",
             In::Text(_) => "texto",
-            In::Handle(MARK_OBJECT, _) => "objeto",
-            In::Handle(..) => "atributos de um objeto",
+            In::Handle(mark, _) => mark_kind(*mark),
             In::Other(kind) => kind,
         }
     }
@@ -202,6 +241,14 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
             let name = name.unwrap_or_default();
             Ok(match name {
                 b"attr" => Out::Handle(MARK_ATTRIBUTES, key),
+                b"state" => {
+                    // Its fields count the units; outside a call the door says why not.
+                    if shared.phase.get() != Phase::Running {
+                        door(shared)?;
+                    }
+                    state_module(shared, key)?;
+                    Out::Handle(MARK_STATE, key)
+                }
                 b"name" => {
                     let runtime = door(shared)?;
                     let handles = shared.handles.borrow();
@@ -237,6 +284,114 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
         }
         _ => Err("valor desconhecido da engine".into()),
     }
+}
+
+/// Only the object running reaches its memory, that of the module running, which declares one.
+fn state_module(shared: &Shared, key: u64) -> Result<Rc<super::Module>, String> {
+    if shared.caller_key() != Some(key) {
+        return Err(
+            "só self.state existe: a memória de outro objeto não é acessível (use atributos ou \
+             mensagens)"
+                .into(),
+        );
+    }
+    let module = shared
+        .module()
+        .ok_or("memória fora de uma chamada de script")?;
+    if module.state.is_none() {
+        return Err(
+            "este script não declara memória; declare os campos no topo, como Modulo.state = { \
+             vida = 3 }"
+                .into(),
+        );
+    }
+    Ok(module)
+}
+
+/// The memory of the object running for the module running, made with its defaults the first
+/// time.
+fn state_door(shared: &Shared, key: u64) -> Result<&mut Memory, String> {
+    let runtime = door(shared)?;
+    let module = state_module(shared, key)?;
+    let schema = module.state.as_ref().expect("checked by state_module");
+    let handles = shared.handles.borrow();
+    let owner = handles
+        .get(&key)
+        .filter(|id| runtime.entity(id).is_some())
+        .ok_or_else(gone)?;
+    Ok(runtime.script_memory(owner, &module.path, schema))
+}
+
+/// What a field of `self.state` reads as: a scalar, or a table to build from the engine's.
+enum StateOut {
+    Value(Out),
+    /// Into the memory of the `Runtime`, which nothing changes before the table is built.
+    Table(*const [(Key, ScriptValue)]),
+}
+
+fn state_read(shared: &Shared, key: u64, name: &[u8]) -> Result<StateOut, String> {
+    let name = utf8(name)?;
+    let memory = state_door(shared, key)?;
+    let out = match memory.field(name).map_err(|r| r.message())? {
+        ScriptValue::Table(entries) => return Ok(StateOut::Table(entries.as_slice())),
+        ScriptValue::Bool(b) => Out::Bool(*b),
+        ScriptValue::Number(n) => Out::Number(*n),
+        ScriptValue::Text(text) => Out::Text(text.to_string()),
+        ScriptValue::Vector(v) => Out::Vector(*v),
+        ScriptValue::Object(id) => {
+            let id = id.clone();
+            Out::Handle(
+                MARK_OBJECT,
+                shared.register(&id).unwrap_or_else(|_| self::key(&id)),
+            )
+        }
+    };
+    Ok(StateOut::Value(out))
+}
+
+/// A field of `self.state` takes a scalar: checked here and written in the engine.
+fn state_write(shared: &Shared, key: u64, name: &[u8], value: In) -> Result<(), String> {
+    let name = String::from_utf8_lossy(name);
+    let refused = |what: &str| format!("self.state.{name}: não aceita {what}");
+    let value = match value {
+        In::Bool(b) => ScriptValue::Bool(b),
+        In::Number(n) if n.is_finite() => ScriptValue::Number(n),
+        In::Number(_) => return Err(refused("infinito nem NaN")),
+        In::Text(text) if text.len() > memory::MAX_TEXT => {
+            return Err(refused(&format!(
+                "texto de mais de {} bytes",
+                memory::MAX_TEXT
+            )));
+        }
+        In::Text(text) => ScriptValue::Text(text.into()),
+        In::Vector(v) if v.iter().all(|c| c.is_finite()) => ScriptValue::Vector(v),
+        In::Vector(_) => return Err(refused("vetor com infinito ou NaN")),
+        In::Handle(MARK_OBJECT, k) => ScriptValue::Object(shared.id(k).ok_or_else(gone)?),
+        other => {
+            let memory = state_door(shared, key)?;
+            let kind = memory.field(&name).map_err(|r| r.message())?.kind();
+            return Err(format!(
+                "self.state.{name}: guarda {kind}, não {}",
+                other.kind()
+            ));
+        }
+    };
+    let memory = state_door(shared, key)?;
+    memory.set(&name, value).map_err(|refusal| {
+        if refusal.limit {
+            shared.overran(Limit::ScriptMemory, None);
+        }
+        refusal.message()
+    })
+}
+
+/// A field of `self.state` takes a table, which the call then touches: only a table field.
+fn state_assign(shared: &Shared, key: u64, name: &[u8]) -> Result<(), String> {
+    let name = String::from_utf8_lossy(name);
+    let memory = state_door(shared, key)?;
+    memory
+        .check(&name, &ScriptValue::Table(Vec::new()))
+        .map_err(|r| r.message())
 }
 
 fn unknown_member(name: &[u8]) -> String {
@@ -327,7 +482,7 @@ fn run(
             let name = utf8(name)?;
             Ok(entity.ok_or_else(gone)?.attributes.contains_key(name))
         }
-        Method::Timer => Err("método de temporizador fora da tabela de métodos".into()),
+        Method::Listed => Err("método fora da tabela de métodos".into()),
     }
 }
 
@@ -424,11 +579,72 @@ unsafe fn push(l: *mut ffi::lua_State, out: Out) {
     }
 }
 
-/// Upvalues: the `Shared` and the table of methods.
+/// Puts the value at `value` in the table of touched tables (upvalue `touched`) under the key at
+/// `name`, emptying it first when it holds nothing of this call.
+///
+/// # Safety
+/// `name` and `value` are valid indexes of `l`, run by a C function whose upvalue `touched` is
+/// that table.
+unsafe fn touch(
+    l: *mut ffi::lua_State,
+    shared: &Shared,
+    name: c_int,
+    value: c_int,
+    touched: c_int,
+) {
+    unsafe {
+        let touched = ffi::lua_upvalueindex(touched);
+        if !shared.touched.replace(true) {
+            ffi::lua_cleartable(l, touched);
+        }
+        ffi::lua_pushvalue(l, name);
+        ffi::lua_pushvalue(l, value);
+        ffi::lua_rawset(l, touched);
+    }
+}
+
+/// A field of `self.state`: a table touched in this call, else the engine's value.
+///
+/// # Safety
+/// Called from `object_index`, with the memory's handle at 1 and the key at 2.
+unsafe fn state_index(l: *mut ffi::lua_State, shared: &Shared, key: u64) -> c_int {
+    unsafe {
+        let Some(name) = string_at(l, 2) else {
+            raise(
+                l,
+                shared,
+                "os campos de self.state têm nomes de texto".into(),
+            )
+        };
+        if shared.touched.get() {
+            ffi::lua_pushvalue(l, 2);
+            if ffi::lua_rawget(l, ffi::lua_upvalueindex(3)) != ffi::LUA_TNIL {
+                return 1;
+            }
+            ffi::lua_settop(l, -2);
+        }
+        match guarded(shared, "Object.state", || state_read(shared, key, name)) {
+            Ok(StateOut::Value(out)) => push(l, out),
+            Ok(StateOut::Table(entries)) => {
+                // SAFETY: the entries are the Runtime's, unchanged since `state_read`.
+                let pushed = memory::push_table(l, shared, &*entries);
+                shared.count_converted(pushed);
+                touch(l, shared, 2, ffi::lua_gettop(l), 3);
+            }
+            Err(message) => raise(l, shared, message),
+        }
+        1
+    }
+}
+
+/// Upvalues: the `Shared`, the table of methods and the table of touched tables.
 unsafe extern "C-unwind" fn object_index(l: *mut ffi::lua_State) -> c_int {
     unsafe {
         let shared = shared_of(l);
         let (mark, key) = handle_at(l, 1).unwrap_or_default();
+        if mark == MARK_STATE {
+            return state_index(l, shared, key);
+        }
         let name = string_at(l, 2);
         match guarded(shared, "Object.__index", || index(shared, mark, key, name)) {
             Ok(out) => push(l, out),
@@ -438,25 +654,25 @@ unsafe extern "C-unwind" fn object_index(l: *mut ffi::lua_State) -> c_int {
     }
 }
 
-/// Upvalue: the `Shared`.
-unsafe extern "C-unwind" fn object_newindex(l: *mut ffi::lua_State) -> c_int {
+/// The value at `idx` as a script writes it.
+///
+/// # Safety
+/// `idx` is a valid index of `l`.
+unsafe fn read_in(l: *mut ffi::lua_State, idx: c_int) -> In {
     unsafe {
-        let shared = shared_of(l);
-        let (mark, key) = handle_at(l, 1).unwrap_or_default();
-        let name = string_at(l, 2).unwrap_or(b"?");
-        let value = match ffi::lua_type(l, 3) {
+        match ffi::lua_type(l, idx) {
             ffi::LUA_TNIL => In::Nil,
-            ffi::LUA_TBOOLEAN => In::Bool(ffi::lua_toboolean(l, 3) != 0),
-            ffi::LUA_TNUMBER => In::Number(ffi::lua_tonumberx(l, 3, std::ptr::null_mut())),
+            ffi::LUA_TBOOLEAN => In::Bool(ffi::lua_toboolean(l, idx) != 0),
+            ffi::LUA_TNUMBER => In::Number(ffi::lua_tonumberx(l, idx, std::ptr::null_mut())),
             ffi::LUA_TVECTOR => {
-                let v = ffi::lua_tovector(l, 3);
+                let v = ffi::lua_tovector(l, idx);
                 In::Vector([*v, *v.add(1), *v.add(2)])
             }
             ffi::LUA_TLIGHTUSERDATA => {
-                let (mark, key) = decode(ffi::lua_tolightuserdata(l, 3));
+                let (mark, key) = decode(ffi::lua_tolightuserdata(l, idx));
                 In::Handle(mark, key)
             }
-            ffi::LUA_TSTRING => match string_at(l, 3).map(|b| std::str::from_utf8(b)) {
+            ffi::LUA_TSTRING => match string_at(l, idx).map(|b| std::str::from_utf8(b)) {
                 Some(Ok(text)) => In::Text(text.to_owned()),
                 _ => In::Other("texto que não é UTF-8"),
             },
@@ -464,7 +680,40 @@ unsafe extern "C-unwind" fn object_newindex(l: *mut ffi::lua_State) -> c_int {
             ffi::LUA_TFUNCTION => In::Other("função"),
             ffi::LUA_TTHREAD => In::Other("corrotina"),
             _ => In::Other("userdata"),
-        };
+        }
+    }
+}
+
+/// Upvalues: the `Shared` and the table of touched tables.
+unsafe extern "C-unwind" fn object_newindex(l: *mut ffi::lua_State) -> c_int {
+    unsafe {
+        let shared = shared_of(l);
+        let (mark, key) = handle_at(l, 1).unwrap_or_default();
+        if mark == MARK_STATE {
+            let Some(name) = string_at(l, 2) else {
+                raise(
+                    l,
+                    shared,
+                    "os campos de self.state têm nomes de texto".into(),
+                )
+            };
+            if ffi::lua_type(l, 3) == ffi::LUA_TTABLE {
+                match guarded(shared, "Object.state", || state_assign(shared, key, name)) {
+                    Ok(()) => touch(l, shared, 2, 3, 2),
+                    Err(message) => raise(l, shared, message),
+                }
+                return 0;
+            }
+            let value = read_in(l, 3);
+            if let Err(message) = guarded(shared, "Object.state", || {
+                state_write(shared, key, name, value)
+            }) {
+                raise(l, shared, message);
+            }
+            return 0;
+        }
+        let name = string_at(l, 2).unwrap_or(b"?");
+        let value = read_in(l, 3);
         if let Err(message) = guarded(shared, "Object.__newindex", || {
             newindex(shared, mark, key, name, value)
         }) {
@@ -520,7 +769,7 @@ unsafe extern "C-unwind" fn object_namecall(l: *mut ffi::lua_State) -> c_int {
             CStr::from_ptr(atom).to_bytes()
         };
         match method(name) {
-            Some((name, Method::Timer)) => call_listed(l, name),
+            Some((name, Method::Listed)) => call_listed(l, name),
             Some((_, m)) => run_method(l, shared, m),
             None => raise(l, shared, not_a_method(name)),
         }
@@ -553,6 +802,7 @@ unsafe extern "C-unwind" fn object_tostring(l: *mut ffi::lua_State) -> c_int {
                 .unwrap_or_else(|| "objeto".into());
             Ok(match mark {
                 MARK_ATTRIBUTES => format!("atributos de {name}"),
+                MARK_STATE => format!("memória de {name}"),
                 _ => name,
             })
         });
@@ -561,5 +811,20 @@ unsafe extern "C-unwind" fn object_tostring(l: *mut ffi::lua_State) -> c_int {
             Err(message) => raise(l, shared, message),
         }
         1
+    }
+}
+
+/// `#` of a handle: objects, their attributes and their memory have no length. Upvalue: the
+/// `Shared`.
+unsafe extern "C-unwind" fn object_len(l: *mut ffi::lua_State) -> c_int {
+    unsafe {
+        let shared = shared_of(l);
+        let (mark, _) = handle_at(l, 1).unwrap_or_default();
+        let message = match mark {
+            MARK_STATE => STATE_SHAPE,
+            MARK_ATTRIBUTES => "os atributos de um objeto não têm tamanho (#)",
+            _ => "um objeto não tem tamanho (#)",
+        };
+        raise(l, shared, message.to_owned())
     }
 }

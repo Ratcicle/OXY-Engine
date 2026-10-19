@@ -2,12 +2,15 @@
 //! real path (events queued by `emit`, tasks, the function looked up by name, the interrupt net
 //! on), against the ceiling of 50 µs of scripts per step of the 0.7 design (§2.4, §11); also
 //! with the runners' logic run by a timer of each instead of on_step (the waiting queue swept,
-//! the next call queued before each one). The measure runs in release:
+//! the next call queued before each one); and what script memory costs by the size of what a
+//! step converts, which calibrates the warning of `script_costs`. The measures run in release:
 //! `./scripts/cargo.ps1 test -p oxy_core --release --test integration scripts_bench:: '--'
 //! --ignored --nocapture`.
 use oxy_core::{
     document::*,
-    runtime::{FIXED_DT, InputFrame, Runtime, RuntimeEvent, RuntimeOptions},
+    runtime::{
+        FIXED_DT, InputFrame, Runtime, RuntimeEvent, RuntimeOptions, SCRIPT_ENTRIES_WARNING,
+    },
     script::{ScriptRef, ScriptSources},
 };
 use std::sync::Arc;
@@ -252,4 +255,77 @@ fn the_parkour_logic_in_luau_with_8_runners_fits_in_50_us_per_step() {
     );
     assert!(entering < 50., "{entering:.2} µs por passo");
     assert!(timed_entering < 50., "{timed_entering:.2} µs por passo");
+}
+
+/// A list of `Quantos` records of 3 fields in memory; each step reads a scalar (`n`) or
+/// touches one record of the list, which takes the whole list in and back out.
+const LIST: &str = r#"local M = {}
+M.state = { n = 0, items = {} }
+function M.on_start(self)
+    local items = {}
+    for i = 1, self.attr.Quantos do
+        items[i] = { hp = 100, name = "inimigo " .. i, pos = vector.create(i, 0, 0) }
+    end
+    self.state.items = items
+end
+function M.on_step(self)
+    if self.attr.Tocar then
+        self.state.items[5].hp -= 1
+    else
+        self.state.n += 1
+    end
+end
+return M
+"#;
+
+/// The median µs of scripts in a step and the table entries they converted in it.
+fn list_step(records: usize, touch: bool) -> (f64, u64) {
+    let mut e = Entity::new("Ondas", None);
+    e.attributes
+        .insert("Quantos".into(), Value::Number(records as f64));
+    e.attributes.insert("Tocar".into(), Value::Bool(touch));
+    e.scripts = vec![ScriptRef::new("scripts/lista.luau")];
+    let mut project = Project::new("Memória");
+    project.scenes[0].entities.push(e);
+    let options = RuntimeOptions {
+        scripts: Arc::new(ScriptSources::from_texts([("scripts/lista.luau", LIST)])),
+        ..Default::default()
+    };
+    let rt = Runtime::with_options(&project, &project.start_scene, options).unwrap();
+    let mut course = Course {
+        rt,
+        runners: Vec::new(),
+        checkpoints: Vec::new(),
+        steps: 0,
+    };
+    let time = median_step(&mut course, false, 300);
+    assert_eq!(course.rt.script_errors().count(), 0, "{:?}", course.rt.logs);
+    let cost = &course.rt.script_costs()[0];
+    (time, cost.most_entries)
+}
+
+#[test]
+#[ignore = "medida de desempenho: rode em release (veja o topo do arquivo)"]
+fn script_memory_costs_what_a_step_converts_which_calibrates_the_warning() {
+    let mut per_entry = Vec::new();
+    for records in [10, 100, 1000] {
+        // The scene start builds the list once; a step touching it converts it twice.
+        let (scalar, _) = list_step(records, false);
+        let (touched, entries) = list_step(records, true);
+        let each = (touched - scalar) / entries as f64;
+        per_entry.push(each);
+        println!(
+            "{records} registros: escalar {scalar:.2} µs por passo; um registro tocado \
+             {touched:.2} µs, {entries} entradas convertidas, {:.3} µs por entrada",
+            each
+        );
+    }
+    // At the warning, the conversions alone cost about the 50 µs of the parkour's 8 runners.
+    let each = per_entry.iter().copied().fold(0., f64::max);
+    let warned = each * SCRIPT_ENTRIES_WARNING as f64;
+    println!(
+        "aviso a partir de {SCRIPT_ENTRIES_WARNING} entradas por passo: ~{warned:.1} µs (teto do \
+         parkour com 8 corredores: 50 µs)"
+    );
+    assert!((25. ..100.).contains(&warned), "{warned:.1} µs");
 }

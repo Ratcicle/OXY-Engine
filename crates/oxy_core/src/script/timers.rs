@@ -8,7 +8,7 @@
 //! `TimerRoom`): a timer past it is a limit, which stops the script on its object. The
 //! surface is provisional until the API table of a later stage.
 use super::ScriptArg;
-use super::handles::{MARK_OBJECT, decode};
+use super::handles::{self, MARK_OBJECT, decode};
 use super::host::{Limit, Shared, api, locate};
 use crate::document::{Id, Value};
 use crate::runtime::{FIXED_DT, MAX_WAIT, Runtime};
@@ -422,7 +422,7 @@ fn value(s: &Shared, value: &LuaValue) -> Result<ScriptArg, String> {
         }
         LuaValue::LightUserData(handle) => match decode(handle.0) {
             (MARK_OBJECT, key) => Value::Object(Some(s.id(key).ok_or("o objeto não existe mais")?)),
-            _ => return refused("os atributos de um objeto"),
+            (mark, _) => return refused(handles::mark_kind(mark)),
         },
         LuaValue::Table(_) => return refused("tabela"),
         LuaValue::Function(_) => return refused("função"),

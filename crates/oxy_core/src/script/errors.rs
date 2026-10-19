@@ -203,6 +203,11 @@ fn a_value(name: &str) -> String {
     }
 }
 
+/// What follows an error of walking or copying an object, its attributes or its memory.
+const OBJECT_HINT: &str = "; objetos, self.attr e self.state não se percorrem nem se copiam: \
+                           guarde uma lista num campo de self.state (veja “Memória do script” no \
+                           Guia)";
+
 /// The Luau runtime messages scripts meet most, in Portuguese; others pass as they come.
 fn translate(text: &str) -> String {
     let quoted = |text: &str| {
@@ -238,7 +243,8 @@ fn translate(text: &str) -> String {
     if let Some(rest) = text.strip_prefix("attempt to iterate over a ")
         && let Some(what) = rest.strip_suffix(" value")
     {
-        return format!("tentou percorrer {} num for", a_value(what));
+        let hint = if what == "Object" { OBJECT_HINT } else { "" };
+        return format!("tentou percorrer {} num for{hint}", a_value(what));
     }
     if let Some(rest) = text.strip_prefix("attempt to perform arithmetic (")
         && let Some((operation, values)) = rest.split_once(") on ")
@@ -273,9 +279,10 @@ fn translate(text: &str) -> String {
         let reason = reason.strip_suffix(')').unwrap_or(reason);
         return match reason.split_once(" expected, got ") {
             Some((expected, got)) => format!(
-                "argumento #{number} de {function} inválido: esperava {}, recebeu {}",
+                "argumento #{number} de {function} inválido: esperava {}, recebeu {}{}",
                 type_word(expected),
-                type_word(got)
+                type_word(got),
+                if got == "Object" { OBJECT_HINT } else { "" }
             ),
             None => format!("argumento #{number} de {function} inválido ({reason})"),
         };
@@ -377,8 +384,8 @@ mod tests {
                 "tentou juntar um texto com uma tabela (..)",
             ),
             (
-                "attempt to iterate over a Object value",
-                "tentou percorrer um Object num for",
+                "attempt to iterate over a table value",
+                "tentou percorrer uma tabela num for",
             ),
             (
                 "invalid argument #1 to 'floor' (number expected, got string)",
@@ -396,6 +403,17 @@ mod tests {
         ] {
             assert_eq!(translate(luau), ours);
         }
+        // Walking or copying an object points to where lists live.
+        assert_eq!(
+            translate("attempt to iterate over a Object value"),
+            format!("tentou percorrer um Object num for{OBJECT_HINT}")
+        );
+        assert_eq!(
+            translate("invalid argument #1 to 'pairs' (table expected, got Object)"),
+            format!(
+                "argumento #1 de 'pairs' inválido: esperava tabela, recebeu Object{OBJECT_HINT}"
+            )
+        );
         assert_eq!(
             scrub("table: 0x000001f2a3b4c5d6 e function: 0xABC, thread: 0x1 · Foo: 0x2 · x: 0x"),
             "tabela e função, corrotina · Foo · x: 0x"

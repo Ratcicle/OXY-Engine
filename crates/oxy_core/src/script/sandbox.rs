@@ -69,15 +69,16 @@ pub(crate) fn compiler(debug_level: u8) -> Compiler {
         .set_disabled_builtins(["setmetatable"])
 }
 
-/// A new VM with the sandbox, the object handles and the safety net of interrupts.
-pub(crate) fn create(shared: &Rc<Shared>, extra: Extra) -> mlua::Result<Lua> {
+/// A new VM with the sandbox, the object handles and the safety net of interrupts; with it, the
+/// table of touched tables of script memory (see `handles`).
+pub(crate) fn create(shared: &Rc<Shared>, extra: Extra) -> mlua::Result<(Lua, Table)> {
     let lua = Lua::new_with(libraries(), LuaOptions::new().catch_rust_panics(false))?;
     let base = lua.globals();
     for name in REMOVED {
         base.raw_set(name, LuaValue::Nil)?;
     }
     install_base(&lua, &base, shared)?;
-    let handles = handles::install(&lua, shared)?;
+    let (handles, touched) = handles::install(&lua, shared)?;
     extra(&lua, &base, shared)?;
     // Every host function the base reaches may sit in a module; any other (a coroutine.wrap,
     // a string.gmatch iterator) carries state of its own.
@@ -100,7 +101,7 @@ pub(crate) fn create(shared: &Rc<Shared>, extra: Extra) -> mlua::Result<Lua> {
             Err(mlua::Error::runtime(limit.message(&s.limits.get())))
         }
     });
-    Ok(lua)
+    Ok((lua, touched))
 }
 
 fn collect_functions(value: &LuaValue, known: &mut HashSet<usize>, depth: u32) {
@@ -280,7 +281,22 @@ fn install_base(lua: &Lua, base: &Table, shared: &Rc<Shared>) -> mlua::Result<()
             let name = name.to_string_lossy();
             guard(lua, &s, "require", || {
                 let from = locate(lua).map(|at| at.path);
-                let path = resolve(&s, from.as_deref(), &name).map_err(|e| located(lua, e))?;
+                let path = resolve(from.as_deref(), &name).map_err(|e| located(lua, e))?;
+                // Noted before the file is looked for: a reload that takes away a module
+                // still required finds which text to keep.
+                if let Some(from) = from {
+                    s.requires
+                        .borrow_mut()
+                        .entry(from)
+                        .or_default()
+                        .insert(path.clone());
+                }
+                if s.sources.get(&path).is_none() {
+                    return Err(located(
+                        lua,
+                        format!("require(\"{name}\"): {path} não existe"),
+                    ));
+                }
                 match load::module(lua, &s, &path) {
                     Ok(module) => Ok(module.table.clone()),
                     Err(e) => Err(located(lua, format!("require(\"{name}\"): {e}"))),
@@ -308,11 +324,11 @@ fn guard<R>(
     }
 }
 
-/// The module `name` names from the script `from`, as Luau's require-by-string reads it:
-/// `./` from the script's folder, `../` from the folder above, never out of `scripts`; the file
-/// `<name>.luau`. `@native/` is reserved for Rust modules of a game (0.7
-/// has none) and other aliases do not exist.
-fn resolve(shared: &Shared, from: Option<&str>, name: &str) -> Result<String, String> {
+/// The path of the module `name` names from the script `from`, as Luau's require-by-string
+/// reads it: `./` from the script's folder, `../` from the folder above, never out of
+/// `scripts`; the file `<name>.luau`, whether or not it exists. `@native/` is reserved for Rust
+/// modules of a game (0.7 has none) and other aliases do not exist.
+fn resolve(from: Option<&str>, name: &str) -> Result<String, String> {
     if name.starts_with("@native/") {
         return Err(format!(
             "require(\"{name}\"): módulos Rust por jogo ainda não existem (@native/)"
@@ -342,11 +358,7 @@ fn resolve(shared: &Shared, from: Option<&str>, name: &str) -> Result<String, St
             part => parts.push(part),
         }
     }
-    let path = format!("{}.luau", parts.join("/"));
-    match shared.sources.get(&path) {
-        Some(_) => Ok(path),
-        None => Err(format!("require(\"{name}\"): {path} não existe")),
-    }
+    Ok(format!("{}.luau", parts.join("/")))
 }
 
 /// What `print` writes of a value: text as it is, a table's first level, the rest as the

@@ -7,9 +7,11 @@
 //! The host runs them in Luau through mlua (`host`, `sandbox`, `load`, `handles`), one VM per
 //! `Runtime`, created only when its scene attaches a script. The VM keeps the compiled modules,
 //! frozen, and nothing of the game, which lives in the engine's state: a module's functions
-//! with the fixed names of [`Callback`] hear events as tasks of the runtime, and its timers
-//! (`timers`) are tasks too, which name the function to call. Its `unsafe` code keeps two
-//! rules:
+//! with the fixed names of [`Callback`] hear events as tasks of the runtime, its timers
+//! (`timers`) are tasks too, which name the function to call, its memory (`memory`) is the
+//! engine's per object, and its messages (`messages`) wait in the engine's queue. So a VM made
+//! anew, for a reload or to check that no script hides state in it, runs on where the last one
+//! stopped. Its `unsafe` code keeps two rules:
 //! - Aliasing: a call lends the VM the `Runtime` through a pointer that a guard sets from a
 //!   `&mut Runtime` it keeps borrowed until the call ends, so the caller cannot touch the
 //!   `Runtime` meanwhile; the host is out of the `Runtime` (`Option::take`) during the call, so
@@ -36,7 +38,11 @@ mod host;
 #[cfg(test)]
 mod host_tests;
 mod load;
+pub(crate) mod memory;
+pub(crate) mod messages;
 mod sandbox;
+#[cfg(test)]
+mod state_tests;
 #[cfg(test)]
 mod task_tests;
 pub(crate) mod timers;
@@ -45,6 +51,9 @@ pub use errors::{ScriptError, ScriptErrorKind};
 pub(crate) use handles::collision;
 pub use host::ScriptCall;
 pub(crate) use host::{Module, ScriptHost};
+pub(crate) use load::check as load_check;
+pub(crate) use memory::{Memory, ScriptValue};
+pub(crate) use messages::{Message, Unsent};
 pub(crate) use timers::{Repeat, ScriptTask, Share, Timer, TimerRoom, TimerStep};
 
 /// The fixed names a module's table gives the functions that hear events (design §3.6). The
@@ -62,10 +71,12 @@ pub(crate) enum Callback {
     Marker,
     Character,
     Pause,
+    /// A message another object (or the object itself) sent.
+    Message,
 }
 
 impl Callback {
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::Start,
         Self::Step,
         Self::Input,
@@ -75,6 +86,7 @@ impl Callback {
         Self::Marker,
         Self::Character,
         Self::Pause,
+        Self::Message,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -88,13 +100,15 @@ impl Callback {
             Self::Marker => "on_marker",
             Self::Character => "on_character",
             Self::Pause => "on_pause",
+            Self::Message => "on_message",
         }
     }
 
     /// The graph's event for the same happening, by which the runtime knows what its scene
-    /// hears (whether Esc pauses the game, whether exits are worked out).
-    pub(crate) fn event(self) -> &'static str {
-        match self {
+    /// hears (whether Esc pauses the game, whether exits are worked out); none for messages,
+    /// which the graph never hears.
+    pub(crate) fn event(self) -> Option<&'static str> {
+        Some(match self {
             Self::Start => "event.scene_start",
             Self::Step => "event.step",
             Self::Input => "event.input",
@@ -104,18 +118,14 @@ impl Callback {
             Self::Marker => "event.animation",
             Self::Character => "event.character",
             Self::Pause => "event.pause",
-        }
+            Self::Message => return None,
+        })
     }
 }
 
-/// Callback names a module may already define that the engine calls in a later stage or
-/// version (messages in 0.7, players in 0.8): no warning for them.
-pub(crate) const LATER_CALLBACKS: [&str; 4] = [
-    "on_message",
-    "on_request",
-    "on_player_join",
-    "on_player_leave",
-];
+/// Callback names a module may already define that the engine calls in a later version
+/// (players in 0.8): no warning for them.
+pub(crate) const LATER_CALLBACKS: [&str; 3] = ["on_request", "on_player_join", "on_player_leave"];
 
 /// The callbacks a module defines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -137,14 +147,28 @@ impl Callbacks {
 }
 
 /// A value a script task passes its function after `self`: the values attributes hold, nil,
-/// and the records of named values the engine builds for an event (`on_character`'s), which
-/// reach the script as a table. Timers carry only the first two, so their data is what the
-/// engine keeps and compares.
+/// the records of named values the engine builds for an event (`on_character`'s), which reach
+/// the script as a table, and a message's value, as memory keeps it. Timers carry only the
+/// first two, so their data is what the engine keeps and compares.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ScriptArg {
     Nil,
     Value(Value),
     Record(Vec<(&'static str, Value)>),
+    Data(ScriptValue),
+}
+
+/// What reloading the scripts did (see `Runtime::reload_scripts`), for the editor's Console:
+/// never the runtime's log, whose lines are part of the state. Provisional, as the reload.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScriptReload {
+    /// The scripts whose new text runs now, by path.
+    pub reloaded: Vec<String>,
+    /// Why a new text did not load: the old one goes on running (a new file has none).
+    pub errors: Vec<ScriptError>,
+    /// Memory fields reset or dropped, functions named like callbacks that are none.
+    pub warnings: Vec<String>,
 }
 
 /// What [`check`] reads from a script that loads. Provisional, as [`check`].

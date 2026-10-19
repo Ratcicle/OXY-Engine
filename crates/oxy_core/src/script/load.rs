@@ -2,11 +2,10 @@
 //! check the bytecode (R8); run the module's top with the host "loading", where nothing reaches
 //! the world (R2); freeze in depth everything the module reaches (R1). The module is kept for
 //! the life of the VM: nothing of the game lives in it.
-use super::bytecode;
 use super::errors::{ScriptError, closest, describe};
 use super::host::{Module, Phase, Shared, suspended_error};
 use super::sandbox::compiler;
-use super::{Callback, Callbacks, LATER_CALLBACKS};
+use super::{Callback, Callbacks, LATER_CALLBACKS, bytecode, memory};
 use mlua::chunk::ChunkMode;
 use mlua::{Function, Lua, Table, Value as LuaValue, ffi};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -123,6 +122,20 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
         ));
     };
     freeze(lua, shared, &table).map_err(|e| ScriptError::new(path, 0, e))?;
+    let state = match table.raw_get::<LuaValue>("state") {
+        Ok(LuaValue::Nil) => None,
+        Ok(LuaValue::Table(declared)) => {
+            Some(memory::schema(lua, shared, &declared).map_err(|e| ScriptError::new(path, 0, e))?)
+        }
+        Ok(_) => {
+            return Err(ScriptError::new(
+                path,
+                0,
+                "Modulo.state precisa ser uma tabela de campos, como { vida = 3 }",
+            ));
+        }
+        Err(e) => return Err(describe(&e, path, 0)),
+    };
     let functions = table
         .pairs::<LuaValue, LuaValue>()
         .filter_map(|pair| match pair.ok()? {
@@ -158,6 +171,7 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
         names,
         callbacks,
         unknown,
+        state,
     }))
 }
 

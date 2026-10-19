@@ -1954,6 +1954,8 @@ impl Tools {
                 .map_err(invalid("Semente (seed) inválida"))?
                 .unwrap_or_default(),
             check_replay: args["check_replay"].as_bool() == Some(true),
+            // The tools run no scripts yet: the check comes with them.
+            check_vm_reset: false,
             save: arg("save")
                 .map(headless::SimulationRequest::read_save)
                 .transpose()

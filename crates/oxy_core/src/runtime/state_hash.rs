@@ -15,9 +15,10 @@ use std::fmt::{self, Write as _};
 /// tasks, areas, characters, random, variables.<name> for each game variable, save, audio,
 /// camera, script_errors), then each object's in scene order: transform, visible,
 /// attributes.<name>, document (its whole document form), character, platform, body (2D
-/// movement), animation, behavior (stopped by an error or by logic) and scripts (those a limit
-/// stopped). Parts a project without scripts never has are left out, not written empty, and so
-/// is what scripts add to a part (their tasks, timer numbers, draws and copies).
+/// movement), animation, behavior (stopped by an error or by logic), scripts (those a limit
+/// stopped) and script:<path> (the memory of each script, by path). Parts a project without
+/// scripts never has are left out, not written empty, and so is what scripts add to a part
+/// (their tasks, timer numbers, messages, draws and copies).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateDigest {
     pub parts: Vec<StatePart>,
@@ -238,6 +239,13 @@ impl Runtime {
             // Counted from the timer tasks, which are read below.
             timer_room: _,
             disabled_scripts,
+            script_memory,
+            messages,
+            // Only within a step.
+            messages_sent: _,
+            messages_by_script: _,
+            // Measured, never state.
+            script_costs: _,
         } = self;
         let RunState {
             seed,
@@ -308,6 +316,10 @@ impl Runtime {
             // The last number a script's timer got, which names the next one.
             if *timers > 0 {
                 s.debug(timers);
+            }
+            // The messages on their way, which become tasks in the next logic phase.
+            if !messages.is_empty() {
+                s.debug(messages);
             }
         });
         digest.add(None, "areas", |s| {
@@ -400,6 +412,11 @@ impl Runtime {
                     .collect();
                 (!stopped.is_empty()).then(|| write!(s, "{stopped:?}"))
             });
+            for (path, memory) in script_memory.get(&entity.id).into_iter().flatten() {
+                digest.add(id, format!("script:{path}"), |s| {
+                    s.debug(&memory.fields());
+                });
+            }
         }
         digest
     }

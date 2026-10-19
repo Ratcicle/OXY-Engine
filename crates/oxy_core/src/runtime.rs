@@ -5,16 +5,16 @@
 //!   The clock (`time`), activation serials, the host pause, logs and traces with their
 //!   counters, the host queues (`sounds`, `save_requests`, `scene_starts`, `recording`), the
 //!   quit request, the scripts' sources with the Luau VM that caches their modules and what
-//!   each module hears (`stop` drops both), and `run`, the `RunState` (draws, copy counts and
-//!   timer numbers of the graph and of scripts, game variables, saved progress, time spent in
-//!   the game pause, music and volumes, script errors told) that new run-wide state goes
-//!   into. `stop` resets `run`.
+//!   each module hears (`stop` drops both), what each script file cost (measured, never
+//!   state), and `run`, the `RunState` (draws, copy counts and timer numbers of the graph and
+//!   of scripts, game variables, saved progress, time spent in the game pause, music and
+//!   volumes, script errors told) that new run-wide state goes into. `stop` resets `run`.
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
-//!   stopped behaviors and scripts, area pairs, activations, hit leases, the game pause, the
-//!   cursor shown by logic and the effect loops (kept with the music in `run`, which
-//!   `change_scene` ends).
+//!   stopped behaviors and scripts, the scripts' memory and messages, area pairs, activations,
+//!   hit leases, the game pause, the cursor shown by logic and the effect loops (kept with the
+//!   music in `run`, which `change_scene` ends).
 //! - Per object: the entries of per-scene structures keyed by an object, pruned in
 //!   `remove_object` when it goes (the cameras' lazily, at the next presentation), and the
 //!   run's counts of an object made during the run (see `forget_copies`).
@@ -51,12 +51,14 @@ mod game_nodes;
 mod math_nodes;
 mod movement_nodes;
 mod operations;
+mod script_state;
 mod scripts;
 mod state_hash;
 mod transforms;
 pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
 pub use operations::ObjectComponent;
+pub use script_state::{SCRIPT_ENTRIES_WARNING, ScriptCost};
 pub use state_hash::{StateDifference, StateDigest, StatePart};
 pub use transforms::{TransformPart, TransformSpace};
 
@@ -376,6 +378,15 @@ pub struct Runtime {
     timer_room: Rc<crate::script::TimerRoom>,
     /// (object, script) pairs a limit of work or memory stopped.
     disabled_scripts: BTreeSet<(Id, String)>,
+    /// What scripts keep in `self.state`, by object, with each script's in the order of paths.
+    script_memory: BTreeMap<Id, Vec<(Arc<str>, crate::script::Memory)>>,
+    /// Messages sent and not yet delivered, oldest first: the next logic phase delivers them.
+    messages: Vec<crate::script::Message>,
+    /// Messages the scene's scripts sent in this step, and those of each (object, script).
+    messages_sent: usize,
+    messages_by_script: HashMap<(Id, Arc<str>), usize>,
+    /// What each script file cost; measured for the tools.
+    script_costs: script_state::ScriptCosts,
 }
 
 impl Runtime {
@@ -455,6 +466,11 @@ impl Runtime {
             script_callbacks: HashMap::new(),
             timer_room: Rc::default(),
             disabled_scripts: BTreeSet::new(),
+            script_memory: BTreeMap::new(),
+            messages: Vec::new(),
+            messages_sent: 0,
+            messages_by_script: HashMap::new(),
+            script_costs: Default::default(),
         };
         if let Some(slot) = options.save {
             runtime.load_save(slot);
@@ -465,6 +481,7 @@ impl Runtime {
         runtime.emit(RuntimeEvent::SceneStart);
         let mut budget = MAX_NODE_WORK;
         runtime.process_tasks(&mut budget);
+        runtime.script_costs.end_step();
         runtime.settle_audio_changes();
         Ok(runtime)
     }
@@ -571,6 +588,8 @@ impl Runtime {
             ("animations", self.animations.is_empty()),
             ("disabled_behaviors", self.disabled_behaviors.is_empty()),
             ("disabled_scripts", self.disabled_scripts.is_empty()),
+            ("script_memory", self.script_memory.is_empty()),
+            ("messages", self.messages.is_empty()),
             ("overlap_pairs", self.overlap_pairs.is_empty()),
             ("area_activations", self.area_activations.is_empty()),
             ("damage_hits", self.damage_hits.is_empty()),
@@ -608,6 +627,8 @@ impl Runtime {
         self.disabled_scripts.clear();
         self.scripts = None;
         self.script_callbacks.clear();
+        self.script_memory.clear();
+        self.messages.clear();
         self.area_hits.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -716,6 +737,7 @@ impl Runtime {
                 frame.look = [0.; 2];
             }
             crate::metrics::timed(|| self.fixed_step(&frame), |c, ns| c.fixed_step_ns += ns);
+            self.script_costs.end_step();
             self.settle_audio_changes();
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
@@ -732,6 +754,8 @@ impl Runtime {
         if let Some(host) = &self.scripts {
             host.begin_step();
         }
+        self.messages_sent = 0;
+        self.messages_by_script.clear();
         self.step_input = input.clone();
         self.query_work = 0;
         self.sounds_before_change = None;
@@ -1067,6 +1091,10 @@ impl Runtime {
             }
         }
         self.waiting = future;
+        // After the events and the timers due, the messages sent since the last phase.
+        if !self.messages.is_empty() {
+            self.deliver_messages();
+        }
         while let Some(task) = self.ready.pop_front() {
             // An event of a trajectory that ended, or of a character gone, never runs.
             if task
@@ -1483,6 +1511,7 @@ impl Runtime {
         if let Some(host) = &self.scripts {
             host.forget(&ids);
         }
+        self.forget_script_state(&ids);
         self.overlap_pairs
             .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
         self.damage_hits.retain(|(a, _), hits| {
@@ -1554,6 +1583,8 @@ impl Runtime {
         self.animations.clear();
         self.disabled_behaviors.clear();
         self.disabled_scripts.clear();
+        self.script_memory.clear();
+        self.messages.clear();
         self.overlap_pairs.clear();
         self.area_activations.clear();
         self.damage_hits.clear();

@@ -198,7 +198,9 @@ impl Runtime {
                     .cloned()
                     .collect();
                 for callback in scripts.iter().flat_map(|(_, callbacks)| callbacks.iter()) {
-                    catalog.operations.insert(callback.event().into());
+                    if let Some(event) = callback.event() {
+                        catalog.operations.insert(event.into());
+                    }
                     catalog.input |= callback == crate::script::Callback::Input;
                 }
                 if used || !scripts.is_empty() {
