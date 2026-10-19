@@ -454,9 +454,7 @@ fn newindex(shared: &Shared, mark: u64, key: u64, name: &[u8], value: In) -> Res
     let old = runtime
         .attribute(id, &name)
         .map_err(|_| gone())?
-        .ok_or_else(|| {
-            format!("o atributo {name} não existe neste objeto; crie-o no painel de propriedades")
-        })?;
+        .ok_or_else(|| missing_attribute(runtime, id, &name, shared.caller_key() == Some(key)))?;
     let new = match (old, value) {
         (Value::Number(_), In::Number(n)) => Value::Number(n),
         (Value::Text(_), In::Text(text)) => Value::Text(text),
@@ -482,6 +480,27 @@ fn newindex(shared: &Shared, mark: u64, key: u64, name: &[u8], value: In) -> Res
     runtime
         .set_attribute(id, &name, new)
         .map_err(|e| format!("atributo {name}: {e}"))
+}
+
+/// Why `obj.attr.name = v` fails on the object `id`, which lacks the attribute: with the nearest
+/// name it has, and how it gets one, for `self` (`own`) through the script's declaration.
+fn missing_attribute(runtime: &Runtime, id: &str, name: &str, own: bool) -> String {
+    let entity = runtime.entity(id);
+    let near = entity
+        .and_then(|e| closest(name, e.attributes.keys().map(String::as_str)))
+        .map_or_else(String::new, |near| format!(" (quis dizer {near}?)"));
+    if own {
+        format!(
+            "o atributo {name} não existe neste objeto{near}; declare-o em Modulo.attributes \
+             (anexar o script de novo cria o que falta) ou crie-o no objeto"
+        )
+    } else {
+        let object = entity.map_or("o objeto", |e| e.name.as_str());
+        format!(
+            "o atributo {name} não existe em {object}{near}; crie-o nele ou declare-o em \
+             Modulo.attributes de um script que ele anexa"
+        )
+    }
 }
 
 /// `obj.position = v` or `obj.world_position = v`: the object moves there, as Mover / girar /

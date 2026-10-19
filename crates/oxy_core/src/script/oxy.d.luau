@@ -22,7 +22,7 @@ export type VarValue = boolean | number | string | vector
 export type Object = {
     --- Nome do objeto na cena (só leitura).
     name: string,
-    --- Atributos do objeto, pelo nome: ler um que ele não tem dá nil; escrever pede um atributo que ele tem, com um valor do mesmo tipo.
+    --- Atributos do objeto, pelo nome: ler um que ele não tem dá nil; escrever pede um atributo que ele tem, com um valor do mesmo tipo (declare-o em `Modulo.attributes`, que anexar cria, ou crie-o no objeto).
     attr: { [string]: any },
     --- Memória deste script neste objeto, com os campos de `Modulo.state`. Só em `self`.
     state: any,
@@ -34,11 +34,11 @@ export type Object = {
     exists: (self: Object) -> boolean,
     --- Diz se o objeto tem o atributo.
     has_attribute: (self: Object, name: string) -> boolean,
-    --- Chama `fn(self, ...)` daqui a `seconds` segundos de jogo; `fn` é uma função do módulo, como `Modulo.fechar`. Devolve o número que `cancel` recebe.
+    --- Chama `fn(self, ...)` daqui a `seconds` segundos de jogo, no mínimo no passo seguinte, como o nó Esperar sem bloquear; `fn` é uma função do módulo, como `Modulo.fechar`. Devolve o número que `cancel` recebe.
     after: <X...>(self: Object, seconds: number, fn: (Object, X...) -> (), X...) -> number,
     --- Chama `fn(self, ...)` a cada `seconds` segundos de jogo, até `cancel`.
     every: <X...>(self: Object, seconds: number, fn: (Object, X...) -> (), X...) -> number,
-    --- Chama `fn(self, item)` para cada item: o primeiro no passo seguinte, cada outro `interval` segundos depois.
+    --- Chama `fn(self, item)` com o item k aos (k-1) × `interval` segundos daqui, como `self:after` chamaria: o primeiro no passo seguinte, como `self:after(0)`, e os outros na grade das esperas do grafo. O estado que precisa valer já neste passo, grave direto antes; o primeiro item o grava de novo, e um efeito dele (um som) sairia duas vezes.
     sequence: <T>(self: Object, interval: number, fn: (Object, T) -> (), items: { T }) -> number,
     --- Passos com atrasos próprios, `{ {atraso, Modulo.f, dado?}, ... }`, cada atraso contado do passo anterior.
     schedule: (self: Object, steps: { Step }) -> number,
@@ -52,7 +52,7 @@ export type Object = {
 export type ScriptObject<A, S> = {
     --- Nome do objeto na cena (só leitura).
     name: string,
-    --- Atributos do objeto, pelo nome: ler um que ele não tem dá nil; escrever pede um atributo que ele tem, com um valor do mesmo tipo.
+    --- Atributos do objeto, pelo nome: ler um que ele não tem dá nil; escrever pede um atributo que ele tem, com um valor do mesmo tipo (declare-o em `Modulo.attributes`, que anexar cria, ou crie-o no objeto).
     attr: A,
     --- Memória deste script neste objeto, com os campos de `Modulo.state`. Só em `self`.
     state: S,
@@ -64,11 +64,11 @@ export type ScriptObject<A, S> = {
     exists: (self: ScriptObject<A, S>) -> boolean,
     --- Diz se o objeto tem o atributo.
     has_attribute: (self: ScriptObject<A, S>, name: string) -> boolean,
-    --- Chama `fn(self, ...)` daqui a `seconds` segundos de jogo; `fn` é uma função do módulo, como `Modulo.fechar`. Devolve o número que `cancel` recebe.
+    --- Chama `fn(self, ...)` daqui a `seconds` segundos de jogo, no mínimo no passo seguinte, como o nó Esperar sem bloquear; `fn` é uma função do módulo, como `Modulo.fechar`. Devolve o número que `cancel` recebe.
     after: <X...>(self: ScriptObject<A, S>, seconds: number, fn: (ScriptObject<A, S>, X...) -> (), X...) -> number,
     --- Chama `fn(self, ...)` a cada `seconds` segundos de jogo, até `cancel`.
     every: <X...>(self: ScriptObject<A, S>, seconds: number, fn: (ScriptObject<A, S>, X...) -> (), X...) -> number,
-    --- Chama `fn(self, item)` para cada item: o primeiro no passo seguinte, cada outro `interval` segundos depois.
+    --- Chama `fn(self, item)` com o item k aos (k-1) × `interval` segundos daqui, como `self:after` chamaria: o primeiro no passo seguinte, como `self:after(0)`, e os outros na grade das esperas do grafo. O estado que precisa valer já neste passo, grave direto antes; o primeiro item o grava de novo, e um efeito dele (um som) sairia duas vezes.
     sequence: <T>(self: ScriptObject<A, S>, interval: number, fn: (ScriptObject<A, S>, T) -> (), items: { T }) -> number,
     --- Passos com atrasos próprios, `{ {atraso, Modulo.f, dado?}, ... }`, cada atraso contado do passo anterior.
     schedule: (self: ScriptObject<A, S>, steps: { Step }) -> number,
@@ -84,7 +84,7 @@ export type AnyObject = Object | ScriptObject<any, any>
 export type PlayOptions = {
     --- Volume de 0 a 1 (padrão 1).
     volume: number?,
-    --- O objeto cujo jogador ouve o som (com vários jogadores, a partir da 0.8; hoje, o único jogador).
+    --- O objeto cujo jogador ouve o som, com vários jogadores, a partir da 0.8. Hoje não muda nada: o único jogador ouve todo som; para tocar só para ele, confira um atributo do personagem (como `Jogador local`).
     audience: AnyObject?,
 }
 
@@ -94,7 +94,7 @@ declare audio: {
 }
 
 declare vars: {
-    --- Lê uma variável do jogo pelo nome; com `key`, o valor daquela chave. nil quando não há valor.
+    --- Lê uma variável do jogo pelo nome; com `key`, o valor daquela chave, ou o valor inicial da variável numa chave nunca gravada, como o nó Ler variável do jogo. Um nome que o projeto não tem é um erro, com o nome mais próximo. As variáveis guardam o valor quando a cena reinicia: zere no `on_start` o que precisa recomeçar.
     get: (name: string, key: string?) -> any,
     --- Grava uma variável do jogo pelo nome, com um valor do tipo dela; com `key`, o valor daquela chave.
     set: (name: string, value: VarValue, key: string?) -> (),

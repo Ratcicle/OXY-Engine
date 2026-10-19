@@ -896,6 +896,10 @@ logic added with entity \"$4\" goes where command 4 created the object, whatever
 default scene. An object the command's scene lacks is refused naming that scene and, when \
 another scene has the object, that one: \"Controle não existe na cena Menu (a do comando); ele \
 está na cena Pista: passe scene\".
+Objects go by ID or by name (any case) in entity, ids and parent, in the scene the command looks \
+in (copy_entities' parent: to_scene), in every command but the legacy node ones (add_node, \
+remove_node, set_node_params, connect, disconnect, arrange_logic), which take IDs; a name two \
+objects there share is refused with their IDs and where each is.
 Commands (field `op`):
 - rename_project {name}; set_start_scene {scene}; create_scene {name, kind: \"2d\"|\"3d\"}; \
 rename_scene {scene, name}; duplicate_scene {scene}; delete_scene {scene}
@@ -1107,8 +1111,9 @@ not undo it. read {path}: {path, lines, text}, each line of text after its numbe
 part of the file). write {path, text}: the whole file, all-or-nothing: checked as the game loads \
 it (syntax, a top-level local some function changes, the module's top run, the folder's other \
 scripts serving require) and refused as \"scripts/x.luau:LINE: reason\" with nothing written; \
-answers {path, saved, created, lines, added?, removed?, previous_version? (<file>.agente.bak, the \
-file as it was before this session first changed it; live, the editor's session), warnings?, \
+answers {path, saved, created, lines, added?, removed?, previous_version? \
+(.oxy/agente/scripts/<file>.bak, out of the scripts folder, the file as it was before this \
+session first changed it; live, the editor's session), warnings?, \
 vscode? (the first write or attach_script sets VS Code up)}. check {path?, text?}: a script, text as that script \
 without saving it, or every script: {ok, checked, errors?, warnings?}, each \"scripts/x.luau:LINE: \
 message\"; warnings are functions named like callbacks that are none (they never run) and a \
@@ -1123,10 +1128,16 @@ on_marker(self, marker, clip), on_character(self, event), on_pause(self, paused)
 on_message(self, name, value, from); obj.name, obj.attr.Name (nil when absent; writing needs an \
 attribute of that type), obj.position and obj.world_position (vectors in metres, \
 vector.create(x, y, z); writing moves it), obj:exists(), obj:has_attribute(name), self.state \
-(the fields Module.state declares), obj:send(name, value?), self:after(seconds, Module.f, ...), \
-self:every(seconds, Module.f, ...), self:sequence(interval, Module.f, items), \
-self:schedule({ {delay, Module.f, data?}, ... }), self:cancel(id); audio.play(name, {volume?, \
-audience?}); vars.get(name, key?), vars.set(name, value, key?); print and warn. \
+(the fields Module.state declares), obj:send(name, value?), self:after(seconds, Module.f, ...) \
+(at least the next step, as control.wait), self:every(seconds, Module.f, ...), \
+self:sequence(interval, Module.f, items) (item \
+k (k-1) × interval after the call, as self:after would call it: the first on the next step and \
+the rest on the grid of a graph's waits), self:schedule({ {delay, Module.f, data?}, ... }), \
+self:cancel(id); audio.play(name, {volume?, audience?}) (audience changes nothing before 0.8: \
+the one player hears every sound, so check the character's own attribute to play it only for \
+them); vars.get(name, key?) (a key never written reads the variable's initial value; a name the \
+project lacks is an error with the nearest one), vars.set(name, value, key?); print and warn. \
+Game variables keep their values when a scene restarts: reset in on_start what must start over. \
 Module.attributes = {Name = default} declares what attach_script gives an object. Objects, \
 attributes, sounds, actions and variables go by the person's names.";
 
@@ -1233,7 +1244,12 @@ repeat: random.number takes them from seed \
 get the same IDs on every run (not those of the logic setup creates: see seed). state_hash, 16 \
 hex digits, fingerprints the game state at the end: equal hashes, same state (the seed counts \
 even with no draws, and so do IDs: objects setup creates change it on each call); check_replay \
-checks that a run repeats itself. \
+checks that a run repeats itself. With scripts, script_time [{path, calls (callbacks and \
+timer calls run), steps (the steps it ran in, a scene start counting as one), p50_us and max_us \
+(microseconds of those steps: half took p50_us or less, the slowest max_us; wall time, which \
+varies between runs and machines), most_entries (the most table entries it converted between \
+Luau and the engine in one step: script memory read and written back, messages), warning? \
+(past 1024 of them)}] tells what each script file cost. \
 Lists keep the most recent 300 entries and `truncated` counts what was dropped. Times are \
 seconds rounded to 0.1 ms. Set screenshot=true to also get the game camera view at the end, \
 with the game interface drawn.";
@@ -3196,16 +3212,28 @@ mod tests {
                 .map(|l| l["text"].as_str().unwrap().to_owned())
                 .collect()
         };
+        // Objects by name, as in the other tools.
         let attach_command = json!(
-            {"op": "attach_script", "entity": &id, "path": "scripts/girar.luau"}
+            {"op": "attach_script", "entity": "porta", "path": "scripts/girar.luau"}
         );
-        // oxy_simulate runs the scripts of the folder, attached by its setup too.
+        // oxy_simulate runs the scripts of the folder, attached by its setup too, whose commands
+        // take objects by name.
         let report = call(
             "oxy_simulate",
             json!({"seconds": 0.1, "ui": false, "setup": [attach_command.clone()]}),
         )
         .unwrap();
         assert_eq!(logs(&report), ["Porta · giro 90"]);
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "setup": [
+                {"op": "update_entity", "entity": "Porta", "patch": {"name": "Portão"}},
+                {"op": "duplicate_entities", "ids": ["Portão"]},
+                {"op": "attach_script", "entity": "Portão", "path": "scripts/girar.luau"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(logs(&report), ["Portão · giro 90"]);
         let attach = json!({"commands": [attach_command]});
         let applied = call("oxy_apply", attach.clone()).unwrap();
         assert!(applied.get("warnings").is_none(), "{applied}");
@@ -3369,7 +3397,11 @@ mod tests {
             (Some(1), Some(1))
         );
         assert!(written.get("previous_version").is_none() && written.get("vscode").is_none());
-        let backup = dir.join("scripts").join("contador.luau.agente.bak");
+        let backup = dir
+            .join(".oxy")
+            .join("agente")
+            .join("scripts")
+            .join("contador.luau.bak");
         assert!(!backup.exists());
         let mut args = args;
         args["project"] = json!(dir.display().to_string());
@@ -3382,6 +3414,12 @@ mod tests {
             json!(backup.display().to_string())
         );
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), second);
+        // The scripts folder keeps only the scripts.
+        let folder: Vec<String> = std::fs::read_dir(dir.join("scripts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(folder, ["contador.luau"]);
         // check: every script, errors and warnings at their line.
         std::fs::write(
             dir.join("scripts/area.luau"),
@@ -3449,6 +3487,18 @@ mod tests {
             json!(["read", "write", "check", "vscode"])
         );
         assert!(SCRIPTS_DESCRIPTION.contains("Ctrl+Z in the editor does not undo it"));
+        assert!(SCRIPTS_DESCRIPTION.contains(".oxy/agente/scripts/<file>.bak"));
+        assert!(!SCRIPTS_DESCRIPTION.contains("agente.bak"));
+        for text in [
+            "item k (k-1) × interval after the call",
+            "audience changes nothing before 0.8",
+            "a key never written reads the variable's initial value",
+            "keep their values when a scene restarts",
+        ] {
+            assert!(SCRIPTS_DESCRIPTION.contains(text), "{text}");
+        }
+        assert!(SIMULATE_DESCRIPTION.contains("script_time [{path, calls"));
+        assert!(SIMULATE_DESCRIPTION.contains("most_entries (the most table entries"));
         assert!(ENTITY_DESCRIPTION.contains("scripts [{path, missing?}]"));
         std::fs::remove_dir_all(dir).unwrap();
     }

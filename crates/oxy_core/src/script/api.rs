@@ -50,8 +50,9 @@ pub(crate) fn install(lua: &Lua, base: &Table, shared: &Rc<Shared>) -> mlua::Res
                 "vars.get precisa do nome da variável do jogo (um texto)",
             );
             let key = key_of(&key, "vars.get");
+            // A key never written reads the variable's initial value, as Ler variável do jogo.
             let value = api(lua, &s, "vars.get", |runtime| {
-                let id = variables::find(runtime.project(), &name?)?;
+                let id = variable(runtime.project(), &name?)?;
                 Ok(runtime.variable(&id, &key?).cloned())
             })?;
             match value {
@@ -72,7 +73,7 @@ pub(crate) fn install(lua: &Lua, base: &Table, shared: &Rc<Shared>) -> mlua::Res
                 let key = key_of(&key, "vars.set");
                 let given = Given::of(&value);
                 api(lua, &s, "vars.set", |runtime| {
-                    let id = variables::find(runtime.project(), &name?)?;
+                    let id = variable(runtime.project(), &name?)?;
                     let variable = variables::get(runtime.project(), &id).expect("found above");
                     let value = given.as_value(&variable.value).ok_or_else(|| {
                         format!(
@@ -112,6 +113,21 @@ fn lock(
     meta.raw_set("__metatable", "travado")?;
     meta.set_readonly(true);
     table.set_metatable(Some(meta))
+}
+
+/// The game variable `name` names, by its ID or its name in any case (see `variables::find`); one
+/// the project lacks is refused with the nearest name it has, when one is close enough to be a
+/// typo, and the names it has.
+fn variable(project: &Project, name: &str) -> Result<Id, String> {
+    if let Some(id) = variables::find_named(project, name)? {
+        return Ok(id);
+    }
+    let hint = closest(name, project.variables.iter().map(|v| v.name.as_str()))
+        .map_or_else(|| ".".to_owned(), |near| format!("; quis dizer {near}?"));
+    Err(format!(
+        "A variável do jogo \"{name}\" não existe no projeto{hint} Variáveis: {}",
+        variables::summary(project)
+    ))
 }
 
 /// A text argument, or `refused`.

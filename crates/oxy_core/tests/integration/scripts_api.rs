@@ -80,13 +80,17 @@ fn sound(project: &mut Project, name: &str) -> Id {
 
 #[test]
 fn attributes_read_nil_when_missing_and_take_only_their_type() {
+    let mut chest = object("Baú");
+    chest.attributes.insert("Moedas".into(), Value::Number(0.));
     let mut door = object("Porta");
     door.attributes.insert("Vida".into(), Value::Number(3.));
     door.attributes
         .insert("Ponto".into(), Value::Vector2([0., 0.]));
+    door.attributes
+        .insert("Baú".into(), Value::Object(Some(chest.id.clone())));
     let id = door.id.clone();
     let mut project = Project::new("Atributos");
-    project.scenes[0].entities.push(door);
+    project.scenes[0].entities.extend([door, chest]);
     let source = r#"local M = {}
 function M.read(self)
     self.attr.Resultado = tostring(self.attr.Vida) .. " " .. tostring(self.attr.Nada)
@@ -94,6 +98,8 @@ end
 function M.write(self) self.attr.Vida -= 1 end
 function M.wrong(self) self.attr.Vida = "muita" end
 function M.missing(self) self.attr.Nada = 1 end
+function M.typo(self) self.attr.Vidaa = 1 end
+function M.other(self) self.attr["Baú"].attr.Moeda = 1 end
 function M.flat(self) self.attr.Ponto = vector.create(1, 2, 3) end
 return M
 "#;
@@ -108,10 +114,25 @@ return M
         (e.line, e.message.as_str()),
         (6, "o atributo Vida guarda número, não texto")
     );
+    // Writing one the object lacks says how it gets one: the script's declaration, which
+    // attaching creates, or the object itself; with the nearest name it has.
     let e = failed(call(&mut rt, "missing"));
     assert_eq!(
         e.message,
-        "o atributo Nada não existe neste objeto; crie-o no painel de propriedades"
+        "o atributo Nada não existe neste objeto; declare-o em Modulo.attributes (anexar o \
+         script de novo cria o que falta) ou crie-o no objeto"
+    );
+    let e = failed(call(&mut rt, "typo"));
+    assert!(
+        e.message
+            .starts_with("o atributo Vidaa não existe neste objeto (quis dizer Vida?); declare-o"),
+        "{e}"
+    );
+    let e = failed(call(&mut rt, "other"));
+    assert_eq!(
+        e.message,
+        "o atributo Moeda não existe em Baú (quis dizer Moedas?); crie-o nele ou declare-o em \
+         Modulo.attributes de um script que ele anexa"
     );
     // A Vetor2 takes a vector's x and y.
     assert_eq!(call(&mut rt, "flat"), ScriptCall::Done);
@@ -255,6 +276,7 @@ function M.go(self)
         vars.get("Recorde", "Outra"), vars.get("Nome"), p.x, p.y, p.z)
 end
 function M.unknown(self) vars.get("Largada") end
+function M.near(self) vars.set("contagen", 1) end
 function M.wrong(self) vars.set("Contagem", "três") end
 function M.key(self) vars.get("Contagem", 1) end
 function M.typo(self) vars.sett("Contagem", 1) end
@@ -286,6 +308,16 @@ return M
     );
     // Names, never IDs.
     assert!(!e.message.contains(&start), "{e}");
+    // A name close to one the project has is a typo, told with that name: vars.get and vars.set
+    // never read or write nil for a variable the project lacks.
+    let e = failed(call(&mut rt, "near"));
+    assert!(
+        e.message.starts_with(
+            "A variável do jogo \"contagen\" não existe no projeto; quis dizer Contagem? \
+             Variáveis: Largada liberada, Contagem"
+        ),
+        "{e}"
+    );
     let e = failed(call(&mut rt, "wrong"));
     assert_eq!(
         e.message,
@@ -369,7 +401,9 @@ function Checkpoint.on_area_enter(self: Object, other: Object)
     if other.attr["Checkpoint atual"] < order then
         other.attr["Ponto de retorno"] = self.world_position - FEET
         other.attr["Checkpoint atual"] = order
-        audio.play("Checkpoint", { volume = 0.9, audience = other })
+        if other.attr["Jogador local"] then     -- audience só separa os jogadores na 0.8
+            audio.play("Checkpoint", { volume = 0.9, audience = other })
+        end
     end
 end
 
@@ -385,7 +419,7 @@ Race.attributes = { Aviso = "" }
 
 function Race.on_start(self: Object)
     vars.set("Largada liberada", false)
-    self:sequence(1, Race.show, { 3, 2, 1, 0 })   -- show(self, 3) no passo seguinte, depois 1 por segundo
+    self:sequence(1, Race.show, { 3, 2, 1, 0 })   -- show(self, 3) no passo seguinte; 2, 1 e 0 a 1, 2 e 3 s
     self:after(4, Race.hide_banner)
 end
 
@@ -435,14 +469,25 @@ fn the_parkour_checkpoint_and_countdown_run_as_the_design_writes_them() {
     runner
         .attributes
         .insert("Ponto de retorno".into(), Value::Vector3([0.; 3]));
+    // A copy of the player takes the checkpoint too, without its sound: audience changes
+    // nothing before 0.8, so the character's own attribute tells who plays.
+    let mut copy = runner.clone();
+    copy.id = new_id();
+    copy.name = "Cópia".into();
+    copy.attributes
+        .insert("Jogador local".into(), Value::Bool(false));
+    runner
+        .attributes
+        .insert("Jogador local".into(), Value::Bool(true));
     // A physics box enters too, and the checkpoint leaves it alone.
     let mut crate_ = Entity::new("Caixa", None);
     crate_.collider = Some(Collider::default());
     crate_.transform.position = [5., 1.5, 0.];
     let (control_id, area_id, runner_id) = (control.id.clone(), area.id.clone(), runner.id.clone());
+    let copy_id = copy.id.clone();
     project.scenes[0]
         .entities
-        .extend([control, area, runner, crate_]);
+        .extend([control, area, runner, copy, crate_]);
     let files = [
         ("scripts/checkpoint.luau", CHECKPOINT),
         ("scripts/controle_da_corrida.luau", RACE),
@@ -492,6 +537,10 @@ fn the_parkour_checkpoint_and_countdown_run_as_the_design_writes_them() {
     assert_eq!(
         attribute(&rt, &runner_id, "Ponto de retorno"),
         Value::Vector3([5., 0., 0.])
+    );
+    assert_eq!(
+        attribute(&rt, &copy_id, "Checkpoint atual"),
+        Value::Number(2.)
     );
     step(&mut rt, 69);
     assert_eq!(aviso(&rt), Value::Text("2".into()));

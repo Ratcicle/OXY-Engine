@@ -365,20 +365,40 @@ fn loading_refuses_bad_scripts_with_clear_messages() {
     let e = refused(
         "local M = {}\nlocal contador = 0\nfunction M.on_step(self)\n    contador += 1\nend\nreturn M\n",
     );
+    // At the line of the change, not the function's.
     assert!(
         e.starts_with(
-            "scripts/teste.luau:3: `contador` é um local do topo do script alterado dentro de uma \
+            "scripts/teste.luau:4: `contador` é um local do topo do script alterado dentro de uma \
              função"
         ),
         "{e}"
     );
     assert!(e.contains("local function antes de usá-la, const"), "{e}");
-    // The known false positive, a forward declaration, gets the same hint.
+    // A function that only reads it before one that changes it, in a function it creates.
     let e = refused(
-        "local M = {} local ajuda function M.f() return ajuda() end ajuda = function() return 1 \
-         end return M",
+        "local M = {}\nlocal count = 0\nfunction M.read(self)\n    return count\nend\n\
+         function M.on_start(self)\n    local function add()\n        count += 1\n    end\n    \
+         add()\nend\nreturn M\n",
+    );
+    assert!(
+        e.starts_with("scripts/teste.luau:8: `count` é um local do topo do script alterado"),
+        "{e}"
+    );
+    // The known false positive, a forward declaration, gets the same hint; the top changes it,
+    // so the line is the function's, and the message says so.
+    let e = refused(
+        "local M = {}\nlocal ajuda\nfunction M.f()\n    return ajuda()\nend\n\
+         ajuda = function() return 1 end\nreturn M\n",
     );
     assert!(e.contains("`ajuda`") && e.contains("M.ajuda"), "{e}");
+    assert!(
+        e.starts_with(
+            "scripts/teste.luau:3: `ajuda` é um local do topo do script alterado depois de \
+             declarado, e a função desta linha o usa (a mudança não está dentro de uma função, \
+             então a linha é a da função)"
+        ),
+        "{e}"
+    );
     // A local factory inlined into the top is the same case.
     assert!(
         refused(
@@ -629,7 +649,8 @@ return M
         ("infinite", "o atributo Numero não aceita infinito nem NaN"),
         (
             "missing",
-            "o atributo Novo não existe neste objeto; crie-o no painel de propriedades",
+            "o atributo Novo não existe neste objeto; declare-o em Modulo.attributes (anexar o \
+             script de novo cria o que falta) ou crie-o no objeto",
         ),
     ] {
         let e = failed(call(&mut rt, &id, function));

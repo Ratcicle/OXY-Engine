@@ -28,6 +28,25 @@ fn folder(files: &[(&str, &str)]) -> PathBuf {
     root
 }
 
+/// The files under `folder`, by their path from it with `/`.
+fn files_under(folder: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut pending = vec![(folder.to_owned(), String::new())];
+    while let Some((dir, prefix)) = pending.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if entry.file_type().unwrap().is_dir() {
+                pending.push((entry.path(), format!("{name}/")));
+            } else {
+                found.push(name);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 fn call(
     root: &Path,
     kept: &mut HashSet<PathBuf>,
@@ -166,11 +185,13 @@ fn writes_are_all_or_nothing_and_keep_the_file_as_the_session_found_it() {
         std::fs::read_to_string(root.join("scripts/porta.luau")).unwrap(),
         DOOR
     );
-    assert!(!root.join("scripts/porta.luau.agente.bak").exists());
-    // The first change keeps the file as it was; the answer and the Console say what changed.
+    assert!(!root.join(".oxy").exists());
+    // The first change keeps the file as it was, out of the scripts folder; the answer and the
+    // Console say what changed.
     let second = DOOR.replace("aberta", "abriu");
     let (answer, console) = write(&mut kept, "scripts/porta.luau", &second).unwrap();
-    let backup = root.join("scripts").join("porta.luau.agente.bak");
+    let agent = root.join(".oxy").join("agente").join("scripts");
+    let backup = agent.join("porta.luau.bak");
     assert_eq!(answer["created"], false);
     assert_eq!(
         (answer["added"].as_u64(), answer["removed"].as_u64()),
@@ -230,13 +251,27 @@ fn writes_are_all_or_nothing_and_keep_the_file_as_the_session_found_it() {
         "Script scripts/fases/chave.luau criado (4 linhas)"
     );
     write(&mut kept, "scripts/fases/chave.luau", "return {}\n").unwrap();
-    assert!(!root.join("scripts/fases/chave.luau.agente.bak").exists());
-    // The copies are not scripts.
+    assert!(!agent.join("fases").exists());
+    // The scripts folder holds the scripts and nothing else, and loading reads only them.
+    assert_eq!(
+        files_under(&root.join("scripts")),
+        ["fases/chave.luau", "porta.luau"]
+    );
+    assert_eq!(files_under(&agent), ["porta.luau.bak"]);
+    std::fs::write(root.join("scripts/notas.txt"), "não é script").unwrap();
+    std::fs::write(root.join("scripts/porta.luau.agente.bak"), "return {").unwrap();
     let sources = persistence::load_scripts(&root).unwrap();
     assert_eq!(
         sources.files.keys().collect::<Vec<_>>(),
         ["scripts/fases/chave.luau", "scripts/porta.luau"]
     );
+    let (all, _) = call(&root, &mut kept, json!({"action": "check"})).unwrap();
+    assert_eq!(
+        all["checked"],
+        json!(["scripts/fases/chave.luau", "scripts/porta.luau"])
+    );
+    std::fs::remove_file(root.join("scripts/notas.txt")).unwrap();
+    std::fs::remove_file(root.join("scripts/porta.luau.agente.bak")).unwrap();
     // Paths out of the folder and texts over 1 MB are refused.
     assert!(
         Request::parse(&json!({"action": "write", "path": "../fora.luau", "text": ""}))
@@ -266,7 +301,7 @@ fn writes_are_all_or_nothing_and_keep_the_file_as_the_session_found_it() {
     let (answer, _) = write(&mut kept, "scripts/latin.luau", "-- não\nreturn {}\n").unwrap();
     assert_eq!(answer["created"], false);
     assert_eq!(
-        std::fs::read(root.join("scripts/latin.luau.agente.bak")).unwrap(),
+        std::fs::read(agent.join("latin.luau.bak")).unwrap(),
         b"-- n\xe3o\nreturn {}\n"
     );
     let (all, _) = call(&root, &mut kept, json!({"action": "check"})).unwrap();
@@ -448,7 +483,9 @@ function Checkpoint.on_area_enter(self: Object, other: Object)
     if other.attr["Checkpoint atual"] < order then
         other.attr["Ponto de retorno"] = self.world_position - FEET
         other.attr["Checkpoint atual"] = order
-        audio.play("Checkpoint", { volume = 0.9, audience = other })
+        if other.attr["Jogador local"] then
+            audio.play("Checkpoint", { volume = 0.9, audience = other })
+        end
     end
 end
 

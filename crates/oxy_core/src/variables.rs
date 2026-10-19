@@ -212,7 +212,7 @@ pub fn find_named(project: &Project, text: &str) -> Result<Option<Id>, String> {
     }
 }
 /// Up to 30 variable names, for messages.
-fn summary(project: &Project) -> String {
+pub(crate) fn summary(project: &Project) -> String {
     if project.variables.is_empty() {
         return "nenhuma".into();
     }

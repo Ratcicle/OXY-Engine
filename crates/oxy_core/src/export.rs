@@ -1555,7 +1555,8 @@ mod tests {
     }
 
     /// Gives the fixture a door that runs a script, which requires another one of the folder;
-    /// the folder also holds a file that is no script.
+    /// the folder also holds a file that is no script and an agent's copy of a script, where
+    /// older sessions left them, and the project another copy, where they go now.
     fn scripted(fixture: &mut Fixture) {
         let mut door = Entity::new("Porta", None);
         door.scripts = vec![crate::script::ScriptRef::new("scripts/porta.luau")];
@@ -1575,6 +1576,11 @@ mod tests {
             "return { ABERTA = 'aberta' }\n",
         );
         write("scripts/notas.txt", "fica de fora");
+        write("scripts/porta.luau.agente.bak", "return {\n");
+        write(
+            &persistence::script_backup_path("scripts/porta.luau"),
+            "return {}\n",
+        );
         persistence::save_project(&fixture.folder.join(PROJECT_FILE), &fixture.project).unwrap();
     }
 
@@ -1589,8 +1595,16 @@ mod tests {
             .into_iter()
             .filter(|file| file.starts_with("scripts/"))
             .collect();
-        // Every script of the folder, the one only required too; the rest stays out.
+        // Every script of the folder, the one only required too; the rest stays out, and no
+        // copy of a script goes anywhere in the game.
         assert_eq!(scripts, ["scripts/dados/textos.luau", "scripts/porta.luau"]);
+        assert!(
+            files(&report.folder)
+                .iter()
+                .all(|file| !file.ends_with(".bak") && !file.contains(".oxy/")),
+            "{:?}",
+            files(&report.folder)
+        );
         for file in &scripts {
             assert_eq!(
                 fs::read(data.join(file)).unwrap(),

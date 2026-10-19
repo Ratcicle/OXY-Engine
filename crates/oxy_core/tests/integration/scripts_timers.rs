@@ -77,13 +77,14 @@ fn timers_sequences_and_schedules_fire_at_their_steps_until_cancelled() {
         ]
     );
     step(&mut rt, 60);
-    // In game time, from when they were asked (time 0): the first item of a sequence on the
-    // next step, each step of a schedule after the one before. Calls of one step go in the
-    // order their timers were queued.
+    // In game time, from when they were asked (time 0): item k of a sequence (k-1) × 0.1 s
+    // later, as self:after would call it, so the first on the next step; each step of a
+    // schedule after the one before. Calls of one step go in the order their timers were
+    // queued.
     assert_eq!(
         attribute(&rt, "relogio", "Registro"),
         Value::Text(
-            "s1@1 s2@7 p1@12 s3@13 sempre@15 depois@30 nil@30 sempre@30 p3@33 sempre@45 \
+            "s1@1 s2@6 p1@12 s3@12 sempre@15 depois@30 nil@30 sempre@30 p3@33 sempre@45 \
              sempre@60 "
                 .into()
         )
@@ -252,8 +253,171 @@ fn a_replay_with_scripts_stays_identical_and_runs_repeat() {
     };
     assert_eq!(
         log,
-        "s1@1 s2@7 p1@12 s3@13 sempre@15 depois@30 nil@30 sempre@30 p3@33 sempre@45 sempre@60 \
+        "s1@1 s2@6 p1@12 s3@12 sempre@15 depois@30 nil@30 sempre@30 p3@33 sempre@45 sempre@60 \
          sempre@75 true "
     );
     assert!(rt.has_script_host() && rt.script_errors().count() == 0);
+}
+
+fn start_node(e: &mut Entity) -> Id {
+    let node = Node::new("event.scene_start", [0.; 2]);
+    let id = node.id.clone();
+    e.graph.nodes.push(node);
+    id
+}
+
+/// `attribute.set` of `Aviso` to `n` on the object running the graph.
+fn show_node(e: &mut Entity, n: f64) -> Id {
+    let mut node = Node::new("attribute.set", [0.; 2]);
+    node.params
+        .insert("attribute".into(), Value::Text("Aviso".into()));
+    node.params.insert("value".into(), Value::Number(n));
+    let id = node.id.clone();
+    e.graph.nodes.push(node);
+    id
+}
+
+fn wait_node(e: &mut Entity, seconds: f64) -> Id {
+    let mut node = Node::new("control.wait", [0.; 2]);
+    node.params.insert("seconds".into(), Value::Number(seconds));
+    let id = node.id.clone();
+    e.graph.nodes.push(node);
+    id
+}
+
+/// Links `nodes` one after the other.
+fn chain(e: &mut Entity, nodes: &[&Id]) {
+    for pair in nodes.windows(2) {
+        e.graph.edges.push(Edge {
+            from_node: pair[0].clone(),
+            from_port: "exec".into(),
+            to_node: pair[1].clone(),
+            to_port: "exec".into(),
+        });
+    }
+}
+
+fn counter(name: &str) -> Entity {
+    let mut e = Entity::new(name, None);
+    e.attributes.insert("Aviso".into(), Value::Number(-1.));
+    e
+}
+
+const COUNTDOWN: &str = r#"local M = {}
+function M.on_start(self)
+    self:sequence(1, M.show, { 3, 2, 1, 0 })
+end
+function M.show(self, n)
+    self.attr.Aviso = n
+end
+return M
+"#;
+
+/// The countdown of the parkour ported from its graph: the 3 right at the start, as the graph
+/// sets it, then the sequence (whose first item repeats it on the next step) and the end.
+const START_COUNTDOWN: &str = r#"local M = {}
+function M.on_start(self)
+    M.show(self, 3)
+    self:sequence(1, M.show, { 3, 2, 1, 0 })
+    self:after(4, M.show, -1)
+end
+function M.show(self, n)
+    self.attr.Aviso = n
+end
+return M
+"#;
+
+/// A 3-2-1 countdown with self:sequence keeps the steps of the waits of a graph on the same
+/// project: item k waits (k-1) s from the call, the first as Esperar sem bloquear with 0 s
+/// waits (the next step). The countdown of the parkour, which sets the 3 at the start and then
+/// waits a second between items, ports to a script step for step; a replay repeats it all.
+#[test]
+fn a_sequence_keeps_the_steps_of_the_waits_of_an_equivalent_graph() {
+    let mut project = Project::new("Contagem");
+    // As the sequence: Esperar 0 s → 3; and from the start, 1 s → 2 → 1 s → 1 → 1 s → 0.
+    let mut graph = counter("Grafo");
+    let start = start_node(&mut graph);
+    let (first, three) = (wait_node(&mut graph, 0.), show_node(&mut graph, 3.));
+    chain(&mut graph, &[&start, &first, &three]);
+    let mut waits = vec![start];
+    for n in [2., 1., 0.] {
+        waits.push(wait_node(&mut graph, 1.));
+        waits.push(show_node(&mut graph, n));
+    }
+    chain(&mut graph, &waits.iter().collect::<Vec<_>>());
+    let mut script = counter("Script");
+    script.scripts = vec![ScriptRef::new("scripts/contagem.luau")];
+    // The parkour's: the 3 at the start, then 1 s between items and 1 s more to clear it.
+    let mut parkour = counter("Grafo do parkour");
+    let mut flow = vec![start_node(&mut parkour)];
+    flow.push(show_node(&mut parkour, 3.));
+    for n in [2., 1., 0., -1.] {
+        flow.push(wait_node(&mut parkour, 1.));
+        flow.push(show_node(&mut parkour, n));
+    }
+    chain(&mut parkour, &flow.iter().collect::<Vec<_>>());
+    let mut ported = counter("Script do parkour");
+    ported.scripts = vec![ScriptRef::new("scripts/largada.luau")];
+    let ids: Vec<Id> = [&graph, &script, &parkour, &ported]
+        .iter()
+        .map(|e| e.id.clone())
+        .collect();
+    project.scenes[0]
+        .entities
+        .extend([graph, script, parkour, ported]);
+    let files = [
+        ("scripts/contagem.luau", COUNTDOWN),
+        ("scripts/largada.luau", START_COUNTDOWN),
+    ];
+    let mut rt = run(&project, &files);
+    // Each object's value after the start and after each step, and the steps it changed at.
+    let mut seen: Vec<Vec<Value>> = vec![Vec::new(); 4];
+    for n in 0..=250 {
+        if n > 0 {
+            step(&mut rt, 1);
+        }
+        for (values, id) in seen.iter_mut().zip(&ids) {
+            values.push(attribute(&rt, id, "Aviso"));
+        }
+    }
+    let changes = |values: &[Value]| -> Vec<(usize, Value)> {
+        let mut last = Value::Number(-1.);
+        let mut found = Vec::new();
+        for (n, value) in values.iter().enumerate() {
+            if *value != last {
+                found.push((n, value.clone()));
+                last = value.clone();
+            }
+        }
+        found
+    };
+    assert_eq!(seen[1], seen[0], "the sequence and its graph");
+    assert_eq!(
+        changes(&seen[1]),
+        [1, 60, 120, 180]
+            .into_iter()
+            .zip([3., 2., 1., 0.].map(Value::Number))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(seen[3], seen[2], "the parkour's countdown and its port");
+    assert_eq!(
+        changes(&seen[3]),
+        [0, 60, 120, 180, 240]
+            .into_iter()
+            .zip([3., 2., 1., 0., -1.].map(Value::Number))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(rt.script_errors().count(), 0);
+    let request: SimulationRequest = serde_json::from_value(json!({
+        "seconds": 5, "check_replay": true, "actions": "none", "ui": false
+    }))
+    .unwrap();
+    let scripts = Arc::new(ScriptSources::from_texts(files));
+    let (report, rt) = headless::run_with_scripts(&project, scripts, &request).unwrap();
+    let replay = report.replay.as_ref().unwrap();
+    assert!(replay.identical, "{replay:?}");
+    assert_eq!(replay.steps, 300);
+    for (id, values) in ids.iter().zip(&seen) {
+        assert_eq!(attribute(&rt, id, "Aviso"), values[250], "{id}");
+    }
 }

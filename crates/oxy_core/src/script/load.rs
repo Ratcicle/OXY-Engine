@@ -20,7 +20,13 @@ pub(crate) fn check(path: &str, source: &str) -> Result<(Vec<u8>, bytecode::Repo
     let bytes = compiler(1).compile(source).map_err(|e| syntax(path, &e))?;
     let module = bytecode::parse(&bytes).map_err(|e| ScriptError::new(path, 0, e))?;
     let report = bytecode::analyze(&module).map_err(|e| ScriptError::new(path, 0, e))?;
-    if let Some(write) = report.top_level_writes.first() {
+    // At the line of the change when a function changes it; else at the function that uses it.
+    let writes = &report.top_level_writes;
+    if let Some(write) = writes
+        .iter()
+        .find(|write| write.changed_at.is_some())
+        .or(writes.first())
+    {
         // The name comes from a second compilation that keeps the locals' names.
         let name = compiler(2)
             .compile(source)
@@ -28,15 +34,22 @@ pub(crate) fn check(path: &str, source: &str) -> Result<(Vec<u8>, bytecode::Repo
             .and_then(|bytes: Vec<u8>| bytecode::parse(&bytes).ok())
             .and_then(|full| bytecode::local_name(&full, write))
             .unwrap_or_else(|| "?".into());
+        let (line, what) = match write.changed_at {
+            Some(line) => (line, "alterado dentro de uma função"),
+            None => (
+                write.line.unwrap_or(0),
+                "alterado depois de declarado, e a função desta linha o usa (a mudança não está \
+                 dentro de uma função, então a linha é a da função)",
+            ),
+        };
         return Err(ScriptError::new(
             path,
-            write.line.unwrap_or(0),
+            line,
             format!(
-                "`{name}` é um local do topo do script alterado dentro de uma função: o valor se \
-                 perderia ao recarregar e na rede; use self.state ou um atributo. Se ele só \
-                 recebe uma função ou um valor fixo depois de declarado, dê o valor já na \
-                 declaração (local function antes de usá-la, const ou uma expressão só) ou use \
-                 um campo do módulo (M.{name})"
+                "`{name}` é um local do topo do script {what}: o valor se perderia ao recarregar e \
+                 na rede; use self.state ou um atributo. Se ele só recebe uma função ou um valor \
+                 fixo depois de declarado, dê o valor já na declaração (local function antes de \
+                 usá-la, const ou uma expressão só) ou use um campo do módulo (M.{name})"
             ),
         ));
     }

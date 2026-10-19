@@ -712,10 +712,14 @@ pub fn read_script(root: &Path, path: &str) -> Result<Option<String>, Persistenc
         .map_err(|_| PersistenceError::ScriptNotText(path.to_owned()))
 }
 
-/// The copy of a script file an agent keeps beside it, as it was before its session first
-/// changed the file, by the script's path.
+/// Where the agents' copies of script files go, from the project's folder: out of the `scripts`
+/// folder, so that it holds only scripts.
+pub const SCRIPT_BACKUPS: &str = ".oxy/agente";
+
+/// The copy of a script file an agent keeps, as it was before its session first changed the
+/// file, by the script's path: `scripts/porta.luau` keeps `.oxy/agente/scripts/porta.luau.bak`.
 pub fn script_backup_path(path: &str) -> String {
-    format!("{path}.agente.bak")
+    format!("{SCRIPT_BACKUPS}/{path}.bak")
 }
 
 /// Writes `text` as the script `path` of the project at `root` (`path` as

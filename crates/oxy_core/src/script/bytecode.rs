@@ -13,6 +13,7 @@ pub const TYPES_VERSION: u8 = 3;
 const LCT_VAL: u32 = 0;
 const LCT_REF: u32 = 1;
 const LCT_UPVAL: u32 = 2;
+const OP_SETUPVAL: u32 = 10;
 const OP_GETIMPORT: u32 = 12;
 const OP_NEWCLOSURE: u32 = 19;
 const OP_DUPCLOSURE: u32 = 64;
@@ -287,7 +288,11 @@ fn read_proto(r: &mut Reader) -> Result<Proto, String> {
 pub struct TopLevelWrite {
     pc: usize,
     register: u8,
+    /// The line of the function that captures it.
     pub line: Option<u32>,
+    /// The line where that function, or one it creates, changes it; none when they only read
+    /// it (the top changes it after declaring it) or the bytecode carries no lines.
+    pub changed_at: Option<u32>,
 }
 
 /// What the load checks read from a chunk.
@@ -374,6 +379,7 @@ pub fn analyze(m: &Module) -> Result<Report, String> {
                         pc: pc - 1,
                         register: b as u8,
                         line: p.line(pc - 1),
+                        changed_at: upvalue_write(m, child, k, 0),
                     });
                 }
                 mutable[child][k] |= shared;
@@ -393,6 +399,50 @@ pub fn analyze(m: &Module) -> Result<Report, String> {
         }
     }
     Ok(report)
+}
+
+/// The line of the first write of the upvalue `upvalue` of the function `id`, in its code or in
+/// that of the functions it creates that capture it, when the bytecode carries lines.
+fn upvalue_write(m: &Module, id: usize, upvalue: usize, depth: usize) -> Option<u32> {
+    // Functions nest as the source does; the parser stops far earlier.
+    if depth > 200 {
+        return None;
+    }
+    let p = m.protos.get(id)?;
+    let mut pc = 0;
+    while pc < p.code.len() {
+        let insn = p.code[pc];
+        let op = insn & 0xff;
+        if op == OP_SETUPVAL && ((insn >> 16) & 0xff) as usize == upvalue {
+            return p.line(pc);
+        }
+        let d = (insn as i32 >> 16) as usize;
+        let child = match op {
+            OP_NEWCLOSURE => p.children.get(d).map(|&child| child as usize),
+            OP_DUPCLOSURE => match p.constants.get(d) {
+                Some(Constant::Closure(child)) => Some(*child as usize),
+                _ => None,
+            },
+            _ => None,
+        };
+        pc += op_length(op);
+        let Some(child) = child else { continue };
+        let upvalues = m.protos.get(child)?.upvalues as usize;
+        for k in 0..upvalues {
+            let capture = *p.code.get(pc + k)?;
+            let passed = capture & 0xff == OP_CAPTURE
+                && (capture >> 8) & 0xff == LCT_UPVAL
+                && ((capture >> 16) & 0xff) as usize == upvalue;
+            if let Some(line) = passed
+                .then(|| upvalue_write(m, child, k, depth + 1))
+                .flatten()
+            {
+                return Some(line);
+            }
+        }
+        pc += upvalues;
+    }
+    None
 }
 
 /// The name of the top-level local behind `write`, read from the same source compiled with

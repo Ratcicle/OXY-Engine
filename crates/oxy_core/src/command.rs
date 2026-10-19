@@ -853,6 +853,7 @@ pub fn apply_with_scripts(
             message,
         };
         let command = resolve_placeholders(command, &applied, &draft).map_err(fail)?;
+        let command = resolve_names(&command, &draft, default_scene).map_err(fail)?;
         // Copies take the logic as it is laid out.
         if matches!(
             command,
@@ -2085,6 +2086,63 @@ fn resolve_placeholders(
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
+/// Whether `command` takes objects by name: all but the legacy node commands, whose contract is
+/// frozen since 0.7 and takes IDs.
+fn takes_names(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::AddNode { .. }
+            | Command::RemoveNode { .. }
+            | Command::SetNodeParams { .. }
+            | Command::Connect { .. }
+            | Command::Disconnect { .. }
+            | Command::ArrangeLogic { .. }
+    )
+}
+
+/// Replaces the objects `command` names by name in its `entity`, `ids` and `parent` with their
+/// IDs, as agents give them in the other tools: a text that no object of the project has as its
+/// ID and that is the name (any case, without the spaces around it) of exactly one object of
+/// the scene the command looks in (`to_scene` for copy_entities' parent). A name several objects
+/// there share is refused with their IDs and where each is; one no object there has stays, for
+/// the command's own refusal, which says where an object of that name is.
+fn resolve_names(command: &Command, project: &Project, default: &str) -> Result<Command, String> {
+    if !takes_names(command) {
+        return Ok(command.clone());
+    }
+    let mut value = serde_json::to_value(command).map_err(|e| e.to_string())?;
+    let own = value["scene"].as_str().unwrap_or(default).to_owned();
+    let mut changed = false;
+    for key in ["entity", "ids", "parent"] {
+        let looked_in = match command {
+            Command::CopyEntities { to_scene, .. } if key == "parent" => to_scene.as_str(),
+            _ => own.as_str(),
+        };
+        // A scene that does not exist is the command's own refusal.
+        let Ok(scene) = project.find_scene(looked_in, "scene") else {
+            continue;
+        };
+        let texts: Vec<&mut Json> = match value.get_mut(key) {
+            Some(Json::Array(items)) => items.iter_mut().collect(),
+            Some(text @ Json::String(_)) => vec![text],
+            _ => continue,
+        };
+        for text in texts {
+            let Json::String(given) = text else { continue };
+            let is_id = project.scenes.iter().any(|s| s.entity(given).is_some());
+            if is_id || scene.entities_named(given).is_empty() {
+                continue;
+            }
+            *given = scene.find_entity(given, key)?.id.clone();
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(command.clone());
+    }
+    serde_json::from_value(value).map_err(|e| e.to_string())
+}
+
 /// The scene of a command: `scene` by its ID or name, `default` when absent.
 fn scene_id(project: &Project, scene: &Option<Id>, default: &str) -> Result<Id, String> {
     scene_named(project, scene.as_deref().unwrap_or(default), "scene")
@@ -2137,10 +2195,55 @@ fn placed(project: &Project, command: &Command, default: &str, message: String) 
             "{} não existe na cena {} (a do comando); ele está na cena {}: passe scene",
             e.name, scene.name, other.name
         ),
-        None => format!(
-            "Objeto {id} não existe na cena {} (a do comando) nem em outra cena do projeto",
-            scene.name
-        ),
+        // A name: of objects of other scenes (see `resolve_names`), of one of this scene looked
+        // for in another, or given to a legacy node command, which takes IDs.
+        None => {
+            let legacy = !takes_names(command);
+            let (own, others): (Vec<_>, Vec<_>) = project
+                .scenes
+                .iter()
+                .flat_map(|s| s.entities_named(id).into_iter().map(move |e| (s, e)))
+                .partition(|(s, _)| s.id == scene.id);
+            match (own.as_slice(), others.as_slice()) {
+                ([(_, e)], _) if legacy => format!(
+                    "{} é o nome de um objeto da cena {}; os comandos de nós (legado) pedem o ID \
+                     dele: {}",
+                    e.name, scene.name, e.id
+                ),
+                ([(_, e)], _) => {
+                    format!("{} não existe na cena em que o comando o procura", e.name)
+                }
+                ([_, _, ..], _) => scene.find_entity(id, "entity").err().unwrap_or(message),
+                ([], [(other, e)]) if legacy => format!(
+                    "{} é o nome de um objeto da cena {}, e não da {} (a do comando); os comandos \
+                     de nós (legado) pedem o ID dele ({}) e a cena dele em scene",
+                    e.name, other.name, scene.name, e.id
+                ),
+                ([], [(other, e)]) => format!(
+                    "{} não existe na cena {} (a do comando); ele está na cena {}: passe scene",
+                    e.name, scene.name, other.name
+                ),
+                ([], []) => format!(
+                    "Objeto {id} não existe na cena {} (a do comando) nem em outra cena do projeto",
+                    scene.name
+                ),
+                ([], many) => format!(
+                    "{id} não existe na cena {} (a do comando); outras cenas têm {} objetos com \
+                     esse nome: {}{}",
+                    scene.name,
+                    many.len(),
+                    many.iter()
+                        .map(|(s, e)| format!("{} (cena {})", e.id, s.name))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if legacy {
+                        "; os comandos de nós (legado) pedem o ID e a cena do objeto em scene"
+                    } else {
+                        ": passe scene"
+                    }
+                ),
+            }
+        }
     }
 }
 fn check_entities(scene: &Scene, ids: &[Id]) -> Result<(), String> {

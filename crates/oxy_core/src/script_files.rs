@@ -232,9 +232,10 @@ fn check(
 /// Writes the script `path` with `text` when it loads (the other scripts of the folder serve its
 /// `require`; the file it replaces is not read, so a text fixes a file that is not UTF-8 or is
 /// too large), refusing it otherwise with nothing written. The first time the session changes a
-/// file that existed before it, the file as it was goes to its `.agente.bak` in the same
-/// transaction, and again if that copy was deleted; a file the session created keeps none. The
-/// first write of a project without this engine's types sets VS Code up too.
+/// file that existed before it, the file as it was goes to its copy under `.oxy/agente` (see
+/// [`persistence::script_backup_path`]: never in the `scripts` folder, which holds only scripts)
+/// in the same transaction, and again if that copy was deleted; a file the session created
+/// keeps none. The first write of a project without this engine's types sets VS Code up too.
 fn write(
     root: &Path,
     path: &str,

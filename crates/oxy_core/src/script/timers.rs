@@ -6,9 +6,10 @@
 //! to keep and is refused. Only on the object running, and only the values attributes hold
 //! (and nil) as data. The queue has room for so many calls and so much text (see
 //! `TimerRoom`): a timer past it is a limit, which stops the script on its object.
-//! `self:after(seconds, Module.f, ...)` calls `Module.f(self, ...)` once; `self:sequence(interval,
-//! Module.f, items)` calls it with each item, the first on the next step and each other one
-//! `interval` after the one before; the four answer the number `self:cancel` takes.
+//! `self:after(seconds, Module.f, ...)` calls `Module.f(self, ...)` once, as Esperar sem bloquear
+//! waits; `self:sequence(interval, Module.f, items)` calls it with the k-th item (k-1) ×
+//! `interval` after it was asked, as `self:after` would: the first on the next step, the others
+//! on the grid of a graph's waits. The four answer the number `self:cancel` takes.
 use super::ScriptArg;
 use super::handles::{self, MARK_OBJECT, decode};
 use super::host::{Limit, Shared, api, locate};
@@ -219,19 +220,23 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, methods: &Table) -> mlua::
                             "sequence precisa de uma lista de itens, como { 3, 2, 1 }".into()
                         );
                     };
+                    // The k-th item (k-1) × interval after now, as self:after would call it: the
+                    // first on the next step, the second interval after now (one step less after
+                    // the first), every other one interval after the one before.
+                    let step = f64::from(FIXED_DT);
                     let mut steps = VecDeque::new();
-                    for item in list(items, "sequence")? {
+                    for (k, item) in list(items, "sequence")?.into_iter().enumerate() {
                         steps.push_back(TimerStep {
-                            delay: interval,
+                            delay: match k {
+                                0 => step,
+                                1 => interval - step,
+                                _ => interval,
+                            },
                             function: function.clone(),
                             args: vec![value(&s, &item)?],
                         });
                     }
-                    // The first item on the next step, each one after it `interval` later.
-                    let first = steps.pop_front().map(|first| TimerStep {
-                        delay: f64::from(FIXED_DT),
-                        ..first
-                    });
+                    let first = steps.pop_front();
                     let then = Repeat::Steps(steps);
                     queue(lua, &s, runtime, &owner, &script, first, then)
                 })

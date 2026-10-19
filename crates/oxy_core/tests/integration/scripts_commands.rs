@@ -455,3 +455,170 @@ fn only_an_attached_script_declares_attributes() {
         ]
     );
 }
+
+/// Objects go by name in the commands, as in the other tools: attach_script and detach_script,
+/// the batches of oxy_simulate's setup and every command but the legacy node ones, which take
+/// IDs. A name two objects of the command's scene share is refused with their IDs, and one only
+/// other scenes have names those scenes; a name given to a node command says where its object
+/// is and that they take its ID.
+#[test]
+fn commands_take_objects_by_name_but_the_legacy_node_ones() {
+    let (mut project, id, sources) = door();
+    let mut lever = Entity::new("Alavanca", None);
+    lever.parent = Some(id.clone());
+    let mut twin = Entity::new("Alavanca", None);
+    twin.attributes.insert("Vida".into(), Value::Number(1.));
+    let (lever_id, twin_id) = (lever.id.clone(), twin.id.clone());
+    project.scenes[0].entities.extend([lever, twin]);
+    // Other scenes have a button, another door and two signs.
+    let mut menu = Scene::new("Menu", SceneKind::ThreeD);
+    let (button, sign) = (Entity::new("Botão", None), Entity::new("Placa", None));
+    let (button_id, sign_id) = (button.id.clone(), sign.id.clone());
+    menu.entities.extend([button, sign]);
+    let mut stage = Scene::new("Fase", SceneKind::TwoD);
+    let other_sign = Entity::new("Placa", None);
+    let other_sign_id = other_sign.id.clone();
+    stage
+        .entities
+        .extend([Entity::new("Porta", None), other_sign]);
+    project.scenes.extend([menu, stage]);
+    let commands = |json: serde_json::Value| command::parse(&json).unwrap();
+    let mut applied = project.clone();
+    apply(
+        &mut applied,
+        &sources,
+        &commands(serde_json::json!([
+            {"op": "attach_script", "entity": " porta ", "path": "scripts/girar.luau"},
+            {"op": "attach_script", "entity": "PORTA", "path": "scripts/numero.luau"},
+            {"op": "detach_script", "entity": "Porta", "path": "scripts/girar.luau"},
+            {"op": "update_entity", "entity": "Porta", "patch": {"visible": false}},
+            {"op": "duplicate_entities", "ids": ["Porta"]},
+        ])),
+    )
+    .unwrap();
+    assert_eq!(scripts(&applied, &id), ["scripts/numero.luau"]);
+    let door = entity(&applied, &id);
+    assert_eq!(door.attributes["Vida"], Value::Number(3.));
+    assert!(!door.visible);
+    // The door and the lever under it, copied.
+    assert_eq!(
+        applied.scenes[0].entities.len(),
+        project.scenes[0].entities.len() + 2
+    );
+    // The usual refusals, with nothing changed.
+    let refused = |command: serde_json::Value| {
+        let mut copy = project.clone();
+        let error = apply(&mut copy, &sources, &commands(command))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(copy, project);
+        error
+    };
+    let error = refused(serde_json::json!(
+        {"op": "attach_script", "entity": "Alavanca", "path": "scripts/girar.luau"}
+    ));
+    assert_eq!(
+        error,
+        format!(
+            "Comando 0 (attach_script, o 1º do lote): entity: há 2 objetos chamados \"Alavanca\" \
+             na cena Cena 2D; use o ID: {lever_id} (em Porta), {twin_id} (na raiz da cena). \
+             Nada foi alterado."
+        )
+    );
+    assert!(
+        refused(serde_json::json!({"op": "delete_entities", "ids": ["Porta", "alavanca"]}))
+            .contains("ids: há 2 objetos chamados \"alavanca\""),
+    );
+    assert_eq!(
+        refused(serde_json::json!({"op": "set_visible", "entity": "Botão", "visible": false})),
+        "Comando 0 (set_visible, o 1º do lote): Botão não existe na cena Cena 2D (a do comando); \
+         ele está na cena Menu: passe scene. Nada foi alterado."
+    );
+    assert_eq!(
+        refused(serde_json::json!(
+            {"op": "detach_script", "entity": "Janela", "path": "scripts/girar.luau"}
+        )),
+        "Comando 0 (detach_script, o 1º do lote): Objeto Janela não existe na cena Cena 2D (a do \
+         comando) nem em outra cena do projeto. Nada foi alterado."
+    );
+    // A name objects of other scenes share lists them.
+    assert_eq!(
+        refused(serde_json::json!({"op": "set_visible", "entity": "Placa", "visible": false})),
+        format!(
+            "Comando 0 (set_visible, o 1º do lote): Placa não existe na cena Cena 2D (a do \
+             comando); outras cenas têm 2 objetos com esse nome: {sign_id} (cena Menu), \
+             {other_sign_id} (cena Fase): passe scene. Nada foi alterado."
+        )
+    );
+    // The legacy node commands keep taking IDs, and say so, the object of the command's scene
+    // first (another scene has a door too), and never only "pass scene".
+    let node = |entity: &str, scene: Option<&str>| {
+        let mut node = serde_json::json!(
+            {"op": "add_node", "entity": entity, "operation": "event.scene_start"}
+        );
+        if let Some(scene) = scene {
+            node["scene"] = scene.into();
+        }
+        refused(node)
+    };
+    assert_eq!(
+        node("Porta", None),
+        format!(
+            "Comando 0 (add_node, o 1º do lote): Porta é o nome de um objeto da cena Cena 2D; os \
+             comandos de nós (legado) pedem o ID dele: {id}. Nada foi alterado."
+        )
+    );
+    assert_eq!(
+        node("Botão", None),
+        format!(
+            "Comando 0 (add_node, o 1º do lote): Botão é o nome de um objeto da cena Menu, e não \
+             da Cena 2D (a do comando); os comandos de nós (legado) pedem o ID dele ({button_id}) \
+             e a cena dele em scene. Nada foi alterado."
+        )
+    );
+    assert_eq!(
+        node("Botão", Some("Menu")),
+        format!(
+            "Comando 0 (add_node, o 1º do lote): Botão é o nome de um objeto da cena Menu; os \
+             comandos de nós (legado) pedem o ID dele: {button_id}. Nada foi alterado."
+        )
+    );
+    assert!(
+        node("alavanca", None)
+            .contains("entity: há 2 objetos chamados \"alavanca\" na cena Cena 2D; use o ID: ")
+    );
+    assert_eq!(
+        node("Placa", None),
+        format!(
+            "Comando 0 (add_node, o 1º do lote): Placa não existe na cena Cena 2D (a do comando); \
+             outras cenas têm 2 objetos com esse nome: {sign_id} (cena Menu), {other_sign_id} \
+             (cena Fase); os comandos de nós (legado) pedem o ID e a cena do objeto em scene. \
+             Nada foi alterado."
+        )
+    );
+    // In the scene the command names (copy_entities' parent, in the scene it copies to), and by
+    // the IDs as ever, which the node commands take with their scene.
+    let mut moved = project.clone();
+    apply(
+        &mut moved,
+        &sources,
+        &commands(serde_json::json!([
+            {"op": "set_visible", "scene": "Menu", "entity": "botão", "visible": false},
+            {"op": "copy_entities", "ids": [&twin_id], "to_scene": "Menu", "parent": "Botão"},
+            {"op": "set_parent", "ids": [&twin_id], "parent": "Porta"},
+            {
+                "op": "add_node", "scene": "Menu", "entity": &button_id,
+                "operation": "event.scene_start"
+            },
+        ])),
+    )
+    .unwrap();
+    let menu = &moved.scenes[1].entities;
+    assert!(!menu[0].visible);
+    assert_eq!(menu[0].graph.nodes.len(), 1);
+    assert_eq!(menu[2].parent.as_deref(), Some(menu[0].id.as_str()));
+    assert_eq!(
+        entity(&moved, &twin_id).parent.as_deref(),
+        Some(id.as_str())
+    );
+}
