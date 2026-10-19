@@ -12,16 +12,25 @@
 //! back. That table is emptied by the first table a call touches, so nothing of an earlier call
 //! is read from it.
 //!
-//! The surface scripts reach here is provisional (stage 2): the object's `name`, `attr`,
-//! `state`, `exists()`, `has_attribute(name)`, the timers of `timers` (`self:after(...)` and the
-//! others) and `send` of `messages`, both written with mlua and called from the table of
-//! methods. The API of game scripts comes with its own table.
+//! What an object has for scripts:
+//! - `obj.name`: its name, read only;
+//! - `obj.attr`: its attributes, `obj.attr.Vida` (nil when it lacks one) and `obj.attr.Vida = 3`
+//!   (it must have it, with a value of the same type; a Vetor2 takes a vector's x and y);
+//! - `obj.position` and `obj.world_position`: where it stands, in metres, as a vector: in its
+//!   parent's axes, as Properties shows it, and its pivot in the world (a 3D character's
+//!   origin); writing one moves it as Mover / girar / escalar objeto does, refusing what that
+//!   refuses (a 3D character, an object a playing clip poses);
+//! - `obj:exists()` and `obj:has_attribute(name)`;
+//! - `self.state`, the memory of the script running (see `memory`);
+//! - the timers of `timers` (`self:after(...)` and the others) and `obj:send(name, value)` of
+//!   `messages`, written with mlua and called from the table of methods.
 use super::errors::closest;
 use super::host::{Limit, Phase, Shared, door, locate_raw, peek};
 use super::memory::{self, Key, Memory, ScriptValue};
-use super::{messages, timers};
+use super::{messages, timers, value_kind};
 use crate::document::Value;
-use crate::runtime::Runtime;
+use crate::runtime::{Runtime, TransformPart, TransformSpace};
+use glam::Vec3;
 use mlua::{Function, LightUserData, Lua, Table, ffi};
 use std::ffi::CStr;
 use std::os::raw::{c_int, c_void};
@@ -74,10 +83,12 @@ pub(crate) fn collision(runtime: &Runtime, a: &str, b: &str) -> String {
     )
 }
 
-const OBJECT_MEMBERS: [&str; 11] = [
+const OBJECT_MEMBERS: [&str; 13] = [
     "name",
     "attr",
     "state",
+    "position",
+    "world_position",
     "exists",
     "has_attribute",
     "after",
@@ -215,15 +226,12 @@ impl In {
     }
 }
 
-fn value_kind(value: &Value) -> &'static str {
-    match value {
-        Value::Number(_) => "número",
-        Value::Text(_) => "texto",
-        Value::Bool(_) => "booleano",
-        Value::Vector3(_) => "vetor",
-        Value::Vector2(_) => "vetor 2D",
-        Value::Object(_) => "objeto",
-        Value::Surface(_) => "superfície",
+/// The space a position property reads and writes in.
+fn position_space(name: &[u8]) -> Option<TransformSpace> {
+    match name {
+        b"position" => Some(TransformSpace::Local),
+        b"world_position" => Some(TransformSpace::World),
+        _ => None,
     }
 }
 
@@ -254,6 +262,17 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
                     let handles = shared.handles.borrow();
                     let id = handles.get(&key).ok_or_else(gone)?;
                     Out::Text(runtime.entity(id).ok_or_else(gone)?.name.clone())
+                }
+                b"position" | b"world_position" => {
+                    let space = position_space(name).expect("a position");
+                    let runtime = door(shared)?;
+                    let handles = shared.handles.borrow();
+                    let id = handles.get(&key).ok_or_else(gone)?;
+                    if runtime.entity(id).is_none() {
+                        return Err(gone());
+                    }
+                    let (position, _) = runtime.object_pose(id, space)?;
+                    Out::Vector(position.to_array())
                 }
                 other => match method(other) {
                     Some((name, _)) => Out::Method(name),
@@ -413,6 +432,9 @@ fn not_a_method(name: &[u8]) -> String {
 }
 
 fn newindex(shared: &Shared, mark: u64, key: u64, name: &[u8], value: In) -> Result<(), String> {
+    if let (MARK_OBJECT, Some(space)) = (mark, position_space(name)) {
+        return write_position(shared, key, name, space, value);
+    }
     let name = String::from_utf8_lossy(name);
     match mark {
         MARK_OBJECT if OBJECT_MEMBERS.contains(&name.as_ref()) => {
@@ -460,6 +482,38 @@ fn newindex(shared: &Shared, mark: u64, key: u64, name: &[u8], value: In) -> Res
     runtime
         .set_attribute(id, &name, new)
         .map_err(|e| format!("atributo {name}: {e}"))
+}
+
+/// `obj.position = v` or `obj.world_position = v`: the object moves there, as Mover / girar /
+/// escalar objeto moves it.
+fn write_position(
+    shared: &Shared,
+    key: u64,
+    name: &[u8],
+    space: TransformSpace,
+    value: In,
+) -> Result<(), String> {
+    let name = String::from_utf8_lossy(name);
+    let In::Vector(position) = value else {
+        return Err(format!(
+            "{name} recebe um vetor, como vector.create(0, 1, 0), não {}",
+            value.kind()
+        ));
+    };
+    let runtime = door(shared)?;
+    let handles = shared.handles.borrow();
+    let id = handles.get(&key).ok_or_else(gone)?;
+    if runtime.entity(id).is_none() {
+        return Err(gone());
+    }
+    runtime.write_transform(
+        id,
+        TransformPart::Position,
+        space,
+        Vec3::from(position),
+        false,
+        false,
+    )
 }
 
 fn run(

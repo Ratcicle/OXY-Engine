@@ -393,7 +393,8 @@ impl Editor {
             "catalog" => query::catalog_query(params),
             "validate" => {
                 self.agent_scene(params)?;
-                Ok(query::validation(&self.state.project))
+                let root = self.path.as_deref().and_then(std::path::Path::parent);
+                Ok(query::validation_in(&self.state.project, root))
             }
             "apply" => {
                 let commands = command::parse(&params["commands"])?;

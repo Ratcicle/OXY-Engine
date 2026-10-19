@@ -157,6 +157,7 @@ fn the_globals_are_the_engines_list_read_only_and_frozen() {
         "_G:table",
         "_VERSION:string",
         "assert:function",
+        "audio:table",
         "bit32:table",
         "coroutine:table",
         "error:function",
@@ -182,6 +183,7 @@ fn the_globals_are_the_engines_list_read_only_and_frozen() {
         "typeof:function",
         "unpack:function",
         "utf8:table",
+        "vars:table",
         "vector:table",
         "warn:function",
         "xpcall:function",
@@ -194,11 +196,13 @@ fn the_globals_are_the_engines_list_read_only_and_frozen() {
         .load(
             "return tostring(table.isfrozen(getmetatable(vector.create(0, 0, 0)))) .. ' ' .. \
              tostring(table.isfrozen(getmetatable(''))) .. ' ' .. tostring(table.isfrozen(_G)) \
-             .. ' ' .. tostring(table.isfrozen(math)) .. ' ' .. tostring(table.isfrozen(string))",
+             .. ' ' .. tostring(table.isfrozen(math)) .. ' ' .. tostring(table.isfrozen(string)) \
+             .. ' ' .. tostring(table.isfrozen(audio)) .. ' ' .. tostring(table.isfrozen(vars)) \
+             .. ' ' .. tostring(getmetatable(audio))",
         )
         .eval()
         .unwrap();
-    assert_eq!(frozen, "true true true true true");
+    assert_eq!(frozen, "true true true true true true true travado");
     let handles = host.lua().type_metatable::<LightUserData>().unwrap();
     assert!(handles.is_readonly());
     // A function scripts call, kept and called from Rust outside a call, refuses.

@@ -4,6 +4,25 @@
 //! project, logs and agents, by its path from the project's folder with `/`, as
 //! `scripts/porta.luau`. Values per object stay in its attributes.
 //!
+//! What game scripts reach, by names in English with underscores (decision Q5; objects,
+//! attributes, sounds, actions and variables keep the names the person gave them):
+//! - the callbacks of [`Callback`], `self` being the object: `on_start(self)`,
+//!   `on_area_enter(self, other)`, `on_input(self, action, phase)` (the action's name and
+//!   `"pressed"` or `"released"`) and the others;
+//! - objects (`handles`): `obj.name`, `obj.attr`, `obj.position`, `obj.world_position`,
+//!   `obj:exists()`, `obj:has_attribute(name)`, `self.state` and `obj:send(name, value)`;
+//! - timers (`timers`): `self:after`, `self:every`, `self:sequence`, `self:schedule` and
+//!   `self:cancel`;
+//! - the global tables of `api`: `audio.play(name, { volume = …, audience = obj })`,
+//!   `vars.get(name, key?)` and `vars.set(name, value, key?)`;
+//! - `print` and `warn`, which log the object's name, the text and the script line.
+//!
+//! A module may declare `Module.attributes = { Velocidade = 90 }`, the attributes attaching it
+//! gives an object that lacks them, with those defaults (decision Q6; see
+//! [`declared_attributes`]), and `Module.state`, its memory. Only an attached script's
+//! `Module.attributes` is read, so a table of content that is only required may hold an
+//! `attributes` of its own.
+//!
 //! The host runs them in Luau through mlua (`host`, `sandbox`, `load`, `handles`), one VM per
 //! `Runtime`, created only when its scene attaches a script. The VM keeps the compiled modules,
 //! frozen, and nothing of the game, which lives in the engine's state: a module's functions
@@ -26,11 +45,12 @@
 //!   raised after the Rust values are dropped. The VM is created with
 //!   `catch_rust_panics(false)`, so a script's `pcall` never hides a panic, and each door marks
 //!   the host when it catches one (`coroutine.resume` still swallows them).
-use crate::document::{Project, Value};
+use crate::document::{Id, Project, Value};
 use crate::input_actions::every_entity;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
+mod api;
 mod bytecode;
 mod errors;
 mod handles;
@@ -180,9 +200,9 @@ pub struct ScriptCheck {
 }
 
 /// Compiles `source` as the script `path` (`scripts/porta.luau`) and checks it the way loading
-/// does before running anything: syntax and top-level locals some function writes.
-/// Provisional: the lint of names and the checks of the tools build on it in a later stage;
-/// only tests call it now.
+/// does before running anything: syntax and top-level locals some function writes. The export
+/// refuses a script it refuses. Provisional: the lint of names and the checks of the tools
+/// build on it in a later stage.
 #[doc(hidden)]
 pub fn check(path: &str, source: &str) -> Result<ScriptCheck, ScriptError> {
     let (_, report) = load::check(path, source)?;
@@ -309,24 +329,143 @@ pub fn any_attached(project: &Project) -> bool {
     every_entity(project).any(|(_, e)| !e.scripts.is_empty())
 }
 
+/// A script an object attaches that the project's folder lacks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissingScript {
+    /// The object's ID, which tells two objects of one name apart; never shown.
+    pub object: Id,
+    /// The object as messages name it: a model's piece after its model.
+    pub name: String,
+    pub path: String,
+}
+
+impl std::fmt::Display for MissingScript {
+    /// `Porta: o script scripts/porta.luau não existe na pasta do projeto`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: o script {} não existe na pasta do projeto",
+            self.name, self.path
+        )
+    }
+}
+
+/// The scripts the objects of `project` attach, in scenes and models, that `exists` does not
+/// find, in the order of the scenes, the models and their objects.
+pub fn missing(project: &Project, exists: impl Fn(&str) -> bool) -> Vec<MissingScript> {
+    every_entity(project)
+        .flat_map(|(holder, e)| {
+            let name = if holder.model {
+                format!("Modelo {holder}, {}", e.name)
+            } else {
+                e.name.clone()
+            };
+            let exists = &exists;
+            e.scripts
+                .iter()
+                .filter(move |s| !exists(&s.path))
+                .map(move |s| MissingScript {
+                    object: e.id.clone(),
+                    name: name.clone(),
+                    path: s.path.clone(),
+                })
+        })
+        .collect()
+}
+
+/// Objects a line about one missing file names before it counts the rest.
+const OBJECTS_LISTED: usize = 3;
+
+/// `missing` told once per file, in the order the files first come: the objects that attach
+/// it, the first few by name and then how many more, and its path, as `Porta e Porta 2: o
+/// script scripts/porta.luau não existe na pasta do projeto`; with how many objects attach it.
+/// One file shared by many objects is one line.
+pub fn missing_by_file(missing: &[MissingScript]) -> Vec<(String, usize)> {
+    let mut files: Vec<(&str, Vec<&str>)> = Vec::new();
+    for found in missing {
+        match files.iter_mut().find(|(path, _)| *path == found.path) {
+            Some((_, names)) => names.push(&found.name),
+            None => files.push((&found.path, vec![&found.name])),
+        }
+    }
+    files
+        .into_iter()
+        .map(|(path, names)| {
+            let objects = match names.as_slice() {
+                [one] => (*one).to_owned(),
+                [first @ .., last] if names.len() <= OBJECTS_LISTED => {
+                    format!("{} e {last}", first.join(", "))
+                }
+                _ => format!(
+                    "{} e mais {} objetos",
+                    names[..OBJECTS_LISTED].join(", "),
+                    names.len() - OBJECTS_LISTED
+                ),
+            };
+            (
+                format!("{objects}: o script {path} não existe na pasta do projeto"),
+                names.len(),
+            )
+        })
+        .collect()
+}
+
 /// The first script an object of `project` attaches, in a scene or a model, that `exists` does
 /// not find: the object as messages name it (a model's piece after its model) and the path.
-pub fn first_missing(project: &Project, exists: impl Fn(&str) -> bool) -> Option<(String, &str)> {
-    every_entity(project).find_map(|(holder, e)| {
-        let script = e.scripts.iter().find(|s| !exists(&s.path))?;
-        let object = if holder.model {
-            format!("Modelo {holder}, {}", e.name)
-        } else {
-            e.name.clone()
-        };
-        Some((object, script.path.as_str()))
-    })
+pub fn first_missing(project: &Project, exists: impl Fn(&str) -> bool) -> Option<(String, String)> {
+    missing(project, exists)
+        .into_iter()
+        .next()
+        .map(|found| (found.name, found.path))
+}
+
+/// The attributes a script declares in `Module.attributes`: each one's name and default value,
+/// by name.
+pub type Declared = Vec<(String, Value)>;
+
+/// What `Module.attributes` declares in each of the scripts `paths` of `sources` (decision Q6),
+/// or why it cannot be read: the script does not load, or the declaration is not a table of
+/// defaults. The scripts load in a VM of their own, as the runtime loads them, nothing of the
+/// world reached.
+pub fn declared_attributes<'a>(
+    sources: &ScriptSources,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Vec<(&'a str, Result<Declared, ScriptError>)> {
+    let host = ScriptHost::new(std::sync::Arc::new(sources.clone()));
+    paths
+        .into_iter()
+        .map(|path| {
+            let declared = match &host {
+                Ok(host) => host.load(path).and_then(|module| {
+                    module
+                        .attributes
+                        .clone()
+                        .map_err(|message| ScriptError::new(path, 0, message))
+                }),
+                Err(error) => Err(ScriptError::new(path, 0, error.clone())),
+            };
+            (path, declared)
+        })
+        .collect()
+}
+
+/// How messages name the type of `value`: "número", "texto", "booleano"…
+pub(crate) fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Number(_) => "número",
+        Value::Text(_) => "texto",
+        Value::Bool(_) => "booleano",
+        Value::Vector3(_) => "vetor",
+        Value::Vector2(_) => "vetor 2D",
+        Value::Object(_) => "objeto",
+        Value::Surface(_) => "superfície",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{Entity, Primitive, validate_project};
+    use crate::document::{Entity, Primitive, new_id, validate_project};
 
     #[test]
     fn paths_are_normalized_into_the_scripts_folder() {
@@ -449,15 +588,71 @@ mod tests {
         assert_eq!(first_missing(&project, |_| true), None);
         assert_eq!(
             first_missing(&project, |_| false),
-            Some(("Peça".to_owned(), "scripts/peça.luau"))
+            Some(("Peça".to_owned(), "scripts/peça.luau".to_owned()))
         );
+        // Every one, the scene's objects before the models' pieces.
+        let all = missing(&project, |_| false);
+        assert_eq!(
+            all.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [
+                "Peça: o script scripts/peça.luau não existe na pasta do projeto",
+                "Modelo Bloco, Peça: o script scripts/peça.luau não existe na pasta do projeto",
+            ]
+        );
+        assert_eq!(all[0].object, id);
         project.scenes[0].entities.clear();
         assert_eq!(
             first_missing(&project, |path| path != "scripts/peça.luau"),
-            Some(("Modelo Bloco, Peça".to_owned(), "scripts/peça.luau"))
+            Some((
+                "Modelo Bloco, Peça".to_owned(),
+                "scripts/peça.luau".to_owned()
+            ))
         );
         project.assets.clear();
         assert!(!any_attached(&project));
+    }
+
+    #[test]
+    fn missing_scripts_are_told_once_per_file_naming_a_few_objects() {
+        let found = |name: &str, path: &str| MissingScript {
+            object: new_id(),
+            name: name.into(),
+            path: path.into(),
+        };
+        let mut missing = vec![
+            found("Porta", "scripts/porta.luau"),
+            found("Gatilho 1", "scripts/gatilho.luau"),
+            found("Porta 2", "scripts/porta.luau"),
+            found("Chave", "scripts/chave.luau"),
+        ];
+        missing.extend((2..=12).map(|n| found(&format!("Gatilho {n}"), "scripts/gatilho.luau")));
+        assert_eq!(
+            missing_by_file(&missing),
+            [
+                (
+                    "Porta e Porta 2: o script scripts/porta.luau não existe na pasta do projeto"
+                        .to_owned(),
+                    2
+                ),
+                (
+                    "Gatilho 1, Gatilho 2, Gatilho 3 e mais 9 objetos: o script \
+                     scripts/gatilho.luau não existe na pasta do projeto"
+                        .to_owned(),
+                    12
+                ),
+                (
+                    "Chave: o script scripts/chave.luau não existe na pasta do projeto".to_owned(),
+                    1
+                ),
+            ]
+        );
+        assert_eq!(missing_by_file(&missing[3..4])[0].0, missing[3].to_string());
+        let three = [&missing[1], &missing[4], &missing[5]].map(Clone::clone);
+        assert_eq!(
+            missing_by_file(&three)[0].0,
+            "Gatilho 1, Gatilho 2 e Gatilho 3: o script scripts/gatilho.luau não existe na pasta \
+             do projeto"
+        );
     }
 
     #[test]

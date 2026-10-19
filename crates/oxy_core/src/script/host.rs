@@ -113,6 +113,10 @@ pub(crate) struct Module {
     pub unknown: Vec<(String, u32, Option<&'static str>)>,
     /// What `Module.state` declares; none when the script keeps no memory.
     pub state: Option<Memory>,
+    /// What `Module.attributes` declares, each attribute's name and default value by name, or
+    /// why it is no such declaration: read only where the script is attached, so a module only
+    /// required may keep a table of its own under that name.
+    pub attributes: Result<super::Declared, String>,
 }
 
 impl std::fmt::Debug for Module {

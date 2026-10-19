@@ -330,14 +330,23 @@ pub fn model_parts(project: &Project, model: &str, page: Page) -> Result<Json, S
 /// there is one, and `warnings` when the game would ignore or stop on something (see
 /// [`crate::command::warnings`]).
 pub fn validation(project: &Project) -> Json {
+    validation_in(project, None)
+}
+
+/// [`validation`] of the project saved in the folder `root`, whose warnings also name the
+/// scripts its objects attach that the folder lacks (see `persistence::script_warnings`).
+pub fn validation_in(project: &Project, root: Option<&std::path::Path>) -> Json {
     let mut result = match validate_project(project) {
         Ok(()) => json!({"valid": true}),
         Err(error) => json!({"valid": false, "error": error}),
     };
-    let warnings: Vec<String> = crate::command::warnings(project)
+    let mut warnings: Vec<String> = crate::command::warnings(project)
         .into_iter()
         .map(|w| w.message)
         .collect();
+    if let Some(root) = root {
+        warnings.extend(crate::persistence::script_warnings(project, root));
+    }
     if !warnings.is_empty() {
         result["warnings"] = json!(warnings);
     }

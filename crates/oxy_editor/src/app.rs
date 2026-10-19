@@ -40,6 +40,7 @@ use oxy_core::{
     painting::PaintImage,
     persistence, random,
     runtime::{Runtime, RuntimeOptions},
+    script::ScriptSources,
     texture_cache::TextureCache,
 };
 use oxy_render::{CameraState, Renderer};
@@ -555,6 +556,12 @@ impl Editor {
                     self.log(format!("Projeto convertido em memória do formato {version}. O original continua intacto. Ao salvar, será criado um backup identificado; versões antigas da engine não abrirão o novo formato."));
                     self.notice_last(true);
                 }
+                // A script renamed or deleted outside OXY: the project opens, the test and the
+                // export wait for it.
+                for warning in persistence::script_warnings(&self.state.project, &self.root()) {
+                    self.log(warning);
+                    self.notice_last(true);
+                }
             }
             Err(e) => {
                 self.log(format!("Não foi possível abrir: {e}"));
@@ -691,6 +698,10 @@ impl Editor {
                 self.renderer.release_saved_texture_pixels();
                 self.play.game_ui.release_saved_texture_pixels();
                 self.log(format!("{origin}Salvo: {}", path.display()));
+                for warning in persistence::script_warnings(&self.state.project, &self.root()) {
+                    self.log(warning);
+                    self.notice_last(false);
+                }
                 true
             }
             Err(e) => {
@@ -906,7 +917,12 @@ impl Editor {
         // Every test draws differently, as the exported game does. The low half of a v4 UUID
         // has its fixed bits above the 53 kept.
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
-        let options = self.play.options(seed);
+        let scripts = test_scripts(&self.state.project, self.path.as_deref())
+            .map_err(|error| format!("Não é possível jogar: {error}."))?;
+        let options = RuntimeOptions {
+            scripts: std::sync::Arc::new(scripts),
+            ..self.play.options(seed)
+        };
         let runtime = Runtime::with_options(&self.state.project, scene, options)?;
         self.play.seed = Some(seed);
         self.play.previous_tab = self.tab;
@@ -1735,6 +1751,20 @@ pub fn vector3(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64
     });
 }
 
+/// The scripts a test of `project`, saved at `path`, runs: those of its folder, every one its
+/// objects attach among them (see `persistence::load_scripts_to_run`). A project never saved
+/// has no folder for them.
+fn test_scripts(project: &Project, path: Option<&Path>) -> Result<ScriptSources, String> {
+    match path.and_then(Path::parent) {
+        Some(root) => persistence::load_scripts_to_run(project, root),
+        None if oxy_core::script::any_attached(project) => Err(
+            "o projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; salve-o antes"
+                .into(),
+        ),
+        None => Ok(ScriptSources::default()),
+    }
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod native_perf;
 
@@ -1820,6 +1850,58 @@ mod play_tests {
         jogar(&mut play);
         play.forget_project();
         assert_eq!(play.mixer.voice_count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_test_runs_the_scripts_of_the_folder_and_waits_for_a_missing_one() {
+        let root = std::env::temp_dir().join(format!("oxy-editor-scripts-{}", new_id()));
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(
+            root.join("scripts/contador.luau"),
+            "local M = {}\nfunction M.on_start(self) self.attr.Vezes += 1 end\nreturn M\n",
+        )
+        .unwrap();
+        let mut project = Project::new("Scripts");
+        let mut counter = Entity::new("Contador", None);
+        counter.attributes.insert("Vezes".into(), Value::Number(0.));
+        counter.scripts = vec![oxy_core::script::ScriptRef::new("scripts/contador.luau")];
+        let id = counter.id.clone();
+        project.scenes[0].entities.push(counter);
+        let path = root.join(persistence::PROJECT_FILE);
+        let play = PlaySession::default();
+        // Jogar: the test runs what the folder holds.
+        let scripts = test_scripts(&project, Some(&path)).unwrap();
+        let options = RuntimeOptions {
+            scripts: std::sync::Arc::new(scripts),
+            ..play.options(7)
+        };
+        let runtime = Runtime::with_options(&project, &project.start_scene, options).unwrap();
+        assert_eq!(
+            runtime.scene().entity(&id).unwrap().attributes["Vezes"],
+            Value::Number(1.)
+        );
+        // A script taken away outside OXY stops the next test until it is back.
+        std::fs::remove_file(root.join("scripts/contador.luau")).unwrap();
+        assert_eq!(
+            test_scripts(&project, Some(&path)).unwrap_err(),
+            "Contador: o script scripts/contador.luau não existe na pasta do projeto; restaure o \
+             arquivo ou remova o script do objeto"
+        );
+        // A project never saved has no folder for scripts; without any, it plays as always.
+        assert!(
+            test_scripts(&project, None)
+                .unwrap_err()
+                .contains("ainda não foi salvo")
+        );
+        project.scenes[0].entities[0].scripts.clear();
+        assert!(test_scripts(&project, None).unwrap().files.is_empty());
+        assert!(
+            test_scripts(&project, Some(&path))
+                .unwrap()
+                .files
+                .is_empty()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

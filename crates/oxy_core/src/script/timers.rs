@@ -5,8 +5,10 @@
 //! inside the VM, so a timer outlives a VM made anew; a function made on the spot has no name
 //! to keep and is refused. Only on the object running, and only the values attributes hold
 //! (and nil) as data. The queue has room for so many calls and so much text (see
-//! `TimerRoom`): a timer past it is a limit, which stops the script on its object. The
-//! surface is provisional until the API table of a later stage.
+//! `TimerRoom`): a timer past it is a limit, which stops the script on its object.
+//! `self:after(seconds, Module.f, ...)` calls `Module.f(self, ...)` once; `self:sequence(interval,
+//! Module.f, items)` calls it with each item, the first on the next step and each other one
+//! `interval` after the one before; the four answer the number `self:cancel` takes.
 use super::ScriptArg;
 use super::handles::{self, MARK_OBJECT, decode};
 use super::host::{Limit, Shared, api, locate};

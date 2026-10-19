@@ -6,6 +6,7 @@ use super::errors::{ScriptError, closest, describe};
 use super::host::{Module, Phase, Shared, suspended_error};
 use super::sandbox::compiler;
 use super::{Callback, Callbacks, LATER_CALLBACKS, bytecode, memory};
+use crate::document::Value;
 use mlua::chunk::ChunkMode;
 use mlua::{Function, Lua, Table, Value as LuaValue, ffi};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -136,6 +137,17 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
         }
         Err(e) => return Err(describe(&e, path, 0)),
     };
+    // Never refused here: only where the script is attached is it a declaration.
+    let attributes = match table.raw_get::<LuaValue>("attributes") {
+        Ok(LuaValue::Nil) => Ok(Vec::new()),
+        Ok(LuaValue::Table(declared)) => attributes(&declared),
+        Ok(_) => Err(
+            "Modulo.attributes precisa ser uma tabela com o valor padrão de cada \
+             atributo, como { Velocidade = 90 }"
+                .into(),
+        ),
+        Err(e) => Err(describe(&e, path, 0).message),
+    };
     let functions = table
         .pairs::<LuaValue, LuaValue>()
         .filter_map(|pair| match pair.ok()? {
@@ -172,7 +184,62 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
         callbacks,
         unknown,
         state,
+        attributes,
     }))
+}
+
+/// What `Module.attributes` declares (decision Q6): each attribute's name and the default value
+/// attaching the script gives an object that lacks it, by name. A default is a number, a text, a
+/// boolean or a vector (a Vetor3 attribute); its type is the attribute's.
+fn attributes(declared: &Table) -> Result<super::Declared, String> {
+    let mut found = BTreeMap::new();
+    for pair in declared.pairs::<LuaValue, LuaValue>() {
+        let (key, value) = pair.map_err(|e| describe(&e, "", 0).message)?;
+        let LuaValue::String(name) = &key else {
+            return Err(
+                "Modulo.attributes: os nomes dos atributos são textos, como { Velocidade = 90 }"
+                    .into(),
+            );
+        };
+        let name = name
+            .to_str()
+            .map_err(|_| "Modulo.attributes: nome de atributo que não é UTF-8")?
+            .to_owned();
+        if name.trim().is_empty() || name.trim() != name {
+            return Err(format!(
+                "Modulo.attributes: \"{name}\" não serve de nome de atributo (vazio ou com espaços \
+                 nas pontas)"
+            ));
+        }
+        let default = match value {
+            LuaValue::Boolean(b) => Value::Bool(b),
+            LuaValue::Number(n) if n.is_finite() => Value::Number(n),
+            LuaValue::Integer(i) => Value::Number(i as f64),
+            LuaValue::String(text) => Value::Text(
+                text.to_str()
+                    .map_err(|_| format!("Modulo.attributes.{name}: texto que não é UTF-8"))?
+                    .to_owned(),
+            ),
+            LuaValue::Vector(v) if [v.x(), v.y(), v.z()].iter().all(|c| c.is_finite()) => {
+                Value::Vector3([v.x(), v.y(), v.z()])
+            }
+            other => {
+                let kind = match other {
+                    LuaValue::Number(_) | LuaValue::Vector(_) => "infinito ou NaN",
+                    LuaValue::Table(_) => "uma tabela",
+                    LuaValue::Function(_) => "uma função",
+                    LuaValue::LightUserData(_) => "um objeto",
+                    _ => "esse valor",
+                };
+                return Err(format!(
+                    "Modulo.attributes.{name}: {kind} não serve de valor padrão; use um número, um \
+                     texto, um booleano ou um vetor"
+                ));
+            }
+        };
+        found.insert(name, default);
+    }
+    Ok(found.into_iter().collect())
 }
 
 /// A module's top running: the host "loading" and the module on the stack of requires, both

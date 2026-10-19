@@ -5,8 +5,7 @@
 //! phase. In a step a script sends at most [`MAX_MESSAGES`] from one object, past which it stops
 //! there, as past any limit, and the scene's scripts send at most [`MAX_SCENE_MESSAGES`], past
 //! which a send fails without stopping anyone: a script that floods stops, the others do not. The
-//! graph sends and hears none (it is frozen). The surface is provisional until the API table of
-//! a later stage.
+//! graph sends and hears none (it is frozen).
 use super::handles::{self, MARK_OBJECT};
 use super::host::{Limit, Shared, api, locate};
 use super::memory::{self, ScriptValue};

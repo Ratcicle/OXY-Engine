@@ -58,8 +58,12 @@ fn door() -> Project {
     project
 }
 
+/// What a missing script warns of, after the object and the file.
+const STOPS: &str = "; jogar e exportar ficam recusados até que você restaure o arquivo ou remova \
+                     o script do objeto";
+
 #[test]
-fn a_missing_attached_script_is_reported_by_name_and_keeps_the_project_open() {
+fn a_missing_attached_script_opens_and_saves_with_a_warning_and_stops_the_test() {
     let root = folder("ausentes");
     let file = root.join(persistence::PROJECT_FILE);
     let project = door();
@@ -68,10 +72,28 @@ fn a_missing_attached_script_is_reported_by_name_and_keeps_the_project_open() {
             .err()
             .map(|error| error.to_string())
     };
-    // The project saves and opens without its files; the check names each, in order.
+    // The project saves and opens without its files, normally and lazily, with a warning for
+    // each, by the object's name and the file; a test that would run them is refused.
     persistence::save_project(&file, &project).unwrap();
     assert_eq!(files(&root), ["project.oxy.json"]);
     assert_eq!(persistence::load_project(&file).unwrap(), project);
+    assert_eq!(persistence::load_project_lazy(&file).unwrap(), project);
+    assert_eq!(
+        persistence::script_warnings(&project, &root),
+        [
+            format!("Porta: o script scripts/porta.luau não existe na pasta do projeto{STOPS}"),
+            format!("Porta: o script scripts/comum/som.luau não existe na pasta do projeto{STOPS}"),
+            format!(
+                "Modelo Bloco, Peça: o script scripts/comum/peça.luau não existe na pasta do \
+                 projeto{STOPS}"
+            ),
+        ]
+    );
+    assert_eq!(
+        persistence::load_scripts_to_run(&project, &root).unwrap_err(),
+        "Porta: o script scripts/porta.luau não existe na pasta do projeto; restaure o arquivo ou \
+         remova o script do objeto"
+    );
     let error = persistence::validate_script_files(&project, &root).unwrap_err();
     assert!(matches!(error, PersistenceError::ScriptMissing { .. }));
     assert_eq!(
@@ -97,8 +119,11 @@ fn a_missing_attached_script_is_reported_by_name_and_keeps_the_project_open() {
     );
     write(&root, "scripts/comum/peça.luau", "return {}\n");
     assert_eq!(missing(&root), None);
-    // A script renamed outside OXY: the project still opens and saves every way, and the check
-    // says which reference broke.
+    assert!(persistence::script_warnings(&project, &root).is_empty());
+    let sources = persistence::load_scripts_to_run(&project, &root).unwrap();
+    assert_eq!(sources.files.len(), 3);
+    // A script renamed outside OXY: the project still opens and saves every way, and the
+    // warning says which reference broke.
     std::fs::rename(
         root.join("scripts/porta.luau"),
         root.join("scripts/Porta da frente.luau"),
@@ -114,12 +139,53 @@ fn a_missing_attached_script_is_reported_by_name_and_keeps_the_project_open() {
         missing(&root).as_deref(),
         Some("Porta: o script scripts/porta.luau não existe na pasta do projeto")
     );
+    assert_eq!(
+        persistence::script_warnings(&project, &root),
+        [format!(
+            "Porta: o script scripts/porta.luau não existe na pasta do projeto{STOPS}"
+        )]
+    );
+    assert!(persistence::load_scripts_to_run(&project, &root).is_err());
+    // An edit warns of what it adds: a copy of the door misses the same script.
+    let known = persistence::missing_scripts(&project, &root).unwrap();
+    let mut copied = project.clone();
+    let door_id = copied.scenes[0].entities[0].id.clone();
+    let copy = copied.scenes[0].duplicate_subtree(&door_id).unwrap();
+    let copy_name = copied.scenes[0].entity(&copy).unwrap().name.clone();
+    assert_eq!(
+        persistence::added_script_warnings(&known, &copied, &root),
+        [format!(
+            "{copy_name}: o script scripts/porta.luau não existe na pasta do projeto{STOPS}"
+        )]
+    );
+    assert!(persistence::added_script_warnings(&known, &project, &root).is_empty());
+    // One file many objects attach is one line, naming them.
+    let both =
+        format!("Porta e {copy_name}: o script scripts/porta.luau não existe na pasta do projeto");
+    assert_eq!(
+        persistence::script_warnings(&copied, &root),
+        [format!(
+            "{both}; jogar e exportar ficam recusados até que você restaure o arquivo ou remova \
+             o script dos objetos"
+        )]
+    );
+    assert_eq!(
+        persistence::load_scripts_to_run(&copied, &root).unwrap_err(),
+        format!("{both}; restaure o arquivo ou remova o script dos objetos")
+    );
     // Without attached scripts, the folder is not even looked for.
     let nowhere = root.join("sem pasta");
     let mut graph_only = project.clone();
     graph_only.scenes[0].entities[0].scripts.clear();
     graph_only.assets.clear();
     persistence::validate_script_files(&graph_only, &nowhere).unwrap();
+    assert!(persistence::script_warnings(&graph_only, &nowhere).is_empty());
+    assert!(
+        persistence::load_scripts_to_run(&graph_only, &nowhere)
+            .unwrap()
+            .files
+            .is_empty()
+    );
     assert!(missing(&nowhere).is_some());
     std::fs::remove_dir_all(root).unwrap();
 }

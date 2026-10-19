@@ -2674,10 +2674,9 @@ pub fn run(
     run_with_scripts(project, Default::default(), request)
 }
 
-/// `run` with the project's scripts (see `persistence::load_scripts`), which its objects run;
-/// the replay check's twin runs them in a VM of its own. Provisional: the tools pass the
-/// scripts of the project's folder in a later stage of 0.7.
-#[doc(hidden)]
+/// `run` with the project's scripts (see `persistence::load_scripts`), which its objects run and
+/// the setup's attach_script attaches; the replay check's twin runs them in a VM of its own.
+/// The exported game's check runs this way.
 pub fn run_with_scripts(
     project: &Project,
     scripts: Arc<ScriptSources>,
@@ -2741,7 +2740,7 @@ pub fn run_with_scripts(
     let applied = if request.setup.is_empty() {
         Vec::new()
     } else {
-        command::apply(copy.to_mut(), &default_scene, &request.setup)
+        command::apply_with_scripts(copy.to_mut(), &default_scene, &request.setup, &scripts)
             .map_err(|e| format!("Preparação (setup): {e}"))?
     };
     let start = asked.unwrap_or_else(|| copy.start_scene.clone());

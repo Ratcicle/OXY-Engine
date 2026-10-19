@@ -78,6 +78,7 @@ pub(crate) fn create(shared: &Rc<Shared>, extra: Extra) -> mlua::Result<(Lua, Ta
         base.raw_set(name, LuaValue::Nil)?;
     }
     install_base(&lua, &base, shared)?;
+    super::api::install(&lua, &base, shared)?;
     let (handles, touched) = handles::install(&lua, shared)?;
     extra(&lua, &base, shared)?;
     // Every host function the base reaches may sit in a module; any other (a coroutine.wrap,
@@ -110,6 +111,10 @@ fn collect_functions(value: &LuaValue, known: &mut HashSet<usize>, depth: u32) {
             known.insert(f.to_pointer() as usize);
         }
         LuaValue::Table(t) if depth > 0 => {
+            // The API's tables refuse unknown names through their metatable.
+            if let Some(meta) = t.metatable() {
+                collect_functions(&LuaValue::Table(meta), known, depth - 1);
+            }
             for (_, v) in t.pairs::<LuaValue, LuaValue>().flatten() {
                 collect_functions(&v, known, depth - 1);
             }

@@ -18,6 +18,7 @@ use crate::{
     input_actions::{self, every_entity, every_holder},
     movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
     physics3d::{CollisionGeometry, CollisionShape},
+    script::{self, ScriptRef, ScriptSources},
     spatial::{self, FitShape},
     surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace},
     variables,
@@ -508,6 +509,29 @@ pub enum Command {
         #[serde(default)]
         shape: Option<FitShape>,
     },
+    /// Attaches the script `path` (a `.luau` file of the project's `scripts` folder, written as
+    /// `scripts/porta.luau`) to the object, at `index` of its list of scripts (default the end),
+    /// and gives the object, with their defaults, the attributes the script declares in
+    /// `Module.attributes` that it lacks (decision Q6 of 0.7). An attribute it has keeps its
+    /// value, whatever its type; one of another type than the declared, or declared with two
+    /// types by its scripts, is warned about. Attaching a script the object has moves it to
+    /// `index`, when given, and only creates the declared attributes still missing. Needs the
+    /// project's scripts (see [`apply_with_scripts`]).
+    AttachScript {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Takes the script `path` off the object; the attributes it declared stay.
+    DetachScript {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        path: String,
+    },
     /// Writes a movement profile's values into a 3D character (see
     /// [`crate::character::PROFILE_FIELDS`]); they stay editable.
     ApplyMovementProfile {
@@ -720,6 +744,8 @@ impl Command {
             Self::AddComponent { .. } => "Adicionar componente",
             Self::RemoveComponent { .. } => "Remover componente",
             Self::FitCollider { .. } => "Ajustar colisor",
+            Self::AttachScript { .. } => "Anexar script",
+            Self::DetachScript { .. } => "Remover script",
             Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
             Self::AddNode { .. } => "Adicionar nó",
@@ -797,11 +823,23 @@ impl std::fmt::Display for CommandError {
 impl std::error::Error for CommandError {}
 
 /// Applies `commands` in order as one atomic batch. Commands without a scene use
-/// `default_scene`. On success the project is replaced; on failure it is unchanged.
+/// `default_scene`. On success the project is replaced; on failure it is unchanged. A project
+/// whose scripts a command needs takes [`apply_with_scripts`].
 pub fn apply(
     project: &mut Project,
     default_scene: &str,
     commands: &[Command],
+) -> Result<Vec<Applied>, CommandError> {
+    apply_with_scripts(project, default_scene, commands, &ScriptSources::default())
+}
+
+/// [`apply`] with the project's scripts (see `persistence::load_scripts`), which attach_script
+/// attaches, reading what they declare.
+pub fn apply_with_scripts(
+    project: &mut Project,
+    default_scene: &str,
+    commands: &[Command],
+    scripts: &ScriptSources,
 ) -> Result<Vec<Applied>, CommandError> {
     let mut draft = project.clone();
     let mut applied: Vec<Applied> = Vec::with_capacity(commands.len());
@@ -833,6 +871,7 @@ pub fn apply(
             &command,
             &mut raised,
             &mut copies,
+            scripts,
         )
         .map_err(|message| fail(placed(&draft, &command, default_scene, message)))?;
         match &command {
@@ -867,6 +906,13 @@ pub fn apply(
             if let Check::LongWires { scene, entity, .. } = &check {
                 checks.retain(|(_, earlier)| {
                     !matches!(earlier, Check::LongWires { scene: s, entity: e, .. }
+                        if s == scene && e == entity)
+                });
+            }
+            // The last attach to an object read what all its scripts declare.
+            if let Check::DeclaredAttributes { scene, entity, .. } = &check {
+                checks.retain(|(_, earlier)| {
+                    !matches!(earlier, Check::DeclaredAttributes { scene: s, entity: e, .. }
                         if s == scene && e == entity)
                 });
             }
@@ -956,6 +1002,22 @@ enum Check {
         entity: Id,
         nodes: Option<Vec<Id>>,
         split: bool,
+    },
+    /// attach_script attached a script to an object: what each script it attaches declares in
+    /// `Module.attributes`, by path, as they loaded, which may give one attribute two types or
+    /// another type than the object's.
+    DeclaredAttributes {
+        scene: Id,
+        entity: Id,
+        declared: Vec<(String, script::Declared)>,
+    },
+    /// attach_script attached `path`, whose declared attributes could not be read (`error`: it
+    /// does not load, or its `Module.attributes` is no table of defaults).
+    UnreadScript {
+        scene: Id,
+        entity: Id,
+        path: String,
+        error: String,
     },
 }
 impl Check {
@@ -1148,6 +1210,86 @@ impl Check {
                     listed.join("; ")
                 ))
             }
+            Self::DeclaredAttributes {
+                scene,
+                entity,
+                declared,
+            } => {
+                let e = project.scene(scene)?.entity(entity)?;
+                // The declarations of the scripts the object still attaches.
+                let attached: Vec<&(String, script::Declared)> = declared
+                    .iter()
+                    .filter(|(path, _)| e.scripts.iter().any(|s| s.path == *path))
+                    .collect();
+                let names: BTreeSet<&str> = attached
+                    .iter()
+                    .flat_map(|(_, attributes)| attributes.iter().map(|(name, _)| name.as_str()))
+                    .collect();
+                let same =
+                    |a: &Value, b: &Value| std::mem::discriminant(a) == std::mem::discriminant(b);
+                let mut found = Vec::new();
+                for name in names {
+                    let by: Vec<(&str, &Value)> = attached
+                        .iter()
+                        .filter_map(|(path, attributes)| {
+                            let (_, value) = attributes.iter().find(|(n, _)| n == name)?;
+                            Some((path.as_str(), value))
+                        })
+                        .collect();
+                    let first = by[0].1;
+                    let held = e.attributes.get(name);
+                    if by.iter().any(|(_, value)| !same(value, first)) {
+                        let listed: Vec<String> = by
+                            .iter()
+                            .map(|(path, value)| format!("{path}: {}", script::value_kind(value)))
+                            .collect();
+                        let kept = match held {
+                            Some(value) => format!(
+                                "o atributo ficou como estava ({})",
+                                script::value_kind(value)
+                            ),
+                            None => "o objeto não tem o atributo".into(),
+                        };
+                        found.push(format!(
+                            "os scripts declaram o atributo {name} com tipos diferentes ({}); \
+                             {kept}",
+                            listed.join("; ")
+                        ));
+                    } else if let Some(value) = held
+                        && !same(value, first)
+                    {
+                        let paths: Vec<&str> = by.iter().map(|(path, _)| *path).collect();
+                        let verb = if paths.len() == 1 {
+                            "declara"
+                        } else {
+                            "declaram"
+                        };
+                        found.push(format!(
+                            "o atributo {name} é {}, mas {} o {verb} como {}; o atributo ficou \
+                             como estava",
+                            script::value_kind(value),
+                            paths.join(" e "),
+                            script::value_kind(first)
+                        ));
+                    }
+                }
+                (!found.is_empty()).then(|| format!("{}: {}", e.name, found.join("; ")))
+            }
+            Self::UnreadScript {
+                scene,
+                entity,
+                path,
+                error,
+            } => {
+                let e = project.scene(scene)?.entity(entity)?;
+                e.scripts.iter().any(|s| s.path == *path).then(|| {
+                    format!(
+                        "{}: os atributos que {path} declara não foram criados ({error}); \
+                         corrija o script e anexe-o de novo para criá-los",
+                        e.name
+                    )
+                })
+            }
         }
     }
 }
@@ -1210,9 +1352,38 @@ pub fn apply_and_report(
     default_scene: &str,
     commands: &[Command],
 ) -> Result<Json, CommandError> {
+    apply_and_report_with_scripts(project, default_scene, commands, &ScriptSources::default())
+}
+
+/// [`apply_and_report`] with the project's scripts, as [`apply_with_scripts`] takes them.
+pub fn apply_and_report_with_scripts(
+    project: &mut Project,
+    default_scene: &str,
+    commands: &[Command],
+    scripts: &ScriptSources,
+) -> Result<Json, CommandError> {
     let before = batch_warnings(project);
-    let applied = apply(project, default_scene, commands)?;
+    let applied = apply_with_scripts(project, default_scene, commands, scripts)?;
     Ok(report(project, &applied, &before))
+}
+
+/// Adds `warnings` to those of a [`report`], which gets the list when it had none.
+pub fn add_warnings(report: &mut Json, warnings: Vec<String>) {
+    if warnings.is_empty() {
+        return;
+    }
+    match report.get_mut("warnings").and_then(Json::as_array_mut) {
+        Some(listed) => listed.extend(warnings.into_iter().map(Json::from)),
+        None => report["warnings"] = json!(warnings),
+    }
+}
+
+/// Whether a command of `commands` needs the project's scripts (see [`apply_with_scripts`]):
+/// hosts read the folder only then.
+pub fn needs_scripts(commands: &[Command]) -> bool {
+    commands
+        .iter()
+        .any(|command| matches!(command, Command::AttachScript { .. }))
 }
 
 /// The names of the `wanted` IDs in `project`: scenes, objects of scenes and models, nodes
@@ -2321,6 +2492,7 @@ fn apply_one(
     command: &Command,
     checks: &mut Vec<Check>,
     copies: &mut Vec<Arc<CopyMap>>,
+    scripts: &ScriptSources,
 ) -> Result<Vec<Id>, String> {
     use Command as C;
     match command {
@@ -2781,6 +2953,83 @@ fn apply_one(
         } => {
             let id = scene_id(project, scene, default)?;
             authoring::remove(entity_mut(scene_mut(project, &id), entity)?, *component)?;
+            Ok(vec![])
+        }
+        C::AttachScript {
+            scene,
+            entity,
+            path,
+            index,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let path = script::normalize_path(path)?;
+            if scripts.get(&path).is_none() {
+                return Err(format!("o script {path} não existe na pasta do projeto"));
+            }
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let at = e.scripts.iter().position(|s| s.path == path);
+            let last = e.scripts.len() - usize::from(at.is_some());
+            if let Some(index) = *index
+                && index > last
+            {
+                return Err(format!(
+                    "index {index} fica fora da lista de scripts de {} (de 0 a {last})",
+                    e.name
+                ));
+            }
+            let attached = match at {
+                Some(at) => e.scripts.remove(at),
+                None => ScriptRef::new(path.clone()),
+            };
+            e.scripts
+                .insert(index.unwrap_or(at.unwrap_or(last)), attached);
+            // What every script of the object declares, for the warnings when the batch ends;
+            // only the one attached gives the attributes it declares.
+            let paths: Vec<String> = e.scripts.iter().map(|s| s.path.clone()).collect();
+            let mut declared = Vec::new();
+            for (each, result) in
+                script::declared_attributes(scripts, paths.iter().map(String::as_str))
+            {
+                match result {
+                    Ok(attributes) => {
+                        if each == path {
+                            for (name, default) in &attributes {
+                                e.attributes
+                                    .entry(name.clone())
+                                    .or_insert_with(|| default.clone());
+                            }
+                        }
+                        declared.push((each.to_owned(), attributes));
+                    }
+                    Err(error) if each == path => checks.push(Check::UnreadScript {
+                        scene: id.clone(),
+                        entity: e.id.clone(),
+                        path: path.clone(),
+                        error: error.to_string(),
+                    }),
+                    // Told where it is attached, or by the project's checks when it is missing.
+                    Err(_) => {}
+                }
+            }
+            checks.push(Check::DeclaredAttributes {
+                scene: id,
+                entity: e.id.clone(),
+                declared,
+            });
+            Ok(vec![])
+        }
+        C::DetachScript {
+            scene,
+            entity,
+            path,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let path = script::normalize_path(path)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let Some(at) = e.scripts.iter().position(|s| s.path == path) else {
+                return Err(format!("{} não tem o script {path}", e.name));
+            };
+            e.scripts.remove(at);
             Ok(vec![])
         }
         C::FitCollider {

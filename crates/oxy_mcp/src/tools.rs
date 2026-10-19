@@ -11,13 +11,44 @@ use oxy_core::{
     export::{self, ExportRequest},
     headless, persistence, query, random,
     runtime::Runtime,
+    script::{self, ScriptSources},
 };
 use oxy_render::{CameraState, offscreen::ShotView};
 use serde_json::{Value as Json, json};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
+
+/// The scripts a run of `project`, kept in the folder `root`, needs: those of the folder when its
+/// objects attach one, as the editor's test reads them (a file an object attaches that the
+/// folder lacks refuses the run), or when the setup's attach_script attaches one; none
+/// otherwise.
+fn run_scripts(
+    project: &Project,
+    root: Option<&Path>,
+    setup: &[command::Command],
+) -> Result<Arc<ScriptSources>, String> {
+    let attached = script::any_attached(project);
+    if !attached && !command::needs_scripts(setup) {
+        return Ok(Arc::default());
+    }
+    let Some(root) = root else {
+        return Err(
+            "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; peça para a \
+             pessoa salvá-lo antes de simular."
+                .into(),
+        );
+    };
+    let sources = if attached {
+        persistence::load_scripts_to_run(project, root)
+            .map_err(|error| format!("Não é possível simular: {error}."))?
+    } else {
+        persistence::load_scripts(root).map_err(|error| error.to_string())?
+    };
+    Ok(Arc::new(sources))
+}
 
 /// What a tool call returns: JSON text and, optionally, a PNG image.
 #[derive(Debug)]
@@ -546,7 +577,10 @@ pub fn definitions() -> Json {
              takes the nearest limit; none when the input port of the same id is wired, which \
              the game reads instead), action.component nodes whose target parameter names an \
              object lacking the part they switch and variable.set nodes whose value parameter \
-             is not of the variable's type (both stop with an error in the game).",
+             is not of the variable's type (both stop with an error in the game), and scripts \
+             objects attach that the project's scripts folder lacks (the project opens and \
+             saves, but the editor's test and the export refuse it until the file is back or \
+             detach_script).",
             json!({"project": project}),
             json!([])
         ),
@@ -928,6 +962,14 @@ what a playing clip poses). delete_clip {entity, clip}, refused while a node pla
 (oxy_catalog movement_profiles) into a 3D character; they stay editable
 - set_attribute {entity, name, value?} (no value removes); attribute values are always tagged, \
 e.g. {\"Number\": 3}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\"}
+- attach_script {entity, path, index?}: runs the Luau file path of the project's scripts folder \
+(scripts/porta.luau) on the object, at index of its list (default the end; its scripts run in \
+that order, after its logic graph), and gives the object, with their defaults, the attributes the \
+script declares in Module.attributes that it lacks (one it has keeps its value). A type that \
+differs from the object's or between its scripts, and a script that does not load or declares \
+no table of defaults (its attributes unread), come back in warnings. Again on an attached script: moves it to index and \
+creates what is missing. A file the folder lacks is refused. detach_script {entity, path}: takes \
+it off, keeping the attributes
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}. A box collider takes the shape's dimensions \
 when added and follows the object's scale, not later dimension changes
@@ -1097,7 +1139,8 @@ since past last_seq is read from the oldest line kept and the answer says reset:
 counts older lines left out by limit. oxy_status says whether a test is running.";
 
 const SIMULATE_DESCRIPTION: &str = "Runs the game without a window on an in-memory copy of \
-the project (nothing is saved or changed) and reports what happened: scene changes (reload: true \
+the project (nothing is saved or changed), its objects' scripts read from the project's scripts \
+folder as the editor's test reads them, and reports what happened: scene changes (reload: true \
 when a scene restarts), logs with object and node names (debug.message writes the value wired to \
 its value input after the text; an action whose failure no node reads, as character.teleport \
 with success and error unwired, logs \"<object> · <node label> falhou: <reason>\" once per node \
@@ -1453,7 +1496,7 @@ impl Tools {
                     query::answer(p, scene, request, args)
                 })
             }
-            "oxy_validate" => self.read(args, "validate", |p, _| Ok(query::validation(p))),
+            "oxy_validate" => self.validate(args),
             "oxy_apply" => self.apply(args),
             "oxy_simulate" => self.simulate(args),
             "oxy_screenshot" => self.screenshot(args),
@@ -1686,6 +1729,24 @@ impl Tools {
         }
     }
 
+    /// oxy_validate: on files, its warnings also name the scripts the project's objects attach
+    /// that its folder lacks, as the editor's do live.
+    fn validate(&mut self, args: &Json) -> Result<Output, String> {
+        match self.target(args)? {
+            Target::Live(port) => {
+                let mut params = args.clone();
+                if let Some(map) = params.as_object_mut() {
+                    map.remove("project");
+                }
+                self.live(port, "validate", params).map(Output::json)
+            }
+            Target::File(file) => {
+                let project = persistence::load_project(&file).map_err(|e| e.to_string())?;
+                Ok(Output::json(query::validation_in(&project, file.parent())))
+            }
+        }
+    }
+
     fn apply(&mut self, args: &Json) -> Result<Output, String> {
         let mut commands = match &args["commands"] {
             Json::Array(items) => items.clone(),
@@ -1709,9 +1770,24 @@ impl Tools {
             Target::File(file) => {
                 let parsed = command::parse(&Json::Array(commands))?;
                 let mut project = persistence::load_project(&file).map_err(|e| e.to_string())?;
+                let root = file
+                    .parent()
+                    .map_or_else(|| PathBuf::from("."), Path::to_owned);
+                // attach_script reads the scripts of the project's folder.
+                let scripts = if command::needs_scripts(&parsed) {
+                    persistence::load_scripts(&root).map_err(|e| e.to_string())?
+                } else {
+                    Default::default()
+                };
+                let known = persistence::missing_scripts(&project, &root).unwrap_or_default();
                 let start = project.start_scene.clone();
-                let mut report = command::apply_and_report(&mut project, &start, &parsed)
-                    .map_err(|e| e.to_string())?;
+                let mut report =
+                    command::apply_and_report_with_scripts(&mut project, &start, &parsed, &scripts)
+                        .map_err(|e| e.to_string())?;
+                command::add_warnings(
+                    &mut report,
+                    persistence::added_script_warnings(&known, &project, &root),
+                );
                 let backup = self.keep_previous_version(&file)?;
                 persistence::save_project(&file, &project).map_err(|e| e.to_string())?;
                 report["saved"] = json!(file.display().to_string());
@@ -1954,7 +2030,7 @@ impl Tools {
                 .map_err(invalid("Semente (seed) inválida"))?
                 .unwrap_or_default(),
             check_replay: args["check_replay"].as_bool() == Some(true),
-            // The tools run no scripts yet: the check comes with them.
+            // Not offered by the tool yet.
             check_vm_reset: false,
             save: arg("save")
                 .map(headless::SimulationRequest::read_save)
@@ -1972,7 +2048,8 @@ impl Tools {
         let request = Self::simulation_request(args, seconds)?;
         let target = self.target(args)?;
         let (project, root) = self.document(&target)?;
-        let (report, mut runtime) = headless::run(&project, &request)?;
+        let scripts = run_scripts(&project, root.as_deref(), &request.setup)?;
+        let (report, mut runtime) = headless::run_with_scripts(&project, scripts, &request)?;
         let image = if args["screenshot"].as_bool() == Some(true) {
             let (png, _) = self.render_view(
                 &mut runtime,
@@ -2029,7 +2106,8 @@ impl Tools {
         // Only the game camera shows the interface.
         request.ui &= shot == Shot::Game;
         let (project, root) = self.document(&target)?;
-        let (report, mut runtime) = headless::run(&project, &request)?;
+        let scripts = run_scripts(&project, root.as_deref(), &request.setup)?;
+        let (report, mut runtime) = headless::run_with_scripts(&project, scripts, &request)?;
         let shot = shot.resolve(&runtime, &report.setup)?;
         let size = report.view_size;
         let (image, camera) = self.render_view(&mut runtime, root.as_deref(), args, &shot, size)?;
@@ -2994,6 +3072,130 @@ mod tests {
             );
         }
         assert!(validate.contains("outside their range"), "{validate}");
+    }
+
+    #[test]
+    fn files_attach_scripts_with_their_attributes_and_warn_of_missing_ones() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-scripts-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Scripts", SceneKind::ThreeD).unwrap();
+        let door = Entity::new("Porta", None);
+        let id = door.id.clone();
+        project.scenes[0].entities.push(door);
+        persistence::save_project(&file, &project).unwrap();
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/girar.luau"),
+            "local M = {}\nM.attributes = { Velocidade = 90 }\nfunction M.on_start(self) \
+             print('giro', self.attr.Velocidade) end\nreturn M\n",
+        )
+        .unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let logs = |report: &Json| -> Vec<String> {
+            report["logs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| l["text"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let attach_command = json!(
+            {"op": "attach_script", "entity": &id, "path": "scripts/girar.luau"}
+        );
+        // oxy_simulate runs the scripts of the folder, attached by its setup too.
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "setup": [attach_command.clone()]}),
+        )
+        .unwrap();
+        assert_eq!(logs(&report), ["Porta · giro 90"]);
+        let attach = json!({"commands": [attach_command]});
+        let applied = call("oxy_apply", attach.clone()).unwrap();
+        assert!(applied.get("warnings").is_none(), "{applied}");
+        let saved = persistence::load_project(&file).unwrap();
+        let door = saved.scenes[0].entity(&id).unwrap();
+        assert_eq!(
+            door.scripts,
+            [oxy_core::script::ScriptRef::new("scripts/girar.luau")]
+        );
+        assert_eq!(door.attributes["Velocidade"], Value::Number(90.));
+        assert!(
+            call("oxy_validate", json!({}))
+                .unwrap()
+                .get("warnings")
+                .is_none()
+        );
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        assert_eq!(logs(&report), ["Porta · giro 90"]);
+        // The file renamed outside OXY: oxy_validate names the object and the file, oxy_simulate
+        // waits for it as the editor's test does, and the batch that copies the door warns of
+        // the copy.
+        std::fs::rename(
+            dir.join("scripts/girar.luau"),
+            dir.join("scripts/giro.luau"),
+        )
+        .unwrap();
+        let error = call("oxy_simulate", json!({"seconds": 0.1})).unwrap_err();
+        assert!(
+            error.starts_with(
+                "Não é possível simular: Porta: o script scripts/girar.luau não existe na pasta \
+                 do projeto"
+            ),
+            "{error}"
+        );
+        let validation = call("oxy_validate", json!({})).unwrap();
+        assert_eq!(validation["valid"], true);
+        let warnings = validation["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{validation}");
+        assert!(
+            warnings[0]
+                .as_str()
+                .unwrap()
+                .starts_with("Porta: o script scripts/girar.luau não existe na pasta do projeto"),
+            "{validation}"
+        );
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "duplicate_entities", "ids": [&id]}]}),
+        )
+        .unwrap();
+        let warnings = applied["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{applied}");
+        assert!(
+            warnings[0]
+                .as_str()
+                .unwrap()
+                .contains("o script scripts/girar.luau não existe na pasta do projeto"),
+            "{applied}"
+        );
+        // The door and its copy miss one file: one warning names both.
+        let validation = call("oxy_validate", json!({})).unwrap();
+        let warnings = validation["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{validation}");
+        assert!(
+            warnings[0].as_str().unwrap().starts_with("Porta e Porta")
+                && warnings[0]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("remova o script dos objetos"),
+            "{validation}"
+        );
+        // A file the folder lacks is not attached.
+        let error = call("oxy_apply", attach).unwrap_err();
+        assert!(error.contains("não existe na pasta do projeto"), "{error}");
+        assert!(APPLY_DESCRIPTION.contains("attach_script {entity, path, index?}"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

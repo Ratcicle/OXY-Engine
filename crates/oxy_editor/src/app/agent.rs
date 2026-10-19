@@ -16,6 +16,23 @@ pub(crate) const AGENT_PREFIX: &str = "Agente · ";
 
 const NO_TEST: &str = "Não há teste do jogo em andamento no editor.";
 
+/// The scripts an agent's batch for the project saved at `path` reads: those of its folder when
+/// a command attaches one (see [`command::needs_scripts`]), else none. A project never saved
+/// has no folder for them.
+fn agent_scripts(path: Option<&Path>, commands: &[Command]) -> Result<ScriptSources, String> {
+    if !command::needs_scripts(commands) {
+        return Ok(ScriptSources::default());
+    }
+    match path.and_then(Path::parent) {
+        Some(root) => persistence::load_scripts(root).map_err(|error| error.to_string()),
+        None => Err(
+            "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; \
+             salve-o antes de anexar um script."
+                .into(),
+        ),
+    }
+}
+
 impl PlaySession {
     /// The game time the inputs an agent sent still wait until, when some wait.
     pub(crate) fn queued_until(&self) -> Option<f64> {
@@ -84,10 +101,29 @@ impl Editor {
             [one] => format!("Agente: {}", one.label()),
             many => format!("Agente: {} comandos", many.len()),
         };
+        let scripts = agent_scripts(self.path.as_deref(), commands)?;
+        let root = self
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_owned);
+        let known = root.as_deref().map(|root| {
+            persistence::missing_scripts(&self.state.project, root).unwrap_or_default()
+        });
         self.history
             .begin(label, &self.state.project, &self.state.images);
-        match command::apply_and_report(&mut self.state.project, &self.scene_id, commands) {
-            Ok(report) => {
+        match command::apply_and_report_with_scripts(
+            &mut self.state.project,
+            &self.scene_id,
+            commands,
+            &scripts,
+        ) {
+            Ok(mut report) => {
+                if let (Some(root), Some(known)) = (&root, &known) {
+                    let added =
+                        persistence::added_script_warnings(known, &self.state.project, root);
+                    command::add_warnings(&mut report, added);
+                }
                 if let Err(error) = self
                     .history
                     .commit(&self.state.project, &mut self.state.images)
@@ -397,6 +433,46 @@ mod tests {
     #[test]
     fn agent_messages_carry_the_console_origin() {
         assert!(format!("{AGENT_PREFIX}Criar objeto").starts_with("Agente · "));
+    }
+
+    #[test]
+    fn only_a_batch_that_attaches_a_script_reads_the_folder() {
+        let root = std::env::temp_dir().join(format!("oxy-editor-agent-scripts-{}", new_id()));
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(root.join("scripts/porta.luau"), "return {}\n").unwrap();
+        let path = root.join(persistence::PROJECT_FILE);
+        let door = new_id();
+        let attach = [Command::AttachScript {
+            scene: None,
+            entity: door.clone(),
+            path: "scripts/porta.luau".into(),
+            index: None,
+        }];
+        let detach = [Command::DetachScript {
+            scene: None,
+            entity: door,
+            path: "scripts/porta.luau".into(),
+        }];
+        let read = agent_scripts(Some(&path), &attach).unwrap();
+        assert_eq!(
+            read.files.keys().collect::<Vec<_>>(),
+            ["scripts/porta.luau"]
+        );
+        assert!(
+            agent_scripts(Some(&path), &detach)
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        // A project never saved has no folder: attaching is refused, the rest goes on.
+        let error = agent_scripts(None, &attach).unwrap_err();
+        assert!(error.contains("ainda não foi salvo"), "{error}");
+        assert!(agent_scripts(None, &detach).unwrap().files.is_empty());
+        // A folder that cannot be read refuses the batch with the reason.
+        std::fs::write(root.join("scripts/binario.luau"), [0xff, 0xfe]).unwrap();
+        let error = agent_scripts(Some(&path), &attach).unwrap_err();
+        assert!(error.contains("scripts/binario.luau"), "{error}");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

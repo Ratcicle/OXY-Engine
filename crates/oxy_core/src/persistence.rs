@@ -651,21 +651,96 @@ pub fn load_scripts(root: &Path) -> Result<ScriptSources, PersistenceError> {
     }
     Ok(sources)
 }
-/// Checks that every script an object attaches, in a scene or a model, is in the `scripts`
-/// folder at `root`, for the project's checks to report. Opening and saving do not ask for it:
-/// a script renamed or deleted outside OXY must not keep the project from opening or saving.
-/// The folder is read only when some object attaches a script.
-pub fn validate_script_files(project: &Project, root: &Path) -> Result<(), PersistenceError> {
-    if !script::any_attached(project) {
-        return Ok(());
+/// What a missing script asks of the person, to play or export the project again, for a file
+/// `objects` objects attach.
+pub(crate) fn missing_fix(objects: usize) -> &'static str {
+    if objects == 1 {
+        "restaure o arquivo ou remova o script do objeto"
+    } else {
+        "restaure o arquivo ou remova o script dos objetos"
     }
-    let files = script_files(root)?;
-    match script::first_missing(project, |path| files.contains_key(path)) {
-        Some((object, path)) => Err(PersistenceError::ScriptMissing {
-            object,
-            path: path.to_owned(),
+}
+
+/// Checks that every script an object attaches, in a scene or a model, is in the `scripts`
+/// folder at `root`: the first one missing is the error. Opening and saving do not ask for it
+/// (a script renamed or deleted outside OXY must not keep the project from opening or saving:
+/// they warn, see [`script_warnings`]); playing it in the editor and exporting it do. The folder
+/// is read only when some object attaches a script.
+pub fn validate_script_files(project: &Project, root: &Path) -> Result<(), PersistenceError> {
+    match missing_scripts(project, root)?.into_iter().next() {
+        Some(missing) => Err(PersistenceError::ScriptMissing {
+            object: missing.name,
+            path: missing.path,
         }),
         None => Ok(()),
+    }
+}
+/// The scripts the objects of `project` attach, in scenes and models, that the `scripts` folder
+/// at `root` lacks; the folder is read only when some object attaches a script.
+pub fn missing_scripts(
+    project: &Project,
+    root: &Path,
+) -> Result<Vec<script::MissingScript>, PersistenceError> {
+    if !script::any_attached(project) {
+        return Ok(Vec::new());
+    }
+    let files = script_files(root)?;
+    Ok(script::missing(project, |path| files.contains_key(path)))
+}
+/// What opening or saving the project at `root` warns about its scripts, one line per file:
+/// every script its objects attach that the `scripts` folder lacks, by its path and the names
+/// of the objects (see [`script::missing_by_file`]). The project opens and saves all the same;
+/// playing it in the editor and exporting it are refused until the file is back or no object
+/// attaches it.
+pub fn script_warnings(project: &Project, root: &Path) -> Vec<String> {
+    match missing_scripts(project, root) {
+        Ok(missing) => missing_warnings(&missing),
+        Err(error) => vec![format!("Não foi possível conferir os scripts: {error}")],
+    }
+}
+/// The lines of [`script_warnings`] about `missing`.
+fn missing_warnings(missing: &[script::MissingScript]) -> Vec<String> {
+    script::missing_by_file(missing)
+        .into_iter()
+        .map(|(line, objects)| {
+            format!(
+                "{line}; jogar e exportar ficam recusados até que você {}",
+                missing_fix(objects)
+            )
+        })
+        .collect()
+}
+/// The lines of [`script_warnings`] that an edit adds to the project it left, `after`: the
+/// scripts its objects attach that the folder at `root` lacks, but those `known` before the
+/// edit (its [`missing_scripts`]); a copy of an object whose script is missing, for one.
+pub fn added_script_warnings(
+    known: &[script::MissingScript],
+    after: &Project,
+    root: &Path,
+) -> Vec<String> {
+    let Ok(mut missing) = missing_scripts(after, root) else {
+        return Vec::new();
+    };
+    missing.retain(|missing| {
+        !known
+            .iter()
+            .any(|old| old.object == missing.object && old.path == missing.path)
+    });
+    missing_warnings(&missing)
+}
+/// The scripts of the project at `root` for a run that needs every one its objects attach, as
+/// the editor's test: the first file missing from the folder refuses it, with the objects that
+/// attach it, as [`load_scripts`] refuses a file it cannot read. The message says what to do.
+/// Without attached scripts nothing is read: none would run.
+pub fn load_scripts_to_run(project: &Project, root: &Path) -> Result<ScriptSources, String> {
+    if !script::any_attached(project) {
+        return Ok(ScriptSources::default());
+    }
+    let sources = load_scripts(root).map_err(|error| error.to_string())?;
+    let missing = script::missing(project, |path| sources.get(path).is_some());
+    match script::missing_by_file(&missing).into_iter().next() {
+        Some((line, objects)) => Err(format!("{line}; {}", missing_fix(objects))),
+        None => Ok(sources),
     }
 }
 pub(crate) fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {

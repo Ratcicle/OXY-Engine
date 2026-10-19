@@ -8,6 +8,7 @@ use crate::{
     document::{AssetKind, Id, Project, new_id, validate_project},
     headless::{self, SimulationRequest},
     persistence::{self, PROJECT_FILE},
+    script::{self, ScriptSources},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,6 +16,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -135,9 +137,10 @@ pub struct ExportCheck {
     pub warnings: Vec<String>,
 }
 
-/// Checks `project` for export: it must pass validation and every image and sound must be at
+/// Checks `project` for export: it must pass validation, every image and sound must be at
 /// `source_root` and readable, unless it is in `unsaved` (painted and not saved, exported from
-/// memory). The warnings are those of [`command::warnings`].
+/// memory), and its scripts must be there and load (see `script_errors`). The warnings are
+/// those of [`command::warnings`].
 pub fn check(project: &Project, source_root: Option<&Path>, unsaved: &HashSet<Id>) -> ExportCheck {
     let mut errors = Vec::new();
     if let Err(error) = validate_project(project) {
@@ -169,11 +172,44 @@ pub fn check(project: &Project, source_root: Option<&Path>, unsaved: &HashSet<Id
     if unsaved.iter().any(|id| project.asset(id).is_none()) {
         errors.push("Uma imagem pintada não pertence mais ao projeto".into());
     }
+    errors.extend(script_errors(project, source_root));
     let warnings = command::warnings(project)
         .into_iter()
         .map(|warning| warning.message)
         .collect();
     ExportCheck { errors, warnings }
+}
+
+/// What stops exporting the scripts of `project`, whose folder is `root`: a script an object
+/// attaches that the folder lacks, a file of the folder that cannot be read as a script (too
+/// big, not text) and one that does not compile or that loading refuses before it runs. A
+/// project whose objects attach no script exports none and checks none.
+fn script_errors(project: &Project, root: Option<&Path>) -> Vec<String> {
+    if !script::any_attached(project) {
+        return Vec::new();
+    }
+    let Some(root) = root else {
+        return vec![
+            "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; salve antes de \
+             exportar"
+                .into(),
+        ];
+    };
+    let sources = match persistence::load_scripts(root) {
+        Ok(sources) => sources,
+        Err(error) => return vec![error.to_string()],
+    };
+    let missing = script::missing(project, |path| sources.get(path).is_some());
+    let mut errors: Vec<String> = script::missing_by_file(&missing)
+        .into_iter()
+        .map(|(line, objects)| format!("{line}; {}", persistence::missing_fix(objects)))
+        .collect();
+    for (path, file) in &sources.files {
+        if let Err(error) = script::check(path, &file.text) {
+            errors.push(error.to_string());
+        }
+    }
+    errors
 }
 
 /// What an exported game's check found: the project loads and its start scene runs without
@@ -200,7 +236,9 @@ pub struct VerifyReport {
 }
 
 /// Checks the game in the data folder `data`: the project loads as the player loads it (every
-/// image and sound read in full) and its start scene runs for `seconds` without a window.
+/// image and sound read in full, every script its objects attach found in `data/scripts` and
+/// every script there checked as the export checks them) and its start scene runs for
+/// `seconds` without a window, its scripts with it.
 pub fn verify(data: &Path, seconds: f64) -> VerifyReport {
     let mut report = VerifyReport {
         engine: engine_version(),
@@ -213,11 +251,34 @@ pub fn verify(data: &Path, seconds: f64) -> VerifyReport {
             report.start_scene = project
                 .scene(&project.start_scene)
                 .map(|scene| scene.name.clone());
+            let scripts = match persistence::load_scripts(data) {
+                Ok(scripts) => scripts,
+                Err(error) => {
+                    report.errors.push(error.to_string());
+                    ScriptSources::default()
+                }
+            };
+            let missing = script::missing(&project, |path| scripts.get(path).is_some());
+            report.errors.extend(
+                script::missing_by_file(&missing)
+                    .into_iter()
+                    .map(|(line, _)| line),
+            );
+            // The copies, which a script saved after the export's check or edited in the
+            // game's folder may have changed.
+            for (path, file) in &scripts.files {
+                if let Err(error) = script::check(path, &file.text) {
+                    report.errors.push(error.to_string());
+                }
+            }
             let ran = serde_json::from_value::<SimulationRequest>(
                 serde_json::json!({"seconds": seconds, "ui": false}),
             )
             .map_err(|e| e.to_string())
-            .and_then(|request| headless::simulate(&project, &request));
+            .and_then(|request| {
+                headless::run_with_scripts(&project, Arc::new(scripts), &request)
+                    .map(|(run, _)| run)
+            });
             match ran {
                 Ok(run) => {
                     report.seconds = run.seconds;
@@ -626,7 +687,7 @@ impl Drop for Staging {
 }
 
 /// Writes the game into `staging`: the player as `executable` with its runtime libraries, the
-/// project and its images and sounds in data, the licenses, the note and the marker.
+/// project and its images, sounds and scripts in data, the licenses, the note and the marker.
 fn stage(request: &ExportRequest, staging: &Path, executable: &str) -> Result<(), ExportError> {
     let project = request.project;
     fs::copy(request.player, staging.join(executable))
@@ -665,6 +726,23 @@ fn stage(request: &ExportRequest, staging: &Path, executable: &str) -> Result<()
                     .map(drop)
                     .map_err(io_context(failed))?;
             }
+        }
+    }
+    // Every script of the folder, attached or not: a require may build the name it loads.
+    // `verify` checks what was copied.
+    if let Some(root) = request.source_root
+        && script::any_attached(project)
+    {
+        let sources = persistence::load_scripts(root)
+            .map_err(|error| ExportError::Invalid(vec![error.to_string()]))?;
+        for (path, file) in &sources.files {
+            let target = persistence::resolve_asset_path(&data, path)
+                .map_err(|error| ExportError::Invalid(vec![error.to_string()]))?;
+            let failed = format!("Não foi possível exportar o script {path}");
+            if let Some(folder) = target.parent() {
+                fs::create_dir_all(folder).map_err(io_context(failed.clone()))?;
+            }
+            fs::write(&target, &file.text).map_err(io_context(failed))?;
         }
     }
     let licenses = staging.join("licenses");
@@ -1474,6 +1552,117 @@ mod tests {
         assert!(found.errors.is_empty(), "{found:?}");
         assert_eq!(found.warnings.len(), 1, "{found:?}");
         assert!(found.warnings[0].contains("pausar"), "{found:?}");
+    }
+
+    /// Gives the fixture a door that runs a script, which requires another one of the folder;
+    /// the folder also holds a file that is no script.
+    fn scripted(fixture: &mut Fixture) {
+        let mut door = Entity::new("Porta", None);
+        door.scripts = vec![crate::script::ScriptRef::new("scripts/porta.luau")];
+        fixture.project.scenes[0].entities.push(door);
+        let write = |path: &str, text: &str| {
+            let file = fixture.folder.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, text).unwrap();
+        };
+        write(
+            "scripts/porta.luau",
+            "local Textos = require('./dados/textos')\nlocal M = {}\nfunction M.on_start(self) \
+             print(Textos.ABERTA) end\nreturn M\n",
+        );
+        write(
+            "scripts/dados/textos.luau",
+            "return { ABERTA = 'aberta' }\n",
+        );
+        write("scripts/notas.txt", "fica de fora");
+        persistence::save_project(&fixture.folder.join(PROJECT_FILE), &fixture.project).unwrap();
+    }
+
+    #[test]
+    fn a_game_takes_its_scripts_to_data_and_its_check_runs_them() {
+        let mut fixture = Fixture::new("scripts");
+        scripted(&mut fixture);
+        let destination = fixture.base.join("Jogos");
+        let report = export_with(&fixture.request(&destination, false), checked).unwrap();
+        let data = report.folder.join("data");
+        let scripts: Vec<String> = files(&data)
+            .into_iter()
+            .filter(|file| file.starts_with("scripts/"))
+            .collect();
+        // Every script of the folder, the one only required too; the rest stays out.
+        assert_eq!(scripts, ["scripts/dados/textos.luau", "scripts/porta.luau"]);
+        for file in &scripts {
+            assert_eq!(
+                fs::read(data.join(file)).unwrap(),
+                fs::read(fixture.folder.join(file)).unwrap()
+            );
+        }
+        assert!(report.verify.ok, "{:?}", report.verify);
+        assert!(
+            report
+                .verify
+                .logs
+                .iter()
+                .any(|line| line.ends_with("Porta · aberta")),
+            "{:?}",
+            report.verify.logs
+        );
+        // A script taken from the exported game fails its check, by the object and the file.
+        fs::remove_file(data.join("scripts/porta.luau")).unwrap();
+        let found = verify(&data, VERIFY_SECONDS);
+        assert!(!found.ok);
+        assert_eq!(
+            found.errors,
+            ["Porta: o script scripts/porta.luau não existe na pasta do projeto"]
+        );
+        // A script edited in the game's folder is checked as the export checks it.
+        fs::write(data.join("scripts/dados/textos.luau"), "return {\n").unwrap();
+        let found = verify(&data, VERIFY_SECONDS);
+        assert_eq!(found.errors.len(), 2, "{found:?}");
+        assert!(
+            found.errors[1].starts_with("scripts/dados/textos.luau:")
+                && found.errors[1].contains("erro de sintaxe"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_broken_script_stops_the_export() {
+        let mut fixture = Fixture::new("scripts-recusados");
+        scripted(&mut fixture);
+        let painted = HashSet::from([fixture.painted.clone()]);
+        let found = check(&fixture.project, Some(&fixture.folder), &painted);
+        assert!(found.errors.is_empty(), "{found:?}");
+        fs::remove_file(fixture.folder.join("scripts/porta.luau")).unwrap();
+        fs::write(fixture.folder.join("scripts/quebrado.luau"), "return {\n").unwrap();
+        let found = check(&fixture.project, Some(&fixture.folder), &painted);
+        assert_eq!(found.errors.len(), 2, "{found:?}");
+        assert_eq!(
+            found.errors[0],
+            "Porta: o script scripts/porta.luau não existe na pasta do projeto; restaure o \
+             arquivo ou remova o script do objeto"
+        );
+        assert!(
+            found.errors[1].starts_with("scripts/quebrado.luau:")
+                && found.errors[1].contains("erro de sintaxe"),
+            "{found:?}"
+        );
+        let destination = fixture.base.join("Jogos");
+        let error = export_with(&fixture.request(&destination, false), checked).unwrap_err();
+        assert!(
+            matches!(error, ExportError::Invalid(_)) && error.to_string().contains("Porta"),
+            "{error}"
+        );
+        assert!(!destination.exists());
+        // A project never saved has no folder for its scripts.
+        let found = check(&fixture.project, None, &painted);
+        assert!(
+            found
+                .errors
+                .iter()
+                .any(|error| error.contains("onde ficam os seus scripts")),
+            "{found:?}"
+        );
     }
 
     #[test]

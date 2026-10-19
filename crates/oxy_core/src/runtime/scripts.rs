@@ -79,13 +79,15 @@ fn callback_of(event: &RuntimeEvent, owner: &str) -> Option<Callback> {
     })
 }
 
-/// What `event` passes its callback after `self`.
-fn callback_args(event: &RuntimeEvent, time: f64) -> Vec<ScriptArg> {
+/// What `event` passes its callback after `self`: an input action by its name in `project`, as
+/// the person named it.
+fn callback_args(event: &RuntimeEvent, time: f64, project: &Project) -> Vec<ScriptArg> {
     let text = |text: &str| ScriptArg::Value(Value::Text(text.to_owned()));
+    let action = |id: &str| text(&crate::input_actions::label(project, id));
     match event {
         RuntimeEvent::FixedStep => vec![ScriptArg::Value(Value::Number(f64::from(FIXED_DT)))],
-        RuntimeEvent::Input(action) => vec![text(action), text("pressed")],
-        RuntimeEvent::InputReleased(action) => vec![text(action), text("released")],
+        RuntimeEvent::Input(id) => vec![action(id), text("pressed")],
+        RuntimeEvent::InputReleased(id) => vec![action(id), text("released")],
         RuntimeEvent::AreaEnter { other, .. } | RuntimeEvent::AreaExit { other, .. } => {
             vec![ScriptArg::Value(Value::Object(Some(other.clone())))]
         }
@@ -176,7 +178,8 @@ impl Runtime {
     }
 
     /// The callbacks of an attached script join what the scene hears; its functions named like
-    /// callbacks that are none are told.
+    /// callbacks that are none are told, and so is a `Module.attributes` that declares nothing
+    /// attaching could create (the script runs all the same).
     fn register_script(&mut self, module: &Module) {
         let path = &*module.path;
         self.script_callbacks.insert(
@@ -191,6 +194,19 @@ impl Runtime {
                 path,
                 *line,
                 format!("{name} não é um evento dos scripts e nunca roda sozinha{hint}"),
+            );
+            self.tell_once(
+                String::new(),
+                ErrorPlace::of(&error),
+                sentence(&error),
+                error.location(),
+            );
+        }
+        if let Err(message) = &module.attributes {
+            let error = ScriptError::new(
+                path,
+                0,
+                format!("{message}; anexar o script não cria os atributos que ele declara"),
             );
             self.tell_once(
                 String::new(),
@@ -239,7 +255,7 @@ impl Runtime {
             let ((other, activation, trajectory), args) = heard.get_or_insert_with(|| {
                 (
                     self.event_context(event, &entity.id, generated_activation),
-                    callback_args(event, self.game_time()),
+                    callback_args(event, self.game_time(), &self.project),
                 )
             });
             found.push(Task {
