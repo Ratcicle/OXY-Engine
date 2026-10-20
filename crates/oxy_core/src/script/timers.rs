@@ -15,7 +15,7 @@ use super::handles::{self, MARK_OBJECT, decode};
 use super::host::{Limit, Shared, api, locate};
 use crate::document::{Id, Value};
 use crate::runtime::{FIXED_DT, MAX_WAIT, Runtime};
-use mlua::{Lua, MultiValue, Table, Value as LuaValue};
+use mlua::{Function, Lua, MultiValue, Table, Value as LuaValue};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -147,9 +147,6 @@ pub(crate) struct TimerStep {
     pub args: Vec<ScriptArg>,
 }
 
-/// The methods objects have for timers.
-pub(crate) const METHODS: [&str; 5] = ["after", "every", "sequence", "schedule", "cancel"];
-
 /// Calls of one sequence or schedule.
 const MAX_STEPS: usize = 1024;
 /// Values passed to one call.
@@ -168,134 +165,130 @@ pub(crate) fn delay(seconds: f64) -> Result<f64, String> {
     Ok(seconds.max(f64::from(FIXED_DT)))
 }
 
-/// Puts the timer methods in the objects' table of methods.
-pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, methods: &Table) -> mlua::Result<()> {
+/// `self:after(seconds, Module.f, ...)`.
+pub(crate) fn after(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     let s = shared.clone();
-    methods.raw_set(
-        "after",
-        lua.create_function(
-            move |lua, (me, seconds, f, data): (LuaValue, LuaValue, LuaValue, MultiValue)| {
-                api(lua, &s, "after", |runtime| {
-                    let (owner, script) = mine(&s, &me, "after")?;
-                    let first = TimerStep {
-                        delay: delay(seconds_of(&seconds, "after")?)?,
-                        function: function_name(&s, &f, "after")?,
-                        args: values(&s, &data)?,
-                    };
-                    queue(lua, &s, runtime, &owner, &script, Some(first), Repeat::Once)
-                })
-            },
-        )?,
-    )?;
-    let s = shared.clone();
-    methods.raw_set(
-        "every",
-        lua.create_function(
-            move |lua, (me, seconds, f, data): (LuaValue, LuaValue, LuaValue, MultiValue)| {
-                api(lua, &s, "every", |runtime| {
-                    let (owner, script) = mine(&s, &me, "every")?;
-                    let interval = delay(seconds_of(&seconds, "every")?)?;
-                    let first = TimerStep {
-                        delay: interval,
-                        function: function_name(&s, &f, "every")?,
-                        args: values(&s, &data)?,
-                    };
-                    let then = Repeat::Every(interval);
-                    queue(lua, &s, runtime, &owner, &script, Some(first), then)
-                })
-            },
-        )?,
-    )?;
-    let s = shared.clone();
-    methods.raw_set(
-        "sequence",
-        lua.create_function(
-            move |lua, (me, interval, f, items): (LuaValue, LuaValue, LuaValue, LuaValue)| {
-                api(lua, &s, "sequence", |runtime| {
-                    let (owner, script) = mine(&s, &me, "sequence")?;
-                    let interval = delay(seconds_of(&interval, "sequence")?)?;
-                    let function = function_name(&s, &f, "sequence")?;
-                    let LuaValue::Table(items) = &items else {
-                        return Err(
-                            "sequence precisa de uma lista de itens, como { 3, 2, 1 }".into()
-                        );
-                    };
-                    // The k-th item (k-1) × interval after now, as self:after would call it: the
-                    // first on the next step, the second interval after now (one step less after
-                    // the first), every other one interval after the one before.
-                    let step = f64::from(FIXED_DT);
-                    let mut steps = VecDeque::new();
-                    for (k, item) in list(items, "sequence")?.into_iter().enumerate() {
-                        steps.push_back(TimerStep {
-                            delay: match k {
-                                0 => step,
-                                1 => interval - step,
-                                _ => interval,
-                            },
-                            function: function.clone(),
-                            args: vec![value(&s, &item)?],
-                        });
-                    }
-                    let first = steps.pop_front();
-                    let then = Repeat::Steps(steps);
-                    queue(lua, &s, runtime, &owner, &script, first, then)
-                })
-            },
-        )?,
-    )?;
-    let s = shared.clone();
-    methods.raw_set(
-        "schedule",
-        lua.create_function(move |lua, (me, list_of): (LuaValue, LuaValue)| {
-            api(lua, &s, "schedule", |runtime| {
-                let (owner, script) = mine(&s, &me, "schedule")?;
-                let shape = "schedule precisa de uma lista de passos { atraso, função, dado? }, \
-                             como { {0.5, Modulo.abrir}, {1, Modulo.fechar} }";
-                let LuaValue::Table(given) = &list_of else {
-                    return Err(shape.into());
+    lua.create_function(
+        move |lua, (me, seconds, f, data): (LuaValue, LuaValue, LuaValue, MultiValue)| {
+            api(lua, &s, "after", |runtime| {
+                let (owner, script) = mine(&s, &me, "after")?;
+                let first = TimerStep {
+                    delay: delay(seconds_of(&seconds, "after")?)?,
+                    function: function_name(&s, &f, "after")?,
+                    args: values(&s, &data)?,
                 };
+                queue(lua, &s, runtime, &owner, &script, Some(first), Repeat::Once)
+            })
+        },
+    )
+}
+
+/// `self:every(seconds, Module.f, ...)`.
+pub(crate) fn every(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let s = shared.clone();
+    lua.create_function(
+        move |lua, (me, seconds, f, data): (LuaValue, LuaValue, LuaValue, MultiValue)| {
+            api(lua, &s, "every", |runtime| {
+                let (owner, script) = mine(&s, &me, "every")?;
+                let interval = delay(seconds_of(&seconds, "every")?)?;
+                let first = TimerStep {
+                    delay: interval,
+                    function: function_name(&s, &f, "every")?,
+                    args: values(&s, &data)?,
+                };
+                let then = Repeat::Every(interval);
+                queue(lua, &s, runtime, &owner, &script, Some(first), then)
+            })
+        },
+    )
+}
+
+/// `self:sequence(interval, Module.f, items)`.
+pub(crate) fn sequence(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let s = shared.clone();
+    lua.create_function(
+        move |lua, (me, interval, f, items): (LuaValue, LuaValue, LuaValue, LuaValue)| {
+            api(lua, &s, "sequence", |runtime| {
+                let (owner, script) = mine(&s, &me, "sequence")?;
+                let interval = delay(seconds_of(&interval, "sequence")?)?;
+                let function = function_name(&s, &f, "sequence")?;
+                let LuaValue::Table(items) = &items else {
+                    return Err("sequence precisa de uma lista de itens, como { 3, 2, 1 }".into());
+                };
+                // The k-th item (k-1) × interval after now, as self:after would call it: the
+                // first on the next step, the second interval after now (one step less after
+                // the first), every other one interval after the one before.
+                let step = f64::from(FIXED_DT);
                 let mut steps = VecDeque::new();
-                for (i, step) in list(given, "schedule")?.into_iter().enumerate() {
-                    let LuaValue::Table(step) = step else {
-                        return Err(format!("passo {}: {shape}", i + 1));
-                    };
-                    let get = |n: usize| step.raw_get::<LuaValue>(n).map_err(|e| e.to_string());
-                    let data = get(3)?;
+                for (k, item) in list(items, "sequence")?.into_iter().enumerate() {
                     steps.push_back(TimerStep {
-                        delay: delay(seconds_of(&get(1)?, "schedule")?)?,
-                        function: function_name(&s, &get(2)?, "schedule")?,
-                        args: match data {
-                            LuaValue::Nil => Vec::new(),
-                            data => vec![value(&s, &data)?],
+                        delay: match k {
+                            0 => step,
+                            1 => interval - step,
+                            _ => interval,
                         },
+                        function: function.clone(),
+                        args: vec![value(&s, &item)?],
                     });
                 }
                 let first = steps.pop_front();
                 let then = Repeat::Steps(steps);
                 queue(lua, &s, runtime, &owner, &script, first, then)
             })
-        })?,
-    )?;
+        },
+    )
+}
+
+/// `self:schedule({ {delay, Module.f, data?}, ... })`.
+pub(crate) fn schedule(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     let s = shared.clone();
-    methods.raw_set(
-        "cancel",
-        lua.create_function(move |lua, (me, id): (LuaValue, LuaValue)| {
-            api(lua, &s, "cancel", |runtime| {
-                let (owner, _) = mine(&s, &me, "cancel")?;
-                let Some(id) = number(&id) else {
-                    return Err(
-                        "cancel precisa do número que after, every, sequence ou schedule \
-                                devolveu"
-                            .into(),
-                    );
+    lua.create_function(move |lua, (me, list_of): (LuaValue, LuaValue)| {
+        api(lua, &s, "schedule", |runtime| {
+            let (owner, script) = mine(&s, &me, "schedule")?;
+            let shape = "schedule precisa de uma lista de passos { atraso, função, dado? }, como \
+                         { {0.5, Modulo.abrir}, {1, Modulo.fechar} }";
+            let LuaValue::Table(given) = &list_of else {
+                return Err(shape.into());
+            };
+            let mut steps = VecDeque::new();
+            for (i, step) in list(given, "schedule")?.into_iter().enumerate() {
+                let LuaValue::Table(step) = step else {
+                    return Err(format!("passo {}: {shape}", i + 1));
                 };
-                let given =
-                    id.fract() == 0.0 && (1.0..=crate::random::MAX_SEED as f64).contains(&id);
-                Ok(given && runtime.cancel_script_timer(&owner, id as u64))
-            })
-        })?,
-    )?;
-    Ok(())
+                let get = |n: usize| step.raw_get::<LuaValue>(n).map_err(|e| e.to_string());
+                let data = get(3)?;
+                steps.push_back(TimerStep {
+                    delay: delay(seconds_of(&get(1)?, "schedule")?)?,
+                    function: function_name(&s, &get(2)?, "schedule")?,
+                    args: match data {
+                        LuaValue::Nil => Vec::new(),
+                        data => vec![value(&s, &data)?],
+                    },
+                });
+            }
+            let first = steps.pop_front();
+            let then = Repeat::Steps(steps);
+            queue(lua, &s, runtime, &owner, &script, first, then)
+        })
+    })
+}
+
+/// `self:cancel(id)`.
+pub(crate) fn cancel(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let s = shared.clone();
+    lua.create_function(move |lua, (me, id): (LuaValue, LuaValue)| {
+        api(lua, &s, "cancel", |runtime| {
+            let (owner, _) = mine(&s, &me, "cancel")?;
+            let Some(id) = number(&id) else {
+                return Err(
+                    "cancel precisa do número que after, every, sequence ou schedule devolveu"
+                        .into(),
+                );
+            };
+            let given = id.fract() == 0.0 && (1.0..=crate::random::MAX_SEED as f64).contains(&id);
+            Ok(given && runtime.cancel_script_timer(&owner, id as u64))
+        })
+    })
 }
 
 /// Queues a timer for `owner`; its number, for `self:cancel`. With no room left in the queue,

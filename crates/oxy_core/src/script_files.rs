@@ -379,13 +379,13 @@ fn and_list(items: &[&str]) -> String {
     }
 }
 
-/// The definitions file as written: a line with the engine's version, then [`script::TYPES`].
+/// The definitions file as written: a line with the engine's version, then [`script::types`].
 pub fn types_text() -> String {
     format!(
         "-- Gerado pela OXY Engine {}: os tipos da API dos scripts para o luau-lsp. Não edite: a\n\
          -- OXY grava este arquivo de novo quando a versão da engine muda.\n{}",
         engine_version(),
-        script::TYPES
+        script::types()
     )
 }
 
@@ -713,6 +713,6 @@ mod tests {
             "{}",
             &text[..120]
         );
-        assert!(text.ends_with(script::TYPES));
+        assert!(text.ends_with(script::types()));
     }
 }

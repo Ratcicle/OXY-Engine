@@ -166,6 +166,7 @@ fn the_globals_are_the_engines_list_read_only_and_frozen() {
         "math:table",
         "next:function",
         "pairs:function",
+        "param:table",
         "pcall:function",
         "print:function",
         "rawequal:function",
@@ -604,6 +605,8 @@ function M.gone(self, outro)
     return outro.name
 end
 function M.loose(self) self.x = 1 end
+function M.misspelled(self) self.positon = vector.create(0, 1, 0) end
+function M.method_written(self) self.after = 1 end
 function M.name(self) self.name = "x" end
 function M.typo(self) return self.nmae end
 function M.method(self) self:exist() end
@@ -638,6 +641,12 @@ return M
             "loose",
             "self não aceita campos soltos (x); use self.state ou um atributo",
         ),
+        (
+            "misspelled",
+            "self não aceita campos soltos (positon; quis dizer 'position'?); use self.state ou \
+             um atributo",
+        ),
+        ("method_written", "after é um método e é só leitura"),
         ("name", "name é só leitura"),
         ("typo", "Object não tem 'nmae'; quis dizer 'name'?"),
         ("method", "Object não tem 'exist'; quis dizer 'exists'?"),

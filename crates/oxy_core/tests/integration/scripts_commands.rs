@@ -411,7 +411,8 @@ fn only_an_attached_script_declares_attributes() {
                 "Comando 1 (attach_script, o 2º do lote): Solto: os atributos que \
                  scripts/solto.luau declara não foram criados (scripts/solto.luau: \
                  Modulo.attributes.Alvo: uma tabela não serve de valor padrão; use um número, um \
-                 texto, um booleano ou um vetor); corrija o script e anexe-o de novo para criá-los"
+                 texto, um booleano, um vetor, param.object() (um objeto escolhido depois) ou \
+                 param.vector2(x, y)); corrija o script e anexe-o de novo para criá-los"
                     .to_owned()
             ]
         ]
@@ -444,7 +445,8 @@ fn only_an_attached_script_declares_attributes() {
         [
             format!(
                 "scripts/solto.luau: Modulo.attributes.Alvo: uma tabela não serve de valor \
-                 padrão; use um número, um texto, um booleano ou um vetor{CREATES_NOTHING}"
+                 padrão; use um número, um texto, um booleano, um vetor, param.object() (um \
+                 objeto escolhido depois) ou param.vector2(x, y){CREATES_NOTHING}"
             ),
             format!(
                 "scripts/dados/classes.luau: Modulo.attributes: os nomes dos atributos são \

@@ -1138,8 +1138,10 @@ the one player hears every sound, so check the character's own attribute to play
 them); vars.get(name, key?) (a key never written reads the variable's initial value; a name the \
 project lacks is an error with the nearest one), vars.set(name, value, key?); print and warn. \
 Game variables keep their values when a scene restarts: reset in on_start what must start over. \
-Module.attributes = {Name = default} declares what attach_script gives an object. Objects, \
-attributes, sounds, actions and variables go by the person's names.";
+Module.attributes = {Name = default} declares what attach_script gives an object \
+(param.object() an empty Object attribute, param.vector2(x, y) a Vector2). Every function's help, \
+made from the engine's API table, is in the types vscode writes (.oxy/tipos/oxy.d.luau). \
+Objects, attributes, sounds, actions and variables go by the person's names.";
 
 const EXPORT_DESCRIPTION: &str = "Exports the game as the editor's Projeto > Exportar jogo \
 does, into <destination>\\<game name>: the game name is game.title of oxy_project (set with \

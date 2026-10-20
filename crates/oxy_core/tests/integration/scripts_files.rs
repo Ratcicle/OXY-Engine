@@ -2,13 +2,15 @@
 //! checked as loading checks them, written all-or-nothing with the agent's copy of a changed
 //! file, and the files VS Code with luau-lsp reads; with them, what a reload in the editor's
 //! test warns about and the scripts an object attaches that the folder lacks. When
-//! `OXY_LUAU_LSP` names a luau-lsp 1.70.1 executable, its check of the generated types runs too.
+//! `OXY_LUAU_LSP` names a luau-lsp 1.70.1 executable, its check of the generated types, of the
+//! API's examples, of objects typed by their scripts and of the plan-B module runs too, in both
+//! of Luau's solvers (design §5.7).
 use oxy_core::{
     document::*,
     persistence::{self, PersistenceError},
     query,
     runtime::{FIXED_DT, InputFrame, Runtime, RuntimeOptions},
-    script::{ScriptRef, ScriptSources},
+    script::{self, ScriptRef, ScriptSources, registry},
     script_files::{self, Request},
 };
 use serde_json::{Value as Json, json};
@@ -521,6 +523,21 @@ return Race
 /// `luau-lsp analyze` as design §6.3 runs it, in `root`, on `files`, in the old solver or the
 /// new one: whether it found nothing, and what it said.
 fn analyze(lsp: &Path, root: &Path, files: &[&str], new_solver: bool) -> (bool, String) {
+    analyze_with(lsp, root, files, new_solver, true)
+}
+
+/// The settings of the plan-B form: the globals the sandbox takes away, without the definitions
+/// file that the settings OXY writes name.
+const MODULE_SETTINGS: &str = "modulo-settings.json";
+
+/// `analyze`, with the definitions file OXY writes or, for the plan-B module, without it.
+fn analyze_with(
+    lsp: &Path,
+    root: &Path,
+    files: &[&str],
+    new_solver: bool,
+    definitions: bool,
+) -> (bool, String) {
     let mut command = std::process::Command::new(lsp);
     command
         .current_dir(root)
@@ -529,13 +546,20 @@ fn analyze(lsp: &Path, root: &Path, files: &[&str], new_solver: bool) -> (bool, 
         .arg("--platform=standard")
         .arg("--formatter=gnu")
         .arg(format!(
+            "--settings={}",
+            root.join(if definitions {
+                ".vscode/settings.json"
+            } else {
+                MODULE_SETTINGS
+            })
+            .display()
+        ));
+    if definitions {
+        command.arg(format!(
             "--definitions=@oxy={}",
             root.join(script_files::TYPES_PATH).display()
-        ))
-        .arg(format!(
-            "--settings={}",
-            root.join(".vscode/settings.json").display()
         ));
+    }
     if new_solver {
         command.arg("--flag:LuauSolverV2=true");
     }
@@ -544,6 +568,89 @@ fn analyze(lsp: &Path, root: &Path, files: &[&str], new_solver: bool) -> (bool, 
         + &String::from_utf8_lossy(&output.stderr);
     (output.status.success(), said)
 }
+
+/// What luau-lsp said beyond its notes ([INFO], and [WARN] for the module form without
+/// definitions): the diagnostics, errors and lint alike.
+fn diagnostics(said: &str) -> Vec<&str> {
+    said.lines()
+        .filter(|line| {
+            !line.trim().is_empty() && !line.starts_with("[INFO]") && !line.starts_with("[WARN]")
+        })
+        .collect()
+}
+
+/// `text` as a script of the plan-B form (S2 §3): the module required, the types and the
+/// global tables it uses taken from it.
+fn module_form(text: &str) -> String {
+    let uses = |name: &str| {
+        text.match_indices(name).any(|(at, _)| {
+            let before = text[..at].chars().next_back();
+            let after = text[at + name.len()..].chars().next();
+            !before.is_some_and(|c| c.is_alphanumeric() || "_.:".contains(c))
+                && after.is_some_and(|c| c == '.' || c == '(' || c == '<' || c == ',' || c == ')')
+        })
+    };
+    let mut header = vec!["local oxy = require(\"@oxy\")".to_owned()];
+    for ty in ["Object", "CharacterEvent"] {
+        if uses(ty) {
+            header.push(format!("type {ty} = oxy.{ty}"));
+        }
+    }
+    if uses("ScriptObject") {
+        header.push("type ScriptObject<A, S> = oxy.ScriptObject<A, S>".to_owned());
+    }
+    let mut globals: Vec<&str> = registry::API
+        .iter()
+        .filter(|f| f.kind == registry::ApiKind::Function && f.in_types() && f.name != "print")
+        .map(|f| {
+            if f.holder().is_empty() {
+                f.name
+            } else {
+                f.holder()
+            }
+        })
+        .collect();
+    globals.dedup();
+    let used: Vec<&str> = globals.into_iter().filter(|g| uses(g)).collect();
+    if !used.is_empty() {
+        let taken: Vec<String> = used.iter().map(|g| format!("oxy.{g}")).collect();
+        header.push(format!("local {} = {}", used.join(", "), taken.join(", ")));
+    }
+    let (first, rest) = text.split_once('\n').unwrap();
+    if header.len() == 1 {
+        return text.to_owned();
+    }
+    format!("{first}\n{}\n{rest}", header.join("\n"))
+}
+
+/// Typed by its declarations (`ScriptObject`), as the Guide shows: a marker typed as the value
+/// the attribute holds, the memory with its fields.
+const TYPED: &str = r#"--!strict
+local Race = {}
+Race.attributes = { Aviso = "", Painel = param.object(), Tamanho = param.vector2(1, 1) }
+Race.state = { mostrados = 0 }
+type Self = ScriptObject<typeof(Race.attributes), typeof(Race.state)>
+
+function Race.on_start(self: Self)
+    self:sequence(1, Race.show, { 3, 2, 1, 0 })
+    self:after(4, Race.hide_banner)
+end
+
+function Race.show(self: Self, n: number)
+    self.attr.Aviso = if n > 0 then tostring(n) else "Já!"
+    self.state.mostrados += 1
+end
+
+function Race.hide_banner(self: Self)
+    local painel = self.attr.Painel
+    if painel then
+        painel.position = self.attr.Tamanho
+    end
+    self.attr.Aviso = ""
+end
+
+return Race
+"#;
 
 #[test]
 fn luau_lsp_reads_the_types_without_false_errors_and_catches_wrong_names() {
@@ -588,5 +695,116 @@ fn luau_lsp_reads_the_types_without_false_errors_and_catches_wrong_names() {
     .unwrap();
     let (clean, said) = analyze(&lsp, &root, &["scripts/sorteio.luau"], false);
     assert!(!clean && said.contains("Key 'random' not found"), "{said}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
+    // Optional, as the test above.
+    let Some(lsp) = std::env::var_os("OXY_LUAU_LSP").map(PathBuf::from) else {
+        return;
+    };
+    let examples: Vec<(String, String)> = registry::API
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (format!("scripts/api/{i:02}.luau"), f.example_script()))
+        .collect();
+    let mut files: Vec<(String, String)> = examples.clone();
+    files.push(("scripts/tipado.luau".into(), TYPED.into()));
+    // The module require's example loads, next to the examples in both forms.
+    for folder in ["scripts", "modulo"] {
+        files.push((
+            format!("{folder}/api/dados.luau"),
+            "return { custo = 2 }\n".into(),
+        ));
+    }
+    // Names the script does not declare, and an empty object attribute read unchecked.
+    for (name, from, to) in [
+        (
+            "avisoo",
+            "self.attr.Aviso = \"\"\n",
+            "self.attr.Avisoo = \"\"\n",
+        ),
+        (
+            "memoria",
+            "self.state.mostrados += 1",
+            "self.state.mostrado += 1",
+        ),
+        (
+            "painel",
+            "local painel = self.attr.Painel\n    if painel then",
+            "self.attr.Painel.position = self.attr.Tamanho\n    if true then\n        local \
+             painel = self.attr.Painel :: Object",
+        ),
+    ] {
+        assert!(TYPED.contains(from), "{name}");
+        files.push((format!("scripts/{name}.luau"), TYPED.replacen(from, to, 1)));
+    }
+    // The plan-B form: the module and the same scripts requiring it.
+    files.push((".oxy/tipos/oxy.luau".into(), script::generate::module()));
+    files.push((
+        "modulo/.luaurc".into(),
+        "{ \"aliases\": { \"oxy\": \"../.oxy/tipos/oxy\" } }\n".into(),
+    ));
+    let mut scripts = examples.clone();
+    scripts.push(("scripts/tipado.luau".into(), TYPED.into()));
+    for (path, text) in &scripts {
+        files.push((path.replace("scripts/", "modulo/"), module_form(text)));
+    }
+    files.push((
+        "modulo/errado.luau".into(),
+        module_form(
+            &examples[registry::API
+                .iter()
+                .position(|f| f.name == "audio.play")
+                .unwrap()]
+            .1,
+        )
+        .replace("audio.play(", "audio.paly("),
+    ));
+    files.push((
+        MODULE_SETTINGS.into(),
+        json!({ "luau-lsp.types.disabledGlobals": script_files::DISABLED_GLOBALS }).to_string(),
+    ));
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let root = folder(&borrowed);
+    script_files::setup_vscode(&root).unwrap();
+    let mut good: Vec<&str> = examples.iter().map(|(path, _)| path.as_str()).collect();
+    good.push("scripts/tipado.luau");
+    let module: Vec<String> = good
+        .iter()
+        .map(|path| path.replace("scripts/", "modulo/"))
+        .collect();
+    let mut module: Vec<&str> = module.iter().map(String::as_str).collect();
+    module.push(".oxy/tipos/oxy.luau");
+    for new_solver in [false, true] {
+        let (clean, said) = analyze(&lsp, &root, &good, new_solver);
+        assert!(
+            clean && diagnostics(&said).is_empty(),
+            "solver novo {new_solver}: {said}"
+        );
+        let (clean, said) = analyze_with(&lsp, &root, &module, new_solver, false);
+        assert!(
+            clean && diagnostics(&said).is_empty(),
+            "módulo, solver novo {new_solver}: {said}"
+        );
+        for (name, found) in [
+            ("avisoo", "Cannot add property 'Avisoo'"),
+            ("memoria", "key 'mostrado'"),
+            ("painel", "could be nil"),
+        ] {
+            let (clean, said) =
+                analyze(&lsp, &root, &[&format!("scripts/{name}.luau")], new_solver);
+            assert!(
+                !clean && said.contains(found),
+                "{name}, solver novo {new_solver}: {said}"
+            );
+        }
+        let (clean, said) = analyze_with(&lsp, &root, &["modulo/errado.luau"], new_solver, false);
+        assert!(!clean && said.contains("Key 'paly' not found"), "{said}");
+    }
     std::fs::remove_dir_all(root).unwrap();
 }

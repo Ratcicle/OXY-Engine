@@ -5,7 +5,10 @@
 //! `scripts/porta.luau`. Values per object stay in its attributes.
 //!
 //! What game scripts reach, by names in English with underscores (decision Q5; objects,
-//! attributes, sounds, actions and variables keep the names the person gave them):
+//! attributes, sounds, actions and variables keep the names the person gave them), is the
+//! registry's ([`registry::API`], design §5.7): one row per callback, property, method and
+//! function, from which the host installs what scripts call and [`generate`] writes the types,
+//! the plan-B module, the Guide's pages and docs/api-scripts.md. In short:
 //! - the callbacks of [`Callback`], `self` being the object: `on_start(self)`,
 //!   `on_area_enter(self, other)`, `on_input(self, action, phase)` (the action's name and
 //!   `"pressed"` or `"released"`) and the others;
@@ -14,12 +17,14 @@
 //! - timers (`timers`): `self:after`, `self:every`, `self:sequence`, `self:schedule` and
 //!   `self:cancel`;
 //! - the global tables of `api`: `audio.play(name, { volume = …, audience = obj })`,
-//!   `vars.get(name, key?)` and `vars.set(name, value, key?)`;
-//! - `print` and `warn`, which log the object's name, the text and the script line.
+//!   `vars.get(name, key?)`, `vars.set(name, value, key?)`, and `param.object()` and
+//!   `param.vector2(x, y)` for declarations;
+//! - `print` and `warn`, which log the object's name, the text and the script line;
+//! - `require(path)` of `sandbox`, a frozen module of the scripts' folder.
 //!
-//! A module may declare `Module.attributes = { Velocidade = 90 }`, the attributes attaching it
-//! gives an object that lacks them, with those defaults (decision Q6; see
-//! [`declared_attributes`]), and `Module.state`, its memory. Only an attached script's
+//! A module may declare `Module.attributes = { Velocidade = 90, Alvo = param.object() }`, the
+//! attributes attaching it gives an object that lacks them, with those defaults (decision Q6;
+//! see [`declared_attributes`]), and `Module.state`, its memory. Only an attached script's
 //! `Module.attributes` is read, so a table of content that is only required may hold an
 //! `attributes` of its own.
 //!
@@ -53,6 +58,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 mod api;
 mod bytecode;
 mod errors;
+pub mod generate;
 mod handles;
 mod host;
 #[cfg(test)]
@@ -60,6 +66,7 @@ mod host_tests;
 mod load;
 pub(crate) mod memory;
 pub(crate) mod messages;
+pub mod registry;
 mod sandbox;
 #[cfg(test)]
 mod state_tests;
@@ -315,10 +322,13 @@ pub(crate) fn undeclared_attributes(path: &str, message: &str) -> ScriptError {
 
 /// The types of the scripts' API for the luau-lsp extension of VS Code (design §5.3, §6.2):
 /// globals and a definitions file of `export type`, `declare name: type` and `declare
-/// function` only, the one form both of Luau's solvers in luau-lsp 1.70.1 read. The vertical
-/// slice of 0.7 has the API its scripts reach; the full API comes with the table it is made
-/// from. Without the header line `script_files` writes before it.
-pub const TYPES: &str = include_str!("script/oxy.d.luau");
+/// function` only, the one form both of Luau's solvers in luau-lsp 1.70.1 read, made from the
+/// registry by [`generate::definitions`] (the repository keeps it in `script/oxy.d.luau`).
+/// Without the header line `script_files` writes before it.
+pub fn types() -> &'static str {
+    static TYPES: std::sync::LazyLock<String> = std::sync::LazyLock::new(generate::definitions);
+    &TYPES
+}
 
 /// The scripts' folder, in the project's folder (`data` in an exported game).
 pub const FOLDER: &str = "scripts";
@@ -762,64 +772,6 @@ mod tests {
             "Gatilho 1, Gatilho 2 e Gatilho 3: o script scripts/gatilho.luau não existe na pasta \
              do projeto"
         );
-    }
-
-    /// The names a block of the definitions file declares, from the line `start` to its `}`.
-    fn declared(start: &str) -> Vec<String> {
-        let body = TYPES.split(start).nth(1).expect(start);
-        let body = &body[..body.find("\n}").expect("the block's end")];
-        let mut names: Vec<String> = body
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.starts_with("--"))
-            .filter_map(|line| Some(line.split_once(':')?.0.trim().to_owned()))
-            .collect();
-        names.sort();
-        names
-    }
-
-    #[test]
-    fn the_types_declare_what_scripts_reach() {
-        let mut members: Vec<String> = handles::OBJECT_MEMBERS.map(String::from).to_vec();
-        members.sort();
-        assert_eq!(declared("export type Object = {"), members);
-        assert_eq!(declared("export type ScriptObject<A, S> = {"), members);
-        // The global tables as the VM has them, and the base functions they declare.
-        let host = ScriptHost::new(std::sync::Arc::default()).unwrap();
-        let globals = host.lua().globals();
-        for table in ["audio", "vars"] {
-            let found: mlua::Table = globals.get(table).unwrap();
-            let mut names: Vec<String> = found
-                .pairs::<String, mlua::Value>()
-                .map(|pair| pair.unwrap().0)
-                .collect();
-            names.sort();
-            assert_eq!(declared(&format!("declare {table}: {{")), names, "{table}");
-        }
-        assert!(TYPES.contains("declare function warn(...: any): ()"));
-        assert!(globals.get::<mlua::Function>("warn").is_ok());
-        // Every callback is listed for the person.
-        for callback in Callback::ALL {
-            assert!(
-                TYPES.contains(&format!("--   {}(self", callback.name())),
-                "{callback:?}"
-            );
-        }
-        // Only the syntax luau-lsp 1.70.1 reads in both solvers (design §5.3).
-        for line in TYPES
-            .lines()
-            .filter(|l| !l.starts_with(' ') && !l.starts_with("--"))
-        {
-            assert!(
-                line.is_empty()
-                    || line == "}"
-                    || line.starts_with("export type ")
-                    || line.starts_with("declare function ")
-                    || (line.starts_with("declare ") && line.ends_with(": {")),
-                "{line}"
-            );
-        }
-        assert!(!TYPES.contains("declare class") && !TYPES.contains("declare extern"));
     }
 
     #[test]

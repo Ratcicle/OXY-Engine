@@ -12,28 +12,28 @@
 //! back. That table is emptied by the first table a call touches, so nothing of an earlier call
 //! is read from it.
 //!
-//! What an object has for scripts:
-//! - `obj.name`: its name, read only;
+//! What an object has for scripts is the registry's (`registry`): its properties ([`Property`])
+//! are resolved here by name, `obj:exists()` and `obj:has_attribute(name)` run in C
+//! ([`FastMethod`]), and the other methods (the timers of `timers`, `obj:send` of `messages`)
+//! are mlua functions in the table of methods, made from the registry's rows.
 //! - `obj.attr`: its attributes, `obj.attr.Vida` (nil when it lacks one) and `obj.attr.Vida = 3`
 //!   (it must have it, with a value of the same type; a Vetor2 takes a vector's x and y);
 //! - `obj.position` and `obj.world_position`: where it stands, in metres, as a vector: in its
 //!   parent's axes, as Properties shows it, and its pivot in the world (a 3D character's
 //!   origin); writing one moves it as Mover / girar / escalar objeto does, refusing what that
 //!   refuses (a 3D character, an object a playing clip poses);
-//! - `obj:exists()` and `obj:has_attribute(name)`;
-//! - `self.state`, the memory of the script running (see `memory`);
-//! - the timers of `timers` (`self:after(...)` and the others) and `obj:send(name, value)` of
-//!   `messages`, written with mlua and called from the table of methods.
+//! - `self.state`, the memory of the script running (see `memory`).
 use super::errors::closest;
 use super::host::{Limit, Phase, Shared, door, locate_raw, peek};
 use super::memory::{self, Key, Memory, ScriptValue};
-use super::{messages, timers, value_kind};
+use super::registry::{self, Imp};
+use super::value_kind;
 use crate::document::Value;
 use crate::runtime::{Runtime, TransformPart, TransformSpace};
 use glam::Vec3;
 use mlua::{Function, LightUserData, Lua, Table, ffi};
 use std::ffi::CStr;
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
@@ -83,41 +83,29 @@ pub(crate) fn collision(runtime: &Runtime, a: &str, b: &str) -> String {
     )
 }
 
-pub(super) const OBJECT_MEMBERS: [&str; 13] = [
-    "name",
-    "attr",
-    "state",
-    "position",
-    "world_position",
-    "exists",
-    "has_attribute",
-    "after",
-    "every",
-    "sequence",
-    "schedule",
-    "cancel",
-    "send",
-];
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Method {
-    Exists = 1,
-    HasAttribute = 2,
-    /// One of `timers::METHODS` or `send`, an mlua function in the table of methods.
-    Listed = 3,
+/// The properties of objects, which `__index` and `__newindex` resolve.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Property {
+    Name,
+    Attr,
+    State,
+    Position,
+    WorldPosition,
 }
 
-const METHODS: [(&CStr, Method); 8] = [
-    (c"exists", Method::Exists),
-    (c"has_attribute", Method::HasAttribute),
-    (c"after", Method::Listed),
-    (c"every", Method::Listed),
-    (c"sequence", Method::Listed),
-    (c"schedule", Method::Listed),
-    (c"cancel", Method::Listed),
-    (c"send", Method::Listed),
-];
-const _: () = assert!(timers::METHODS.len() == 5);
+impl Property {
+    /// Whether a script may assign it.
+    pub(crate) fn writable(self) -> bool {
+        matches!(self, Self::Position | Self::WorldPosition)
+    }
+}
+
+/// The methods of objects that run in C, without a call of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FastMethod {
+    Exists = 1,
+    HasAttribute = 2,
+}
 
 /// Why `self.state` cannot be measured, walked or copied.
 const STATE_SHAPE: &str = "self.state não se mede, não se percorre e não se copia: o primeiro \
@@ -125,32 +113,30 @@ const STATE_SHAPE: &str = "self.state não se mede, não se percorre e não se c
                            Modulo.state; guarde uma lista num campo (self.state.itens) para \
                            usar #, pairs ou table.clone (veja “Memória do script” no Guia)";
 
-fn method(name: &[u8]) -> Option<(&'static CStr, Method)> {
-    METHODS.iter().find(|(n, _)| n.to_bytes() == name).copied()
-}
-
 /// Installs the metatable of light userdata, frozen; the metatable and the table of touched
 /// tables of script memory.
 pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<(Table, Table)> {
     let me = LightUserData(Rc::as_ptr(shared) as *mut c_void);
     let methods = lua.create_table()?;
-    timers::install(lua, shared, &methods)?;
-    messages::install(lua, shared, &methods)?;
     let touched = lua.create_table()?;
-    for (name, method) in METHODS {
-        if method == Method::Listed {
-            continue;
-        }
-        // SAFETY: the two arguments become the closure's upvalues and the closure is left as
-        // the only value. `Shared` outlives the VM (the host closes the VM first).
-        let f: Function = unsafe {
-            lua.exec_raw((me, method as i32), |l| {
-                ffi::lua_pushcclosurek(l, object_method, name.as_ptr(), 2, None);
-            })?
+    for f in registry::API {
+        let method: Function = match f.imp {
+            Imp::Method(make) => make(lua, shared)?,
+            // SAFETY: the two arguments become the closure's upvalues and the closure is left
+            // as the only value. `Shared` outlives the VM (the host closes the VM first).
+            Imp::FastMethod(method) => unsafe {
+                lua.exec_raw((me, method as i32), |l| {
+                    ffi::lua_pushcclosurek(l, object_method, c"Object method".as_ptr(), 2, None);
+                })?
+            },
+            _ => continue,
         };
-        methods.raw_set(name.to_string_lossy(), f)?;
+        methods.raw_set(f.member(), method)?;
     }
     methods.set_readonly(true);
+    // The tests read what scripts reach.
+    #[cfg(test)]
+    lua.set_named_registry_value("oxy.methods", &methods)?;
     // SAFETY: as above.
     let (index, newindex, namecall, tostring, len): (
         Function,
@@ -198,7 +184,8 @@ enum Out {
     Vector([f32; 3]),
     Text(String),
     Handle(u64, u64),
-    Method(&'static CStr),
+    /// The method under the key, from the table of methods.
+    Method,
 }
 
 /// A value a script writes, read off the stack first.
@@ -226,12 +213,14 @@ impl In {
     }
 }
 
-/// The space a position property reads and writes in.
-fn position_space(name: &[u8]) -> Option<TransformSpace> {
-    match name {
-        b"position" => Some(TransformSpace::Local),
-        b"world_position" => Some(TransformSpace::World),
-        _ => None,
+/// The property objects have under `name`, none for a method; why not when they have neither.
+fn property(name: &[u8]) -> Result<Option<Property>, String> {
+    match registry::object_member(name) {
+        Some(f) => Ok(match f.imp {
+            Imp::Property(property) => Some(property),
+            _ => None,
+        }),
+        None => Err(unknown_member(name)),
     }
 }
 
@@ -246,10 +235,12 @@ fn utf8(bytes: &[u8]) -> Result<&str, String> {
 fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Out, String> {
     match mark {
         MARK_OBJECT => {
-            let name = name.unwrap_or_default();
-            Ok(match name {
-                b"attr" => Out::Handle(MARK_ATTRIBUTES, key),
-                b"state" => {
+            let Some(property) = property(name.unwrap_or_default())? else {
+                return Ok(Out::Method);
+            };
+            Ok(match property {
+                Property::Attr => Out::Handle(MARK_ATTRIBUTES, key),
+                Property::State => {
                     // Its fields count the units; outside a call the door says why not.
                     if shared.phase.get() != Phase::Running {
                         door(shared)?;
@@ -257,14 +248,18 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
                     state_module(shared, key)?;
                     Out::Handle(MARK_STATE, key)
                 }
-                b"name" => {
+                Property::Name => {
                     let runtime = door(shared)?;
                     let handles = shared.handles.borrow();
                     let id = handles.get(&key).ok_or_else(gone)?;
                     Out::Text(runtime.entity(id).ok_or_else(gone)?.name.clone())
                 }
-                b"position" | b"world_position" => {
-                    let space = position_space(name).expect("a position");
+                Property::Position | Property::WorldPosition => {
+                    let space = if property == Property::Position {
+                        TransformSpace::Local
+                    } else {
+                        TransformSpace::World
+                    };
                     let runtime = door(shared)?;
                     let handles = shared.handles.borrow();
                     let id = handles.get(&key).ok_or_else(gone)?;
@@ -274,10 +269,6 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
                     let (position, _) = runtime.object_pose(id, space)?;
                     Out::Vector(position.to_array())
                 }
-                other => match method(other) {
-                    Some((name, _)) => Out::Method(name),
-                    None => return Err(unknown_member(other)),
-                },
             })
         }
         MARK_ATTRIBUTES => {
@@ -413,18 +404,23 @@ fn state_assign(shared: &Shared, key: u64, name: &[u8]) -> Result<(), String> {
         .map_err(|r| r.message())
 }
 
+/// The member of objects nearest to `name`, as a hint: `; quis dizer 'position'?`.
+fn nearest_member(name: &str) -> String {
+    closest(name, registry::object_members().filter(|m| *m != name))
+        .map(|near| format!("; quis dizer '{near}'?"))
+        .unwrap_or_default()
+}
+
 fn unknown_member(name: &[u8]) -> String {
     let name = String::from_utf8_lossy(name);
-    match closest(&name, OBJECT_MEMBERS.into_iter().filter(|m| *m != name)) {
-        Some(near) => format!("Object não tem '{name}'; quis dizer '{near}'?"),
-        None => format!("Object não tem '{name}'"),
-    }
+    format!("Object não tem '{name}'{}", nearest_member(&name))
 }
 
 /// `obj:name()` of a name that is no method.
 fn not_a_method(name: &[u8]) -> String {
-    match OBJECT_MEMBERS.into_iter().find(|m| m.as_bytes() == name) {
-        Some(property) => {
+    match registry::object_member(name) {
+        Some(f) => {
+            let property = f.member();
             format!("{property} é uma propriedade, não um método (use obj.{property})")
         }
         None => unknown_member(name),
@@ -432,21 +428,31 @@ fn not_a_method(name: &[u8]) -> String {
 }
 
 fn newindex(shared: &Shared, mark: u64, key: u64, name: &[u8], value: In) -> Result<(), String> {
-    if let (MARK_OBJECT, Some(space)) = (mark, position_space(name)) {
-        return write_position(shared, key, name, space, value);
+    if mark == MARK_OBJECT {
+        let member = registry::object_member(name);
+        let name = String::from_utf8_lossy(name);
+        return match member.map(|f| f.imp) {
+            Some(Imp::Property(property)) if property.writable() => {
+                let space = if property == Property::Position {
+                    TransformSpace::Local
+                } else {
+                    TransformSpace::World
+                };
+                write_position(shared, key, &name, space, value)
+            }
+            Some(Imp::Method(_) | Imp::FastMethod(_)) => {
+                Err(format!("{name} é um método e é só leitura"))
+            }
+            Some(_) => Err(format!("{name} é só leitura")),
+            None => Err(format!(
+                "self não aceita campos soltos ({name}{}); use self.state ou um atributo",
+                nearest_member(&name)
+            )),
+        };
     }
     let name = String::from_utf8_lossy(name);
-    match mark {
-        MARK_OBJECT if OBJECT_MEMBERS.contains(&name.as_ref()) => {
-            return Err(format!("{name} é só leitura"));
-        }
-        MARK_OBJECT => {
-            return Err(format!(
-                "self não aceita campos soltos ({name}); use self.state ou um atributo"
-            ));
-        }
-        MARK_ATTRIBUTES => {}
-        _ => return Err("este valor é só leitura".into()),
+    if mark != MARK_ATTRIBUTES {
+        return Err("este valor é só leitura".into());
     }
     let runtime = door(shared)?;
     let handles = shared.handles.borrow();
@@ -508,11 +514,10 @@ fn missing_attribute(runtime: &Runtime, id: &str, name: &str, own: bool) -> Stri
 fn write_position(
     shared: &Shared,
     key: u64,
-    name: &[u8],
+    name: &str,
     space: TransformSpace,
     value: In,
 ) -> Result<(), String> {
-    let name = String::from_utf8_lossy(name);
     let In::Vector(position) = value else {
         return Err(format!(
             "{name} recebe um vetor, como vector.create(0, 1, 0), não {}",
@@ -537,7 +542,7 @@ fn write_position(
 
 fn run(
     shared: &Shared,
-    method: Method,
+    method: FastMethod,
     mark: u64,
     key: u64,
     arg: Option<&[u8]>,
@@ -549,13 +554,12 @@ fn run(
     let handles = shared.handles.borrow();
     let entity = handles.get(&key).and_then(|id| runtime.entity(id));
     match method {
-        Method::Exists => Ok(entity.is_some()),
-        Method::HasAttribute => {
+        FastMethod::Exists => Ok(entity.is_some()),
+        FastMethod::HasAttribute => {
             let name = arg.ok_or("has_attribute precisa do nome do atributo (texto)")?;
             let name = utf8(name)?;
             Ok(entity.ok_or_else(gone)?.attributes.contains_key(name))
         }
-        Method::Listed => Err("método fora da tabela de métodos".into()),
     }
 }
 
@@ -645,8 +649,10 @@ unsafe fn push(l: *mut ffi::lua_State, out: Out) {
             Out::Vector([x, y, z]) => ffi::lua_pushvector(l, x, y, z),
             Out::Text(text) => push_text(l, &text),
             Out::Handle(mark, key) => ffi::lua_pushlightuserdatatagged(l, handle(mark, key), 0),
-            Out::Method(name) => {
-                ffi::lua_rawgetfield(l, ffi::lua_upvalueindex(2), name.as_ptr());
+            Out::Method => {
+                // The key at 2 names a method of the registry, which the table has.
+                ffi::lua_pushvalue(l, 2);
+                ffi::lua_rawget(l, ffi::lua_upvalueindex(2));
             }
         }
     }
@@ -798,7 +804,7 @@ unsafe extern "C-unwind" fn object_newindex(l: *mut ffi::lua_State) -> c_int {
 
 /// # Safety
 /// Called from a C function Luau runs, with the object at 1 and the arguments after it.
-unsafe fn run_method(l: *mut ffi::lua_State, shared: &Shared, method: Method) -> c_int {
+unsafe fn run_method(l: *mut ffi::lua_State, shared: &Shared, method: FastMethod) -> c_int {
     unsafe {
         let Some((mark, key)) = handle_at(l, 1) else {
             raise(
@@ -820,11 +826,12 @@ unsafe fn run_method(l: *mut ffi::lua_State, shared: &Shared, method: Method) ->
 /// object and the arguments as they came; its errors unwind from it.
 ///
 /// # Safety
-/// Called from a C function Luau runs, with nothing of Rust to drop.
-unsafe fn call_listed(l: *mut ffi::lua_State, name: &CStr) -> c_int {
+/// Called from a C function Luau runs, with nothing of Rust to drop; `name` is the method's
+/// name, NUL-terminated, which the table has.
+unsafe fn call_listed(l: *mut ffi::lua_State, name: *const c_char) -> c_int {
     unsafe {
         let n = ffi::lua_gettop(l);
-        ffi::lua_rawgetfield(l, ffi::lua_upvalueindex(2), name.as_ptr());
+        ffi::lua_rawgetfield(l, ffi::lua_upvalueindex(2), name);
         ffi::lua_insert(l, 1);
         ffi::lua_call(l, n, ffi::LUA_MULTRET);
         ffi::lua_gettop(l)
@@ -841,10 +848,10 @@ unsafe extern "C-unwind" fn object_namecall(l: *mut ffi::lua_State) -> c_int {
         } else {
             CStr::from_ptr(atom).to_bytes()
         };
-        match method(name) {
-            Some((name, Method::Listed)) => call_listed(l, name),
-            Some((_, m)) => run_method(l, shared, m),
-            None => raise(l, shared, not_a_method(name)),
+        match registry::object_member(name).map(|f| f.imp) {
+            Some(Imp::Method(_)) => call_listed(l, atom),
+            Some(Imp::FastMethod(method)) => run_method(l, shared, method),
+            _ => raise(l, shared, not_a_method(name)),
         }
     }
 }
@@ -854,10 +861,10 @@ unsafe extern "C-unwind" fn object_method(l: *mut ffi::lua_State) -> c_int {
     unsafe {
         let shared = shared_of(l);
         let number = ffi::lua_tonumberx(l, ffi::lua_upvalueindex(2), std::ptr::null_mut());
-        let method = if number == Method::Exists as i32 as f64 {
-            Method::Exists
+        let method = if number == FastMethod::Exists as i32 as f64 {
+            FastMethod::Exists
         } else {
-            Method::HasAttribute
+            FastMethod::HasAttribute
         };
         run_method(l, shared, method)
     }

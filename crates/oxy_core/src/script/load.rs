@@ -5,7 +5,7 @@
 use super::errors::{ScriptError, closest, describe};
 use super::host::{Module, Phase, Shared, suspended_error};
 use super::sandbox::compiler;
-use super::{Callback, Callbacks, LATER_CALLBACKS, bytecode, memory};
+use super::{Callback, Callbacks, LATER_CALLBACKS, api, bytecode, memory, registry};
 use crate::document::Value;
 use mlua::chunk::ChunkMode;
 use mlua::{Function, Lua, Table, Value as LuaValue, ffi};
@@ -139,6 +139,7 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
     let state = match table.raw_get::<LuaValue>("state") {
         Ok(LuaValue::Nil) => None,
         Ok(LuaValue::Table(declared)) => {
+            unmarked(lua, &declared).map_err(|e| ScriptError::new(path, 0, e))?;
             Some(memory::schema(lua, shared, &declared).map_err(|e| ScriptError::new(path, 0, e))?)
         }
         Ok(_) => {
@@ -153,7 +154,7 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
     // Never refused here: only where the script is attached is it a declaration.
     let attributes = match table.raw_get::<LuaValue>("attributes") {
         Ok(LuaValue::Nil) => Ok(Vec::new()),
-        Ok(LuaValue::Table(declared)) => attributes(&declared),
+        Ok(LuaValue::Table(declared)) => attributes(lua, &declared),
         Ok(_) => Err(
             "Modulo.attributes precisa ser uma tabela com o valor padrão de cada \
              atributo, como { Velocidade = 90 }"
@@ -177,7 +178,7 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
         names
             .entry(f.to_pointer() as usize)
             .or_insert_with(|| name.as_str().into());
-        if let Some(callback) = Callback::ALL.into_iter().find(|c| c.name() == name) {
+        if let Some(callback) = registry::callback(name) {
             callbacks.insert(callback);
         } else if name.starts_with("on_") && !LATER_CALLBACKS.contains(&name.as_str()) {
             let known = Callback::ALL.map(Callback::name).into_iter();
@@ -201,10 +202,27 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
     }))
 }
 
+/// Refuses a `param` marker in `Module.state`, which keeps no field that starts empty yet.
+fn unmarked(lua: &Lua, declared: &Table) -> Result<(), String> {
+    for pair in declared.pairs::<LuaValue, LuaValue>() {
+        let (key, value) = pair.map_err(|e| describe(&e, "", 0).message)?;
+        if api::declared_by_marker(lua, &value).is_some() {
+            let name = key.to_string().unwrap_or_default();
+            return Err(format!(
+                "Modulo.state.{name}: os marcadores param servem em Modulo.attributes; a memória \
+                 ainda não tem campos que começam vazios (para um objeto escolhido depois, \
+                 declare um atributo Objeto: Modulo.attributes = {{ {name} = param.object() }})"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// What `Module.attributes` declares (decision Q6): each attribute's name and the default value
 /// attaching the script gives an object that lacks it, by name. A default is a number, a text, a
-/// boolean or a vector (a Vetor3 attribute); its type is the attribute's.
-fn attributes(declared: &Table) -> Result<super::Declared, String> {
+/// boolean, a vector (a Vetor3 attribute) or a marker of `param` for the types with no literal
+/// (an empty Objeto, a Vetor2); its type is the attribute's.
+fn attributes(lua: &Lua, declared: &Table) -> Result<super::Declared, String> {
     let mut found = BTreeMap::new();
     for pair in declared.pairs::<LuaValue, LuaValue>() {
         let (key, value) = pair.map_err(|e| describe(&e, "", 0).message)?;
@@ -237,6 +255,10 @@ fn attributes(declared: &Table) -> Result<super::Declared, String> {
                 Value::Vector3([v.x(), v.y(), v.z()])
             }
             other => {
+                if let Some(default) = api::declared_by_marker(lua, &other) {
+                    found.insert(name, default);
+                    continue;
+                }
                 let kind = match other {
                     LuaValue::Number(_) | LuaValue::Vector(_) => "infinito ou NaN",
                     LuaValue::Table(_) => "uma tabela",
@@ -246,7 +268,8 @@ fn attributes(declared: &Table) -> Result<super::Declared, String> {
                 };
                 return Err(format!(
                     "Modulo.attributes.{name}: {kind} não serve de valor padrão; use um número, um \
-                     texto, um booleano ou um vetor"
+                     texto, um booleano, um vetor, param.object() (um objeto escolhido depois) ou \
+                     param.vector2(x, y)"
                 ));
             }
         };

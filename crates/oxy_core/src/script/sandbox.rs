@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 /// No `os`, `debug`, `buffer` (mutable state the freeze cannot reach) or `integer` (a second
 /// kind of number: `t[1]` and `t[1i]` would be different keys).
-fn libraries() -> StdLib {
+pub(crate) fn libraries() -> StdLib {
     StdLib::MATH
         | StdLib::STRING
         | StdLib::TABLE
@@ -81,6 +81,9 @@ pub(crate) fn create(shared: &Rc<Shared>, extra: Extra) -> mlua::Result<(Lua, Ta
     super::api::install(&lua, &base, shared)?;
     let (handles, touched) = handles::install(&lua, shared)?;
     extra(&lua, &base, shared)?;
+    // The tests read what scripts reach.
+    #[cfg(test)]
+    lua.set_named_registry_value("oxy.base", &base)?;
     // Every host function the base reaches may sit in a module; any other (a coroutine.wrap,
     // a string.gmatch iterator) carries state of its own.
     {
@@ -185,38 +188,69 @@ fn install_proxy(lua: &Lua, base: &Table) -> mlua::Result<()> {
     }
 }
 
+/// `print(...)`: a line in the log with the object's name and the script line.
+pub(crate) fn print(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    logger(lua, shared, "print", false)
+}
+
+/// `warn(...)`: as `print`, marked as a warning.
+pub(crate) fn warn(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    logger(lua, shared, "warn", true)
+}
+
+fn logger(
+    lua: &Lua,
+    shared: &Rc<Shared>,
+    name: &'static str,
+    warning: bool,
+) -> mlua::Result<Function> {
+    // SAFETY: pushes one C function.
+    let tostring = unsafe { lua.create_c_function(engine_tostring)? };
+    let s = shared.clone();
+    lua.create_function(move |lua, args: MultiValue| {
+        // The text first: a handle's `__tostring` reads the lent Runtime, which the door below
+        // then holds.
+        let mut parts = Vec::with_capacity(args.len());
+        for value in &args {
+            parts.push(show(&tostring, value, 0)?);
+        }
+        let at = locate(lua);
+        api(lua, &s, name, |runtime| {
+            let object = s
+                .caller()
+                .and_then(|id| runtime.entity(&id).map(|e| e.name.clone()))
+                .unwrap_or_default();
+            let text = parts.join(" ");
+            let text = if warning {
+                format!("{object} · aviso: {text}")
+            } else {
+                format!("{object} · {text}")
+            };
+            runtime.log_at(text, at);
+            Ok(())
+        })
+    })
+}
+
+/// The standard functions `install_base` replaces: `tostring` and `string.format` without
+/// addresses, `setmetatable` that keeps protected metatables and refuses weak tables, the draws
+/// of `math` refused (they are the engine's) and the coroutines a call must finish. The engine's
+/// own functions are the registry's; a test holds both lists to what scripts reach.
+#[cfg(test)]
+pub(crate) const SANDBOXED: [&str; 7] = [
+    "tostring",
+    "setmetatable",
+    "math.random",
+    "math.randomseed",
+    "string.format",
+    "coroutine.create",
+    "coroutine.wrap",
+];
+
 fn install_base(lua: &Lua, base: &Table, shared: &Rc<Shared>) -> mlua::Result<()> {
     // SAFETY: pushes one C function.
     let tostring = unsafe { lua.create_c_function(engine_tostring)? };
-    base.raw_set("tostring", tostring.clone())?;
-    for (name, warning) in [("print", false), ("warn", true)] {
-        let s = shared.clone();
-        let tostring = tostring.clone();
-        let f = lua.create_function(move |lua, args: MultiValue| {
-            // The text first: a handle's `__tostring` reads the lent Runtime, which the
-            // door below then holds.
-            let mut parts = Vec::with_capacity(args.len());
-            for value in &args {
-                parts.push(show(&tostring, value, 0)?);
-            }
-            let at = locate(lua);
-            api(lua, &s, name, |runtime| {
-                let object = s
-                    .caller()
-                    .and_then(|id| runtime.entity(&id).map(|e| e.name.clone()))
-                    .unwrap_or_default();
-                let text = parts.join(" ");
-                let text = if warning {
-                    format!("{object} · aviso: {text}")
-                } else {
-                    format!("{object} · {text}")
-                };
-                runtime.log_at(text, at);
-                Ok(())
-            })
-        })?;
-        base.raw_set(name, f)?;
-    }
+    base.raw_set("tostring", tostring)?;
     let s = shared.clone();
     base.raw_set(
         "setmetatable",
@@ -279,37 +313,39 @@ fn install_base(lua: &Lua, base: &Table, shared: &Rc<Shared>) -> mlua::Result<()
             lua.create_function(move |_, args: MultiValue| thread.resume::<MultiValue>(args))
         })?,
     )?;
-    let s = shared.clone();
-    base.raw_set(
-        "require",
-        lua.create_function(move |lua, name: LuaString| {
-            let name = name.to_string_lossy();
-            guard(lua, &s, "require", || {
-                let from = locate(lua).map(|at| at.path);
-                let path = resolve(from.as_deref(), &name).map_err(|e| located(lua, e))?;
-                // Noted before the file is looked for: a reload that takes away a module
-                // still required finds which text to keep.
-                if let Some(from) = from {
-                    s.requires
-                        .borrow_mut()
-                        .entry(from)
-                        .or_default()
-                        .insert(path.clone());
-                }
-                if s.sources.get(&path).is_none() {
-                    return Err(located(
-                        lua,
-                        format!("require(\"{name}\"): {path} não existe"),
-                    ));
-                }
-                match load::module(lua, &s, &path) {
-                    Ok(module) => Ok(module.table.clone()),
-                    Err(e) => Err(located(lua, format!("require(\"{name}\"): {e}"))),
-                }
-            })
-        })?,
-    )?;
     Ok(())
+}
+
+/// `require(path)`: a module of the scripts' folder (see `resolve`), loaded the first time and
+/// frozen.
+pub(crate) fn require(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let s = shared.clone();
+    lua.create_function(move |lua, name: LuaString| {
+        let name = name.to_string_lossy();
+        guard(lua, &s, "require", || {
+            let from = locate(lua).map(|at| at.path);
+            let path = resolve(from.as_deref(), &name).map_err(|e| located(lua, e))?;
+            // Noted before the file is looked for: a reload that takes away a module still
+            // required finds which text to keep.
+            if let Some(from) = from {
+                s.requires
+                    .borrow_mut()
+                    .entry(from)
+                    .or_default()
+                    .insert(path.clone());
+            }
+            if s.sources.get(&path).is_none() {
+                return Err(located(
+                    lua,
+                    format!("require(\"{name}\"): {path} não existe"),
+                ));
+            }
+            match load::module(lua, &s, &path) {
+                Ok(module) => Ok(module.table.clone()),
+                Err(e) => Err(located(lua, format!("require(\"{name}\"): {e}"))),
+            }
+        })
+    })
 }
 
 /// A pure host function behind the panic barrier (it reaches nothing of the world). `f` uses

@@ -10,7 +10,7 @@ use super::handles::{self, MARK_OBJECT};
 use super::host::{Limit, Shared, api, locate};
 use super::memory::{self, ScriptValue};
 use crate::document::Id;
-use mlua::{Lua, Table, Value as LuaValue};
+use mlua::{Function, Lua, Value as LuaValue};
 use std::rc::Rc;
 
 /// A message on its way: the next logic phase delivers it.
@@ -40,66 +40,62 @@ pub(crate) enum Unsent {
     Scene,
 }
 
-/// Puts `send` in the objects' table of methods.
-pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>, methods: &Table) -> mlua::Result<()> {
+/// `obj:send(name, value?)`, a method of objects.
+pub(crate) fn send(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     let s = shared.clone();
-    methods.raw_set(
-        "send",
-        lua.create_function(
-            move |lua, (to, name, value): (LuaValue, LuaValue, LuaValue)| {
-                // The value first, outside the panic barrier: the C API reads its tables.
-                let value = memory::from_lua(lua, &s, &value, MAX_VALUE)
-                    .map_err(|refusal| refusal.at("o valor da mensagem"));
-                let at = locate(lua);
-                api(lua, &s, "send", |runtime| {
-                    let to = match &to {
-                        LuaValue::LightUserData(handle) => match handles::decode(handle.0) {
-                            (MARK_OBJECT, key) => s.id(key),
-                            _ => None,
-                        },
+    lua.create_function(
+        move |lua, (to, name, value): (LuaValue, LuaValue, LuaValue)| {
+            // The value first, outside the panic barrier: the C API reads its tables.
+            let value = memory::from_lua(lua, &s, &value, MAX_VALUE)
+                .map_err(|refusal| refusal.at("o valor da mensagem"));
+            let at = locate(lua);
+            api(lua, &s, "send", |runtime| {
+                let to = match &to {
+                    LuaValue::LightUserData(handle) => match handles::decode(handle.0) {
+                        (MARK_OBJECT, key) => s.id(key),
                         _ => None,
+                    },
+                    _ => None,
+                }
+                .ok_or("send é um método de objetos: alvo:send(\"nome\", valor)")?;
+                let LuaValue::String(name) = &name else {
+                    return Err("send precisa do nome da mensagem (um texto)".into());
+                };
+                let name = name
+                    .to_str()
+                    .map_err(|_| "o nome da mensagem não é UTF-8")?
+                    .to_owned();
+                if name.is_empty() || name.len() > MAX_NAME {
+                    return Err(format!("o nome da mensagem tem de 1 a {MAX_NAME} bytes"));
+                }
+                let value = value?;
+                let from = s.caller().ok_or("o objeto não existe mais")?;
+                let script = s
+                    .module()
+                    .ok_or("send fora de uma chamada de script")?
+                    .path
+                    .clone();
+                if runtime.entity(&to).is_none() {
+                    return Err("o objeto de destino não existe mais".into());
+                }
+                let message = Message {
+                    from,
+                    to,
+                    name,
+                    value,
+                };
+                match runtime.send_message(message, &script, at.clone()) {
+                    Ok(()) => Ok(()),
+                    Err(Unsent::Script) => {
+                        s.overran(Limit::Messages, at);
+                        Err(Limit::Messages.message(&s.limits.get()))
                     }
-                    .ok_or("send é um método de objetos: alvo:send(\"nome\", valor)")?;
-                    let LuaValue::String(name) = &name else {
-                        return Err("send precisa do nome da mensagem (um texto)".into());
-                    };
-                    let name = name
-                        .to_str()
-                        .map_err(|_| "o nome da mensagem não é UTF-8")?
-                        .to_owned();
-                    if name.is_empty() || name.len() > MAX_NAME {
-                        return Err(format!("o nome da mensagem tem de 1 a {MAX_NAME} bytes"));
-                    }
-                    let value = value?;
-                    let from = s.caller().ok_or("o objeto não existe mais")?;
-                    let script = s
-                        .module()
-                        .ok_or("send fora de uma chamada de script")?
-                        .path
-                        .clone();
-                    if runtime.entity(&to).is_none() {
-                        return Err("o objeto de destino não existe mais".into());
-                    }
-                    let message = Message {
-                        from,
-                        to,
-                        name,
-                        value,
-                    };
-                    match runtime.send_message(message, &script, at.clone()) {
-                        Ok(()) => Ok(()),
-                        Err(Unsent::Script) => {
-                            s.overran(Limit::Messages, at);
-                            Err(Limit::Messages.message(&s.limits.get()))
-                        }
-                        Err(Unsent::Scene) => Err(format!(
-                            "os scripts da cena já mandaram {MAX_SCENE_MESSAGES} mensagens neste \
+                    Err(Unsent::Scene) => Err(format!(
+                        "os scripts da cena já mandaram {MAX_SCENE_MESSAGES} mensagens neste \
                              passo; esta não foi enviada"
-                        )),
-                    }
-                })
-            },
-        )?,
-    )?;
-    Ok(())
+                    )),
+                }
+            })
+        },
+    )
 }

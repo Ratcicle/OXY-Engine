@@ -1,96 +1,210 @@
-//! The global tables of the API (design §5.3, §5.4): their functions reach the world through
+//! The global tables of the API (design §5.3, §5.4) and the functions of the base, installed
+//! from the registry (`registry`): only its rows exist. Their functions reach the world through
 //! the `Runtime`'s shared operations layer, so they check, refuse and act as the nodes do, and
 //! name what the person named (sounds and game variables by their names, never their IDs). The
-//! first surface, the vertical slice of 0.7, has `audio.play` and `vars.get`/`vars.set`. The
 //! tables are frozen, and reading a name one lacks is an error with the nearest name it has.
+//!
+//! `param.object()` and `param.vector2(x, y)` are the markers of `Module.attributes` for the
+//! types with no literal (design §3.4): frozen tables with the engine's locked metatable, which
+//! loading reads as the attribute's default.
 use super::errors::closest;
 use super::handles::{self, MARK_OBJECT};
 use super::host::{Shared, api, located};
+use super::registry::{self, Imp};
 use crate::document::{AssetKind, Id, Project, Value};
 use crate::variables;
-use mlua::{Lua, Table, Value as LuaValue};
+use mlua::{Function, Lua, Table, Value as LuaValue};
 use std::rc::Rc;
 
 /// Sounds a message lists before it counts the rest.
 const LISTED: usize = 10;
 
-/// Puts the API's tables in the base, which turns read-only after it.
+/// Puts in the base the registry's functions: those of the base, and the global tables with
+/// theirs. The base turns read-only after it.
 pub(crate) fn install(lua: &Lua, base: &Table, shared: &Rc<Shared>) -> mlua::Result<()> {
-    let audio = lua.create_table()?;
-    let s = shared.clone();
-    audio.raw_set(
-        "play",
-        lua.create_function(move |lua, (name, options): (LuaValue, LuaValue)| {
-            // The arguments first, outside the panic barrier: the options are a table.
-            let name = text(&name, "audio.play precisa do nome do som (um texto)");
-            let options = play_options(&options);
-            api(lua, &s, "audio.play", |runtime| {
-                let name = name?;
-                let (volume, audience) = options?;
-                if let Some(key) = audience
-                    && s.id(key).and_then(|id| runtime.entity(&id)).is_none()
-                {
-                    return Err("audio.play: o objeto de audience não existe mais".into());
-                }
-                let asset = sound(runtime.project(), &name)?;
-                runtime.play_sound(&asset, volume)
-            })
-        })?,
-    )?;
-    lock(lua, &audio, "audio", &["play"])?;
-    base.raw_set("audio", audio)?;
+    let mut tables: Vec<(&'static str, Table, Vec<&'static str>)> = Vec::new();
+    for f in registry::API {
+        let Imp::Function(make) = f.imp else {
+            continue;
+        };
+        let function = make(lua, shared)?;
+        let holder = f.holder();
+        if holder.is_empty() {
+            base.raw_set(f.name, function)?;
+            continue;
+        }
+        let at = match tables.iter().position(|(name, ..)| *name == holder) {
+            Some(at) => at,
+            None => {
+                tables.push((holder, lua.create_table()?, Vec::new()));
+                tables.len() - 1
+            }
+        };
+        let (_, table, members) = &mut tables[at];
+        table.raw_set(f.member(), function)?;
+        members.push(f.member());
+    }
+    for (name, table, members) in tables {
+        lock(lua, &table, name, members)?;
+        base.raw_set(name, table)?;
+    }
+    Ok(())
+}
 
-    let vars = lua.create_table()?;
+/// `audio.play(name, options?)`.
+pub(crate) fn audio_play(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     let s = shared.clone();
-    vars.raw_set(
-        "get",
-        lua.create_function(move |lua, (name, key): (LuaValue, LuaValue)| {
+    lua.create_function(move |lua, (name, options): (LuaValue, LuaValue)| {
+        // The arguments first, outside the panic barrier: the options are a table.
+        let name = text(&name, "audio.play precisa do nome do som (um texto)");
+        let options = play_options(&options);
+        api(lua, &s, "audio.play", |runtime| {
+            let name = name?;
+            let (volume, audience) = options?;
+            if let Some(key) = audience
+                && s.id(key).and_then(|id| runtime.entity(&id)).is_none()
+            {
+                return Err("audio.play: o objeto de audience não existe mais".into());
+            }
+            let asset = sound(runtime.project(), &name)?;
+            runtime.play_sound(&asset, volume)
+        })
+    })
+}
+
+/// `vars.get(name, key?)`.
+pub(crate) fn vars_get(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let s = shared.clone();
+    lua.create_function(move |lua, (name, key): (LuaValue, LuaValue)| {
+        let name = text(
+            &name,
+            "vars.get precisa do nome da variável do jogo (um texto)",
+        );
+        let key = key_of(&key, "vars.get");
+        // A key never written reads the variable's initial value, as Ler variável do jogo.
+        let value = api(lua, &s, "vars.get", |runtime| {
+            let id = variable(runtime.project(), &name?)?;
+            Ok(runtime.variable(&id, &key?).cloned())
+        })?;
+        match value {
+            Some(value) => to_lua(lua, &value),
+            None => Ok(LuaValue::Nil),
+        }
+    })
+}
+
+/// `vars.set(name, value, key?)`.
+pub(crate) fn vars_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
+    let s = shared.clone();
+    lua.create_function(
+        move |lua, (name, value, key): (LuaValue, LuaValue, LuaValue)| {
             let name = text(
                 &name,
-                "vars.get precisa do nome da variável do jogo (um texto)",
+                "vars.set precisa do nome da variável do jogo (um texto)",
             );
-            let key = key_of(&key, "vars.get");
-            // A key never written reads the variable's initial value, as Ler variável do jogo.
-            let value = api(lua, &s, "vars.get", |runtime| {
+            let key = key_of(&key, "vars.set");
+            let given = Given::of(&value);
+            api(lua, &s, "vars.set", |runtime| {
                 let id = variable(runtime.project(), &name?)?;
-                Ok(runtime.variable(&id, &key?).cloned())
-            })?;
-            match value {
-                Some(value) => to_lua(lua, &value),
-                None => Ok(LuaValue::Nil),
-            }
-        })?,
-    )?;
-    let s = shared.clone();
-    vars.raw_set(
-        "set",
-        lua.create_function(
-            move |lua, (name, value, key): (LuaValue, LuaValue, LuaValue)| {
-                let name = text(
-                    &name,
-                    "vars.set precisa do nome da variável do jogo (um texto)",
-                );
-                let key = key_of(&key, "vars.set");
-                let given = Given::of(&value);
-                api(lua, &s, "vars.set", |runtime| {
-                    let id = variable(runtime.project(), &name?)?;
-                    let variable = variables::get(runtime.project(), &id).expect("found above");
-                    let value = given.as_value(&variable.value).ok_or_else(|| {
-                        format!(
-                            "vars.set: a variável {} guarda {}, não {}",
-                            variable.name,
-                            super::value_kind(&variable.value),
-                            given.kind()
-                        )
-                    })?;
-                    runtime.set_variable(&id, &key?, value)
-                })
-            },
-        )?,
-    )?;
-    lock(lua, &vars, "vars", &["get", "set"])?;
-    base.raw_set("vars", vars)?;
-    Ok(())
+                let variable = variables::get(runtime.project(), &id).expect("found above");
+                let value = given.as_value(&variable.value).ok_or_else(|| {
+                    format!(
+                        "vars.set: a variável {} guarda {}, não {}",
+                        variable.name,
+                        super::value_kind(&variable.value),
+                        given.kind()
+                    )
+                })?;
+                runtime.set_variable(&id, &key?, value)
+            })
+        },
+    )
+}
+
+/// The name of the Lua registry's entry with the markers' metatable.
+const MARKER: &str = "oxy.param";
+
+/// The metatable of `param` markers, made the first time.
+fn marker_meta(lua: &Lua) -> mlua::Result<Table> {
+    if let Ok(meta) = lua.named_registry_value::<Table>(MARKER) {
+        return Ok(meta);
+    }
+    let meta = lua.create_table()?;
+    meta.raw_set("__metatable", "travado")?;
+    meta.set_readonly(true);
+    lua.set_named_registry_value(MARKER, &meta)?;
+    Ok(meta)
+}
+
+/// A frozen marker with `fields`.
+fn marker(lua: &Lua, fields: &[(&str, LuaValue)]) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    for (name, value) in fields {
+        table.raw_set(*name, value.clone())?;
+    }
+    table.set_metatable(Some(marker_meta(lua)?))?;
+    table.set_readonly(true);
+    Ok(table)
+}
+
+/// `param.object()`: an Object attribute, empty by default.
+pub(crate) fn param_object(lua: &Lua, _: &Rc<Shared>) -> mlua::Result<Function> {
+    lua.create_function(|lua, ()| {
+        marker(
+            lua,
+            &[("param", LuaValue::String(lua.create_string("object")?))],
+        )
+    })
+}
+
+/// `param.vector2(x, y)`: a Vetor2 attribute with that default.
+pub(crate) fn param_vector2(lua: &Lua, _: &Rc<Shared>) -> mlua::Result<Function> {
+    lua.create_function(|lua, (x, y): (LuaValue, LuaValue)| {
+        let (Some(x), Some(y)) = (number(&x), number(&y)) else {
+            return Err(located(
+                lua,
+                "param.vector2 precisa de dois números, como param.vector2(1, 1)".into(),
+            ));
+        };
+        // As the Vetor2 keeps them: a finite number past ±3.4e38 is infinite there.
+        let (x, y) = (x as f32, y as f32);
+        if !x.is_finite() || !y.is_finite() {
+            return Err(located(
+                lua,
+                "param.vector2 não aceita infinito, NaN nem números além do que um Vetor2 guarda \
+                 (±3,4e38)"
+                    .into(),
+            ));
+        }
+        marker(
+            lua,
+            &[
+                ("param", LuaValue::String(lua.create_string("vector2")?)),
+                ("x", LuaValue::Number(f64::from(x))),
+                ("y", LuaValue::Number(f64::from(y))),
+            ],
+        )
+    })
+}
+
+/// The default a `param` marker declares; none for any other value.
+pub(crate) fn declared_by_marker(lua: &Lua, value: &LuaValue) -> Option<Value> {
+    let LuaValue::Table(table) = value else {
+        return None;
+    };
+    let meta = lua.named_registry_value::<Table>(MARKER).ok()?;
+    if table.metatable()?.to_pointer() != meta.to_pointer() {
+        return None;
+    }
+    let field = |name: &str| table.raw_get::<LuaValue>(name).ok();
+    let coordinate = |name: &str| field(name).as_ref().and_then(number).map(|n| n as f32);
+    match field("param")?.to_string().ok()?.as_str() {
+        "object" => Some(Value::Object(None)),
+        "vector2" => {
+            Some(Value::Vector2([coordinate("x")?, coordinate("y")?])).filter(Value::is_finite)
+        }
+        _ => None,
+    }
 }
 
 /// Gives the table `name` a locked metatable whose `__index` refuses a name it lacks with the
@@ -99,7 +213,7 @@ fn lock(
     lua: &Lua,
     table: &Table,
     name: &'static str,
-    names: &'static [&'static str],
+    names: Vec<&'static str>,
 ) -> mlua::Result<()> {
     let index = lua.create_function(move |lua, (_, key): (LuaValue, LuaValue)| {
         let key = key.to_string().unwrap_or_default();
