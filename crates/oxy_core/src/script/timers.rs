@@ -11,7 +11,7 @@
 //! `interval` after it was asked, as `self:after` would: the first on the next step, the others
 //! on the grid of a graph's waits. The four answer the number `self:cancel` takes.
 use super::ScriptArg;
-use super::handles::{self, MARK_OBJECT, decode};
+use super::handles::{self, MARK_OBJECT, MARK_SURFACE, decode};
 use super::host::{Limit, Shared, api, locate};
 use crate::document::{Id, Value};
 use crate::runtime::{FIXED_DT, MAX_WAIT, Runtime};
@@ -326,7 +326,10 @@ fn mine(s: &Shared, me: &LuaValue, method: &str) -> Result<(Id, Arc<str>), Strin
             "temporizadores são do próprio objeto: use self:{method}(...)"
         ));
     }
-    let owner = s.caller().ok_or("o objeto não existe mais")?;
+    let key = s
+        .caller_key()
+        .ok_or("temporizador fora de uma chamada de script")?;
+    let owner = s.id(key).ok_or_else(|| s.gone(key))?;
     let script = s
         .module()
         .ok_or("temporizador fora de uma chamada de script")?;
@@ -395,7 +398,7 @@ fn value(s: &Shared, value: &LuaValue) -> Result<ScriptArg, String> {
     let refused = |kind: &str| {
         Err(format!(
             "{kind} não pode ser dado de temporizador; passe nil, números, textos, booleanos, \
-             vetores ou objetos"
+             vetores, objetos ou superfícies"
         ))
     };
     Ok(ScriptArg::Value(match value {
@@ -421,13 +424,17 @@ fn value(s: &Shared, value: &LuaValue) -> Result<ScriptArg, String> {
             Value::Text(text.to_owned())
         }
         LuaValue::LightUserData(handle) => match decode(handle.0) {
-            (MARK_OBJECT, key) => Value::Object(Some(s.id(key).ok_or("o objeto não existe mais")?)),
+            (MARK_OBJECT, key) => Value::Object(Some(s.id(key).ok_or_else(|| s.gone(key))?)),
+            (MARK_SURFACE, key) => Value::Surface(Some(
+                s.surface_id(key)
+                    .ok_or("superfície desconhecida da engine")?,
+            )),
             (mark, _) => return refused(handles::mark_kind(mark)),
         },
         LuaValue::Table(_) => return refused("tabela"),
         LuaValue::Function(_) => return refused("função"),
         LuaValue::Thread(_) => return refused("corrotina"),
         LuaValue::Buffer(_) => return refused("buffer"),
-        _ => return refused("userdata"),
+        _ => return refused("userdata (um quatérnio, por exemplo)"),
     }))
 }

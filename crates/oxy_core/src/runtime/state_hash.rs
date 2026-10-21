@@ -246,6 +246,10 @@ impl Runtime {
             messages_by_script: _,
             // Measured, never state.
             script_costs: _,
+            // Only within a script's call.
+            in_script_call: _,
+            copies_to_start: _,
+            script_hits: _,
         } = self;
         let RunState {
             seed,

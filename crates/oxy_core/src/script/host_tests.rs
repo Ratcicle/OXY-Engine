@@ -169,11 +169,13 @@ fn the_globals_are_the_engines_list_read_only_and_frozen() {
         "param:table",
         "pcall:function",
         "print:function",
+        "quat:table",
         "rawequal:function",
         "rawget:function",
         "rawlen:function",
         "rawset:function",
         "require:function",
+        "scene:table",
         "select:function",
         "setmetatable:function",
         "string:table",
@@ -186,6 +188,7 @@ fn the_globals_are_the_engines_list_read_only_and_frozen() {
         "utf8:table",
         "vars:table",
         "vector:table",
+        "vmath:table",
         "warn:function",
         "xpcall:function",
     ];
@@ -606,6 +609,8 @@ function M.gone(self, outro)
 end
 function M.loose(self) self.x = 1 end
 function M.misspelled(self) self.positon = vector.create(0, 1, 0) end
+function M.other_engine(self) self.hidden = true end
+function M.cased(self) return self.Visible end
 function M.method_written(self) self.after = 1 end
 function M.name(self) self.name = "x" end
 function M.typo(self) return self.nmae end
@@ -641,11 +646,20 @@ return M
             "loose",
             "self não aceita campos soltos (x); use self.state ou um atributo",
         ),
+        // A name near a property points to it (A1 of the vertical slice), by spelling, by case
+        // or as other engines call it, with what it is.
         (
             "misspelled",
-            "self não aceita campos soltos (positon; quis dizer 'position'?); use self.state ou \
+            "positon não é uma propriedade de Object; quis dizer 'position'? Para um valor do \
+             próprio script, use self.state ou um atributo",
+        ),
+        (
+            "other_engine",
+            "hidden não é uma propriedade de Object; quis dizer 'visible'? (Se o objeto aparece: \
+             false o esconde, true o mostra.) Para um valor do próprio script, use self.state ou \
              um atributo",
         ),
+        ("cased", "Object não tem 'Visible'; quis dizer 'visible'?"),
         ("method_written", "after é um método e é só leitura"),
         ("name", "name é só leitura"),
         ("typo", "Object não tem 'nmae'; quis dizer 'name'?"),

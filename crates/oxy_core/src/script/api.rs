@@ -4,16 +4,17 @@
 //! name what the person named (sounds and game variables by their names, never their IDs). The
 //! tables are frozen, and reading a name one lacks is an error with the nearest name it has.
 //!
-//! `param.object()` and `param.vector2(x, y)` are the markers of `Module.attributes` for the
-//! types with no literal (design §3.4): frozen tables with the engine's locked metatable, which
-//! loading reads as the attribute's default.
+//! `param.object()`, `param.surface(name?)` and `param.vector2(x, y)` are the markers of
+//! `Module.attributes` and `Module.state` for the types with no literal (design §3.4, §4.3):
+//! frozen tables with the engine's locked metatable, which loading reads as the default.
 use super::errors::closest;
 use super::handles::{self, MARK_OBJECT};
 use super::host::{Shared, api, located};
 use super::registry::{self, Imp};
 use crate::document::{AssetKind, Id, Project, Value};
 use crate::variables;
-use mlua::{Function, Lua, Table, Value as LuaValue};
+use mlua::{Function, Lua, Table, Value as LuaValue, ffi};
+use std::os::raw::c_int;
 use std::rc::Rc;
 
 /// Sounds a message lists before it counts the rest.
@@ -123,6 +124,18 @@ pub(crate) fn vars_set(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function>
 
 /// The name of the Lua registry's entry with the markers' metatable.
 const MARKER: &str = "oxy.param";
+const MARKER_C: &std::ffi::CStr = c"oxy.param";
+
+/// What a marker of `param` declares.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Marker {
+    /// An Objeto, empty.
+    Object,
+    /// A Vetor2 with this default.
+    Vector2([f32; 2]),
+    /// A Superfície: the default one, or the project's of this name.
+    Surface(Option<String>),
+}
 
 /// The metatable of `param` markers, made the first time.
 fn marker_meta(lua: &Lua) -> mlua::Result<Table> {
@@ -187,8 +200,36 @@ pub(crate) fn param_vector2(lua: &Lua, _: &Rc<Shared>) -> mlua::Result<Function>
     })
 }
 
-/// The default a `param` marker declares; none for any other value.
-pub(crate) fn declared_by_marker(lua: &Lua, value: &LuaValue) -> Option<Value> {
+/// `param.surface(name?)`: a Superfície attribute, the default surface or the project's of that
+/// name, which attaching looks up.
+pub(crate) fn param_surface(lua: &Lua, _: &Rc<Shared>) -> mlua::Result<Function> {
+    lua.create_function(|lua, name: LuaValue| {
+        let name = match name {
+            LuaValue::Nil => LuaValue::Nil,
+            LuaValue::String(name) if name.to_str().is_ok_and(|n| !n.trim().is_empty()) => {
+                LuaValue::String(name)
+            }
+            _ => {
+                return Err(located(
+                    lua,
+                    "param.surface recebe o nome de uma superfície do projeto (um texto), como \
+                     param.surface(\"Gelo\"), ou nada para a superfície padrão"
+                        .into(),
+                ));
+            }
+        };
+        marker(
+            lua,
+            &[
+                ("param", LuaValue::String(lua.create_string("surface")?)),
+                ("name", name),
+            ],
+        )
+    })
+}
+
+/// What a `param` marker declares; none for any other value.
+pub(crate) fn marker_of(lua: &Lua, value: &LuaValue) -> Option<Marker> {
     let LuaValue::Table(table) = value else {
         return None;
     };
@@ -199,11 +240,62 @@ pub(crate) fn declared_by_marker(lua: &Lua, value: &LuaValue) -> Option<Value> {
     let field = |name: &str| table.raw_get::<LuaValue>(name).ok();
     let coordinate = |name: &str| field(name).as_ref().and_then(number).map(|n| n as f32);
     match field("param")?.to_string().ok()?.as_str() {
-        "object" => Some(Value::Object(None)),
+        "object" => Some(Marker::Object),
         "vector2" => {
-            Some(Value::Vector2([coordinate("x")?, coordinate("y")?])).filter(Value::is_finite)
+            let v = [coordinate("x")?, coordinate("y")?];
+            Value::Vector2(v).is_finite().then_some(Marker::Vector2(v))
         }
+        "surface" => Some(Marker::Surface(match field("name") {
+            Some(LuaValue::String(name)) => Some(name.to_str().ok()?.to_owned()),
+            _ => None,
+        })),
         _ => None,
+    }
+}
+
+/// [`marker_of`] for the value at `idx` of a C function or a protected call, leaving the stack
+/// as it was.
+///
+/// # Safety
+/// `idx` is a valid absolute index of `l`, which runs protected (a memory error unwinds).
+pub(crate) unsafe fn marker_at(l: *mut ffi::lua_State, idx: c_int) -> Option<Marker> {
+    unsafe {
+        if ffi::lua_type(l, idx) != ffi::LUA_TTABLE {
+            return None;
+        }
+        ffi::lua_checkstack(l, 3);
+        if ffi::lua_getmetatable(l, idx) == 0 {
+            return None;
+        }
+        ffi::lua_rawgetfield(l, ffi::LUA_REGISTRYINDEX, MARKER_C.as_ptr());
+        let marked = ffi::lua_rawequal(l, -1, -2) != 0;
+        ffi::lua_settop(l, -3);
+        if !marked {
+            return None;
+        }
+        let text = |field: &std::ffi::CStr| {
+            ffi::lua_rawgetfield(l, idx, field.as_ptr());
+            let mut len = 0usize;
+            let found = (ffi::lua_type(l, -1) == ffi::LUA_TSTRING).then(|| {
+                let p = ffi::lua_tolstring(l, -1, &mut len);
+                String::from_utf8_lossy(std::slice::from_raw_parts(p as *const u8, len))
+                    .into_owned()
+            });
+            ffi::lua_settop(l, -2);
+            found
+        };
+        let coordinate = |field: &std::ffi::CStr| {
+            ffi::lua_rawgetfield(l, idx, field.as_ptr());
+            let n = ffi::lua_tonumberx(l, -1, std::ptr::null_mut()) as f32;
+            ffi::lua_settop(l, -2);
+            n
+        };
+        match text(c"param")?.as_str() {
+            "object" => Some(Marker::Object),
+            "vector2" => Some(Marker::Vector2([coordinate(c"x"), coordinate(c"y")])),
+            "surface" => Some(Marker::Surface(text(c"name"))),
+            _ => None,
+        }
     }
 }
 
@@ -245,13 +337,25 @@ fn variable(project: &Project, name: &str) -> Result<Id, String> {
 }
 
 /// A text argument, or `refused`.
-fn text(value: &LuaValue, refused: &str) -> Result<String, String> {
+pub(crate) fn text(value: &LuaValue, refused: &str) -> Result<String, String> {
     match value {
         LuaValue::String(text) => text
             .to_str()
             .map(|text| text.to_owned())
             .map_err(|_| format!("{refused}; este não é UTF-8")),
         _ => Err(refused.into()),
+    }
+}
+
+/// The name of an option in the table `function` takes: options have text names, and another
+/// key is refused by its kind (its text would be an address, which changes from run to run).
+pub(crate) fn option_name(key: &LuaValue, function: &str) -> Result<String, String> {
+    match key {
+        LuaValue::String(_) => text(key, &format!("as opções de {function} têm nomes de texto")),
+        other => Err(format!(
+            "as opções de {function} têm nomes de texto, não {}",
+            handles::In::of(other).kind()
+        )),
     }
 }
 
@@ -285,7 +389,7 @@ fn play_options(options: &LuaValue) -> Result<(f64, Option<u64>), String> {
     let (mut volume, mut audience) = (1., None);
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, value) = pair.map_err(|e| e.to_string())?;
-        match key.to_string().unwrap_or_default().as_str() {
+        match option_name(&key, "audio.play")?.as_str() {
             "volume" => {
                 volume = number(&value).ok_or("audio.play: volume é um número de 0 a 1")?;
             }

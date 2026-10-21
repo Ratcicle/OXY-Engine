@@ -21,6 +21,12 @@ pub enum TransformSpace {
     Local,
 }
 
+/// The horizontal turn, in degrees, that points an object's forward (-Z) along `direction`, as
+/// Ler transformação reads it (yaw): 0 is -Z, 90 is -X.
+pub fn yaw_of(direction: Vec3) -> f32 {
+    (-direction.x).atan2(-direction.z).to_degrees()
+}
+
 impl Runtime {
     /// Where `id` stands and how it is turned, in `space`. In the world, where its pivot is, as
     /// Properties shows it and `write_transform` places it, or a 3D character's origin, where

@@ -117,6 +117,20 @@ pub(crate) struct Module {
     /// why it is no such declaration: read only where the script is attached, so a module only
     /// required may keep a table of its own under that name.
     pub attributes: Result<super::Declared, String>,
+    /// The Superfície attributes it declares with a surface's name, as (attribute, surface):
+    /// attaching looks the name up in the project.
+    pub surfaces: Vec<(String, String)>,
+}
+
+/// An attribute the call in progress read as nil, which a later error about a nil names.
+#[derive(Clone, Debug)]
+pub(crate) struct NilRead {
+    /// The object, by name.
+    pub object: String,
+    pub attribute: String,
+    /// An empty Objeto or Superfície, rather than one the object lacks.
+    pub empty: bool,
+    pub at: Option<ScriptLocation>,
 }
 
 impl std::fmt::Debug for Module {
@@ -148,6 +162,15 @@ pub(crate) struct Shared {
     poisoned: RefCell<Option<String>>,
     /// Handle keys to object IDs (see `handles`).
     pub handles: RefCell<HashMap<u64, Id>>,
+    /// Handle keys to surface IDs: the project's, in any scene.
+    surfaces: RefCell<HashMap<u64, Id>>,
+    /// The scene a call asked for (`scene.change`), which opens when the call ends.
+    scene_change: RefCell<Option<Id>>,
+    /// The object running went in the call (`self:destroy()`): the call ends without an error
+    /// at the next thing it does to it.
+    vanished: Cell<bool>,
+    /// The attribute the call read last as nil.
+    pub nil_read: RefCell<Option<NilRead>>,
     pub sources: Arc<ScriptSources>,
     pub modules: RefCell<BTreeMap<String, Result<Rc<Module>, ScriptError>>>,
     /// The modules whose top is running, outermost first (a require inside a top).
@@ -181,6 +204,10 @@ impl Shared {
             overrun: RefCell::default(),
             poisoned: RefCell::default(),
             handles: RefCell::default(),
+            surfaces: RefCell::default(),
+            scene_change: RefCell::default(),
+            vanished: Cell::new(false),
+            nil_read: RefCell::default(),
             sources,
             modules: RefCell::default(),
             loading: RefCell::default(),
@@ -215,6 +242,7 @@ impl Shared {
         self.caller.set(Some(owner));
         *self.module.borrow_mut() = Some(module.clone());
         self.start_count();
+        self.scene_change.take();
         self.units.set(1);
         CallGuard {
             shared: self,
@@ -227,6 +255,8 @@ impl Shared {
         self.interrupts.set(0);
         self.overrun.take();
         self.threads.borrow_mut().clear();
+        self.vanished.set(false);
+        self.nil_read.take();
     }
 
     /// The object running, while a call runs.
@@ -246,6 +276,77 @@ impl Shared {
 
     pub(crate) fn id(&self, key: u64) -> Option<Id> {
         self.handles.borrow().get(&key).cloned()
+    }
+
+    /// Why an object's handle reaches nothing: it went. When it is the object running, the call
+    /// ends there without an error (design §3.7 rule 5).
+    pub(crate) fn gone(&self, key: u64) -> String {
+        if self.caller.get() == Some(key) {
+            self.vanished.set(true);
+        }
+        "o objeto não existe mais".into()
+    }
+
+    /// The objects `ids` went: their handles name nothing more.
+    pub(crate) fn forget(&self, ids: &HashSet<Id>) {
+        self.handles.borrow_mut().retain(|_, id| !ids.contains(id));
+    }
+
+    /// The surface whose handle has `key`.
+    pub(crate) fn surface_id(&self, key: u64) -> Option<Id> {
+        self.surfaces.borrow().get(&key).cloned()
+    }
+
+    /// The handle key of the surface `id`, registering it. Surfaces are few: two whose keys meet
+    /// keep the first one's, as a hash table would.
+    pub(crate) fn register_surface(&self, id: &str) -> u64 {
+        let key = handles::key(id);
+        self.surfaces
+            .borrow_mut()
+            .entry(key)
+            .or_insert_with(|| id.to_owned());
+        key
+    }
+
+    /// The scene `id` opens when the call ends; a later request in the call replaces it.
+    pub(crate) fn change_scene(&self, id: Id) {
+        *self.scene_change.borrow_mut() = Some(id);
+    }
+
+    /// `error`, about a nil, with the attribute the call last read as nil.
+    fn explain_nil(&self, mut error: ScriptError) -> ScriptError {
+        let Some(read) = self.nil_read.take() else {
+            return error;
+        };
+        if !about_nil(&error.message) {
+            return error;
+        }
+        let at = match &read.at {
+            Some(at) if at.path == error.path && at.line == error.line => "esta linha".to_owned(),
+            Some(at) if at.path == error.path => format!("a linha {}", at.line),
+            Some(at) => format!("{}:{}", at.path, at.line),
+            None => "a chamada".to_owned(),
+        };
+        let NilRead {
+            object, attribute, ..
+        } = &read;
+        let attribute = if is_identifier(attribute) {
+            format!("{object}.attr.{attribute}")
+        } else {
+            format!("{object}.attr[\"{attribute}\"]")
+        };
+        error.message.push_str(&if read.empty {
+            format!(
+                " ({at} leu {attribute}, um atributo vazio, que dá nil: escolha o que ele aponta \
+                 nas Propriedades ou com o set_attribute do MCP)"
+            )
+        } else {
+            format!(
+                " ({at} leu {attribute}, que {object} não tem: um atributo ausente dá nil; \
+                 confira com has_attribute ou declare-o em Modulo.attributes)"
+            )
+        });
+        error
     }
 
     /// The handle key of `id`, registering it: an error names the other object with the key.
@@ -308,6 +409,29 @@ impl Shared {
         self.step_units.get() >= limits.step_units
             || self.step_interrupts.get() >= limits.step_interrupts
     }
+}
+
+/// Whether `message` is about a nil value: Luau's operand or key, an argument of the standard
+/// library or a value the API refuses. The API's hints that name nil ("use find_child, que dá
+/// nil") are not.
+fn about_nil(message: &str) -> bool {
+    ["um valor nil", "nil como índice", "recebeu nil", "não nil"]
+        .iter()
+        .any(|about| message.contains(about))
+}
+
+/// Whether `name` is a Luau identifier, which `obj.attr.name` can write: ASCII letters, digits
+/// and `_`, not starting with a digit, and no keyword.
+fn is_identifier(name: &str) -> bool {
+    const KEYWORDS: [&str; 21] = [
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in",
+        "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+    ];
+    name.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && !KEYWORDS.contains(&name)
 }
 
 /// Holds the `Runtime` borrowed while the VM may reach it; clears the pointer on drop, in the
@@ -634,6 +758,8 @@ impl ScriptHost {
             let result = f.call::<()>(values);
             (result, s.suspended_coroutine())
         };
+        // The object went in the call (`self:destroy()`): what stopped the call is its going.
+        let result = if s.vanished.take() { Ok(()) } else { result };
         // What the call did to its memory stays, error or not, as what it did to the world.
         let saved = self
             .write_back(runtime, owner, module)
@@ -650,7 +776,7 @@ impl ScriptHost {
             return ScriptCall::Failed(error);
         }
         if let Err(e) = result {
-            let failed = s.failure(&e, path, defined());
+            let failed = s.explain_nil(s.failure(&e, path, defined()));
             // A memory past its limit stops the script, whatever stopped the call; a value
             // refused is said along with the call's error.
             return ScriptCall::Failed(match saved {
@@ -743,7 +869,8 @@ impl ScriptHost {
             Value::Vector3([x, y, z]) => LuaValue::Vector(mlua::Vector::new(*x, *y, *z)),
             Value::Vector2([x, y]) => LuaValue::Vector(mlua::Vector::new(*x, *y, 0.)),
             Value::Object(Some(id)) => object(self.key(runtime, id)?),
-            Value::Object(None) | Value::Surface(_) => LuaValue::Nil,
+            Value::Surface(Some(id)) => surface(self.shared.register_surface(id)),
+            Value::Object(None) | Value::Surface(None) => LuaValue::Nil,
         })
     }
 
@@ -752,10 +879,24 @@ impl ScriptHost {
             .register(id)
             .map_err(|other| mlua::Error::runtime(handles::collision(runtime, &other, id)))
     }
+
+    /// The scene a call asked for, which opens now that it ended.
+    pub(crate) fn take_scene_change(&self) -> Option<Id> {
+        self.shared.scene_change.take()
+    }
 }
 
-fn object(key: u64) -> LuaValue {
+/// The object with handle key `key`, as Luau sees it.
+pub(crate) fn object(key: u64) -> LuaValue {
     LuaValue::LightUserData(mlua::LightUserData(handles::handle(MARK_OBJECT, key)))
+}
+
+/// The surface with handle key `key`, as Luau sees it.
+pub(crate) fn surface(key: u64) -> LuaValue {
+    LuaValue::LightUserData(mlua::LightUserData(handles::handle(
+        handles::MARK_SURFACE,
+        key,
+    )))
 }
 
 impl Shared {

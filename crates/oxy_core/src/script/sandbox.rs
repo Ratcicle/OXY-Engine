@@ -78,6 +78,7 @@ pub(crate) fn create(shared: &Rc<Shared>, extra: Extra) -> mlua::Result<(Lua, Ta
         base.raw_set(name, LuaValue::Nil)?;
     }
     install_base(&lua, &base, shared)?;
+    super::math::install(&lua)?;
     super::api::install(&lua, &base, shared)?;
     let (handles, touched) = handles::install(&lua, shared)?;
     extra(&lua, &base, shared)?;

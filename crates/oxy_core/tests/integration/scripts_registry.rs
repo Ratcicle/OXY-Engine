@@ -1,8 +1,9 @@
 //! The registry of the scripts' API (design §5.7, stage 4): every row's example, as the whole
 //! script the reference and the Guide show, loads, is attached as the person attaches it and
-//! runs without an error in a small project with the sound, the variable, the module and the
-//! attributes the examples use, callbacks included; and the markers of `param` declare the
-//! attributes that have no literal.
+//! runs without an error in a small project with the sound, the variable, the module, the
+//! child, the model, the scene, the surface and the attributes the examples use, callbacks
+//! included; and the markers of `param` declare the attributes and memory fields that have no
+//! literal.
 use oxy_core::{
     character::{CharacterConfig, MovementEvent},
     command::{self, Command},
@@ -10,6 +11,7 @@ use oxy_core::{
     physics3d::{Collider3d, CollisionShape},
     runtime::{FIXED_DT, InputFrame, Runtime, RuntimeOptions},
     script::{self, ScriptCall, ScriptRef, ScriptSources, registry},
+    surface::{SurfaceMaterial, SurfacePreset},
     variables,
 };
 use std::sync::Arc;
@@ -19,8 +21,9 @@ const PATH: &str = "scripts/exemplo.luau";
 /// The module `require`'s example loads, next to the example.
 const MODULE: (&str, &str) = ("scripts/dados.luau", "return { custo = 2 }\n");
 
-/// A project with the door every example runs on: its attributes, the sound `Bipe` and the
-/// game variable `Pontos`.
+/// A project with the door every example runs on: its attributes and its child `Maçaneta`, the
+/// sound `Bipe`, the game variable `Pontos`, the model `Bala`, the scene `Menu` and the surface
+/// `Gelo`.
 fn project() -> (Project, Id) {
     let mut project = Project::new("API");
     variables::create(&mut project, "Pontos", Value::Number(0.), false).unwrap();
@@ -31,12 +34,26 @@ fn project() -> (Project, Id) {
         kind: AssetKind::Audio,
         model: None,
     });
+    project
+        .surfaces
+        .push(SurfaceMaterial::preset(SurfacePreset::Ice));
+    let scene = project.start_scene.clone();
+    let bullet = Entity::new("Bala", None);
+    let bullet_id = bullet.id.clone();
+    project.scenes[0].entities.push(bullet);
+    project.save_model(&scene, &bullet_id, "Bala").unwrap();
+    project.scenes[0].entities.clear();
+    let mut menu = Scene::new("Menu", SceneKind::TwoD);
+    menu.entities.push(Entity::new("Título", None));
+    project.scenes.push(menu);
     let mut door = Entity::new("Porta", Some(Primitive::Cube));
     door.attributes.insert("Vida".into(), Value::Number(3.));
     door.attributes
         .insert("Aviso".into(), Value::Text(String::new()));
     let id = door.id.clone();
-    project.scenes[0].entities.push(door);
+    let mut handle = Entity::new("Maçaneta", None);
+    handle.parent = Some(id.clone());
+    project.scenes[0].entities.extend([door, handle]);
     (project, id)
 }
 
@@ -164,7 +181,7 @@ fn param_markers_declare_the_attributes_that_have_no_literal() {
                 self.attr.Alvo = outro\n    self.attr.Tamanho = vector.create(3, 4, 5)\n    \
                 self.attr.Aviso = self.attr.Alvo.name\nend\nreturn M\n";
     let sources = ScriptSources::from_texts([(PATH, text)]);
-    let declared = script::declared_attributes(&sources, [PATH]);
+    let declared = script::declared_attributes(&sources, &[], [PATH]);
     assert_eq!(
         declared[0].1.clone().unwrap(),
         [
@@ -234,15 +251,29 @@ fn param_markers_refuse_what_they_cannot_declare() {
             "{args}"
         );
     }
+    // In memory, a surface starts empty, and a marker declares only a field.
     assert_eq!(
-        refused("local M = {}\nM.state = { alvo = param.object() }\nreturn M\n"),
+        refused("local M = {}\nM.state = { piso = param.surface('Gelo') }\nreturn M\n"),
         Some(
-            "scripts/exemplo.luau: Modulo.state.alvo: os marcadores param servem em \
-             Modulo.attributes; a memória ainda não tem campos que começam vazios (para um \
-             objeto escolhido depois, declare um atributo Objeto: Modulo.attributes = { alvo = \
-             param.object() })"
+            "scripts/exemplo.luau: Modulo.state.piso: na memória, param.surface() começa vazio e \
+             não leva o nome de uma superfície (\"Gelo\"); para começar com uma superfície do \
+             projeto, declare um atributo: Modulo.attributes = { piso = param.surface(\"Gelo\") }"
                 .into()
         )
+    );
+    assert_eq!(
+        refused("local M = {}\nM.state = { t = { a = param.object() } }\nreturn M\n"),
+        Some(
+            "scripts/exemplo.luau: Modulo.state.t.a: não aceita um marcador param aqui; os \
+             marcadores declaram um campo de Modulo.state ou um atributo de Modulo.attributes, \
+             no primeiro nível"
+                .into()
+        )
+    );
+    assert!(
+        refused("local M = {}\nM.attributes = { Piso = param.surface(3) }\nreturn M\n")
+            .unwrap()
+            .contains("param.surface recebe o nome de uma superfície do projeto")
     );
     // A marker cannot be changed or faked: its metatable is the engine's, locked.
     assert!(
@@ -257,7 +288,7 @@ fn param_markers_refuse_what_they_cannot_declare() {
         PATH,
         "local M = {}\nM.attributes = { Alvo = { param = 'object' } }\nreturn M\n",
     )]);
-    let declared = script::declared_attributes(&sources, [PATH]);
+    let declared = script::declared_attributes(&sources, &[], [PATH]);
     assert!(
         declared[0]
             .1

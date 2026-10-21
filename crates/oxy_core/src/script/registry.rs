@@ -11,7 +11,7 @@
 //! memory, which `ScriptObject` types from the script's declarations.
 use super::Callback;
 use super::host::Shared;
-use super::{api, handles, messages, sandbox, timers};
+use super::{api, handles, math, messages, objects, sandbox, timers};
 use mlua::{Function, Lua};
 use std::rc::Rc;
 use std::sync::LazyLock;
@@ -57,7 +57,9 @@ pub enum ApiKind {
 pub enum Area {
     Events,
     Object,
+    Scene,
     Transform,
+    Math,
     Attributes,
     Memory,
     Timers,
@@ -68,10 +70,12 @@ pub enum Area {
 }
 
 impl Area {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::Events,
         Self::Object,
+        Self::Scene,
         Self::Transform,
+        Self::Math,
         Self::Attributes,
         Self::Memory,
         Self::Timers,
@@ -86,7 +90,9 @@ impl Area {
         match self {
             Self::Events => "Eventos",
             Self::Object => "Objeto",
+            Self::Scene => "Cena",
             Self::Transform => "Transformação",
+            Self::Math => "Matemática",
             Self::Attributes => "Atributos",
             Self::Memory => "Memória do script",
             Self::Timers => "Temporizadores",
@@ -108,11 +114,22 @@ impl Area {
             }
             Self::Object => {
                 "Os objetos chegam aos scripts como valores estáveis: `self`, o `other` dos \
-                 eventos, os atributos Objeto e o remetente das mensagens. Um objeto removido \
-                 continua sendo um valor no script, mas ler ou escrever nele é um erro."
+                 eventos, os atributos Objeto, o remetente das mensagens e o que `scene` acha. \
+                 Um objeto removido continua sendo um valor no script, mas ler ou escrever nele \
+                 é um erro (`obj:exists()` diz se ele ainda está na cena)."
+            }
+            Self::Scene => {
+                "A cena que está rodando: achar objetos pelo nome ou por um atributo, pôr modelos \
+                 da Biblioteca nela e trocar de cena. As listas vêm na ordem da cena."
             }
             Self::Transform => {
-                "Onde o objeto está, em metros, como vetores do Luau (`vector.create(x, y, z)`)."
+                "Onde o objeto está e como está girado, em metros e graus, como vetores do Luau \
+                 (`vector.create(x, y, z)`) e quatérnios (`quat`). Escrever passa pelas mesmas \
+                 regras do nó Mover / girar / escalar objeto."
+            }
+            Self::Math => {
+                "O que a OXY soma à biblioteca do Luau (`vector`, `math`): `vmath`, para vetores, \
+                 e `quat`, para giros. Um quatérnio nunca muda: toda função devolve um novo."
             }
             Self::Attributes => {
                 "Os atributos do objeto, os mesmos das Propriedades: a ponte com a interface, o \
@@ -354,6 +371,43 @@ pub static TYPES: &[ApiType] = &[
         def: TypeDef::Alias("{ kind: string, [string]: any }"),
     },
     ApiType {
+        name: "Surface",
+        generics: "",
+        doc: "Uma superfície física do projeto, como um atributo Superfície a aponta.",
+        def: TypeDef::Table(&[ApiField {
+            name: "name",
+            ty: "string",
+            doc: "O nome da superfície no projeto.",
+        }]),
+    },
+    ApiType {
+        name: "Quat",
+        generics: "",
+        doc: "Um giro (quatérnio), feito pelas funções de `quat`. Nunca muda.",
+        def: TypeDef::Table(&[
+            ApiField {
+                name: "x",
+                ty: "number",
+                doc: "O componente x.",
+            },
+            ApiField {
+                name: "y",
+                ty: "number",
+                doc: "O componente y.",
+            },
+            ApiField {
+                name: "z",
+                ty: "number",
+                doc: "O componente z.",
+            },
+            ApiField {
+                name: "w",
+                ty: "number",
+                doc: "O componente w.",
+            },
+        ]),
+    },
+    ApiType {
         name: "Object",
         generics: "",
         doc: "Um objeto da cena. Chega aos scripts como `self` e nos argumentos dos eventos.",
@@ -392,6 +446,42 @@ pub static TYPES: &[ApiType] = &[
             },
         ]),
     },
+    ApiType {
+        name: "SpawnOptions",
+        generics: "",
+        doc: "Opções de `obj:clone` e `scene.spawn_model`.",
+        def: TypeDef::Table(&[
+            ApiField {
+                name: "offset",
+                ty: "vector?",
+                doc: "Só em `clone`: quanto a cópia fica longe do original, nos eixos do pai \
+                      (sem ele, no mesmo lugar).",
+            },
+            ApiField {
+                name: "position",
+                ty: "vector?",
+                doc: "Onde a cópia fica, nos eixos do pai, como `obj.position`.",
+            },
+            ApiField {
+                name: "rotation",
+                ty: "vector?",
+                doc: "A rotação da cópia em graus, como `obj.rotation`.",
+            },
+            // Object, not AnyObject: `clone` is a member of ScriptObject, and a ScriptObject in
+            // its own parameters is "Recursive type being used with different parameters" in
+            // the old solver (S2 §8).
+            ApiField {
+                name: "parent",
+                ty: "Object?",
+                doc: "O pai da cópia; sem ele, o do original (`clone`) ou a raiz da cena.",
+            },
+            ApiField {
+                name: "attributes",
+                ty: "{ [string]: any }?",
+                doc: "Valores de atributos que a cópia já tem, antes do `on_start` dela.",
+            },
+        ]),
+    },
 ];
 
 const V07: &str = "0.7.0";
@@ -401,8 +491,8 @@ const TIMER_ERRORS: &[&str] = &[
     "chamado em outro objeto que não `self`",
     "tempo que não é um número de 0 a 86400 segundos",
     "função criada na hora em vez de uma da tabela do módulo (`M.fechar`)",
-    "dado que não é nil, número, texto (até 4.096 bytes), booleano, vetor nem objeto, ou mais de \
-     16 dados",
+    "dado que não é nil, número, texto (até 4.096 bytes), booleano, vetor, objeto nem superfície, \
+     ou mais de 16 dados",
     "a fila sem lugar para mais temporizadores: o script para no objeto",
 ];
 
@@ -631,6 +721,26 @@ pub static API: &[ApiFn] = &[
     },
     // Objects.
     ApiFn {
+        name: "Object.id",
+        area: Area::Object,
+        kind: ApiKind::Property { write: false },
+        generics: "",
+        params: &[],
+        returns: "string",
+        summary: "O ID do objeto: fixo no projeto e, numa cópia feita no jogo, derivado do \
+                  original.",
+        doc: "Só leitura. Dois objetos podem ter o mesmo nome, nunca o mesmo ID: serve de chave \
+              para guardar algo por objeto. Para mostrar um objeto a quem joga, use `name`.",
+        help_en: "The object's ID (read only): fixed in the project and, for a copy made in the \
+                  game, derived from the original; a key, never shown to players.",
+        errors: &["o objeto não existe mais"],
+        example: "print(self.name, self.id)",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Property(handles::Property::Id),
+    },
+    ApiFn {
         name: "Object.name",
         area: Area::Object,
         kind: ApiKind::Property { write: false },
@@ -638,14 +748,110 @@ pub static API: &[ApiFn] = &[
         params: &[],
         returns: "string",
         summary: "O nome do objeto na cena.",
-        doc: "Só leitura. `print` e `tostring` mostram um objeto por esse nome.",
-        help_en: "The object's name in the scene (read only).",
+        doc: "Só leitura. `print` e `tostring` mostram um objeto por esse nome. A raiz de uma \
+              cópia de `obj:clone` leva \" (cópia)\" no fim do nome, como as do nó Criar cópia \
+              de objeto, e o que está nela fica com os nomes do original; as cópias de \
+              `scene.spawn_model` ficam com os nomes do modelo.",
+        help_en: "The object's name in the scene (read only); the root of an obj:clone copy ends \
+                  in \" (cópia)\", while scene.spawn_model copies keep the model's names.",
         errors: &["o objeto não existe mais"],
         example: "print(self.name)",
         domain: Domain::Pure,
         since: V07,
         nodes: &[],
         imp: Imp::Property(handles::Property::Name),
+    },
+    ApiFn {
+        name: "Object.parent",
+        area: Area::Object,
+        kind: ApiKind::Property { write: false },
+        generics: "",
+        params: &[],
+        returns: "Object?",
+        summary: "O pai do objeto na Hierarquia, ou nil num objeto da raiz.",
+        doc: "Só leitura. Um script compartilhado por vários objetos alcança o grupo de cada um \
+              por aqui, sem uma referência fixa.",
+        help_en: "The object's parent in the hierarchy, or nil at the root (read only).",
+        errors: &["o objeto não existe mais"],
+        example: "local pai = self.parent\nif pai then\n    print(pai.name)\nend",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Property(handles::Property::Parent),
+    },
+    ApiFn {
+        name: "Object:children",
+        area: Area::Object,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[],
+        returns: "{ Object }",
+        summary: "Os filhos diretos do objeto, na ordem da cena.",
+        doc: "Uma lista nova a cada chamada: guardá-la ou mudá-la não muda a cena.",
+        help_en: "The object's direct children, in scene order, as a new list.",
+        errors: &["o objeto não existe mais"],
+        example: "for _, filho in self:children() do\n    print(filho.name)\nend",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Method(objects::children),
+    },
+    ApiFn {
+        name: "Object:find_child",
+        area: Area::Object,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[
+            param("name", "string", "o nome do filho"),
+            param(
+                "deep",
+                "boolean?",
+                "true procura em tudo o que está abaixo do objeto, não só nos filhos",
+            ),
+        ],
+        returns: "Object?",
+        summary: "O primeiro filho com o nome, na ordem da cena, ou nil.",
+        doc: "Para quando a ausência é esperada; um filho fixo de um modelo se pega com \
+              `get_child`, que dá um erro claro quando ele falta.",
+        help_en: "The first child with that name in scene order (with deep, anything below), or \
+                  nil.",
+        errors: &["o nome não é um texto", "o objeto não existe mais"],
+        example: "local alca = self:find_child(\"Maçaneta\")\nif alca then\n    alca.visible = \
+                  false\nend",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Method(objects::find_child),
+    },
+    ApiFn {
+        name: "Object:get_child",
+        area: Area::Object,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[
+            param("name", "string", "o nome do filho"),
+            param(
+                "deep",
+                "boolean?",
+                "true procura em tudo o que está abaixo do objeto, não só nos filhos",
+            ),
+        ],
+        returns: "Object",
+        summary: "O primeiro filho com o nome, na ordem da cena; um erro se não houver.",
+        doc: "Como `find_child`, mas o filho é certo: o erro diz o nome mais parecido e os \
+              filhos que existem (um filho renomeado quebra o script na linha, e não depois).",
+        help_en: "The first child with that name (with deep, anything below); an error naming \
+                  the children there are when none has it.",
+        errors: &[
+            "nenhum filho com o nome (o erro lista os filhos)",
+            "o nome não é um texto",
+            "o objeto não existe mais",
+        ],
+        example: "self:get_child(\"Maçaneta\").visible = false",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Method(objects::get_child),
     },
     ApiFn {
         name: "Object:exists",
@@ -664,6 +870,165 @@ pub static API: &[ApiFn] = &[
         since: V07,
         nodes: &[],
         imp: Imp::FastMethod(handles::FastMethod::Exists),
+    },
+    ApiFn {
+        name: "Object.visible",
+        area: Area::Object,
+        kind: ApiKind::Property { write: true },
+        generics: "",
+        params: &[],
+        returns: "boolean",
+        summary: "Se o objeto aparece: false o esconde, true o mostra.",
+        doc: "Como o nó Ativar / desativar componente (Visibilidade). Esconder um grupo esconde \
+              o que está nele, mas o `visible` dos filhos continua true; um botão escondido (ou \
+              num grupo escondido) não recebe cliques.",
+        help_en: "Whether the object shows: false hides it, as action.component visible; a \
+                  hidden group hides its children without changing theirs.",
+        errors: &[
+            "escrever outra coisa que true ou false",
+            "o objeto não existe mais",
+        ],
+        example: "self.visible = false",
+        domain: Domain::Target,
+        since: V07,
+        nodes: &["action.component"],
+        imp: Imp::Property(handles::Property::Visible),
+    },
+    ApiFn {
+        name: "Object.logic_enabled",
+        area: Area::Object,
+        kind: ApiKind::Property { write: true },
+        generics: "",
+        params: &[],
+        returns: "boolean",
+        summary: "Se a lógica de nós (o grafo) do objeto roda; os scripts dele seguem.",
+        doc: "Como o nó Ativar / desativar componente (Comportamento visual): false para o grafo \
+              e descarta as esperas dele; um erro no grafo também o põe em false. Os scripts têm \
+              o próprio liga e desliga.",
+        help_en: "Whether the object's node graph runs (action.component behavior); its scripts \
+                  run either way.",
+        errors: &[
+            "escrever outra coisa que true ou false",
+            "o objeto não existe mais",
+        ],
+        example: "self.logic_enabled = false",
+        domain: Domain::Target,
+        since: V07,
+        nodes: &["action.component"],
+        imp: Imp::Property(handles::Property::LogicEnabled),
+    },
+    ApiFn {
+        name: "Object:has_component",
+        area: Area::Object,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[param(
+            "kind",
+            "\"animation\" | \"area\" | \"camera\" | \"character\" | \"collider\" | \
+             \"controller\" | \"platform\" | \"ui\"",
+            "o componente: animation (tem animações), area (colisor marcado como área), camera, \
+             character (Personagem 3D), collider (colisor 2D ou 3D, área incluída), controller \
+             (Movimento 2D), platform (plataforma móvel) ou ui (elemento de interface)",
+        )],
+        returns: "boolean",
+        summary: "Diz se o objeto tem o componente, ligado ou não.",
+        doc: "Confira antes de agir sobre outro objeto, como o que entrou numa área: um \
+              personagem, uma caixa de física.",
+        help_en: "Whether the object has the component (animation, area, camera, character, \
+                  collider, controller, platform or ui), on or off.",
+        errors: &[
+            "um componente que não é um dos da lista (o erro lista os nomes)",
+            "o objeto não existe mais",
+        ],
+        example: "if self:has_component(\"collider\") then\n    print(\"tem colisor\")\nend",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Method(objects::has_component),
+    },
+    ApiFn {
+        name: "Object:destroy",
+        area: Area::Object,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[],
+        returns: "()",
+        summary: "Tira o objeto e tudo o que está nele da cena, na hora.",
+        doc: "Como o nó Remover objeto. Os temporizadores, as mensagens e a memória dele vão \
+              junto. `self:destroy()` encerra a chamada em silêncio no próximo uso de `self`; \
+              o que vem antes vale.",
+        help_en: "Removes the object and everything under it from the scene at once, as \
+                  action.remove; self:destroy() ends the call quietly at the next use of self.",
+        errors: &["o objeto não existe mais"],
+        example: "self:destroy()",
+        domain: Domain::Target,
+        since: V07,
+        nodes: &["action.remove"],
+        imp: Imp::Method(objects::destroy),
+    },
+    ApiFn {
+        name: "Object:clone",
+        area: Area::Object,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[param(
+            "options",
+            "SpawnOptions?",
+            "`{ offset = v }` ou `{ position = v }`, e `rotation`, `parent` e `attributes`",
+        )],
+        returns: "Object",
+        summary: "Copia o objeto e tudo o que está nele, como está agora, e devolve a cópia.",
+        doc: "Como o nó Criar cópia de objeto: a cópia fica no mesmo pai e no mesmo lugar do \
+              original (`offset` a desloca nos eixos do pai; `position` a põe num lugar), com os \
+              atributos, os scripts e a lógica dele; a memória dos scripts nasce com os valores \
+              declarados, e o `on_start` deles roda depois desta chamada. Os IDs da cópia saem \
+              deste objeto, deste script e de quantas cópias ele já fez: a mesma partida dá os \
+              mesmos IDs.",
+        help_en: "Copies the object and its hierarchy as it is now (action.spawn) and returns \
+                  the copy; options offset or position, rotation, parent, attributes. The \
+                  copy's on_start runs after this call.",
+        errors: &[
+            "uma opção desconhecida, offset com position, ou um valor de outro tipo",
+            "um atributo em `attributes` que a cópia não tem, ou de outro tipo (nada é criado)",
+            "o objeto não existe mais",
+        ],
+        example: "if self.attr.Vida == 3 then\n    local copia = self:clone({ offset = \
+                  vector.create(2, 0, 0) })\n    copia.attr.Vida = 1\nend",
+        domain: Domain::Match,
+        since: V07,
+        nodes: &["action.spawn"],
+        imp: Imp::Method(objects::clone),
+    },
+    ApiFn {
+        name: "Object:first_hit",
+        area: Area::Object,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[param("other", "Object", "o objeto atingido")],
+        returns: "boolean",
+        summary: "true só na primeira vez que `other` é atingido nesta ativação da área do \
+                  objeto.",
+        doc: "A regra \"Uma vez por ativação\" do nó Aplicar dano, sem o dano: a área conta quem \
+              já atingiu até ser desligada e ligada de novo, e os acertos do grafo e dos \
+              scripts somam juntos. Em `on_area_enter` e `on_area_exit` da própria área, conta \
+              na ativação do evento, como o nó, mesmo que a área tenha desligado depois; fora \
+              deles, na ativação de agora, e uma área desligada dá false. O dano vira uma \
+              conta: `other.attr.Vida -= 25`.",
+        help_en: "True only the first time other is hit in this activation of the object's area \
+                  (action.damage's once rule, without the damage); in the area's own \
+                  on_area_enter/on_area_exit it counts in that event's activation, and an area \
+                  that is off gives false elsewhere.",
+        errors: &[
+            "o objeto não é uma área (um colisor marcado como área)",
+            "other não é um objeto ou não existe mais",
+        ],
+        example: "function M.on_area_enter(self: Object, other: Object)\n    if \
+                  other:has_attribute(\"Vida\") and self:first_hit(other) then\n        \
+                  other.attr.Vida -= 1\n    end\nend",
+        domain: Domain::Match,
+        since: V07,
+        nodes: &["action.damage"],
+        imp: Imp::Method(objects::first_hit),
     },
     ApiFn {
         name: "Object:send",
@@ -698,6 +1063,191 @@ pub static API: &[ApiFn] = &[
         since: V07,
         nodes: &[],
         imp: Imp::Method(messages::send),
+    },
+    // Scene.
+    ApiFn {
+        name: "scene.find",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param(
+            "name",
+            "string",
+            "o nome do objeto, como na Hierarquia",
+        )],
+        returns: "Object?",
+        summary: "O primeiro objeto da cena com o nome, na ordem da cena, ou nil.",
+        doc: "O nome é o exato, com maiúsculas e espaços. Para apontar um objeto que pode ser \
+              renomeado, prefira um atributo Objeto (`param.object()`), escolhido nas \
+              Propriedades.",
+        help_en: "The first object of the scene with that exact name, in scene order, or nil.",
+        errors: &["o nome não é um texto"],
+        example: "local porta = scene.find(\"Porta\")\nif porta then\n    print(porta.name)\nend",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(objects::scene_find),
+    },
+    ApiFn {
+        name: "scene.get",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param(
+            "name",
+            "string",
+            "o nome do objeto, como na Hierarquia",
+        )],
+        returns: "Object",
+        summary: "O primeiro objeto da cena com o nome; um erro se não houver.",
+        doc: "Como `scene.find`, para um objeto que tem de existir: o erro diz o nome mais \
+              parecido da cena.",
+        help_en: "The first object of the scene with that exact name; an error with the nearest \
+                  name when none has it.",
+        errors: &[
+            "nenhum objeto com o nome (com o nome mais parecido)",
+            "o nome não é um texto",
+        ],
+        example: "scene.get(\"Porta\").attr.Vida = 2",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(objects::scene_get),
+    },
+    ApiFn {
+        name: "scene.find_all",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param(
+            "name",
+            "string",
+            "o nome dos objetos, como na Hierarquia",
+        )],
+        returns: "{ Object }",
+        summary: "Todos os objetos da cena com o nome, na ordem da cena.",
+        doc: "Uma lista nova a cada chamada, vazia quando nenhum tem o nome.",
+        help_en: "Every object of the scene with that exact name, in scene order.",
+        errors: &["o nome não é um texto"],
+        example: "for _, porta in scene.find_all(\"Porta\") do\n    porta.attr.Vida = 3\nend",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(objects::scene_find_all),
+    },
+    ApiFn {
+        name: "scene.with_attribute",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param("name", "string", "o nome do atributo")],
+        returns: "{ Object }",
+        summary: "Todos os objetos da cena que têm o atributo, na ordem da cena.",
+        doc: "Um atributo serve de marca: os inimigos de uma onda, os interruptores de uma porta.",
+        help_en: "Every object of the scene that has the attribute, in scene order.",
+        errors: &["o nome não é um texto"],
+        example: "for _, alvo in scene.with_attribute(\"Vida\") do\n    alvo.attr.Vida -= 1\nend",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(objects::scene_with_attribute),
+    },
+    ApiFn {
+        name: "scene.spawn_model",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("model", "string", "o nome do modelo na Biblioteca"),
+            param(
+                "options",
+                "SpawnOptions?",
+                "`{ position = v }`, e `rotation`, `parent` e `attributes`",
+            ),
+        ],
+        returns: "Object",
+        summary: "Põe uma cópia de um modelo da Biblioteca na cena e devolve a raiz dela.",
+        doc: "O nome do modelo vale sem diferenciar maiúsculas. A cópia, com os nomes que os \
+              objetos têm no modelo, vai para a raiz da cena (ou para `parent`), na posição \
+              salva no modelo (ou em `position`, nos eixos do pai); o `on_start` dos scripts dela roda depois desta chamada. Os IDs saem deste \
+              objeto, deste script e de quantas cópias ele já fez, como em `obj:clone`.",
+        help_en: "Places a copy of a model of the project (by name, any case) in the scene and \
+                  returns its root; options position, rotation, parent, attributes. Its \
+                  on_start runs after this call.",
+        errors: &[
+            "um modelo que o projeto não tem (o erro lista os modelos)",
+            "um modelo de formas 2D numa cena 3D, ou o contrário",
+            "uma opção desconhecida ou um valor de outro tipo",
+            "um atributo em `attributes` que a raiz da cópia não tem (nada é criado)",
+        ],
+        example: "local bala = scene.spawn_model(\"Bala\", { position = vector.create(0, 1, 0) \
+                  })\nprint(bala.name)",
+        domain: Domain::Match,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(objects::scene_spawn_model),
+    },
+    ApiFn {
+        name: "scene.current",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[],
+        returns: "string",
+        summary: "O nome da cena que está rodando.",
+        doc: "O mesmo nome que `scene.change` recebe.",
+        help_en: "The name of the scene running.",
+        errors: &[],
+        example: "print(scene.current())",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &["scene.current"],
+        imp: Imp::Function(objects::scene_current),
+    },
+    ApiFn {
+        name: "scene.change",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param("name", "string", "o nome da cena, como no projeto")],
+        returns: "()",
+        summary: "Abre outra cena quando a função termina.",
+        doc: "O nome vale sem diferenciar maiúsculas. O resto da função ainda roda na cena \
+              atual; depois ela fecha, com os temporizadores e as mensagens dela, e a nova \
+              começa, como no nó Mudar de cena. Chamar de novo na mesma função troca o destino. \
+              As variáveis do jogo continuam.",
+        help_en: "Opens another scene (by name, any case) when the function ends; the rest of \
+                  the function runs in this one.",
+        errors: &[
+            "uma cena que o projeto não tem (com o nome mais parecido e a lista)",
+            "duas cenas com o mesmo nome",
+            "o nome não é um texto",
+        ],
+        example: "scene.change(\"Menu\")",
+        domain: Domain::Authority,
+        since: V07,
+        nodes: &["action.scene", "value.scene"],
+        imp: Imp::Function(objects::scene_change),
+    },
+    ApiFn {
+        name: "scene.restart",
+        area: Area::Scene,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[],
+        returns: "()",
+        summary: "Começa a cena atual de novo quando a função termina.",
+        doc: "Como `scene.change(scene.current())`. As variáveis do jogo guardam o valor: zere \
+              no `on_start` o que precisa recomeçar.",
+        help_en: "Starts the current scene again when the function ends; game variables keep \
+                  their values.",
+        errors: &[],
+        example: "if vars.get(\"Pontos\") == 0 then\n    vars.set(\"Pontos\", 1)\n    \
+                  scene.restart()\nend",
+        domain: Domain::Authority,
+        since: V07,
+        nodes: &["action.scene", "scene.current"],
+        imp: Imp::Function(objects::scene_restart),
     },
     // Transform.
     ApiFn {
@@ -745,6 +1295,455 @@ pub static API: &[ApiFn] = &[
         nodes: &["transform.read", "transform.write"],
         imp: Imp::Property(handles::Property::WorldPosition),
     },
+    ApiFn {
+        name: "Object.rotation",
+        area: Area::Transform,
+        kind: ApiKind::Property { write: true },
+        generics: "",
+        params: &[],
+        returns: "vector",
+        summary: "A rotação do objeto em graus, nos eixos X, Y e Z do pai, como as Propriedades \
+                  mostram.",
+        doc: "Escrever gira o objeto, como o nó Mover / girar / escalar objeto, e recusa o que \
+              ele recusa. Para girar aos poucos ou combinar giros, use `orientation` e `quat`.",
+        help_en: "The object's rotation in degrees about its parent's X, Y and Z, as Properties \
+                  shows it; writing turns it.",
+        errors: &[
+            "escrever outra coisa que um vetor",
+            "girar um personagem 3D ou um objeto que uma animação tocando posiciona",
+            "o objeto não existe mais",
+        ],
+        example: "self.rotation = vector.create(0, 90, 0)",
+        domain: Domain::Target,
+        since: V07,
+        nodes: &["transform.read", "transform.write"],
+        imp: Imp::Property(handles::Property::Rotation),
+    },
+    ApiFn {
+        name: "Object.orientation",
+        area: Area::Transform,
+        kind: ApiKind::Property { write: true },
+        generics: "",
+        params: &[],
+        returns: "Quat",
+        summary: "A rotação do objeto como quatérnio, nos eixos do pai.",
+        doc: "Escrever gira o objeto como `rotation`, com os ângulos mais perto dos de agora. \
+              As funções de `quat` combinam e interpolam giros.",
+        help_en: "The object's rotation in its parent's axes as a quaternion; writing turns it \
+                  as rotation does.",
+        errors: &[
+            "escrever outra coisa que um quatérnio",
+            "girar um personagem 3D ou um objeto que uma animação tocando posiciona",
+            "o objeto não existe mais",
+        ],
+        example: "self.orientation = quat.from_euler(0, 45, 0)",
+        domain: Domain::Target,
+        since: V07,
+        nodes: &["transform.read", "transform.write"],
+        imp: Imp::Property(handles::Property::Orientation),
+    },
+    ApiFn {
+        name: "Object.scale",
+        area: Area::Transform,
+        kind: ApiKind::Property { write: true },
+        generics: "",
+        params: &[],
+        returns: "vector",
+        summary: "A escala do objeto em X, Y e Z, relativa ao pai, como as Propriedades mostram.",
+        doc: "Escrever muda o tamanho, como o nó Mover / girar / escalar objeto: cada eixo fica \
+              acima de 0,00001 em valor absoluto.",
+        help_en: "The object's scale on X, Y and Z, relative to its parent; writing resizes it.",
+        errors: &[
+            "escrever outra coisa que um vetor",
+            "uma escala que chega a zero",
+            "escalar um personagem 3D ou um objeto que uma animação tocando posiciona",
+            "o objeto não existe mais",
+        ],
+        example: "self.scale = vector.create(2, 2, 2)",
+        domain: Domain::Target,
+        since: V07,
+        nodes: &["transform.write"],
+        imp: Imp::Property(handles::Property::Scale),
+    },
+    ApiFn {
+        name: "Object.yaw",
+        area: Area::Transform,
+        kind: ApiKind::Property { write: false },
+        generics: "",
+        params: &[],
+        returns: "number",
+        summary: "O giro horizontal do objeto no mundo, em graus: para onde a frente (-Z) aponta.",
+        doc: "Só leitura, como o Giro horizontal do nó Ler posição e orientação: 0 olha para -Z e \
+              90 para -X. Um personagem 3D gira com o giro do personagem.",
+        help_en: "The object's horizontal turn in the world in degrees (read only): where its \
+                  front (-Z) points, 0 to -Z and 90 to -X.",
+        errors: &["o objeto não existe mais"],
+        example: "print(self.yaw)",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &["transform.read"],
+        imp: Imp::Property(handles::Property::Yaw),
+    },
+    ApiFn {
+        name: "Object:jump_to",
+        area: Area::Transform,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[param(
+            "position",
+            "vector",
+            "onde o pivô do objeto fica, no mundo, em metros",
+        )],
+        returns: "()",
+        summary: "Leva o objeto para uma posição do mundo de uma vez, como um salto.",
+        doc: "Como escrever `world_position`, mas as plataformas móveis do objeto e do que está \
+              nele soltam quem está em cima, sem lançá-lo (o modo Salto do nó Mover / girar / \
+              escalar objeto).",
+        help_en: "Moves the object's pivot to a world position at once, as a jump: moving \
+                  platforms in it drop their riders without launching them.",
+        errors: &[
+            "a posição não é um vetor",
+            "mover um personagem 3D ou um objeto que uma animação tocando posiciona",
+            "o objeto não existe mais",
+        ],
+        example: "self:jump_to(vector.create(0, 5, 0))",
+        domain: Domain::Target,
+        since: V07,
+        nodes: &["transform.write"],
+        imp: Imp::Method(objects::jump_to),
+    },
+    ApiFn {
+        name: "Object:to_world_direction",
+        area: Area::Transform,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[param(
+            "direction",
+            "vector",
+            "uma direção nos eixos do objeto, como vector.create(0, 0, -1), a frente",
+        )],
+        returns: "vector",
+        summary: "Uma direção nos eixos do objeto, girada para os eixos do mundo.",
+        doc: "Só a rotação conta (a escala e a posição não): a frente do objeto no mundo é \
+              `self:to_world_direction(vector.create(0, 0, -1))`.",
+        help_en: "A direction in the object's axes turned into the world's (rotation only), as \
+                  vector.direction local to world.",
+        errors: &["a direção não é um vetor", "o objeto não existe mais"],
+        example: "print(self:to_world_direction(vector.create(0, 0, -1)))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &["vector.direction"],
+        imp: Imp::Method(objects::to_world_direction),
+    },
+    ApiFn {
+        name: "Object:to_local_direction",
+        area: Area::Transform,
+        kind: ApiKind::Method,
+        generics: "",
+        params: &[param(
+            "direction",
+            "vector",
+            "uma direção nos eixos do mundo",
+        )],
+        returns: "vector",
+        summary: "Uma direção do mundo, girada para os eixos do objeto.",
+        doc: "O contrário de `to_world_direction`: só a rotação conta.",
+        help_en: "A world direction turned into the object's axes (rotation only), as \
+                  vector.direction world to local.",
+        errors: &["a direção não é um vetor", "o objeto não existe mais"],
+        example: "print(self:to_local_direction(vector.create(0, 0, -1)))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &["vector.direction"],
+        imp: Imp::Method(objects::to_local_direction),
+    },
+    // Math.
+    ApiFn {
+        name: "vmath.lerp",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("a", "vector", "o vetor de partida"),
+            param("b", "vector", "o vetor de chegada"),
+            param("t", "number", "0 dá a, 1 dá b; fora disso, além deles"),
+        ],
+        returns: "vector",
+        summary: "O vetor entre `a` e `b` na fração `t`: a + (b - a) * t.",
+        doc: "O mesmo que o `vector.lerp` do Luau; `math.lerp` faz o mesmo com números.",
+        help_en: "The vector between a and b at fraction t (a + (b - a) * t), as Luau's \
+                  vector.lerp.",
+        errors: &["a ou b que não é um vetor, t que não é um número"],
+        example: "print(vmath.lerp(vector.zero, vector.one, 0.5))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::vmath_lerp),
+    },
+    ApiFn {
+        name: "vmath.distance",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("a", "vector", "um ponto"),
+            param("b", "vector", "outro ponto"),
+        ],
+        returns: "number",
+        summary: "A distância entre dois pontos, em metros.",
+        doc: "O comprimento de `b - a`, em precisão dupla.",
+        help_en: "The distance between two points, in metres.",
+        errors: &["a ou b que não é um vetor"],
+        example: "print(vmath.distance(self.position, vector.create(0, 0, 0)))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &["vector3.math"],
+        imp: Imp::Function(math::vmath_distance),
+    },
+    ApiFn {
+        name: "vmath.normalize_or_zero",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param("v", "vector", "o vetor")],
+        returns: "vector",
+        summary: "O vetor com comprimento 1, ou zero quando ele não tem direção.",
+        doc: "Como o A normalizado (zero seguro) do nó Operações com Vetor3: um vetor zero dá \
+              zero, sem NaN (o `vector.normalize` do Luau dá NaN).",
+        help_en: "The vector with length 1, or zero for a zero vector (Luau's vector.normalize \
+                  gives NaN).",
+        errors: &["v que não é um vetor"],
+        example: "print(vmath.normalize_or_zero(vector.create(3, 0, 4)))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &["vector3.math"],
+        imp: Imp::Function(math::vmath_normalize_or_zero),
+    },
+    ApiFn {
+        name: "vmath.flat",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param("v", "vector", "o vetor")],
+        returns: "vector",
+        summary: "O vetor no chão: o mesmo com y = 0.",
+        doc: "Para direções e distâncias no plano, sem a altura.",
+        help_en: "The vector with y = 0.",
+        errors: &["v que não é um vetor"],
+        example: "print(vmath.flat(vector.create(1, 2, 3)))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::vmath_flat),
+    },
+    ApiFn {
+        name: "vmath.yaw_of",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param("direction", "vector", "a direção, no mundo")],
+        returns: "number",
+        summary: "O giro horizontal, em graus, que aponta a frente de um objeto para a direção.",
+        doc: "O mesmo giro de `obj.yaw`: 0 olha para -Z e 90 para -X; a altura não conta, e uma \
+              direção vertical ou zero dá 0. `obj.rotation = vector.create(0, vmath.yaw_of(d), \
+              0)` vira o objeto para `d`.",
+        help_en: "The horizontal turn in degrees that points an object's front at a direction, \
+                  as obj.yaw reads it (0 for a vertical or zero direction).",
+        errors: &["direction que não é um vetor"],
+        example: "self.rotation = vector.create(0, vmath.yaw_of(vector.create(-1, 0, 0)), 0)",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::vmath_yaw_of),
+    },
+    ApiFn {
+        name: "quat.identity",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[],
+        returns: "Quat",
+        summary: "O quatérnio sem giro.",
+        doc: "Um quatérnio nunca muda; feito no topo do script, é uma constante.",
+        help_en: "The quaternion with no rotation.",
+        errors: &[],
+        example: "self.orientation = quat.identity()",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_identity),
+    },
+    ApiFn {
+        name: "quat.from_euler",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("x", "number", "graus em X"),
+            param("y", "number", "graus em Y"),
+            param("z", "number", "graus em Z"),
+        ],
+        returns: "Quat",
+        summary: "O giro dos ângulos X, Y e Z em graus, na ordem das Propriedades.",
+        doc: "`quat.from_euler(0, 90, 0)` é o mesmo giro que `rotation = vector.create(0, 90, \
+              0)`.",
+        help_en: "The rotation of the X, Y and Z angles in degrees, in Properties' order.",
+        errors: &["um ângulo que não é um número"],
+        example: "self.orientation = quat.from_euler(0, 90, 0)",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_from_euler),
+    },
+    ApiFn {
+        name: "quat.from_axis_angle",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("axis", "vector", "o eixo do giro (qualquer comprimento)"),
+            param("degrees", "number", "o ângulo, em graus"),
+        ],
+        returns: "Quat",
+        summary: "O giro de `degrees` graus em volta de um eixo.",
+        doc: "Visto da ponta do eixo, um ângulo positivo gira no sentido anti-horário.",
+        help_en: "The rotation of degrees about an axis.",
+        errors: &[
+            "axis que não é um vetor ou é zero",
+            "degrees que não é um número",
+        ],
+        example: "self.orientation = quat.from_axis_angle(vector.create(0, 1, 0), 90)",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_from_axis_angle),
+    },
+    ApiFn {
+        name: "quat.look_at",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("forward", "vector", "para onde a frente (-Z) deve olhar"),
+            param(
+                "up",
+                "vector?",
+                "para onde o topo (+Y) deve ficar; +Y sem ele",
+            ),
+        ],
+        returns: "Quat",
+        summary: "O giro que aponta a frente de um objeto (-Z) para uma direção.",
+        doc: "O topo fica o mais perto possível de `up`.",
+        help_en: "The rotation that points an object's front (-Z) along forward, its top as \
+                  close to up (default +Y) as it gets.",
+        errors: &[
+            "forward ou up que não é um vetor, forward zero",
+            "forward na mesma direção de up",
+        ],
+        example: "self.orientation = quat.look_at(vector.create(1, 0, 0))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_look_at),
+    },
+    ApiFn {
+        name: "quat.slerp",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("a", "Quat", "o giro de partida"),
+            param("b", "Quat", "o giro de chegada"),
+            param("t", "number", "0 dá a, 1 dá b"),
+        ],
+        returns: "Quat",
+        summary: "O giro entre `a` e `b` na fração `t`, pelo caminho mais curto.",
+        doc: "Para girar aos poucos: chame a cada passo com `t` crescendo.",
+        help_en: "The rotation between a and b at fraction t, along the shortest way.",
+        errors: &["a ou b que não é um quatérnio, t que não é um número"],
+        example: "self.orientation = quat.slerp(quat.identity(), quat.from_euler(0, 90, 0), 0.5)",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_slerp),
+    },
+    ApiFn {
+        name: "quat.multiply",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("a", "Quat", "o giro de fora"),
+            param("b", "Quat", "o giro aplicado primeiro"),
+        ],
+        returns: "Quat",
+        summary: "O giro `b` seguido do giro `a`.",
+        doc: "O operador `a * b` faz o mesmo, mas os tipos do VS Code não o conhecem: com \
+              `--!strict`, use a função.",
+        help_en: "The rotation b followed by a (also a * b at runtime).",
+        errors: &["a ou b que não é um quatérnio"],
+        example: "self.orientation = quat.multiply(self.orientation, quat.from_euler(0, 10, 0))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_multiply),
+    },
+    ApiFn {
+        name: "quat.rotate",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[
+            param("q", "Quat", "o giro"),
+            param("v", "vector", "o vetor a girar"),
+        ],
+        returns: "vector",
+        summary: "O vetor `v` girado por `q`.",
+        doc: "O operador `q * v` faz o mesmo, mas os tipos do VS Code não o conhecem: com \
+              `--!strict`, use a função.",
+        help_en: "The vector v turned by q (also q * v at runtime).",
+        errors: &["q que não é um quatérnio ou v que não é um vetor"],
+        example: "print(quat.rotate(quat.from_euler(0, 90, 0), vector.create(0, 0, -1)))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_rotate),
+    },
+    ApiFn {
+        name: "quat.inverse",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param("q", "Quat", "o giro")],
+        returns: "Quat",
+        summary: "O giro contrário de `q`.",
+        doc: "`quat.multiply(quat.inverse(q), q)` não gira nada.",
+        help_en: "The rotation opposite to q.",
+        errors: &["q que não é um quatérnio"],
+        example: "self.orientation = quat.inverse(self.orientation)",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_inverse),
+    },
+    ApiFn {
+        name: "quat.to_euler",
+        area: Area::Math,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param("q", "Quat", "o giro")],
+        returns: "vector",
+        summary: "Os ângulos X, Y e Z em graus do giro, na ordem das Propriedades.",
+        doc: "O contrário de `quat.from_euler`. É o que a memória, os temporizadores e as \
+              mensagens guardam de um giro: eles não guardam quatérnios.",
+        help_en: "The X, Y and Z angles in degrees of the rotation, in Properties' order.",
+        errors: &["q que não é um quatérnio"],
+        example: "print(quat.to_euler(self.orientation))",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &[],
+        imp: Imp::Function(math::quat_to_euler),
+    },
     // Attributes.
     ApiFn {
         name: "Object.attr",
@@ -756,9 +1755,11 @@ pub static API: &[ApiFn] = &[
         summary: "Os atributos do objeto, pelo nome.",
         doc: "`obj.attr.Vida` lê o atributo, ou nil quando o objeto não o tem; `obj.attr.Vida = \
               2` escreve um atributo que o objeto tem, com um valor do mesmo tipo. Um Vetor2 lê \
-              como vetor com z = 0 e recebe o x e o y de um vetor; um atributo Objeto vazio lê \
-              nil e recebe nil para ficar vazio; um atributo Superfície ainda lê nil. Nomes com \
-              espaços vão entre colchetes: `obj.attr[\"Ponto de retorno\"]`.",
+              como vetor com z = 0 e recebe o x e o y de um vetor; um atributo Objeto lê o \
+              objeto, e um Superfície, a superfície (com `.name`), ou nil quando vazios, e \
+              recebem nil para ficar vazios. Nomes com espaços vão entre colchetes: \
+              `obj.attr[\"Ponto de retorno\"]`. Quando a chamada para num erro com nil, o erro \
+              diz o último atributo que ela leu como nil.",
         help_en: "The object's attributes by name: reading one it lacks gives nil; writing needs \
                   an attribute it has, with a value of its type.",
         errors: &[
@@ -799,20 +1800,22 @@ pub static API: &[ApiFn] = &[
         returns: "{ [string]: any }",
         summary: "Os atributos que o script espera no objeto, com o valor padrão de cada um.",
         doc: "O tipo sai do padrão: número, texto, booleano ou vetor (Vetor3); para os tipos \
-              sem valor literal, `param.object()` e `param.vector2(x, y)` (um atributo \
-              Superfície ainda não se declara). Anexar o script cria \
-              no objeto, no mesmo passo de desfazer, os que ele não tem; um que ele tem com \
-              outro tipo fica como está, com um aviso, e dois scripts do objeto que declaram o \
-              mesmo nome com tipos diferentes também geram um aviso. Um atributo declarado \
-              depois de anexar só aparece ao anexar de novo.",
+              sem valor literal, `param.object()`, `param.surface(nome?)` e `param.vector2(x, \
+              y)`. Anexar o script cria no objeto, no mesmo passo de desfazer, os que ele não \
+              tem; um que ele tem com outro tipo fica como está, com um aviso, e dois scripts do \
+              objeto que declaram o mesmo nome com tipos diferentes também geram um aviso. Um \
+              atributo declarado depois de anexar só aparece ao anexar de novo.",
         help_en: "Module.attributes = {Name = default}: the attributes attach_script gives an \
-                  object that lacks them (param.object() and param.vector2(x, y) for the types \
-                  with no literal).",
+                  object that lacks them (param.object(), param.surface(name?) and \
+                  param.vector2(x, y) for the types with no literal).",
         errors: &[
             "um padrão que não é número, texto, booleano, vetor nem marcador `param`: anexar \
              avisa e não cria nenhum",
+            "`param.surface` com o nome de uma superfície que o projeto não tem: anexar avisa e \
+             não cria nenhum",
         ],
-        example: "M.attributes = { Velocidade = 90, Aviso = \"\", Alvo = param.object() }",
+        example: "M.attributes = { Velocidade = 90, Aviso = \"\", Alvo = param.object(), Piso = \
+                  param.surface() }",
         domain: Domain::Pure,
         since: V07,
         nodes: &[],
@@ -828,16 +1831,41 @@ pub static API: &[ApiFn] = &[
         summary: "Declara um atributo Objeto, vazio até alguém escolher o objeto.",
         doc: "Em `Modulo.attributes = { Alvo = param.object() }`: anexar cria o atributo vazio, \
               e o objeto se escolhe nas Propriedades (ou com `set_attribute` pelo MCP), o que \
-              sobrevive a renomear o objeto. Lido no script, é o objeto ou nil. Ainda não serve \
-              em `Modulo.state`.",
-        help_en: "Declares an Object attribute in Module.attributes, empty until one is picked; \
-                  scripts read the object or nil.",
+              sobrevive a renomear o objeto. Lido no script, é o objeto ou nil. Em \
+              `Modulo.state`, declara um campo de objeto que começa vazio.",
+        help_en: "Declares an Object attribute in Module.attributes (or a memory field in \
+                  Module.state), empty until one is picked; scripts read the object or nil.",
         errors: &[],
         example: "M.attributes = { Alvo = param.object() }",
         domain: Domain::Pure,
         since: V07,
-        nodes: &[],
+        nodes: &["value.object"],
         imp: Imp::Function(api::param_object),
+    },
+    ApiFn {
+        name: "param.surface",
+        area: Area::Attributes,
+        kind: ApiKind::Function,
+        generics: "",
+        params: &[param(
+            "name",
+            "string?",
+            "o nome de uma superfície do projeto; sem ele, a superfície padrão",
+        )],
+        returns: "Surface?",
+        summary: "Declara um atributo Superfície, com a superfície do projeto de nome `name`.",
+        doc: "Em `Modulo.attributes = { Piso = param.surface(\"Gelo\") }`: anexar procura a \
+              superfície pelo nome (sem diferenciar maiúsculas) e avisa, sem criar nada, quando \
+              o projeto não a tem. Lido no script, é a superfície (com `.name`) ou nil para a \
+              padrão. Em `Modulo.state`, só `param.surface()`: um campo que começa vazio.",
+        help_en: "Declares a Surface attribute in Module.attributes, the project's surface of \
+                  that name (none: the default); scripts read the surface or nil.",
+        errors: &["um nome que não é um texto"],
+        example: "M.attributes = { Piso = param.surface(\"Gelo\") }",
+        domain: Domain::Pure,
+        since: V07,
+        nodes: &["value.surface"],
+        imp: Imp::Function(api::param_surface),
     },
     ApiFn {
         name: "param.vector2",
@@ -850,8 +1878,9 @@ pub static API: &[ApiFn] = &[
         ],
         returns: "vector",
         summary: "Declara um atributo Vetor2 com o valor padrão (x, y).",
-        doc: "Em `Modulo.attributes = { Tamanho = param.vector2(1, 1) }`. Lido no script, um \
-              Vetor2 é um vetor com z = 0; escrito, recebe o x e o y de um vetor.",
+        doc: "Em `Modulo.attributes = { Tamanho = param.vector2(1, 1) }`, e num campo de \
+              `Modulo.state`. Lido no script, um Vetor2 é um vetor com z = 0; escrito, recebe o x \
+              e o y de um vetor.",
         help_en: "Declares a Vector2 attribute in Module.attributes with the default (x, y); \
                   scripts read it as a vector with z 0.",
         errors: &[
@@ -873,19 +1902,21 @@ pub static API: &[ApiFn] = &[
         params: &[],
         returns: "{ [string]: any }",
         summary: "Os campos da memória do script em cada objeto, com o valor inicial de cada um.",
-        doc: "Valores: booleano, número, texto, vetor, objeto e tabelas desses valores, com \
-              chaves inteiras ou de texto, até 4 níveis e 1.024 entradas por tabela; até 64 KB \
-              por objeto. Um campo precisa de um valor inicial de verdade (um nil some da \
-              tabela), e um campo de objeto que começa vazio ainda não existe: use um atributo \
-              Objeto (`param.object()`).",
+        doc: "Valores: booleano, número, texto, vetor, objeto, superfície e tabelas desses \
+              valores, com chaves inteiras ou de texto, até 4 níveis e 1.024 entradas por \
+              tabela; até 64 KB por objeto. Um campo precisa de um valor inicial de verdade (um \
+              nil some da tabela); um campo de objeto ou de superfície que começa vazio e um \
+              Vetor2 se declaram com os marcadores: `alvo = param.object()`, `piso = \
+              param.surface()`, `tamanho = param.vector2(1, 1)`.",
         help_en: "Module.state = {field = initial}: the script's memory on each object, kept by \
                   the engine (it outlives a reload), read and written in self.state.",
         errors: &[
-            "um valor que a memória não guarda (função, tabela com metatabela, marcador \
-             `param`): o script não carrega",
+            "um valor que a memória não guarda (função, tabela com metatabela, quatérnio, \
+             marcador `param` dentro de uma tabela, `param.surface` com nome): o script não \
+             carrega",
             "mais de 64 KB: o script não carrega",
         ],
-        example: "M.state = { pulos = 0, nomes = {} :: { string } }",
+        example: "M.state = { pulos = 0, nomes = {} :: { string }, alvo = param.object() }",
         domain: Domain::Owner,
         since: V07,
         nodes: &[],
@@ -899,11 +1930,12 @@ pub static API: &[ApiFn] = &[
         params: &[],
         returns: "@state",
         summary: "A memória deste script neste objeto, com os campos de `Modulo.state`.",
-        doc: "Só em `self`. Um campo simples (número, texto, booleano, vetor, objeto) é lido e \
-              gravado na engine na hora, conferido na linha; uma tabela é montada na primeira \
-              leitura da chamada e gravada de volta quando a chamada termina, com ou sem erro. \
-              O primeiro nível não se percorre nem se mede (`pairs`, `#`, `table.clone`): \
-              guarde listas num campo.",
+        doc: "Só em `self`. Um campo simples (número, texto, booleano, vetor, objeto, \
+              superfície) é lido e gravado na engine na hora, conferido na linha; um campo de \
+              objeto ou de superfície recebe nil para ficar vazio. Uma tabela é montada na \
+              primeira leitura da chamada e gravada de volta quando a chamada termina, com ou \
+              sem erro. O primeiro nível não se percorre nem se mede (`pairs`, `#`, \
+              `table.clone`): guarde listas num campo.",
         help_en: "This script's memory on the object, the fields Module.state declares (self \
                   only); tables are written back when the call ends.",
         errors: &[
@@ -1267,6 +2299,58 @@ pub(crate) fn object_members() -> impl Iterator<Item = &'static str> {
     API.iter().filter(|f| f.of_objects()).map(|f| f.member())
 }
 
+/// Names scripts written for other engines, or in Portuguese, give members of objects, with the
+/// member meant (lowercase, without accents where people drop them).
+const ALIASES: &[(&str, &str)] = &[
+    ("visivel", "visible"),
+    ("visível", "visible"),
+    ("hidden", "visible"),
+    ("active", "visible"),
+    ("shown", "visible"),
+    ("enabled", "logic_enabled"),
+    ("logic", "logic_enabled"),
+    ("behavior", "logic_enabled"),
+    ("behaviour", "logic_enabled"),
+    ("pai", "parent"),
+    ("nome", "name"),
+    ("filhos", "children"),
+    ("posicao", "position"),
+    ("posição", "position"),
+    ("pos", "position"),
+    ("location", "position"),
+    ("localposition", "position"),
+    ("globalposition", "world_position"),
+    ("global_position", "world_position"),
+    ("worldposition", "world_position"),
+    ("rotacao", "rotation"),
+    ("rotação", "rotation"),
+    ("rotation_degrees", "rotation"),
+    ("angles", "rotation"),
+    ("quaternion", "orientation"),
+    ("escala", "scale"),
+    ("giro", "yaw"),
+    ("heading", "yaw"),
+    ("remove", "destroy"),
+    ("delete", "destroy"),
+    ("destruir", "destroy"),
+    ("remover", "destroy"),
+    ("copy", "clone"),
+    ("duplicate", "clone"),
+    ("copiar", "clone"),
+    ("atributos", "attr"),
+    ("attributes", "attr"),
+    ("memoria", "state"),
+    ("memória", "state"),
+];
+
+/// The member of objects people coming from elsewhere call `name` (lowercase).
+pub(crate) fn member_alias(name: &str) -> Option<&'static str> {
+    ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == name)
+        .map(|(_, member)| *member)
+}
+
 /// The callback a module's function named `name` is.
 pub(crate) fn callback(name: &str) -> Option<Callback> {
     API.iter().find_map(|f| match f.imp {
@@ -1438,7 +2522,10 @@ mod tests {
                 (ApiKind::Function, Imp::Function(_)) => {
                     !f.example_at_top() || f.holder() == "param"
                 }
-                (ApiKind::Method, Imp::Method(_) | Imp::FastMethod(_)) => !f.example_at_top(),
+                // A method used in a callback shows the callback.
+                (ApiKind::Method, Imp::Method(_) | Imp::FastMethod(_)) => {
+                    !f.example_at_top() || f.example.starts_with("function M.on_")
+                }
                 (ApiKind::Property { write }, Imp::Property(property)) => {
                     write == property.writable() && !f.example_at_top()
                 }
@@ -1472,5 +2559,13 @@ mod tests {
             assert!(areas.contains(&area), "{area:?}");
         }
         assert!(object_member(b"position").is_some() && object_member(b"posicao").is_none());
+        // Every alias names a member.
+        for (alias, member) in ALIASES {
+            assert!(
+                object_member(member.as_bytes()).is_some(),
+                "{alias}: {member}"
+            );
+            assert_eq!(alias.to_lowercase(), *alias);
+        }
     }
 }

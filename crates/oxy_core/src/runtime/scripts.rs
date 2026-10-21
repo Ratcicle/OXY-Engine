@@ -271,8 +271,13 @@ impl Runtime {
     }
 
     /// The objects of a copy just made (`copied`, the copy's IDs) whose scripts hear on_start
-    /// get it, in scene order, after what is already queued.
+    /// get it, in scene order, after what is already queued. A copy a script's call made waits
+    /// for the call to end, which gives the VM back to load the copy's scripts.
     pub(super) fn start_copied_scripts(&mut self, copied: &HashSet<Id>) {
+        if self.in_script_call {
+            self.copies_to_start.push(copied.clone());
+            return;
+        }
         let attached: Vec<(Id, Vec<String>)> = self
             .scene()
             .entities
@@ -391,7 +396,8 @@ impl Runtime {
                 self.waiting.push(task);
             }
         }
-        self.call_script_with(&owner, &path, &function, &args);
+        let hits = context.hits.map(|hits| (owner.clone(), hits));
+        self.call_script_with(&owner, &path, &function, &args, hits);
         None
     }
 
@@ -411,16 +417,18 @@ impl Runtime {
             return ScriptCall::Skipped;
         }
         let args: Vec<ScriptArg> = args.iter().cloned().map(ScriptArg::Value).collect();
-        self.call_script_with(owner, path, function, &args)
+        self.call_script_with(owner, path, function, &args, None)
     }
 
-    /// `call_script` for an `owner` known to be in the scene.
+    /// `call_script` for an `owner` known to be in the scene; `hits`, the area and the hits of
+    /// the area event the call answers.
     fn call_script_with(
         &mut self,
         owner: &str,
         path: &str,
         function: &str,
         args: &[ScriptArg],
+        hits: Option<(Id, HitLease)>,
     ) -> ScriptCall {
         if self.stopped || self.script_stopped(owner, path) {
             return ScriptCall::Skipped;
@@ -433,13 +441,28 @@ impl Runtime {
         };
         let host = self.scripts.take().expect("script host");
         let started = std::time::Instant::now();
+        self.in_script_call = true;
+        self.script_hits = hits;
         let call = host.call(self, owner, &module, function, args);
+        self.in_script_call = false;
+        self.script_hits = None;
         let spent = started.elapsed();
         let converted = host.take_converted();
+        let scene = host.take_scene_change();
         self.scripts = Some(host);
         self.count_script_cost(&module.path, spent, converted);
         if let ScriptCall::Failed(error) = &call {
             self.report_script_error(owner, path, error);
+        }
+        // What the call left for its end: the copies' scripts start, then the scene it asked
+        // for opens (dropping the tasks of this one, theirs included).
+        for copied in std::mem::take(&mut self.copies_to_start) {
+            self.start_copied_scripts(&copied);
+        }
+        if let Some(scene) = scene
+            && let Err(error) = self.change_scene_from_logic(&scene)
+        {
+            self.log(format!("A troca de cena pedida por {path} falhou: {error}"));
         }
         call
     }

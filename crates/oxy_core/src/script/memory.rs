@@ -11,10 +11,13 @@
 //! exception rule of [`crate::script`]: inside `exec_raw` or a C function Luau runs, never
 //! inside a `catch_unwind`. Their keys are whole numbers or texts, and Luau gets them in the
 //! canonical order (whole numbers rising, then texts in byte order), so `pairs` runs the same
-//! on every machine. The values are those attributes hold that Luau can name today (booleans,
-//! numbers, texts, vectors and objects) and tables of them; the 2D vector and the surface come
-//! with the API of a later stage.
-use super::handles::{self, MARK_OBJECT};
+//! on every machine. The values are those attributes hold (booleans, numbers, texts, vectors,
+//! objects and surfaces) and tables of them. A field may start empty or hold a Vetor2 when
+//! `Module.state` declares it with a marker of `param` (`alvo = param.object()`), as
+//! `Module.attributes` does: an empty object or surface reads nil and takes nil, and a Vetor2
+//! reads as a vector with z 0 and keeps a vector's x and y.
+use super::api::{self, Marker};
+use super::handles::{self, MARK_OBJECT, MARK_SURFACE};
 use super::host::Shared;
 use crate::document::Id;
 use mlua::{Lua, Table, Value as LuaValue, ffi};
@@ -44,8 +47,13 @@ pub(crate) enum ScriptValue {
     Number(f64),
     Text(Box<str>),
     Vector([f32; 3]),
-    /// Kept by ID: it reads as an object that does not exist once the object is gone.
-    Object(Id),
+    /// A field `param.vector2(x, y)` declares: a vector with z 0 in Luau.
+    Vector2([f32; 2]),
+    /// Kept by ID: it reads as an object that does not exist once the object is gone. Empty only
+    /// in a field `param.object()` declares, where it reads nil.
+    Object(Option<Id>),
+    /// A surface of the project, by ID; empty only in a field `param.surface()` declares.
+    Surface(Option<Id>),
     /// Entries in the order of their keys.
     Table(Vec<(Key, ScriptValue)>),
 }
@@ -57,20 +65,22 @@ impl ScriptValue {
             Self::Number(_) => "número",
             Self::Text(_) => "texto",
             Self::Vector(_) => "vetor",
+            Self::Vector2(_) => "vetor 2D",
             Self::Object(_) => "objeto",
+            Self::Surface(_) => "superfície",
             Self::Table(_) => "tabela",
         }
     }
 
     /// What the value weighs against [`MAX_BYTES`]: the bytes of its texts, IDs and text keys,
-    /// 8 for a number or a whole key, 12 for a vector and 1 for a boolean.
+    /// 8 for a number, a whole key or a 2D vector, 12 for a vector and 1 for a boolean.
     pub(crate) fn size(&self) -> usize {
         match self {
             Self::Bool(_) => 1,
-            Self::Number(_) => 8,
+            Self::Number(_) | Self::Vector2(_) => 8,
             Self::Text(text) => text.len(),
             Self::Vector(_) => 12,
-            Self::Object(id) => id.len(),
+            Self::Object(id) | Self::Surface(id) => id.as_ref().map_or(0, |id| id.len()),
             Self::Table(entries) => entries
                 .iter()
                 .map(|(key, value)| key_size(key) + value.size())
@@ -285,7 +295,7 @@ fn over_bytes(fields: &str) -> Refusal {
 }
 
 /// What `Module.state` declares: its fields by name with their defaults, checked as memory
-/// checks what it keeps.
+/// checks what it keeps; a field a marker of `param` declares starts empty or as a Vetor2.
 pub(crate) fn schema(lua: &Lua, shared: &Shared, table: &Table) -> Result<Memory, String> {
     let mut out: Result<Vec<(Arc<str>, ScriptValue)>, String> = Ok(Vec::new());
     // SAFETY: reads the argument and leaves the stack empty; `exec_raw` runs it protected.
@@ -325,14 +335,35 @@ unsafe fn read_fields(
                 );
             };
             let name: Arc<str> = name.into();
-            match reader.value(l, top, 0) {
-                Ok(value) => fields.push((name, value)),
-                Err(refusal) => return Err(refusal.at(&format!("Modulo.state.{name}"))),
-            }
+            let value = match api::marker_at(l, top) {
+                Some(marker) => declared(&name, marker)?,
+                None => reader
+                    .value(l, top, 0)
+                    .map_err(|refusal| refusal.at(&format!("Modulo.state.{name}")))?,
+            };
+            fields.push((name, value));
             ffi::lua_settop(l, top - 1);
         }
         Ok(fields)
     }
+}
+
+/// What a marker of `param` declares as the field `name` of `Module.state`: an empty object or
+/// surface, or a Vetor2. A surface starts empty: memory names no surface of the project.
+fn declared(name: &str, marker: Marker) -> Result<ScriptValue, String> {
+    Ok(match marker {
+        Marker::Object => ScriptValue::Object(None),
+        Marker::Vector2(v) => ScriptValue::Vector2(v),
+        Marker::Surface(None) => ScriptValue::Surface(None),
+        Marker::Surface(Some(surface)) => {
+            return Err(format!(
+                "Modulo.state.{name}: na memória, param.surface() começa vazio e não leva o nome \
+                 de uma superfície (\"{surface}\"); para começar com uma superfície do projeto, \
+                 declare um atributo: Modulo.attributes = {{ {name} = param.surface(\"{surface}\") \
+                 }}"
+            ));
+        }
+    })
 }
 
 /// Reads values off the Luau stack into memory's form, counting their bytes against a limit.
@@ -407,9 +438,14 @@ impl<'a> Reader<'a> {
                 ffi::LUA_TLIGHTUSERDATA => {
                     match handles::decode(ffi::lua_tolightuserdata(l, idx)) {
                         (MARK_OBJECT, key) => {
-                            ScriptValue::Object(self.shared.id(key).ok_or_else(|| {
+                            ScriptValue::Object(Some(self.shared.id(key).ok_or_else(|| {
                                 Refusal::kind("não aceita um objeto desconhecido")
-                            })?)
+                            })?))
+                        }
+                        (MARK_SURFACE, key) => {
+                            ScriptValue::Surface(Some(self.shared.surface_id(key).ok_or_else(
+                                || Refusal::kind("não aceita uma superfície desconhecida"),
+                            )?))
                         }
                         (mark, _) => {
                             return Err(Refusal::kind(format!(
@@ -424,6 +460,12 @@ impl<'a> Reader<'a> {
                 ffi::LUA_TTHREAD => return Err(Refusal::kind(not_kept("corrotina"))),
                 ffi::LUA_TBUFFER => return Err(Refusal::kind(not_kept("buffer"))),
                 ffi::LUA_TNIL => return Err(Refusal::kind(not_kept("nil"))),
+                ffi::LUA_TUSERDATA if ffi::lua_userdatatag(l, idx) == super::math::QUAT_TAG => {
+                    return Err(Refusal::kind(
+                        "não aceita um quatérnio; guarde quat.to_euler(q), um vetor, e refaça-o \
+                         com quat.from_euler",
+                    ));
+                }
                 _ => return Err(Refusal::kind(not_kept("userdata"))),
             };
             match &value {
@@ -447,6 +489,12 @@ impl<'a> Reader<'a> {
                 return Err(Refusal::limit(format!(
                     "passou de {MAX_DEPTH} níveis de tabela (ou uma tabela contém a si mesma)"
                 )));
+            }
+            if api::marker_at(l, idx).is_some() {
+                return Err(Refusal::kind(
+                    "não aceita um marcador param aqui; os marcadores declaram um campo de \
+                     Modulo.state ou um atributo de Modulo.attributes, no primeiro nível",
+                ));
             }
             if ffi::lua_getmetatable(l, idx) != 0 {
                 ffi::lua_settop(l, -2);
@@ -502,7 +550,10 @@ impl<'a> Reader<'a> {
 const MAX_WHOLE: f64 = 9_007_199_254_740_992.;
 
 fn not_kept(kind: &str) -> String {
-    format!("não aceita {kind}; só booleanos, números, textos, vetores, objetos e tabelas deles")
+    format!(
+        "não aceita {kind}; só booleanos, números, textos, vetores, objetos, superfícies e \
+         tabelas deles"
+    )
 }
 
 fn kind_name(kind: c_int) -> &'static str {
@@ -545,12 +596,18 @@ pub(crate) unsafe fn push(l: *mut ffi::lua_State, shared: &Shared, value: &Scrip
                 ffi::lua_pushlstring(l, text.as_ptr().cast(), text.len());
             }
             ScriptValue::Vector([x, y, z]) => ffi::lua_pushvector(l, *x, *y, *z),
-            ScriptValue::Object(id) => {
+            ScriptValue::Vector2([x, y]) => ffi::lua_pushvector(l, *x, *y, 0.),
+            ScriptValue::Object(Some(id)) => {
                 // A key another object holds keeps it (one chance in ~10⁹ for 10 thousand
                 // objects): the handle names that object.
                 let key = shared.register(id).unwrap_or_else(|_| handles::key(id));
                 ffi::lua_pushlightuserdatatagged(l, handles::handle(MARK_OBJECT, key), 0);
             }
+            ScriptValue::Surface(Some(id)) => {
+                let key = shared.register_surface(id);
+                ffi::lua_pushlightuserdatatagged(l, handles::handle(MARK_SURFACE, key), 0);
+            }
+            ScriptValue::Object(None) | ScriptValue::Surface(None) => ffi::lua_pushnil(l),
             ScriptValue::Table(entries) => return push_table(l, shared, entries),
         }
         0

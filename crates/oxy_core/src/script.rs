@@ -12,19 +12,22 @@
 //! - the callbacks of [`Callback`], `self` being the object: `on_start(self)`,
 //!   `on_area_enter(self, other)`, `on_input(self, action, phase)` (the action's name and
 //!   `"pressed"` or `"released"`) and the others;
-//! - objects (`handles`): `obj.name`, `obj.attr`, `obj.position`, `obj.world_position`,
-//!   `obj:exists()`, `obj:has_attribute(name)`, `self.state` and `obj:send(name, value)`;
+//! - objects: their properties (`handles`: `obj.name`, `obj.parent`, `obj.attr`, the transform,
+//!   `obj.visible`, `self.state`…) and methods (`objects`: `obj:children()`, `obj:clone()`,
+//!   `obj:destroy()`…; `obj:send(name, value)` of `messages`);
 //! - timers (`timers`): `self:after`, `self:every`, `self:sequence`, `self:schedule` and
 //!   `self:cancel`;
-//! - the global tables of `api`: `audio.play(name, { volume = …, audience = obj })`,
-//!   `vars.get(name, key?)`, `vars.set(name, value, key?)`, and `param.object()` and
-//!   `param.vector2(x, y)` for declarations;
+//! - the global tables: `scene` (`objects`: finding objects, models, scene changes), `vmath`
+//!   and `quat` (`math`), and those of `api`: `audio.play(name, { volume = …, audience = obj
+//!   })`, `vars.get(name, key?)`, `vars.set(name, value, key?)`, and `param.object()`,
+//!   `param.surface(name?)` and `param.vector2(x, y)` for declarations;
 //! - `print` and `warn`, which log the object's name, the text and the script line;
 //! - `require(path)` of `sandbox`, a frozen module of the scripts' folder.
 //!
 //! A module may declare `Module.attributes = { Velocidade = 90, Alvo = param.object() }`, the
 //! attributes attaching it gives an object that lacks them, with those defaults (decision Q6;
-//! see [`declared_attributes`]), and `Module.state`, its memory. Only an attached script's
+//! see [`declared_attributes`]), and `Module.state`, its memory, whose fields the same markers
+//! may declare empty (an object, a surface) or as a Vetor2. Only an attached script's
 //! `Module.attributes` is read, so a table of content that is only required may hold an
 //! `attributes` of its own.
 //!
@@ -52,6 +55,7 @@
 //!   the host when it catches one (`coroutine.resume` still swallows them).
 use crate::document::{Id, Project, Value};
 use crate::input_actions::every_entity;
+use crate::surface::SurfaceMaterial;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -64,8 +68,10 @@ mod host;
 #[cfg(test)]
 mod host_tests;
 mod load;
+mod math;
 pub(crate) mod memory;
 pub(crate) mod messages;
+mod objects;
 pub mod registry;
 mod sandbox;
 #[cfg(test)]
@@ -74,6 +80,7 @@ mod state_tests;
 mod task_tests;
 pub(crate) mod timers;
 
+pub(crate) use errors::closest;
 pub use errors::{ScriptError, ScriptErrorKind};
 pub(crate) use handles::collision;
 pub use host::ScriptCall;
@@ -543,11 +550,12 @@ pub fn first_missing(project: &Project, exists: impl Fn(&str) -> bool) -> Option
 pub type Declared = Vec<(String, Value)>;
 
 /// What `Module.attributes` declares in each of the scripts `paths` of `sources` (decision Q6),
-/// or why it cannot be read: the script does not load, or the declaration is not a table of
-/// defaults. The scripts load in a VM of their own, as the runtime loads them, nothing of the
-/// world reached.
+/// or why it cannot be read: the script does not load, the declaration is not a table of
+/// defaults, or it names a surface `surfaces` (the project's) lacks. The scripts load in a VM of
+/// their own, as the runtime loads them, nothing of the world reached.
 pub fn declared_attributes<'a>(
     sources: &ScriptSources,
+    surfaces: &[SurfaceMaterial],
     paths: impl IntoIterator<Item = &'a str>,
 ) -> Vec<(&'a str, Result<Declared, ScriptError>)> {
     let host = ScriptHost::new(std::sync::Arc::new(sources.clone()));
@@ -556,16 +564,57 @@ pub fn declared_attributes<'a>(
         .map(|path| {
             let declared = match &host {
                 Ok(host) => host.load(path).and_then(|module| {
-                    module
+                    let mut declared = module
                         .attributes
                         .clone()
-                        .map_err(|message| ScriptError::new(path, 0, message))
+                        .map_err(|message| ScriptError::new(path, 0, message))?;
+                    for (attribute, surface) in &module.surfaces {
+                        let id = surface_named(surfaces, surface).map_err(|message| {
+                            ScriptError::new(
+                                path,
+                                0,
+                                format!("Modulo.attributes.{attribute}: {message}"),
+                            )
+                        })?;
+                        if let Some((_, value)) = declared.iter_mut().find(|(n, _)| n == attribute)
+                        {
+                            *value = Value::Surface(Some(id));
+                        }
+                    }
+                    Ok(declared)
                 }),
                 Err(error) => Err(ScriptError::new(path, 0, error.clone())),
             };
             (path, declared)
         })
         .collect()
+}
+
+/// The surface of `surfaces` that `param.surface(name)` names: by its name, else ignoring case
+/// and the spaces at its ends, as the project lists them.
+fn surface_named(surfaces: &[SurfaceMaterial], name: &str) -> Result<Id, String> {
+    let wanted = name.trim().to_lowercase();
+    let found = surfaces.iter().find(|s| s.name == name).or_else(|| {
+        surfaces
+            .iter()
+            .find(|s| s.name.trim().to_lowercase() == wanted)
+    });
+    if let Some(surface) = found {
+        return Ok(surface.id.clone());
+    }
+    if surfaces.is_empty() {
+        return Err(format!(
+            "param.surface(\"{name}\") nomeia uma superfície, e o projeto não tem superfícies"
+        ));
+    }
+    let names: Vec<&str> = surfaces.iter().map(|s| s.name.as_str()).collect();
+    let hint = closest(name, names.iter().copied())
+        .map_or_else(|| ".".to_owned(), |near| format!("; quis dizer {near}?"));
+    Err(format!(
+        "param.surface(\"{name}\") nomeia uma superfície que o projeto não tem{hint} \
+         Superfícies: {}",
+        names.join(", ")
+    ))
 }
 
 /// How messages name the type of `value`: "número", "texto", "booleano"…

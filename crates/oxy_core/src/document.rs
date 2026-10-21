@@ -1120,20 +1120,45 @@ impl Project {
         asset_id: &str,
         scene_id: &str,
     ) -> Result<(Id, CopyMap), String> {
+        self.instantiate_model_with(asset_id, scene_id, &mut |_| new_id())
+    }
+    /// [`Self::instantiate_model_mapped`] with the copies' IDs from `ids`, which gets the ID of
+    /// each piece, clip and node of the model (and the model's own for a group it adds): asked
+    /// again when an ID it gave is taken in the scene, as [`Scene::duplicate_subtree_with`].
+    pub fn instantiate_model_with(
+        &mut self,
+        asset_id: &str,
+        scene_id: &str,
+        ids: &mut dyn FnMut(&str) -> Id,
+    ) -> Result<(Id, CopyMap), String> {
         let mut model = self
             .asset(asset_id)
             .and_then(|a| a.model.clone())
             .ok_or("Modelo não encontrado")?;
-        let map: HashMap<_, _> = model.iter().map(|e| (e.id.clone(), new_id())).collect();
-        let map = remap_entities(&mut model, &map)?;
+        let scene = self.scene(scene_id).ok_or("Cena não encontrada")?;
+        let taken: HashSet<&str> = scene.entities.iter().map(|e| e.id.as_str()).collect();
+        let mut given = HashSet::new();
+        let mut free = |original: &str, name: &str| {
+            (0..64)
+                .map(|_| ids(original))
+                .find(|new| !taken.contains(new.as_str()) && given.insert(new.clone()))
+                .ok_or_else(|| format!("Sem ID livre para a cópia de {name}"))
+        };
+        let mut map = HashMap::new();
+        for piece in &model {
+            map.insert(piece.id.clone(), free(&piece.id, &piece.name)?);
+        }
+        let several = model.iter().filter(|e| e.parent.is_none()).count() != 1;
+        let group_id = several.then(|| free(asset_id, "Modelo")).transpose()?;
+        let map = remap_entities_with(&mut model, &map, ids)?;
         let mut roots: Vec<_> = model
             .iter()
             .filter(|e| e.parent.is_none())
             .map(|e| e.id.clone())
             .collect();
-        if roots.len() != 1 {
-            let group = Entity::new("Modelo", None);
-            let group_id = group.id.clone();
+        if let Some(group_id) = group_id {
+            let mut group = Entity::new("Modelo", None);
+            group.id = group_id.clone();
             for e in &mut model {
                 if e.parent.is_none() {
                     e.parent = Some(group_id.clone())

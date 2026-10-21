@@ -3069,6 +3069,8 @@ fn apply_one(
             if scripts.get(&path).is_none() {
                 return Err(format!("o script {path} não existe na pasta do projeto"));
             }
+            // A Superfície declared by name is the project's of that name.
+            let surfaces = project.surfaces.clone();
             let e = entity_mut(scene_mut(project, &id), entity)?;
             let at = e.scripts.iter().position(|s| s.path == path);
             let last = e.scripts.len() - usize::from(at.is_some());
@@ -3091,7 +3093,7 @@ fn apply_one(
             let paths: Vec<String> = e.scripts.iter().map(|s| s.path.clone()).collect();
             let mut declared = Vec::new();
             for (each, result) in
-                script::declared_attributes(scripts, paths.iter().map(String::as_str))
+                script::declared_attributes(scripts, &surfaces, paths.iter().map(String::as_str))
             {
                 match result {
                     Ok(attributes) => {
@@ -3793,7 +3795,7 @@ fn flat(shape: Primitive) -> bool {
 
 /// Shapes go only to scenes of their kind, as create_entity requires; validation checks the
 /// components.
-fn check_kind(entities: &[Entity], kind: SceneKind, scene: &str) -> Result<(), String> {
+pub(crate) fn check_kind(entities: &[Entity], kind: SceneKind, scene: &str) -> Result<(), String> {
     let wanted = kind == SceneKind::TwoD;
     for e in entities {
         let two_d = match (e.primitive, &e.mesh) {

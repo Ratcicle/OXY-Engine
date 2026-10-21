@@ -60,10 +60,7 @@ impl Runtime {
                 match output {
                     "position" => Value::Vector3(position.to_array()),
                     "rotation" => Value::Vector3([x.to_degrees(), y.to_degrees(), z.to_degrees()]),
-                    "yaw" => {
-                        let d = rotation * -Vec3::Z;
-                        Value::Number(f64::from((-d.x).atan2(-d.z).to_degrees()))
-                    }
+                    "yaw" => Value::Number(f64::from(yaw_of(rotation * -Vec3::Z))),
                     _ => return Err("Saída de transformação ausente".into()),
                 }
             }

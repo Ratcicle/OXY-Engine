@@ -215,7 +215,7 @@ return M
             "func",
             8,
             "self.state.items[2].f: não aceita função; só booleanos, números, textos, vetores, \
-             objetos e tabelas deles",
+             objetos, superfícies e tabelas deles",
         ),
         (
             "meta",

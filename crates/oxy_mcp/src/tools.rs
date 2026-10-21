@@ -1127,8 +1127,17 @@ version: callbacks on_start(self), on_step(self, dt), on_input(self, action, pha
 on_marker(self, marker, clip), on_character(self, event), on_pause(self, paused), \
 on_message(self, name, value, from); obj.name, obj.attr.Name (nil when absent; writing needs an \
 attribute of that type), obj.position and obj.world_position (vectors in metres, \
-vector.create(x, y, z); writing moves it), obj:exists(), obj:has_attribute(name), self.state \
-(the fields Module.state declares), obj:send(name, value?), self:after(seconds, Module.f, ...) \
+vector.create(x, y, z); writing moves it), obj.rotation (degrees), obj.orientation (a quat), \
+obj.scale, obj.yaw (read), obj:jump_to(p), obj:to_world_direction(v), obj.id, obj.parent, \
+obj:children(), obj:find_child(name, deep?) (nil when absent), obj:get_child(name, deep?) (an \
+error listing the children), obj.visible, obj.logic_enabled (the node graph only), \
+obj:has_component(kind), obj:destroy(), obj:clone(options?), obj:first_hit(other) (once per \
+activation of the object's area), obj:exists(), obj:has_attribute(name), self.state \
+(the fields Module.state declares), obj:send(name, value?); scene.find/get/find_all(name), \
+scene.with_attribute(name), scene.spawn_model(model, options?) (copies get the same IDs every \
+run; their on_start runs after the call), scene.current(), scene.change(name) and \
+scene.restart() (when the function ends); vmath.* and quat.* (quaternions never change); \
+self:after(seconds, Module.f, ...) \
 (at least the next step, as control.wait), self:every(seconds, Module.f, ...), \
 self:sequence(interval, Module.f, items) (item \
 k (k-1) × interval after the call, as self:after would call it: the first on the next step and \
@@ -1139,7 +1148,9 @@ them); vars.get(name, key?) (a key never written reads the variable's initial va
 project lacks is an error with the nearest one), vars.set(name, value, key?); print and warn. \
 Game variables keep their values when a scene restarts: reset in on_start what must start over. \
 Module.attributes = {Name = default} declares what attach_script gives an object \
-(param.object() an empty Object attribute, param.vector2(x, y) a Vector2). Every function's help, \
+(param.object() an empty Object attribute, param.surface(name?) a Surface of the project, \
+param.vector2(x, y) a Vector2; in Module.state they declare fields that start empty). An error \
+about a nil names the attribute the call last read as nil. Every function's help, \
 made from the engine's API table, is in the types vscode writes (.oxy/tipos/oxy.d.luau). \
 Objects, attributes, sounds, actions and variables go by the person's names.";
 

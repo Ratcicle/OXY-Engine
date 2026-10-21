@@ -52,12 +52,13 @@ pub(crate) fn send(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
             api(lua, &s, "send", |runtime| {
                 let to = match &to {
                     LuaValue::LightUserData(handle) => match handles::decode(handle.0) {
-                        (MARK_OBJECT, key) => s.id(key),
+                        (MARK_OBJECT, key) => Some(key),
                         _ => None,
                     },
                     _ => None,
                 }
                 .ok_or("send é um método de objetos: alvo:send(\"nome\", valor)")?;
+                let to = s.id(to).ok_or_else(|| s.gone(to))?;
                 let LuaValue::String(name) = &name else {
                     return Err("send precisa do nome da mensagem (um texto)".into());
                 };
@@ -69,7 +70,8 @@ pub(crate) fn send(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
                     return Err(format!("o nome da mensagem tem de 1 a {MAX_NAME} bytes"));
                 }
                 let value = value?;
-                let from = s.caller().ok_or("o objeto não existe mais")?;
+                let from = s.caller_key().ok_or("send fora de uma chamada de script")?;
+                let from = s.id(from).ok_or_else(|| s.gone(from))?;
                 let script = s
                     .module()
                     .ok_or("send fora de uma chamada de script")?

@@ -631,7 +631,10 @@ fn show(value: &ScriptValue) -> String {
         ScriptValue::Number(n) => n.to_string(),
         ScriptValue::Text(text) => format!("{text:?}"),
         ScriptValue::Vector([x, y, z]) => format!("vector({x}, {y}, {z})"),
-        ScriptValue::Object(id) => format!("objeto {id}"),
+        ScriptValue::Vector2([x, y]) => format!("vector({x}, {y}, 0)"),
+        ScriptValue::Object(Some(id)) => format!("objeto {id}"),
+        ScriptValue::Surface(Some(id)) => format!("superfície {id}"),
+        ScriptValue::Object(None) | ScriptValue::Surface(None) => "nil".into(),
         ScriptValue::Table(entries) => {
             let items: Vec<String> = entries
                 .iter()

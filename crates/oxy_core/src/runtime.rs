@@ -60,7 +60,7 @@ pub use movement_nodes::{SceneQuery, SceneQueryShape};
 pub use operations::ObjectComponent;
 pub use script_state::{SCRIPT_ENTRIES_WARNING, ScriptCost};
 pub use state_hash::{StateDifference, StateDigest, StatePart};
-pub use transforms::{TransformPart, TransformSpace};
+pub use transforms::{TransformPart, TransformSpace, yaw_of};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
@@ -387,6 +387,13 @@ pub struct Runtime {
     messages_by_script: HashMap<(Id, Arc<str>), usize>,
     /// What each script file cost; measured for the tools.
     script_costs: script_state::ScriptCosts,
+    /// A script's call holds the VM: copies made meanwhile start their scripts after it.
+    in_script_call: bool,
+    /// The copies made during the call in progress, whose scripts start when it ends.
+    copies_to_start: Vec<HashSet<Id>>,
+    /// The area and the hits of the area event whose script call runs: `first_hit` on that area
+    /// counts in them, as the node's flow does.
+    script_hits: Option<(Id, HitLease)>,
 }
 
 impl Runtime {
@@ -471,6 +478,9 @@ impl Runtime {
             messages_sent: 0,
             messages_by_script: HashMap::new(),
             script_costs: Default::default(),
+            in_script_call: false,
+            copies_to_start: Vec::new(),
+            script_hits: None,
         };
         if let Some(slot) = options.save {
             runtime.load_save(slot);
@@ -1020,9 +1030,14 @@ impl Runtime {
                 &mut found,
             );
         }
+        // A graph's flow holds the hits of its activation, and so does a script's call of an
+        // area's event, which `first_hit` counts in.
+        let area_event = matches!(
+            event,
+            RuntimeEvent::AreaEnter { .. } | RuntimeEvent::AreaExit { .. }
+        );
         for task in &mut found {
-            // A graph's flow holds the hits of its activation; scripts deal no damage yet.
-            if task.is_node() {
+            if task.is_node() || area_event {
                 task.context.hits = Some(self.lease(&task.owner, task.context.activation));
             }
         }

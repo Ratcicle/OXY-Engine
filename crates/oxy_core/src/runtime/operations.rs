@@ -5,9 +5,10 @@
 //! limits, the messages and the effects. Nothing in their signatures is a node's, so a method
 //! that a node needs differently (its parameter names, its activation) leaves that to the
 //! node. The layer is:
-//! - objects: `attribute`, `set_attribute`, `damage`, `spawn_copy` (and `script_spawn_copy`),
-//!   `set_component_enabled`, `play_animation`, `object_surface` (here), `remove_object`
-//!   (`runtime.rs`) and `apply_surface` (`movement_nodes/queries.rs`);
+//! - objects: `attribute`, `set_attribute`, `damage`, `first_hit`, `spawn_copy` (and
+//!   `script_spawn_copy`, `script_spawn_model`, `place_spawned`), `set_component_enabled`,
+//!   `logic_enabled`, `play_animation`, `object_surface` (here), `remove_object` (`runtime.rs`)
+//!   and `apply_surface` (`movement_nodes/queries.rs`);
 //! - transforms (`transforms.rs`): `object_pose`, `world_rotation`, `write_transform`;
 //! - the game (`game_nodes.rs`): `change_scene_from_logic`, `variable`, `set_variable`,
 //!   `save_progress`, `clear_progress`, `has_saved_progress`, `game_paused`,
@@ -118,6 +119,47 @@ impl Runtime {
         Ok(())
     }
 
+    /// Whether this is the first time `target` is hit in an activation of `area`'s area, marking
+    /// it hit: the rule of Aplicar dano's "Uma vez por ativação", without the damage, over the
+    /// same hits, so a graph's damage and a script's count together. A script's call of the
+    /// area's own event counts in that event's activation, as the node's flow does, even when the
+    /// area went off since; any other call counts in the current one (an area that had none yet
+    /// starts one), and an area that is off hits nothing.
+    pub fn first_hit(&mut self, area: &str, target: &str) -> Result<bool, String> {
+        let e = self.entity(area).ok_or("Objeto ausente")?;
+        let trigger = e.collider.as_ref().filter(|c| c.is_trigger);
+        let sensor = e.physics3d.as_ref().filter(|c| c.sensor);
+        if trigger.is_none() && sensor.is_none() {
+            return Err(format!(
+                "{} não é uma área: first_hit conta os acertos de cada ativação de uma área (um \
+                 colisor marcado como área)",
+                e.name
+            ));
+        }
+        let on = trigger.is_some_and(|c| c.enabled) || sensor.is_some_and(|c| c.enabled);
+        if self.entity(target).is_none() {
+            return Err("Alvo do acerto foi removido".into());
+        }
+        let hits = match &self.script_hits {
+            Some((owner, hits)) if owner == area => hits.clone(),
+            _ if !on => return Ok(false),
+            _ => {
+                if !self.area_hits.contains_key(area) {
+                    self.activate_area(area);
+                }
+                self.area_hits[area].clone()
+            }
+        };
+        let first = hits.lock().unwrap().insert(target.to_owned());
+        Ok(first)
+    }
+
+    /// Whether `id`'s logic graph runs: an error in it or Ativar / desativar componente
+    /// (behavior) stops it, and its scripts go on either way.
+    pub fn logic_enabled(&self, id: &str) -> bool {
+        !self.disabled_behaviors.contains(id)
+    }
+
     /// Plays `target`'s clip `clip` (its ID) from the start; without `restart`, a clip already
     /// playing goes on.
     pub fn play_animation(
@@ -173,10 +215,9 @@ impl Runtime {
         Ok(root)
     }
 
-    /// `spawn_copy` asked by the script `script` that `owner` attaches: its copies are counted
-    /// apart from the graph's, by (owner, script), and their IDs never meet a node's. The
-    /// offset is finite. Provisional: the script API calls it in a later stage; tests now.
-    #[doc(hidden)]
+    /// `spawn_copy` asked by the script `script` that `owner` attaches (`obj:clone`): its copies
+    /// are counted apart from the graph's, by (owner, script), and their IDs never meet a
+    /// node's. The offset is finite.
     pub fn script_spawn_copy(
         &mut self,
         template: &str,
@@ -201,11 +242,124 @@ impl Runtime {
         Ok(root)
     }
 
-    /// A copy just made goes `offset` from its original, is recorded, and its scripts start.
-    fn place_copy(&mut self, root: &Id, offset: Vec3) {
-        // The editor duplicate offset is not part of a runtime spawn's explicit offset.
-        let delta = Vec3::new(offset.x - 0.5, offset.y, offset.z);
-        let descendants: HashSet<_> = self.scene().descendants(root).into_iter().collect();
+    /// Places a copy of the model named `model` (in any case) at the root of the running scene,
+    /// as the script `script` that `owner` attaches asks (`scene.spawn_model`), and gives the
+    /// copy's root. Its IDs come from (owner, script) and the copies it made before, as
+    /// `script_spawn_copy`'s, so a run that makes the same copies gives them the same IDs. A
+    /// model of several roots comes under a group, as placing it in the editor does; a model of
+    /// shapes of the other kind (2D or 3D) than the scene is refused. The copy's objects that
+    /// attach scripts hear on_start once the tasks already queued ran.
+    pub fn script_spawn_model(
+        &mut self,
+        model: &str,
+        owner: &str,
+        script: &str,
+    ) -> Result<Id, String> {
+        let Some(asset) = self.project.model_named(model) else {
+            let names: Vec<&str> = self
+                .project
+                .assets
+                .iter()
+                .filter(|a| a.kind == crate::document::AssetKind::Model)
+                .map(|a| a.name.as_str())
+                .collect();
+            if names.is_empty() {
+                return Err(format!(
+                    "O modelo \"{model}\" não existe: o projeto não tem modelos (salve um objeto \
+                     como modelo na Biblioteca)"
+                ));
+            }
+            let hint = crate::script::closest(model, names.iter().copied())
+                .map_or_else(|| ".".to_owned(), |near| format!("; quis dizer {near}?"));
+            return Err(format!(
+                "O modelo \"{model}\" não existe no projeto{hint} Modelos: {}",
+                names.join(", ")
+            ));
+        };
+        let asset = asset.id.clone();
+        let scene = self.scene();
+        let pieces = self
+            .project
+            .asset(&asset)
+            .and_then(|a| a.model.as_deref())
+            .unwrap_or_default();
+        crate::command::check_kind(pieces, scene.kind, &scene.name)?;
+        self.physics_dirty = true;
+        self.index.take();
+        self.input_modes.take();
+        self.event_operations.take();
+        let key = (owner.to_owned(), script.to_owned());
+        let count = self.run.script_spawns.get(&key).copied().unwrap_or(0);
+        let scene = self.scene_id.clone();
+        let (root, _) = self.project.instantiate_model_with(
+            &asset,
+            &scene,
+            &mut spawn_ids(b"oxy.script.spawn", &key, count),
+        )?;
+        self.run.script_spawns.insert(key, count + 1);
+        let descendants: HashSet<_> = self.scene().descendants(&root).into_iter().collect();
+        self.record_copy(&descendants);
+        self.start_copied_scripts(&descendants);
+        Ok(root)
+    }
+
+    /// Moves the root of a copy just made under `parent`, to `position` in its parent's axes
+    /// and turned by `rotation` (degrees, as Properties shows them), each when given; its
+    /// clips' tracks follow it, as placing a model does. A 3D character is placed too: it
+    /// starts where it is put.
+    pub fn place_spawned(
+        &mut self,
+        root: &str,
+        parent: Option<&str>,
+        position: Option<Vec3>,
+        rotation: Option<Vec3>,
+    ) -> Result<(), String> {
+        let e = self.entity(root).ok_or("Cópia ausente")?;
+        let name = e.name.clone();
+        if let Some(parent) = parent {
+            let inside = self.scene().descendants(root);
+            let found = self
+                .entity(parent)
+                .ok_or("O pai da cópia não existe mais")?;
+            if inside.iter().any(|id| id == parent) {
+                return Err(format!(
+                    "{} está dentro da própria cópia e não pode ser o pai dela",
+                    found.name
+                ));
+            }
+        }
+        if position.is_some_and(|p| !p.is_finite()) || rotation.is_some_and(|r| !r.is_finite()) {
+            return Err(format!(
+                "A posição e a rotação de {name} precisam de números finitos"
+            ));
+        }
+        let before = e.transform.clone();
+        let mut after = before.clone();
+        if let Some(position) = position {
+            after.position = position.to_array();
+        }
+        if let Some(rotation) = rotation {
+            after.rotation = rotation.to_array().map(f32::to_radians);
+        }
+        if !after.finite() {
+            return Err(format!(
+                "A nova transformação de {name} sai do intervalo suportado"
+            ));
+        }
+        let entities = &mut self.scene_mut_internal().entities;
+        crate::editing::carry_tracks(entities, root, &before, &after);
+        let e = entities.iter_mut().find(|e| e.id == root).unwrap();
+        e.transform = after;
+        if let Some(parent) = parent {
+            e.parent = Some(parent.to_owned());
+        }
+        self.physics_dirty = true;
+        self.index.take();
+        Ok(())
+    }
+
+    /// The objects of a copy just made join the recording.
+    fn record_copy(&mut self, descendants: &HashSet<Id>) {
         if let Some(mut recording) = self.recording.take() {
             recording.spawned.extend(
                 self.scene()
@@ -220,6 +374,14 @@ impl Runtime {
             );
             self.recording = Some(recording);
         }
+    }
+
+    /// A copy just made goes `offset` from its original, is recorded, and its scripts start.
+    fn place_copy(&mut self, root: &Id, offset: Vec3) {
+        // The editor duplicate offset is not part of a runtime spawn's explicit offset.
+        let delta = Vec3::new(offset.x - 0.5, offset.y, offset.z);
+        let descendants: HashSet<_> = self.scene().descendants(root).into_iter().collect();
+        self.record_copy(&descendants);
         let entity = self.entity_mut(root).unwrap();
         entity.transform.position = (Vec3::from(entity.transform.position) + delta).to_array();
         for entity in self

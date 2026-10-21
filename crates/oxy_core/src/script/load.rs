@@ -2,10 +2,11 @@
 //! check the bytecode (R8); run the module's top with the host "loading", where nothing reaches
 //! the world (R2); freeze in depth everything the module reaches (R1). The module is kept for
 //! the life of the VM: nothing of the game lives in it.
+use super::api::Marker;
 use super::errors::{ScriptError, closest, describe};
 use super::host::{Module, Phase, Shared, suspended_error};
 use super::sandbox::compiler;
-use super::{Callback, Callbacks, LATER_CALLBACKS, api, bytecode, memory, registry};
+use super::{Callback, Callbacks, LATER_CALLBACKS, api, bytecode, math, memory, registry};
 use crate::document::Value;
 use mlua::chunk::ChunkMode;
 use mlua::{Function, Lua, Table, Value as LuaValue, ffi};
@@ -139,7 +140,6 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
     let state = match table.raw_get::<LuaValue>("state") {
         Ok(LuaValue::Nil) => None,
         Ok(LuaValue::Table(declared)) => {
-            unmarked(lua, &declared).map_err(|e| ScriptError::new(path, 0, e))?;
             Some(memory::schema(lua, shared, &declared).map_err(|e| ScriptError::new(path, 0, e))?)
         }
         Ok(_) => {
@@ -152,9 +152,10 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
         Err(e) => return Err(describe(&e, path, 0)),
     };
     // Never refused here: only where the script is attached is it a declaration.
+    let mut surfaces = Vec::new();
     let attributes = match table.raw_get::<LuaValue>("attributes") {
         Ok(LuaValue::Nil) => Ok(Vec::new()),
-        Ok(LuaValue::Table(declared)) => attributes(lua, &declared),
+        Ok(LuaValue::Table(declared)) => attributes(lua, &declared, &mut surfaces),
         Ok(_) => Err(
             "Modulo.attributes precisa ser uma tabela com o valor padrão de cada \
              atributo, como { Velocidade = 90 }"
@@ -199,30 +200,21 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
         unknown,
         state,
         attributes,
+        surfaces,
     }))
-}
-
-/// Refuses a `param` marker in `Module.state`, which keeps no field that starts empty yet.
-fn unmarked(lua: &Lua, declared: &Table) -> Result<(), String> {
-    for pair in declared.pairs::<LuaValue, LuaValue>() {
-        let (key, value) = pair.map_err(|e| describe(&e, "", 0).message)?;
-        if api::declared_by_marker(lua, &value).is_some() {
-            let name = key.to_string().unwrap_or_default();
-            return Err(format!(
-                "Modulo.state.{name}: os marcadores param servem em Modulo.attributes; a memória \
-                 ainda não tem campos que começam vazios (para um objeto escolhido depois, \
-                 declare um atributo Objeto: Modulo.attributes = {{ {name} = param.object() }})"
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// What `Module.attributes` declares (decision Q6): each attribute's name and the default value
 /// attaching the script gives an object that lacks it, by name. A default is a number, a text, a
 /// boolean, a vector (a Vetor3 attribute) or a marker of `param` for the types with no literal
-/// (an empty Objeto, a Vetor2); its type is the attribute's.
-fn attributes(lua: &Lua, declared: &Table) -> Result<super::Declared, String> {
+/// (an empty Objeto, a Superfície, a Vetor2); its type is the attribute's. A surface its marker
+/// names is the project's, which loading does not know: it goes in `surfaces` as (attribute,
+/// surface), with the default surface as the default, for attaching to look up.
+fn attributes(
+    lua: &Lua,
+    declared: &Table,
+    surfaces: &mut Vec<(String, String)>,
+) -> Result<super::Declared, String> {
     let mut found = BTreeMap::new();
     for pair in declared.pairs::<LuaValue, LuaValue>() {
         let (key, value) = pair.map_err(|e| describe(&e, "", 0).message)?;
@@ -255,7 +247,15 @@ fn attributes(lua: &Lua, declared: &Table) -> Result<super::Declared, String> {
                 Value::Vector3([v.x(), v.y(), v.z()])
             }
             other => {
-                if let Some(default) = api::declared_by_marker(lua, &other) {
+                if let Some(marker) = api::marker_of(lua, &other) {
+                    let default = match marker {
+                        Marker::Object => Value::Object(None),
+                        Marker::Vector2(v) => Value::Vector2(v),
+                        Marker::Surface(surface) => {
+                            surfaces.extend(surface.map(|surface| (name.clone(), surface)));
+                            Value::Surface(None)
+                        }
+                    };
                     found.insert(name, default);
                     continue;
                 }
@@ -268,8 +268,8 @@ fn attributes(lua: &Lua, declared: &Table) -> Result<super::Declared, String> {
                 };
                 return Err(format!(
                     "Modulo.attributes.{name}: {kind} não serve de valor padrão; use um número, um \
-                     texto, um booleano, um vetor, param.object() (um objeto escolhido depois) ou \
-                     param.vector2(x, y)"
+                     texto, um booleano, um vetor, param.object() (um objeto escolhido depois), \
+                     param.surface(nome?) ou param.vector2(x, y)"
                 ));
             }
         };
@@ -303,10 +303,10 @@ impl Drop for Top<'_> {
 }
 
 /// Freezes everything `table` reaches (tables, metatables, keys, values and the upvalues of
-/// Luau functions) and refuses what the engine cannot vouch for: coroutines, userdata, buffers,
-/// 64-bit integers, host functions with state of their own, closures that share a mutable
-/// upvalue (a factory run at the top) and any kind of value the engine does not know, so that
-/// a Luau update cannot open a hole unseen.
+/// Luau functions) and refuses what the engine cannot vouch for: coroutines, userdata other than
+/// the engine's quaternions (which never change), buffers, 64-bit integers, host functions with
+/// state of their own, closures that share a mutable upvalue (a factory run at the top) and any
+/// kind of value the engine does not know, so that a Luau update cannot open a hole unseen.
 fn freeze(lua: &Lua, shared: &Shared, table: &Table) -> Result<(), String> {
     let known = shared.known_functions.borrow();
     let stateful = shared.stateful.borrow();
@@ -516,6 +516,8 @@ unsafe fn walk_value(
                 }
                 Ok(())
             }
+            // A quaternion of the engine never changes.
+            ffi::LUA_TUSERDATA if ffi::lua_userdatatag(l, idx) == math::QUAT_TAG => Ok(()),
             ffi::LUA_TUSERDATA => Err("userdata que não é um valor imutável da engine".into()),
             ffi::LUA_TTHREAD => Err("corrotina guardada no módulo".into()),
             ffi::LUA_TBUFFER => Err(

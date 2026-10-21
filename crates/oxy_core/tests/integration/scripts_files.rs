@@ -627,8 +627,9 @@ fn module_form(text: &str) -> String {
 /// the attribute holds, the memory with its fields.
 const TYPED: &str = r#"--!strict
 local Race = {}
-Race.attributes = { Aviso = "", Painel = param.object(), Tamanho = param.vector2(1, 1) }
-Race.state = { mostrados = 0 }
+Race.attributes = { Aviso = "", Painel = param.object(), Tamanho = param.vector2(1, 1),
+    Piso = param.surface("Gelo") }
+Race.state = { mostrados = 0, alvo = param.object() }
 type Self = ScriptObject<typeof(Race.attributes), typeof(Race.state)>
 
 function Race.on_start(self: Self)
@@ -645,6 +646,15 @@ function Race.hide_banner(self: Self)
     local painel = self.attr.Painel
     if painel then
         painel.position = self.attr.Tamanho
+        painel.visible = false
+    end
+    local piso = self.attr.Piso
+    if piso then
+        print(piso.name)
+    end
+    local alvo = self.state.alvo
+    if alvo then
+        alvo.orientation = quat.multiply(alvo.orientation, quat.from_euler(0, 90, 0))
     end
     self.attr.Aviso = ""
 end
@@ -736,6 +746,13 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
             "self.attr.Painel.position = self.attr.Tamanho\n    if true then\n        local \
              painel = self.attr.Painel :: Object",
         ),
+        // A memory field declared empty is an Object? too.
+        (
+            "alvo",
+            "local alvo = self.state.alvo\n    if alvo then",
+            "self.state.alvo.visible = false\n    if true then\n        local alvo = \
+             self.state.alvo :: Object",
+        ),
     ] {
         assert!(TYPED.contains(from), "{name}");
         files.push((format!("scripts/{name}.luau"), TYPED.replacen(from, to, 1)));
@@ -795,6 +812,7 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
             ("avisoo", "Cannot add property 'Avisoo'"),
             ("memoria", "key 'mostrado'"),
             ("painel", "could be nil"),
+            ("alvo", "could be nil"),
         ] {
             let (clean, said) =
                 analyze(&lsp, &root, &[&format!("scripts/{name}.luau")], new_solver);
