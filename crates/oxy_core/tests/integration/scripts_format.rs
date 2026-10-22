@@ -124,9 +124,9 @@ fn a_missing_attached_script_opens_and_saves_with_a_warning_and_stops_the_test()
     assert_eq!(sources.files.len(), 3);
     // A script renamed outside OXY: the project still opens and saves every way, and the
     // warning says which reference broke.
-    std::fs::rename(
-        root.join("scripts/porta.luau"),
-        root.join("scripts/Porta da frente.luau"),
+    oxy_core::fs_ops::move_no_replace(
+        &root.join("scripts/porta.luau"),
+        &root.join("scripts/Porta da frente.luau"),
     )
     .unwrap();
     assert_eq!(persistence::load_project(&file).unwrap(), project);

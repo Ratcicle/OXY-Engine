@@ -368,6 +368,10 @@ pub(crate) fn isolate_progress() -> PathBuf {
     unsafe { std::env::set_var("OXY_SAVE_DIR", &folder) };
     folder
 }
+#[expect(
+    clippy::disallowed_methods,
+    reason = "QA copies its fixtures into folders of its own"
+)]
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {

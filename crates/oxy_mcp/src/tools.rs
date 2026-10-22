@@ -9,6 +9,7 @@ use oxy_core::{
     document::*,
     editing, encoding,
     export::{self, ExportRequest},
+    fs_ops::utc,
     headless, persistence, query, random,
     runtime::Runtime,
     script::{self, ScriptSources},
@@ -1419,35 +1420,6 @@ fn fingerprint(bytes: &[u8]) -> String {
     )
 }
 
-/// `time` in UTC, as "2026-10-14T01:02:03Z".
-fn utc(time: std::time::SystemTime) -> String {
-    let seconds = time
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    // The civil date of a day count (H. Hinnant's days_from_civil, reversed).
-    let days = (seconds / 86_400) as i64 + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted + 2) / 5 + 1;
-    let month = if shifted < 10 {
-        shifted + 3
-    } else {
-        shifted - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    let second = seconds % 86_400;
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        second / 3600,
-        second % 3600 / 60,
-        second % 60
-    )
-}
-
 /// A short number for reports: f32 noise such as 0.4000000059604645 would hide the value.
 fn short(value: f32) -> f64 {
     (f64::from(value) * 10_000.).round() / 10_000.
@@ -1946,6 +1918,10 @@ impl Tools {
     /// Keeps the project file as it was before this session first changed it, in
     /// project.oxy.json.agente.bak, so the copy is what the session can go back to however
     /// many writes follow: taken once per session (and again if someone deleted it).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the agent's copy of the project file is OXY's own, kept fresh each session"
+    )]
     fn keep_previous_version(&mut self, file: &Path) -> Result<PathBuf, String> {
         let backup = file.with_extension("json.agente.bak");
         let key = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
@@ -3299,9 +3275,9 @@ mod tests {
         // The file renamed outside OXY: oxy_validate names the object and the file, oxy_simulate
         // waits for it as the editor's test does, and the batch that copies the door warns of
         // the copy.
-        std::fs::rename(
-            dir.join("scripts/girar.luau"),
-            dir.join("scripts/giro.luau"),
+        oxy_core::fs_ops::move_no_replace(
+            &dir.join("scripts/girar.luau"),
+            &dir.join("scripts/giro.luau"),
         )
         .unwrap();
         let error = call("oxy_simulate", json!({"seconds": 0.1})).unwrap_err();
@@ -3561,9 +3537,9 @@ mod tests {
             entity["scripts"],
             json!([{"path": "scripts/contador.luau"}])
         );
-        std::fs::rename(
-            dir.join("scripts/contador.luau"),
-            dir.join("scripts/conta.luau"),
+        oxy_core::fs_ops::move_no_replace(
+            &dir.join("scripts/contador.luau"),
+            &dir.join("scripts/conta.luau"),
         )
         .unwrap();
         let entity = call("oxy_entity", json!({"id": "Porta"})).unwrap();

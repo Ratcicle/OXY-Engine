@@ -6,6 +6,7 @@
 //! its live channel, so both accept and refuse the same sources.
 use crate::{
     document::*,
+    names::MAX_NAME_CHARS,
     painting::PaintImage,
     persistence::{self, resolve_asset_path},
 };
@@ -17,8 +18,6 @@ use std::path::{Component, Path, PathBuf, Prefix};
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest content sent inline (`data_base64`), once decoded.
 pub const MAX_INLINE_BYTES: usize = 16 * 1024 * 1024;
-/// Longest asset name kept, in characters.
-const MAX_NAME_CHARS: usize = 80;
 /// Files one call imports at most (`paths`).
 pub const MAX_FILES: usize = 32;
 /// Most bytes the files of one call add up to.

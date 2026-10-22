@@ -6,7 +6,9 @@ use crate::{
     asset_import::{self, normalized, overlaps, real},
     command,
     document::{AssetKind, Id, Project, new_id, validate_project},
+    fs_ops::{busy, move_no_replace, retrying},
     headless::{self, SimulationRequest},
+    names,
     persistence::{self, PROJECT_FILE},
     script::{self, ScriptSources},
 };
@@ -77,40 +79,9 @@ pub fn engine_version() -> String {
 /// The name of an exported game's folder and executable: `title` without what Windows refuses
 /// in file names (`<>:"/\|?*` and control characters), its spaces collapsed, without dots or
 /// spaces at the end, at most 64 characters and never a device name (CON, NUL, COM1…); "Jogo"
-/// when nothing is left.
+/// when nothing is left (see [`names::fit`]).
 pub fn file_name(title: &str) -> String {
-    let cleaned: String = title
-        .chars()
-        .map(|c| {
-            if c.is_control() || r#"<>:"/\|?*"#.contains(c) {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect();
-    let mut name = fit(&cleaned.split_whitespace().collect::<Vec<_>>().join(" "));
-    if reserved(&name) {
-        name = fit(&format!("Jogo {name}"));
-    }
-    if name.is_empty() { "Jogo".into() } else { name }
-}
-fn fit(name: &str) -> String {
-    let capped: String = name.chars().take(MAX_FILE_CHARS).collect();
-    capped.trim_end_matches(['.', ' ']).to_owned()
-}
-/// Whether Windows takes `name` for a device, whatever its extension.
-fn reserved(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or_default().trim_end();
-    let stem: Vec<char> = stem.to_uppercase().chars().collect();
-    let word: String = stem.iter().take(3).collect();
-    match stem.len() {
-        3 => matches!(word.as_str(), "CON" | "PRN" | "AUX" | "NUL"),
-        4 => {
-            matches!(word.as_str(), "COM" | "LPT") && matches!(stem[3], '1'..='9' | '¹' | '²' | '³')
-        }
-        _ => false,
-    }
+    names::fit(title, MAX_FILE_CHARS, "Jogo")
 }
 
 /// The folder `project` is exported to in `destination`.
@@ -688,6 +659,10 @@ impl Drop for Staging {
 
 /// Writes the game into `staging`: the player as `executable` with its runtime libraries, the
 /// project and its images, sounds and scripts in data, the licenses, the note and the marker.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the staging folder is new and the export's own: nothing there is anyone's"
+)]
 fn stage(request: &ExportRequest, staging: &Path, executable: &str) -> Result<(), ExportError> {
     let project = request.project;
     fs::copy(request.player, staging.join(executable))
@@ -893,7 +868,7 @@ fn swap(
         Previous::Nothing => None,
         Previous::Empty | Previous::Export => {
             let kept = destination.join(format!(".oxy-export-previous-{}", new_id()));
-            retrying(|| fs::rename(target, &kept)).map_err(|error| {
+            retrying(|| move_no_replace(target, &kept)).map_err(|error| {
                 if busy(&error) {
                     ExportError::InUse(target.to_owned())
                 } else {
@@ -903,9 +878,9 @@ fn swap(
             Some(kept)
         }
     };
-    if let Err(error) = retrying(|| fs::rename(&staging.path, target)) {
+    if let Err(error) = retrying(|| move_no_replace(&staging.path, target)) {
         if let Some(kept) = kept
-            && let Err(source) = retrying(|| fs::rename(&kept, target))
+            && let Err(source) = retrying(|| move_no_replace(&kept, target))
         {
             return Err(ExportError::Restore { kept, source });
         }
@@ -920,25 +895,6 @@ fn swap(
             )
         })
     }))
-}
-
-/// Whether `error` comes from a file another program holds open (a running game, an antivirus
-/// reading the new executable).
-fn busy(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::PermissionDenied || matches!(error.raw_os_error(), Some(32 | 33))
-}
-/// `action`, tried again for a moment while a file it touches is busy.
-fn retrying<T>(mut action: impl FnMut() -> io::Result<T>) -> io::Result<T> {
-    let mut attempts = 0;
-    loop {
-        match action() {
-            Err(error) if busy(&error) && attempts < 8 => {
-                attempts += 1;
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            result => return result,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1195,6 +1151,11 @@ mod tests {
             ("nul.txt", "Jogo nul.txt"),
             ("com1", "Jogo com1"),
             ("LPT9 ", "Jogo LPT9"),
+            ("COM0", "Jogo COM0"),
+            ("lpt0.exe", "Jogo lpt0.exe"),
+            ("COM³", "Jogo COM³"),
+            ("CONIN$", "Jogo CONIN$"),
+            ("conout$", "Jogo conout$"),
             ("COM10", "COM10"),
             ("Console", "Console"),
             ("", "Jogo"),

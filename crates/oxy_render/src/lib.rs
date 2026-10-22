@@ -379,7 +379,9 @@ impl Renderer {
                     .asset(id)
                     .ok_or_else(|| format!("Referência de textura ausente: {id}"))
                     .and_then(|asset| {
-                        image::open(root.join(&asset.path))
+                        oxy_core::names::resolve(root, &asset.path)
+                            .map_err(|error| error.to_string())
+                            .and_then(|path| image::open(path).map_err(|error| error.to_string()))
                             .map_err(|error| format!("Textura {}: {error}", asset.name))
                     })
                     .map(|image| {

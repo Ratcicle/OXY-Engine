@@ -1114,6 +1114,10 @@ impl NativeQa {
 }
 
 /// Copies a folder and everything in it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "QA copies its fixtures into folders of its own"
+)]
 fn copy_folder(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {

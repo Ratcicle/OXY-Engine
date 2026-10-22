@@ -1138,7 +1138,8 @@ impl Editor {
                 Ok(id) => {
                     if kind == AssetKind::Texture {
                         if let Some(asset) = self.state.project.asset(&id)
-                            && let Ok(image) = PaintImage::load(&root.join(&asset.path))
+                            && let Ok(file) = persistence::resolve_asset_path(&root, &asset.path)
+                            && let Ok(image) = PaintImage::load(&file)
                         {
                             self.state.images.insert(id.clone(), image);
                         }

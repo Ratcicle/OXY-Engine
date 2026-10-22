@@ -1,6 +1,7 @@
 //! Validated documents and staged, recoverable file replacement.
 use crate::{
     document::{Asset, AssetKind, GameSettings, Id, Project, new_id, validate_project},
+    fs_ops::{self, Stamp},
     migration::MigrationError,
     painting::PaintImage,
     script::{self, ScriptFile, ScriptSources},
@@ -8,9 +9,10 @@ use crate::{
 };
 use std::{
     collections::{BTreeMap, HashMap},
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
-    path::{Component, Path, PathBuf},
+    fs::{self, File},
+    io::{self, Read},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// Why a project, asset or save operation failed. Messages are shown to the user as-is.
@@ -39,6 +41,9 @@ pub enum PersistenceError {
     Image(String),
     #[error("Caminho de asset inválido: {0}")]
     InvalidAssetPath(String),
+    /// A part of the path Windows would read otherwise (see [`crate::names::check_part`]).
+    #[error("Caminho inválido {path}: {reason}")]
+    InvalidPath { path: String, reason: String },
     #[error("Caminho sem pasta existente")]
     NoExistingFolder,
     #[error("O caminho do asset sai da pasta do projeto: {0}")]
@@ -76,6 +81,12 @@ pub enum PersistenceError {
     DuplicateTarget(PathBuf),
     #[error("O destino é uma pasta: {}", .0.display())]
     TargetIsDirectory(PathBuf),
+    /// A file that was only to be created found its name taken (see [`WriteMode::Create`]).
+    #[error("{}", taken(.0))]
+    TargetExists(PathBuf),
+    /// A file to replace no longer holds what OXY expected (see [`WriteMode::Replace`]).
+    #[error("{} mudou fora da OXY; nada foi gravado", fs_ops::shown(.0))]
+    TargetChanged(PathBuf),
     /// Every file was restored; nothing on disk changed.
     #[error("Salvamento não concluído; versão anterior preservada: {0}")]
     SaveRolledBack(String),
@@ -186,9 +197,20 @@ pub fn save_project(path: &Path, project: &Project) -> Result<(), PersistenceErr
     };
     let root = path.parent().unwrap_or(Path::new("."));
     validate_asset_files(project, root)?;
-    let mut writes: Vec<_> = crate::migration::backup(&path)?.into_iter().collect();
-    writes.push((path, serde_json::to_vec_pretty(project)?));
+    let mut writes = schema_backup(&path)?;
+    writes.push(FileWrite::replace(
+        path,
+        serde_json::to_vec_pretty(project)?,
+    ));
     transaction_write(writes)
+}
+/// The copy of the project file at `path` a save keeps when it migrates the file (see
+/// [`crate::migration::backup`]), only created.
+fn schema_backup(path: &Path) -> Result<Vec<FileWrite>, PersistenceError> {
+    Ok(crate::migration::backup(path)?
+        .into_iter()
+        .map(|(target, bytes)| FileWrite::create(target, bytes))
+        .collect())
 }
 /// Writes `project` as a new project in `folder`, as the editor's first Salvar of a new project
 /// does (the project file alone, in the current format), where an agent may create one: a full
@@ -320,14 +342,15 @@ pub fn save_bundle(
             if asset.kind != AssetKind::Texture {
                 return Err(PersistenceError::PixelsOnNonTexture(asset.name.clone()));
             }
-            writes.push((target, image.to_png().map_err(PersistenceError::Image)?));
+            let bytes = image.to_png().map_err(PersistenceError::Image)?;
+            writes.push(FileWrite::replace(target, bytes));
         } else {
             validate_asset_file(asset, &target)?;
         }
     }
     let bytes = serde_json::to_vec_pretty(project)?;
-    writes.extend(crate::migration::backup(&path)?);
-    writes.push((path, bytes));
+    writes.extend(schema_backup(&path)?);
+    writes.push(FileWrite::replace(path, bytes));
     transaction_write(writes)
 }
 /// Writes dirty texture buffers and the manifest in the same recoverable transaction.
@@ -388,10 +411,13 @@ fn save_cached_bundle_from(
                 .get(&asset.id)
                 .ok_or(PersistenceError::DirtyTextureNotResident)?;
             let bytes = image.to_png().map_err(PersistenceError::Image)?;
-            if source_root.is_some() && target.exists() && fs::read(&target)? != bytes {
-                return Err(PersistenceError::DestinationConflict(asset.path.clone()));
+            if source_root.is_none() {
+                writes.push(FileWrite::replace(target, bytes));
+            } else {
+                writes.extend(copy_write(target, bytes, || {
+                    PersistenceError::DestinationConflict(asset.path.clone())
+                })?);
             }
-            writes.push((target, bytes));
         } else if let Some(source_root) = source_root {
             let source = resolve_asset_path(source_root, &asset.path)?;
             validate_asset_header(asset, &source)?;
@@ -399,10 +425,9 @@ fn save_cached_bundle_from(
                 name: asset.name.clone(),
                 source,
             })?;
-            if target.exists() && fs::read(&target)? != bytes {
-                return Err(PersistenceError::DestinationConflict(asset.path.clone()));
-            }
-            writes.push((target, bytes));
+            writes.extend(copy_write(target, bytes, || {
+                PersistenceError::DestinationConflict(asset.path.clone())
+            })?);
         } else {
             validate_asset_header(asset, &target)?;
         }
@@ -415,18 +440,36 @@ fn save_cached_bundle_from(
                 source,
             })?;
             let target = resolve_asset_path(root, &path)?;
-            if target.exists() && fs::read(&target)? != bytes {
-                return Err(PersistenceError::ScriptConflict(path));
-            }
-            writes.push((target, bytes));
+            writes.extend(copy_write(target, bytes, || {
+                PersistenceError::ScriptConflict(path.clone())
+            })?);
         }
     }
-    writes.extend(crate::migration::backup(&path)?);
-    writes.push((path.clone(), serde_json::to_vec_pretty(project)?));
+    writes.extend(schema_backup(&path)?);
+    writes.push(FileWrite::replace(
+        path.clone(),
+        serde_json::to_vec_pretty(project)?,
+    ));
     transaction_write(writes)?;
     images.configure(root, project);
     images.mark_saved();
     Ok(())
+}
+/// The write a copy makes of `bytes` at `target`: only created, nothing when the file there
+/// already holds them, and `conflict` when it holds anything else.
+fn copy_write(
+    target: PathBuf,
+    bytes: Vec<u8>,
+    conflict: impl FnOnce() -> PersistenceError,
+) -> Result<Option<FileWrite>, PersistenceError> {
+    match fs::read(&target) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(Some(FileWrite::create(target, bytes)))
+        }
+        Ok(there) if there == bytes => Ok(None),
+        Ok(_) => Err(conflict()),
+        Err(error) => Err(error.into()),
+    }
 }
 pub fn load_paint_images(
     project: &Project,
@@ -472,7 +515,7 @@ pub fn import_asset(
     store_asset(project, root, &bytes, name, kind)
 }
 /// Writes PNG or WAV bytes, already checked, to the project's assets folder under a new name
-/// and adds the asset as `name`.
+/// (only created: a file there is never written over) and adds the asset as `name`.
 pub(crate) fn store_asset(
     project: &mut Project,
     root: &Path,
@@ -480,7 +523,17 @@ pub(crate) fn store_asset(
     name: String,
     kind: AssetKind,
 ) -> Result<Id, PersistenceError> {
-    let id = new_id();
+    store_asset_as(project, root, new_id(), bytes, name, kind)
+}
+/// [`store_asset`] as the asset `id`.
+fn store_asset_as(
+    project: &mut Project,
+    root: &Path,
+    id: Id,
+    bytes: &[u8],
+    name: String,
+    kind: AssetKind,
+) -> Result<Id, PersistenceError> {
     let extension = if kind == AssetKind::Texture {
         "png"
     } else {
@@ -489,7 +542,7 @@ pub(crate) fn store_asset(
     let relative = format!("assets/{id}.{extension}");
     fs::create_dir_all(root)?;
     let target = resolve_asset_path(root, &relative)?;
-    safe_write(&target, bytes)?;
+    transaction_write(vec![FileWrite::create(target, bytes.to_vec())])?;
     project.assets.push(Asset {
         id: id.clone(),
         name,
@@ -506,6 +559,16 @@ pub fn copy_texture(
     asset_id: &str,
     image: Option<&PaintImage>,
 ) -> Result<Id, PersistenceError> {
+    copy_texture_as(project, root, asset_id, image, new_id())
+}
+/// [`copy_texture`] as the asset `id`.
+fn copy_texture_as(
+    project: &mut Project,
+    root: &Path,
+    asset_id: &str,
+    image: Option<&PaintImage>,
+    id: Id,
+) -> Result<Id, PersistenceError> {
     let asset = project
         .asset(asset_id)
         .ok_or(PersistenceError::TextureNotFound)?
@@ -518,9 +581,11 @@ pub fn copy_texture(
     } else {
         fs::read(resolve_asset_path(root, &asset.path)?)?
     };
-    let id = new_id();
     let path = format!("assets/{id}.png");
-    safe_write(&resolve_asset_path(root, &path)?, &bytes)?;
+    transaction_write(vec![FileWrite::create(
+        resolve_asset_path(root, &path)?,
+        bytes,
+    )])?;
     project.assets.push(Asset {
         id: id.clone(),
         name: format!("{} (cópia)", asset.name),
@@ -530,31 +595,10 @@ pub fn copy_texture(
     });
     Ok(id)
 }
+/// The file `relative` of the project at `root`, through the one resolver every reader uses
+/// ([`crate::names::resolve`]).
 pub fn resolve_asset_path(root: &Path, relative: &str) -> Result<PathBuf, PersistenceError> {
-    let path = Path::new(relative);
-    if relative.is_empty()
-        || path.is_absolute()
-        || relative.contains(':')
-        || path
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
-    {
-        return Err(PersistenceError::InvalidAssetPath(relative.to_owned()));
-    }
-    let canonical_root =
-        fs::canonicalize(root).map_err(io_context("Pasta do projeto indisponível"))?;
-    let result = canonical_root.join(path);
-    let mut ancestor = result.as_path();
-    while !ancestor.exists() {
-        ancestor = ancestor
-            .parent()
-            .ok_or(PersistenceError::NoExistingFolder)?;
-    }
-    let resolved = fs::canonicalize(ancestor)?;
-    if !resolved.starts_with(&canonical_root) {
-        return Err(PersistenceError::AssetOutsideProject(relative.to_owned()));
-    }
-    Ok(result)
+    crate::names::resolve(root, relative)
 }
 pub fn validate_asset_files(project: &Project, root: &Path) -> Result<(), PersistenceError> {
     for asset in &project.assets {
@@ -663,11 +707,7 @@ fn read_scripts(root: &Path, skip: Option<&str>) -> Result<ScriptSources, Persis
     Ok(sources)
 }
 /// What tells that a script file changed without reading it: its size and when it was written.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ScriptStamp {
-    pub len: u64,
-    pub modified: Option<std::time::SystemTime>,
-}
+pub type ScriptStamp = Stamp;
 
 /// The stamp of each script file of the project at `root` (the files [`load_scripts`] reads),
 /// by path, from the folder's listing; none without the folder. A file that cannot be looked at
@@ -675,14 +715,7 @@ pub struct ScriptStamp {
 pub fn script_stamps(root: &Path) -> Result<BTreeMap<String, ScriptStamp>, PersistenceError> {
     Ok(script_files(root)?
         .into_iter()
-        .filter_map(|(path, file)| {
-            let meta = fs::metadata(file).ok()?;
-            let stamp = ScriptStamp {
-                len: meta.len(),
-                modified: meta.modified().ok(),
-            };
-            Some((path, stamp))
-        })
+        .filter_map(|(path, file)| Some((path, Stamp::read(&file).ok()?)))
         .collect())
 }
 
@@ -725,6 +758,7 @@ pub fn script_backup_path(path: &str) -> String {
 /// Writes `text` as the script `path` of the project at `root` (`path` as
 /// [`script::normalize_path`] writes it), creating its folders, in one transaction with, when
 /// `backup` is set and the file exists, the copy of it as it was at [`script_backup_path`].
+/// The file is replaced only while it holds what was read, and created only while absent.
 /// Answers the text the file had, if it existed.
 pub fn write_script(
     root: &Path,
@@ -751,12 +785,22 @@ pub fn write_script(
     };
     let mut writes = Vec::new();
     if let (true, Some(bytes)) = (backup, &previous) {
-        writes.push((
+        writes.push(FileWrite::replace(
             resolve_asset_path(root, &script_backup_path(path))?,
             bytes.clone(),
         ));
     }
-    writes.push((target, text.as_bytes().to_vec()));
+    let bytes = text.as_bytes().to_vec();
+    writes.push(match &previous {
+        Some(read) => FileWrite {
+            target,
+            bytes,
+            mode: WriteMode::Replace {
+                expected: Some(Expected::Bytes(read.as_slice().into())),
+            },
+        },
+        None => FileWrite::create(target, bytes),
+    });
     transaction_write(writes)?;
     Ok(previous.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
 }
@@ -906,68 +950,137 @@ pub(crate) fn validate_wav(bytes: &[u8]) -> Result<(), String> {
     }
     Ok(())
 }
+/// Writes `bytes` at `path`, replacing the file there if any: for the project file and OXY's
+/// own files (see [`transaction_write`]).
 pub fn safe_write(path: &Path, bytes: &[u8]) -> Result<(), PersistenceError> {
-    transaction_write(vec![(path.to_owned(), bytes.to_vec())])
+    transaction_write(vec![FileWrite::replace(path.to_owned(), bytes.to_vec())])
+}
+
+/// What a [`transaction_write`] may find at a file's path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WriteMode {
+    /// Nothing: the file is only created, and one that appears at its name meanwhile (in any
+    /// case, or as a short 8.3 name) stays and fails the write.
+    Create,
+    /// Any file when `expected` is None (the project file and OXY's own files in `.oxy`);
+    /// else only the file still as expected, which fails the write when it changed or went.
+    Replace { expected: Option<Expected> },
+}
+/// What a file to replace must still be.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Expected {
+    /// The bytes OXY last read or wrote there.
+    Bytes(Arc<[u8]>),
+    /// The size and write time it had then.
+    Stamp(Stamp),
+}
+/// One file of a [`transaction_write`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileWrite {
+    pub target: PathBuf,
+    pub bytes: Vec<u8>,
+    pub mode: WriteMode,
+}
+impl FileWrite {
+    /// Writes `bytes` as a new file at `target`.
+    pub fn create(target: PathBuf, bytes: Vec<u8>) -> Self {
+        Self {
+            target,
+            bytes,
+            mode: WriteMode::Create,
+        }
+    }
+    /// Writes `bytes` at `target`, over the file there if any.
+    pub fn replace(target: PathBuf, bytes: Vec<u8>) -> Self {
+        Self {
+            target,
+            bytes,
+            mode: WriteMode::Replace { expected: None },
+        }
+    }
+}
+/// The message of a file only to be created whose name `target` is taken.
+fn taken(target: &Path) -> String {
+    format!(
+        "Já existe um arquivo em {}; a OXY não grava por cima dele",
+        fs_ops::shown(target)
+    )
 }
 
 struct Staged {
     target: PathBuf,
     temp: PathBuf,
     backup: Option<PathBuf>,
+    create: bool,
     committed: bool,
 }
 fn temporary_path(target: &Path, label: &str) -> PathBuf {
     let file = target.file_name().unwrap_or_default().to_string_lossy();
     target.with_file_name(format!(".{file}.{label}.{}", new_id()))
 }
-fn transaction_write(writes: Vec<(PathBuf, Vec<u8>)>) -> Result<(), PersistenceError> {
-    transaction_write_with(writes, atomic_replace)
+/// Writes every file of `writes` or none: each is written and synced next to its target first,
+/// as its [`WriteMode`] allows, and only then put in place, in order; a file replaced keeps a
+/// copy until all are in place, so a failure puts every one back. When putting one back fails,
+/// the copies stay for recovery ([`PersistenceError::SaveRecoveryKept`]).
+pub fn transaction_write(writes: Vec<FileWrite>) -> Result<(), PersistenceError> {
+    transaction_write_with(writes, install)
+}
+/// Why putting a written file in place failed.
+enum InstallError {
+    /// Its target was left as it was: the name was taken, or the file changed outside OXY.
+    Refused(PersistenceError),
+    /// Anything else, after which the target may have changed.
+    Failed(String),
 }
 fn transaction_write_with(
-    writes: Vec<(PathBuf, Vec<u8>)>,
-    mut replace: impl FnMut(&Path, &Path) -> Result<(), String>,
+    writes: Vec<FileWrite>,
+    mut replace: impl FnMut(&Path, &Path, &WriteMode) -> Result<(), InstallError>,
 ) -> Result<(), PersistenceError> {
     let mut stages: Vec<Staged> = Vec::new();
+    let mut modes = Vec::new();
     let mut targets = std::collections::HashSet::new();
     let prepared = (|| -> Result<(), PersistenceError> {
-        for (target, bytes) in writes {
+        for FileWrite {
+            target,
+            bytes,
+            mode,
+        } in writes
+        {
             if !targets.insert(target.clone()) {
                 return Err(PersistenceError::DuplicateTarget(target));
             }
             if target.is_dir() {
                 return Err(PersistenceError::TargetIsDirectory(target));
             }
+            // A link that leads nowhere takes the name all the same. The check only gives the
+            // message: what never writes over a file is the move that puts it in place.
+            let named = fs::symlink_metadata(&target).is_ok();
+            match &mode {
+                WriteMode::Create if named => {
+                    return Err(PersistenceError::TargetExists(target));
+                }
+                WriteMode::Replace {
+                    expected: Some(expected),
+                } => unchanged(&target, expected)?,
+                _ => {}
+            }
             let parent = target.parent().unwrap_or(Path::new("."));
             fs::create_dir_all(parent).map_err(io_context("Não foi possível criar pasta"))?;
             let temp = temporary_path(&target, "tmp");
-            let backup = if target.exists() {
-                Some(temporary_path(&target, "backup"))
-            } else {
-                None
-            };
+            let backup = target.exists().then(|| temporary_path(&target, "backup"));
             stages.push(Staged {
                 target: target.clone(),
                 temp: temp.clone(),
                 backup: backup.clone(),
+                create: mode == WriteMode::Create,
                 committed: false,
             });
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-                .map_err(io_context("Falha criando arquivo temporário"))?;
-            file.write_all(&bytes)
-                .and_then(|()| file.sync_all())
+            modes.push(mode);
+            fs_ops::create_new_file(&temp, &bytes)
                 .map_err(io_context("Falha gravando arquivo temporário"))?;
-            drop(file);
             if let Some(backup) = backup {
-                fs::copy(&target, &backup)
+                fs_ops::copy_new(&target, &backup)
                     .map_err(io_context("Falha preservando arquivo anterior"))?;
-                OpenOptions::new()
-                    .write(true)
-                    .open(&backup)
-                    .and_then(|f| f.sync_all())
-                    .map_err(io_context("Falha confirmando cópia anterior"))?;
             }
         }
         Ok(())
@@ -977,28 +1090,85 @@ fn transaction_write_with(
         return Err(error);
     }
     for index in 0..stages.len() {
-        if let Err(error) = replace(&stages[index].temp, &stages[index].target) {
-            let mut rollback_errors = Vec::new();
+        match replace(&stages[index].temp, &stages[index].target, &modes[index]) {
+            Ok(()) => stages[index].committed = true,
+            // The failing file was left as it was: only the ones before it go back.
+            Err(InstallError::Refused(error)) => {
+                return Err(match roll_back(&stages, index) {
+                    Ok(()) => error,
+                    Err(restore) => PersistenceError::SaveRecoveryKept {
+                        error: error.to_string(),
+                        restore,
+                    },
+                });
+            }
             // ReplaceFileW can report an error after removing/renaming the original.
             // Restore the failing stage too; its committed flag cannot prove safety.
-            for previous in stages[..=index].iter().rev() {
-                if let Err(e) = restore_stage(previous) {
-                    rollback_errors.push(format!("{}: {e}", previous.target.display()));
-                }
+            Err(InstallError::Failed(error)) => {
+                return Err(match roll_back(&stages, index + 1) {
+                    Ok(()) => PersistenceError::SaveRolledBack(error),
+                    Err(restore) => PersistenceError::SaveRecoveryKept { error, restore },
+                });
             }
-            if rollback_errors.is_empty() {
-                cleanup(&stages);
-                return Err(PersistenceError::SaveRolledBack(error));
-            }
-            return Err(PersistenceError::SaveRecoveryKept {
-                error,
-                restore: rollback_errors.join("; "),
-            });
         }
-        stages[index].committed = true;
     }
     cleanup(&stages);
     Ok(())
+}
+/// Puts back the first `touched` files of `stages`, the last first, then removes the temporary
+/// files and copies; when one cannot be put back, they all stay for recovery and the error says
+/// which.
+fn roll_back(stages: &[Staged], touched: usize) -> Result<(), String> {
+    let errors: Vec<String> = stages[..touched]
+        .iter()
+        .rev()
+        .filter_map(|stage| {
+            let error = restore_stage(stage).err()?;
+            Some(format!("{}: {error}", stage.target.display()))
+        })
+        .collect();
+    if !errors.is_empty() {
+        return Err(errors.join("; "));
+    }
+    cleanup(stages);
+    Ok(())
+}
+/// Fails with [`PersistenceError::TargetChanged`] unless the file at `path` is still as
+/// `expected`.
+fn unchanged(path: &Path, expected: &Expected) -> Result<(), PersistenceError> {
+    if path.exists() && holds(path, expected)? {
+        Ok(())
+    } else {
+        Err(PersistenceError::TargetChanged(path.to_owned()))
+    }
+}
+/// Whether the file at `path` is still as `expected`.
+fn holds(path: &Path, expected: &Expected) -> Result<bool, PersistenceError> {
+    let holds = match expected {
+        Expected::Stamp(stamp) => Stamp::read(path).map(|now| now == *stamp),
+        Expected::Bytes(bytes) => fs::metadata(path)
+            .and_then(|meta| Ok(meta.len() == bytes.len() as u64 && *fs::read(path)? == **bytes)),
+    };
+    holds.map_err(io_context("Falha conferindo destino"))
+}
+/// Puts the written `source` in place at `target` as `mode` allows. A file to replace as
+/// expected is checked again here, since writing the other files took a while.
+fn install(source: &Path, target: &Path, mode: &WriteMode) -> Result<(), InstallError> {
+    match mode {
+        WriteMode::Create => fs_ops::move_no_replace(source, target).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                InstallError::Refused(PersistenceError::TargetExists(target.to_owned()))
+            } else {
+                InstallError::Failed(error.to_string())
+            }
+        }),
+        WriteMode::Replace { expected } => {
+            if let Some(expected) = expected {
+                unchanged(target, expected).map_err(InstallError::Refused)?;
+            }
+            atomic_replace(source, target).map_err(InstallError::Failed)
+        }
+    }
 }
 fn same_file_contents(a: &Path, b: &Path) -> Result<bool, String> {
     let mut a = File::open(a).map_err(|e| e.to_string())?;
@@ -1023,6 +1193,14 @@ fn same_file_contents(a: &Path, b: &Path) -> Result<bool, String> {
     }
 }
 fn restore_stage(stage: &Staged) -> Result<(), String> {
+    if stage.create {
+        // Only what this write created goes: a file that took the name meanwhile is another's,
+        // and the failed move left it as it was.
+        if !stage.committed {
+            return Ok(());
+        }
+        return fs::remove_file(&stage.target).map_err(|e| e.to_string());
+    }
     let Some(backup) = &stage.backup else {
         if !stage.target.exists() {
             return Ok(());
@@ -1040,13 +1218,8 @@ fn restore_stage(stage: &Staged) -> Result<(), String> {
     // Recovery never consumes the sole backup. If recovery itself fails partway,
     // the original bytes remain available and cleanup is deliberately skipped.
     let recovery = temporary_path(&stage.target, "recovery");
-    fs::copy(backup, &recovery)
+    fs_ops::copy_new(backup, &recovery)
         .map_err(|e| format!("Não foi possível preparar restauração: {e}"))?;
-    OpenOptions::new()
-        .write(true)
-        .open(&recovery)
-        .and_then(|file| file.sync_all())
-        .map_err(|e| format!("Não foi possível confirmar cópia de restauração: {e}"))?;
     let replaced = atomic_replace(&recovery, &stage.target);
     match same_file_contents(&stage.target, backup) {
         Ok(true) => {
@@ -1069,9 +1242,11 @@ fn cleanup(stages: &[Staged]) {
         }
     }
 }
+/// Puts `source` in place of `target`: a move that never replaces when nothing is there, and
+/// ReplaceFileW, which keeps the replaced file's identity, when something is (or appears in
+/// between).
 #[cfg(windows)]
 fn atomic_replace(source: &Path, target: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn ReplaceFileW(
@@ -1084,10 +1259,13 @@ fn atomic_replace(source: &Path, target: &Path) -> Result<(), String> {
         ) -> i32;
     }
     if !target.exists() {
-        return fs::rename(source, target).map_err(|e| e.to_string());
+        match fs_ops::move_no_replace(source, target) {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            moved => return moved.map_err(|e| e.to_string()),
+        }
     }
-    let a: Vec<_> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-    let b: Vec<_> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let a = fs_ops::wide(target).map_err(|e| e.to_string())?;
+    let b = fs_ops::wide(source).map_err(|e| e.to_string())?;
     // Both paths are owned, terminated UTF-16 buffers alive for this synchronous call.
     let success = unsafe {
         ReplaceFileW(
@@ -1106,6 +1284,10 @@ fn atomic_replace(source: &Path, target: &Path) -> Result<(), String> {
     }
 }
 #[cfg(not(windows))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a rename is the atomic replacement outside Windows"
+)]
 fn atomic_replace(source: &Path, target: &Path) -> Result<(), String> {
     fs::rename(source, target).map_err(|e| e.to_string())
 }
@@ -1277,8 +1459,8 @@ mod tests {
         fs::create_dir(&invalid).unwrap();
         assert!(
             transaction_write(vec![
-                (existing.clone(), b"new".to_vec()),
-                (invalid, b"bad".to_vec())
+                FileWrite::replace(existing.clone(), b"new".to_vec()),
+                FileWrite::replace(invalid, b"bad".to_vec())
             ])
             .is_err()
         );
@@ -1298,7 +1480,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn locked_second_file_rolls_back_first_file() {
-        use std::os::windows::fs::OpenOptionsExt;
+        use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
         let dir = temp();
         let a = dir.join("a.txt");
         let b = dir.join("b.txt");
@@ -1310,8 +1492,8 @@ mod tests {
             .open(&b)
             .unwrap();
         let result = transaction_write(vec![
-            (a.clone(), b"first changed".to_vec()),
-            (b.clone(), b"second changed".to_vec()),
+            FileWrite::replace(a.clone(), b"first changed".to_vec()),
+            FileWrite::replace(b.clone(), b"second changed".to_vec()),
         ]);
         assert!(result.is_err());
         assert_eq!(fs::read(a).unwrap(), b"first original");
@@ -1329,18 +1511,20 @@ mod tests {
         let mut attempt = 0;
         let result = transaction_write_with(
             vec![
-                (first.clone(), b"first new".to_vec()),
-                (second.clone(), b"second new".to_vec()),
+                FileWrite::replace(first.clone(), b"first new".to_vec()),
+                FileWrite::replace(second.clone(), b"second new".to_vec()),
             ],
-            |source, target| {
+            |source, target, mode| {
                 attempt += 1;
                 if attempt == 2 {
                     // Reproduce the documented ReplaceFileW error 1176 contract:
                     // failure is returned after the original pathname is removed.
                     fs::remove_file(target).unwrap();
-                    Err("Falha parcial simulada após remover o original (1176)".into())
+                    Err(InstallError::Failed(
+                        "Falha parcial simulada após remover o original (1176)".into(),
+                    ))
                 } else {
-                    atomic_replace(source, target)
+                    install(source, target, mode)
                 }
             },
         );
@@ -1356,22 +1540,27 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn failed_recovery_keeps_the_original_backup() {
-        use std::os::windows::fs::OpenOptionsExt;
+        use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
         let dir = temp();
         let path = dir.join("locked.txt");
         safe_write(&path, b"irreplaceable original").unwrap();
         let mut lock = None;
-        let result = transaction_write_with(vec![(path.clone(), b"new".to_vec())], |_, target| {
-            fs::write(target, b"partially replaced").unwrap();
-            lock = Some(
-                OpenOptions::new()
-                    .read(true)
-                    .share_mode(0)
-                    .open(target)
-                    .unwrap(),
-            );
-            Err("Falha parcial simulada com bloqueio durante recuperação".into())
-        });
+        let result = transaction_write_with(
+            vec![FileWrite::replace(path.clone(), b"new".to_vec())],
+            |_, target, _| {
+                fs::write(target, b"partially replaced").unwrap();
+                lock = Some(
+                    OpenOptions::new()
+                        .read(true)
+                        .share_mode(0)
+                        .open(target)
+                        .unwrap(),
+                );
+                Err(InstallError::Failed(
+                    "Falha parcial simulada com bloqueio durante recuperação".into(),
+                ))
+            },
+        );
         let PersistenceError::SaveRecoveryKept { restore, .. } = result.unwrap_err() else {
             panic!("A recuperação falha deve manter as cópias");
         };
@@ -1388,6 +1577,240 @@ mod tests {
             })
             .unwrap();
         assert_eq!(fs::read(backup).unwrap(), b"irreplaceable original");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn created_files_never_replace_one_that_appears_meanwhile() {
+        let dir = temp();
+        let mine = dir.join("Pulo.wav");
+        let theirs = dir.join("Torre.modelo.json");
+        // Taken before anything is written: nothing is.
+        fs::write(&theirs, b"de um agente").unwrap();
+        let error = transaction_write(vec![
+            FileWrite::create(mine.clone(), b"meu".to_vec()),
+            FileWrite::create(theirs.clone(), b"da OXY".to_vec()),
+        ])
+        .unwrap_err();
+        assert!(matches!(&error, PersistenceError::TargetExists(path) if *path == theirs));
+        assert!(error.to_string().contains("não grava por cima"), "{error}");
+        assert!(!mine.exists());
+        fs::remove_file(&theirs).unwrap();
+        // Taken between writing and putting in place: the same error, the file that appeared
+        // stays, and the one already created goes with the rollback.
+        let result = transaction_write_with(
+            vec![
+                FileWrite::create(mine.clone(), b"meu".to_vec()),
+                FileWrite::create(theirs.clone(), b"da OXY".to_vec()),
+            ],
+            |source, target, mode| {
+                if target == theirs {
+                    fs::write(target, b"de um agente").unwrap();
+                }
+                install(source, target, mode)
+            },
+        );
+        let error = result.unwrap_err();
+        assert!(matches!(&error, PersistenceError::TargetExists(path) if *path == theirs));
+        assert!(error.to_string().contains("não grava por cima"), "{error}");
+        assert_eq!(fs::read(&theirs).unwrap(), b"de um agente");
+        assert!(!mine.exists());
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no temporary file stays"
+        );
+        // A file to replace with nothing expected (the project file, OXY's own) is replaced
+        // even when it appears in between.
+        let manifest = dir.join(PROJECT_FILE);
+        transaction_write_with(
+            vec![FileWrite::replace(manifest.clone(), b"novo".to_vec())],
+            |source, target, mode| {
+                fs::write(target, b"apareceu").unwrap();
+                install(source, target, mode)
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read(&manifest).unwrap(), b"novo");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn replacing_an_expected_file_refuses_one_changed_outside() {
+        let dir = temp();
+        let model = dir.join("Checkpoint.modelo.json");
+        safe_write(&model, b"lido pela OXY").unwrap();
+        let read: Arc<[u8]> = fs::read(&model).unwrap().into();
+        let stamp = Stamp::read(&model).unwrap();
+        let expecting = |expected: Expected, bytes: &[u8]| FileWrite {
+            target: model.clone(),
+            bytes: bytes.to_vec(),
+            mode: WriteMode::Replace {
+                expected: Some(expected),
+            },
+        };
+        transaction_write(vec![expecting(Expected::Bytes(read.clone()), b"salvo 1")]).unwrap();
+        assert_eq!(fs::read(&model).unwrap(), b"salvo 1");
+        // Changed since it was read: refused by bytes and by stamp.
+        for expected in [Expected::Bytes(read), Expected::Stamp(stamp)] {
+            let error = transaction_write(vec![expecting(expected, b"salvo 2")]).unwrap_err();
+            assert!(
+                matches!(error, PersistenceError::TargetChanged(_)),
+                "{error}"
+            );
+            assert!(error.to_string().contains("mudou fora da OXY"), "{error}");
+            assert_eq!(fs::read(&model).unwrap(), b"salvo 1");
+        }
+        let stamp = Stamp::read(&model).unwrap();
+        transaction_write(vec![expecting(Expected::Stamp(stamp), b"salvo 2")]).unwrap();
+        assert_eq!(fs::read(&model).unwrap(), b"salvo 2");
+        // Gone: nothing is created in its place.
+        fs::remove_file(&model).unwrap();
+        let error = transaction_write(vec![expecting(
+            Expected::Bytes(b"salvo 2".as_slice().into()),
+            b"salvo 3",
+        )])
+        .unwrap_err();
+        assert!(
+            matches!(error, PersistenceError::TargetChanged(_)),
+            "{error}"
+        );
+        assert!(!model.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_file_changed_outside_while_the_others_were_written_is_not_replaced() {
+        let dir = temp();
+        let manifest = dir.join(PROJECT_FILE);
+        let new = dir.join("Novo.modelo.json");
+        let script = dir.join("porta.luau");
+        safe_write(&manifest, b"manifesto antigo").unwrap();
+        safe_write(&script, b"lido pela OXY").unwrap();
+        let result = transaction_write_with(
+            vec![
+                FileWrite::replace(manifest.clone(), b"manifesto novo".to_vec()),
+                FileWrite::create(new.clone(), b"modelo".to_vec()),
+                FileWrite {
+                    target: script.clone(),
+                    bytes: b"salvo pela OXY".to_vec(),
+                    mode: WriteMode::Replace {
+                        expected: Some(Expected::Bytes(b"lido pela OXY".as_slice().into())),
+                    },
+                },
+            ],
+            |source, target, mode| {
+                if target == script {
+                    // The editor of the person saves it right then.
+                    fs::write(target, b"salvo no VS Code").unwrap();
+                }
+                install(source, target, mode)
+            },
+        );
+        let error = result.unwrap_err();
+        assert!(matches!(&error, PersistenceError::TargetChanged(path) if *path == script));
+        assert_eq!(fs::read(&script).unwrap(), b"salvo no VS Code");
+        assert_eq!(fs::read(&manifest).unwrap(), b"manifesto antigo");
+        assert!(!new.exists());
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            2,
+            "no temporary file or copy stays"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn imports_and_texture_copies_only_create_their_files() {
+        let dir = temp();
+        let origin = dir.join("origem.png");
+        PaintImage::new(8, 8, [255; 4])
+            .unwrap()
+            .save(&origin)
+            .unwrap();
+        let mut project = Project::new("Importar");
+        let id = import_asset(&mut project, &dir, &origin, AssetKind::Texture).unwrap();
+        let path = project.asset(&id).unwrap().path.clone();
+        assert_eq!(path, format!("assets/{id}.png"));
+        assert_eq!(
+            fs::read(dir.join(&path)).unwrap(),
+            fs::read(&origin).unwrap()
+        );
+        let copy = copy_texture(&mut project, &dir, &id, None).unwrap();
+        assert_ne!(copy, id);
+        assert_eq!(
+            fs::read(dir.join(&project.asset(&copy).unwrap().path)).unwrap(),
+            fs::read(&origin).unwrap()
+        );
+        assert_eq!(fs::read_dir(dir.join("assets")).unwrap().count(), 2);
+        // A file already at the name the asset gets stays, and no asset is added.
+        let before = project.clone();
+        let sound = new_id();
+        let taken = dir.join("assets").join(format!("{sound}.wav"));
+        fs::write(&taken, b"de outra pessoa").unwrap();
+        let error = store_asset_as(
+            &mut project,
+            &dir,
+            sound,
+            b"RIFF",
+            "Pulo".into(),
+            AssetKind::Audio,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, PersistenceError::TargetExists(path) if path.ends_with(taken.file_name().unwrap())),
+            "{error}"
+        );
+        assert_eq!(fs::read(&taken).unwrap(), b"de outra pessoa");
+        let image = new_id();
+        let taken = dir.join("assets").join(format!("{image}.png"));
+        fs::write(&taken, b"de outra pessoa").unwrap();
+        let error = copy_texture_as(&mut project, &dir, &id, None, image).unwrap_err();
+        assert!(
+            matches!(error, PersistenceError::TargetExists(_)),
+            "{error}"
+        );
+        assert_eq!(fs::read(&taken).unwrap(), b"de outra pessoa");
+        assert_eq!(project, before);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn copies_skip_identical_files_and_refuse_others() {
+        let dir = temp();
+        let target = dir.join("assets").join("x.png");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let conflict = || PersistenceError::DestinationConflict("assets/x.png".into());
+        assert_eq!(
+            copy_write(target.clone(), b"png".to_vec(), conflict).unwrap(),
+            Some(FileWrite::create(target.clone(), b"png".to_vec()))
+        );
+        fs::write(&target, b"png").unwrap();
+        assert_eq!(
+            copy_write(target.clone(), b"png".to_vec(), conflict).unwrap(),
+            None
+        );
+        assert!(matches!(
+            copy_write(target.clone(), b"outro".to_vec(), conflict),
+            Err(PersistenceError::DestinationConflict(_))
+        ));
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn writes_reach_past_260_characters() {
+        let dir = temp();
+        let mut deep = dir.clone();
+        while deep.as_os_str().len() < 300 {
+            deep.push("pasta-com-nome-comprido");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        let file = deep.join("arquivo.txt");
+        safe_write(&file, b"um").unwrap();
+        safe_write(&file, b"dois").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"dois");
+        transaction_write(vec![FileWrite::create(
+            deep.join("novo.txt"),
+            b"tres".to_vec(),
+        )])
+        .unwrap();
+        assert_eq!(fs::read_dir(&deep).unwrap().count(), 2);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

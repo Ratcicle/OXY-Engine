@@ -372,6 +372,10 @@ impl Editor {
     /// Saves for an agent, as Ctrl+S does, everything unsaved included, after keeping the
     /// file as it was before this save as project.oxy.json.agente.bak (the MCP server on files
     /// keeps the one from before its session's first write).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the agent's copy of the project file is OXY's own, kept fresh at each save"
+    )]
     pub(crate) fn agent_save(&mut self) -> Result<Json, String> {
         if let Some(reason) = self.save_refusal() {
             return Err(reason.into());
