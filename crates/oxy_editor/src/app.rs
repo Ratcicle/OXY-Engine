@@ -154,7 +154,7 @@ pub(crate) struct PlaySession {
     pub(crate) test_save: oxy_core::save::SaveSlot,
     /// The test's sounds and the Library's Ouvir.
     pub(crate) mixer: oxy_audio::Mixer,
-    /// The watcher of the scripts folder while a test runs scripts (see `script_watch`).
+    /// The watcher of the tree's scripts while a test runs scripts (see `script_watch`).
     pub(crate) script_watch: Option<script_watch::ScriptWatch>,
 }
 impl Default for PlaySession {
@@ -677,13 +677,14 @@ impl Editor {
             else {
                 return false;
             };
-            let path = folder.join("project.oxy.json");
-            if path.exists() {
-                self.log("Já existe project.oxy.json nessa pasta. Abra-o ou escolha outra pasta.");
-                self.notice_last(true);
-                return false;
+            match new_project_file(&folder) {
+                Ok(path) => self.path = Some(path),
+                Err(error) => {
+                    self.log(error);
+                    self.notice_last(true);
+                    return false;
+                }
             }
-            self.path = Some(path);
         }
         let path = self.path.as_ref().unwrap().clone();
         let result = if self.home.example_copy {
@@ -1765,7 +1766,31 @@ pub fn vector3(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64
     });
 }
 
-/// The scripts a test of `project`, saved at `path`, runs: those of its folder, every one its
+/// The project file of a new project in `folder`, as the person chose it: a folder with nothing
+/// in it, since the project's tree is its Library and every file in it would be the project's;
+/// why not, with what to do.
+fn new_project_file(folder: &Path) -> Result<PathBuf, String> {
+    let path = folder.join(persistence::PROJECT_FILE);
+    if path.exists() {
+        return Err(
+            "Já existe project.oxy.json nessa pasta. Abra-o ou escolha outra pasta.".into(),
+        );
+    }
+    let empty = std::fs::read_dir(folder)
+        .map_err(|error| format!("Não foi possível ler a pasta escolhida: {error}"))?
+        .next()
+        .is_none();
+    if !empty {
+        return Err(format!(
+            "A pasta {} já tem outros arquivos; um projeto novo vai numa pasta vazia, só dele. \
+             Crie dentro dela uma pasta com o nome do projeto e escolha essa.",
+            folder.display()
+        ));
+    }
+    Ok(path)
+}
+
+/// The scripts a test of `project`, saved at `path`, runs: those of its tree, every one its
 /// objects attach among them (see `persistence::load_scripts_to_run`). A project never saved
 /// has no folder for them.
 fn test_scripts(project: &Project, path: Option<&Path>) -> Result<ScriptSources, String> {
@@ -1916,6 +1941,34 @@ mod play_tests {
                 .files
                 .is_empty()
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_new_project_goes_in_an_empty_folder() {
+        let root = std::env::temp_dir().join(format!("oxy-editor-new-{}", new_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(
+            new_project_file(&root),
+            Ok(root.join(persistence::PROJECT_FILE))
+        );
+        // A folder with anything in it, the person's notes or a folder starting with a dot.
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let refused = new_project_file(&root).unwrap_err();
+        assert!(
+            refused.starts_with(&format!(
+                "A pasta {} já tem outros arquivos",
+                root.display()
+            )) && refused
+                .ends_with("Crie dentro dela uma pasta com o nome do projeto e escolha essa."),
+            "{refused}"
+        );
+        std::fs::write(root.join(persistence::PROJECT_FILE), "{}").unwrap();
+        assert_eq!(
+            new_project_file(&root).unwrap_err(),
+            "Já existe project.oxy.json nessa pasta. Abra-o ou escolha outra pasta."
+        );
+        assert!(new_project_file(&root.join("nenhuma")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

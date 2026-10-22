@@ -52,6 +52,7 @@ fn the_tree_modules_never_write_over_files() {
     for (module, source) in [
         ("fs_ops.rs", include_str!("../fs_ops.rs")),
         ("names.rs", include_str!("../names.rs")),
+        ("project_tree.rs", include_str!("../project_tree.rs")),
     ] {
         for forbidden in ["fs::write", "File::create", ".create(true)"] {
             assert!(!source.contains(forbidden), "{module} uses {forbidden}");

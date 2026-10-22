@@ -1091,7 +1091,7 @@ fn string_format_writes_star_like_the_engine() {
 }
 
 #[test]
-fn require_serves_frozen_modules_from_the_scripts_folder() {
+fn require_serves_frozen_modules_of_the_project() {
     let main = "local M = {}\nlocal cards = require('./dados/cartas')\nM.cost = cards[1].custo\n\
                 function M.f(self)\n    local again = require('./dados/cartas')\n    \
                 self.attr.Resultado = tostring(M.cost) .. ' ' .. tostring(table.isfrozen(cards)) \
@@ -1135,7 +1135,7 @@ fn require_serves_frozen_modules_from_the_scripts_folder() {
         ),
         ("@oxy", "esse apelido não existe"),
         ("dados/cartas", "o caminho começa com ./ ou ../"),
-        ("../fora", "fora da pasta scripts"),
+        ("../../fora", "sai da pasta do projeto"),
         ("./nada", "scripts/nada.luau não existe"),
     ] {
         let path = format!("scripts/req{}.luau", name.len());
@@ -1145,6 +1145,193 @@ fn require_serves_frozen_modules_from_the_scripts_folder() {
         assert!(e.message.contains(message), "{name}: {e}");
         assert_eq!(e.line, 2, "{name}: {e}");
     }
+}
+
+/// The scripts of the matrix of `require` below, a tree as `luau-lsp analyze` reads it too:
+/// with the `.luaurc` OXY writes at the root (`"aliases": { "project": "./" }`), write these
+/// files and a `Pista/Checkpoint.luau` holding one `require` of the matrix plus
+/// `local _ = M.naoexiste` after it; `luau-lsp analyze --no-flags-enabled --platform=standard
+/// --formatter=gnu Pista/Checkpoint.luau` (1.70.1) says "Key 'naoexiste' not found" where the
+/// path resolved, "Unknown require" where it did not. The engine is the reference: luau-lsp also
+/// takes `./dados.luau`, `../../fora`, `@self`, `./DADOS` (on Windows) and `./Modulo` with an
+/// `init.luau`, which the engine refuses with what to write, and the engine refuses `./` and
+/// `./x/..`, which name a folder.
+const TREE: [(&str, &str); 7] = [
+    ("Pista/dados.luau", "return { velocidade = 3 }"),
+    ("Pista/Dados da pista.luau", "return { volta = 1 }"),
+    ("Pista/Modulo/init.luau", "return {}"),
+    ("Comum/sons.luau", "return { pulo = 'Pulo' }"),
+    ("Fases/Fase ação/fase.luau", "return { numero = 1 }"),
+    ("raiz.luau", "return { raiz = true }"),
+    (".oxy/agente/Pista/dados.luau.bak", "return {}"),
+];
+
+#[test]
+fn require_reads_paths_from_the_script_or_the_project_as_luau_does() {
+    let require = |name: &str| {
+        // A backslash written as Luau's text has it.
+        let written = name.replace('\\', "\\\\");
+        let main = (
+            "Pista/Checkpoint.luau",
+            format!("\nreturn require('{written}')"),
+        );
+        let mut files: Vec<(&str, &str)> = TREE.to_vec();
+        files.push((main.0, &main.1));
+        let host = ScriptHost::new(sources(&files)).unwrap();
+        host.load(main.0).map(|_| ())
+    };
+    for name in [
+        "./dados",
+        "../Comum/sons",
+        "./Dados da pista",
+        "../Fases/Fase ação/fase",
+        "../raiz",
+        "@project/Pista/dados",
+        "@Project/Comum/sons",
+        "@PROJECT/raiz",
+        "@project/./Pista/dados",
+        r".\dados",
+        r"@project\Comum\sons",
+        "./../Pista/dados",
+    ] {
+        require(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+    for (name, message) in [
+        (
+            "../../fora",
+            "require(\"../../fora\"): sai da pasta do projeto",
+        ),
+        (
+            "@project/../fora",
+            "@project/ já começa na pasta do projeto e não aceita ../",
+        ),
+        (
+            "./dados.luau",
+            "require(\"./dados.luau\"): tire o .luau: require(\"./dados\")",
+        ),
+        ("./dados.LUAU", "tire o .luau: require(\"./dados\")"),
+        (
+            "./DADOS",
+            "require(\"./DADOS\"): Pista/DADOS.luau não existe; quis dizer ./dados?",
+        ),
+        (
+            "@project/pista/dados",
+            "pista/dados.luau não existe; quis dizer @project/Pista/dados?",
+        ),
+        (
+            "../comum/Sons",
+            "comum/Sons.luau não existe; quis dizer ../Comum/sons?",
+        ),
+        (
+            "./dado",
+            "require(\"./dado\"): Pista/dado.luau não existe; quis dizer @project/Pista/dados?",
+        ),
+        (
+            "./naoexiste",
+            "require(\"./naoexiste\"): Pista/naoexiste.luau não existe",
+        ),
+        (
+            "../.oxy/agente/Pista/dados",
+            ".oxy/agente/Pista/dados.luau não existe; pastas e arquivos que começam com ponto \
+             ficam fora dos scripts",
+        ),
+        (
+            "@self/dados",
+            "a OXY não usa @self; use ./nome, a partir da pasta deste script, ou @project/…",
+        ),
+        (
+            "@comum/sons",
+            "a OXY só conhece o apelido @project (os apelidos do .luaurc não valem no jogo)",
+        ),
+        (
+            "@native/fisica",
+            "módulos Rust por jogo ainda não existem (@native/)",
+        ),
+        (
+            "@oxy",
+            "esse apelido não existe; os tipos da API chegam ao VS Code sem require, e os \
+             módulos do projeto usam @project/…",
+        ),
+        ("@project", "require(\"@project\"): falta o nome do arquivo"),
+        ("./", "require(\"./\"): falta o nome do arquivo"),
+        (
+            "./dados/..",
+            "require(\"./dados/..\"): falta o nome do arquivo",
+        ),
+        (
+            "./Modulo",
+            "require(\"./Modulo\"): Pista/Modulo.luau não existe; Pista/Modulo/init.luau é o \
+             módulo de uma pasta no Luau, que a OXY não usa: renomeie-o para Pista/Modulo.luau",
+        ),
+        (
+            "Pista/dados",
+            "o caminho começa com ./ ou ../, a partir deste script, ou com @project/, a partir \
+             da pasta do projeto (como require(\"@project/Pista/dados\"))",
+        ),
+    ] {
+        let e = require(name).unwrap_err();
+        assert!(e.message.contains(message), "{name}: {e}");
+        assert_eq!(
+            (e.path.as_str(), e.line),
+            ("Pista/Checkpoint.luau", 2),
+            "{name}: {e}"
+        );
+    }
+    // From a subfolder, `../` names the folder above, never the file beside it.
+    let from = Some("Pista/Checkpoints/porta.luau");
+    for name in ["../", "./..", "../x/.."] {
+        assert_eq!(
+            sandbox::resolve(from, name),
+            Err(format!("require(\"{name}\"): falta o nome do arquivo")),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        sandbox::resolve(from, "../dados").as_deref(),
+        Ok("Pista/dados.luau")
+    );
+}
+
+#[test]
+fn one_module_by_either_path_and_a_file_that_cannot_be_read_says_why() {
+    // A script in Pista/Checkpoints requires the module of Pista by ../ and by the alias: one
+    // module, one frozen table.
+    let main = "local A = require('../dados')\nlocal B = require('@project/Pista/dados')\n\
+                local M = {}\nfunction M.f(self)\n    self.attr.Resultado = \
+                tostring(rawequal(A, B)) .. ' ' .. tostring(table.isfrozen(B))\nend\nreturn \
+                M\n";
+    let path = "Pista/Checkpoints/porta.luau";
+    let door = object("Porta", &[path]);
+    let id = door.id.clone();
+    let mut rt = start(
+        vec![door],
+        &[(path, main), ("Pista/dados.luau", "return { vezes = 1 }")],
+    );
+    assert_eq!(rt.call_script(&id, path, "f", &[]), ScriptCall::Done);
+    assert_eq!(result(&rt, &id), "true true");
+    // The host's key is the path from the project's folder, the one objects attach.
+    let host = rt.script_host().unwrap();
+    assert_eq!(host.loaded_paths(), [path, "Pista/dados.luau"]);
+    assert_eq!(
+        host.required_by(path).into_iter().collect::<Vec<_>>(),
+        ["Pista/dados.luau"]
+    );
+    // A file the tree has but that cannot be a script: requiring it and attaching it say why.
+    let mut files = ScriptSources::from_texts([(PATH, "return require('./grande')")]);
+    files
+        .unreadable
+        .insert("scripts/grande.luau".into(), "tem mais de 1 MB".into());
+    let host = ScriptHost::new(Arc::new(files)).unwrap();
+    let e = host.load(PATH).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "scripts/teste.luau:1: require(\"./grande\"): scripts/grande.luau tem mais de 1 MB"
+    );
+    let e = host.load("scripts/grande.luau").unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "scripts/grande.luau: o arquivo tem mais de 1 MB"
+    );
 }
 
 #[test]

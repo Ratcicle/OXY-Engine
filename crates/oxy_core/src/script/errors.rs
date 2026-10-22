@@ -1,7 +1,6 @@
 //! What stops a script, as the person reads it: the file and line it points at and the message
 //! in Portuguese. The most common Luau messages are translated at the boundary and the rest
 //! pass as they come; no message carries the address of a Luau value.
-use super::FOLDER;
 use crate::runtime::ScriptLocation;
 use std::fmt;
 
@@ -18,7 +17,7 @@ pub enum ScriptErrorKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptError {
-    /// The script file the error points at, as `scripts/porta.luau`.
+    /// The script file the error points at, as `Pista/porta.luau`.
     pub path: String,
     /// Its line, from 1; 0 when only the file is known.
     pub line: u32,
@@ -117,26 +116,29 @@ fn from_text(text: &str) -> (Place, String) {
     (place, translate(&scrub(rest)))
 }
 
-/// `scripts/x.luau:12: rest` → the file, the line and the rest.
+/// `Pista/x.luau:12: rest` → the file, the line and the rest.
 fn split_place(text: &str) -> Option<(String, u32, &str)> {
     let (path, line, after) = place_at(text)?;
     let rest = after.strip_prefix(':')?;
     Some((path, line, rest.strip_prefix(' ').unwrap_or(rest)))
 }
 
-/// A script file and line at the start of `text` (`scripts/x.luau:12`), with what follows.
+/// A script file and line at the start of `text` (`Pista/Fase ação/x.luau:12`), with what
+/// follows: a script's path, which never holds `:`, up to the first one.
 fn place_at(text: &str) -> Option<(String, u32, &str)> {
-    if !text.starts_with(&format!("{FOLDER}/")) {
+    let end = text.find(':')?;
+    let path = &text[..end];
+    let stem = path.strip_suffix(".luau")?;
+    if stem.is_empty() || stem.ends_with('/') || path.starts_with(['[', '=', ' ']) {
         return None;
     }
-    let end = text.find(".luau:")? + ".luau".len();
     let after = &text[end + 1..];
     let digits = after.bytes().take_while(u8::is_ascii_digit).count();
     let line = after[..digits].parse().ok().filter(|&line| line > 0)?;
     Some((text[..end].to_owned(), line, &after[digits..]))
 }
 
-/// The first script line a traceback names (`scripts/x.luau:3 function f`).
+/// The first script line a traceback names (`Pista/x.luau:3 function f`).
 fn first_place(text: &str) -> Place {
     text.lines()
         .filter_map(|line| place_at(line.trim()))
@@ -453,6 +455,37 @@ mod tests {
             (e.to_string(), e.location()),
             ("scripts/x.luau: sem lugar".into(), None)
         );
+        // A script in any folder of the project, the root too, spaces and accents in its path.
+        for path in [
+            "Pista/Fase ação/porta.luau",
+            "porta.luau",
+            "Pista/Checkpoints/a.b.luau",
+        ] {
+            let error = mlua::Error::RuntimeError(format!(
+                "{path}:12: attempt to call a nil value\nstack traceback:\n{path}:12 function f"
+            ));
+            let e = describe(&error, "scripts/x.luau", 3);
+            assert_eq!(
+                e.to_string(),
+                format!("{path}:12: tentou chamar um valor nil")
+            );
+            let error = mlua::Error::RuntimeError(format!(
+                "tabela\nstack traceback:\n[C] function error\n{path}:5 function f"
+            ));
+            assert_eq!(describe(&error, "x.luau", 1).location().unwrap().path, path);
+        }
+        // What only looks like a place stays in the message.
+        for text in [
+            "erro: porta.luau:3: x",
+            "[string \"porta.luau\"]:3: x",
+            ".luau:3: x",
+            "Pista/porta.lua:3: x",
+            "porta.luau: x",
+        ] {
+            let error = mlua::Error::RuntimeError(text.into());
+            let e = describe(&error, "scripts/x.luau", 2);
+            assert_eq!(e.location().unwrap().path, "scripts/x.luau", "{text}");
+        }
         assert_eq!(closest("prnt", ["print", "pairs", "type"]), Some("print"));
         assert_eq!(
             closest("has_atribute", ["exists", "has_attribute"]),

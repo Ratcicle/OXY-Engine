@@ -336,9 +336,10 @@ impl Area {
                  `assert` do Luau param a chamada com o texto, também na linha."
             }
             Self::Modules => {
-                "Funções e dados que vários scripts usam, em outros arquivos `.luau` da pasta \
-                 `scripts`: tabelas de cartas, de fases, de inimigos. Um módulo só guarda \
-                 funções, constantes e dados; o que muda no jogo fica nos atributos e na memória."
+                "Funções e dados que vários scripts usam, em outros arquivos `.luau` do \
+                 projeto, em qualquer pasta: tabelas de cartas, de fases, de inimigos. Um módulo \
+                 só guarda funções, constantes e dados; o que muda no jogo fica nos atributos e na \
+                 memória."
             }
             Self::Reserved => {
                 "Nomes que chegam na 0.8, com a rede e vários jogadores. Na 0.7, usar um deles é \

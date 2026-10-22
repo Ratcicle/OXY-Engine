@@ -1,8 +1,9 @@
-//! Scripts: Luau files in the project's `scripts` folder, with human names and subfolders, that
-//! objects attach. The disk is the truth: the folder is the list of scripts, and the project
-//! file keeps only each object's references, in the order they run. A script is known, in the
-//! project, logs and agents, by its path from the project's folder with `/`, as
-//! `scripts/porta.luau`. Values per object stay in its attributes.
+//! Scripts: the Luau files of the project's tree (see [`crate::project_tree`]), in any folder and
+//! with human names, that objects attach. The disk is the truth: the tree is the list of
+//! scripts, and the project file keeps only each object's references, in the order they run. A
+//! script is known, in the project, logs and agents, by its path from the project's folder with
+//! `/`, as `Pista/Checkpoint.luau` (or `scripts/porta.luau`). Values per object stay in its
+//! attributes.
 //!
 //! What game scripts reach, by names in English with underscores (decision Q5; objects,
 //! attributes, sounds, actions and variables keep the names the person gave them), is the
@@ -27,7 +28,8 @@
 //!   `param.object()`, `param.surface(name?)` and `param.vector2(x, y)` for declarations;
 //! - `print` and `warn`, which log the object's name, the text and the script line, and Luau's
 //!   own `error` and `assert`;
-//! - `require(path)` of `sandbox`, a frozen module of the scripts' folder;
+//! - `require(path)` of `sandbox`, a frozen module of the project: `./` and `../` from the
+//!   script's folder, `@project/` from the project's;
 //! - the names of 0.8 (`players`, `game.online`, `on_request`…), kept: using one is an error
 //!   that says it comes in 0.8.
 //!
@@ -231,7 +233,7 @@ pub struct ScriptCheck {
     pub references: Vec<Reference>,
 }
 
-/// Compiles `source` as the script `path` (`scripts/porta.luau`) and checks it the way loading
+/// Compiles `source` as the script `path` (`Pista/porta.luau`) and checks it the way loading
 /// does before running anything: syntax and top-level locals some function writes. Nothing runs,
 /// so it needs no other script; the export refuses a script it refuses. [`check_loading`] goes
 /// on to run the module's top, and [`lint`] checks the names it gives.
@@ -361,12 +363,14 @@ pub fn types() -> &'static str {
     &TYPES
 }
 
-/// The scripts' folder, in the project's folder (`data` in an exported game).
-pub const FOLDER: &str = "scripts";
 /// The extension of script files.
 pub const EXTENSION: &str = "luau";
 /// Largest script file, in bytes.
 pub const MAX_BYTES: u64 = 1024 * 1024;
+/// The alias `require` knows for the project's folder (`data` in an exported game), as in
+/// `require("@project/Pista/dados")`: built into the runtime, since an exported game reads no
+/// `.luaurc`, and written in the root's `.luaurc` for luau-lsp (see `script_files`).
+pub const PROJECT_ALIAS: &str = "project";
 
 /// A script an object attaches, by its path in [`normalize_path`]'s form.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -380,10 +384,20 @@ impl ScriptRef {
     }
 }
 
-/// The project's scripts as its folder holds them: each file's text by path.
+/// The project's scripts as its tree holds them: each file's text by path, and the `.luau`
+/// files that are no script now, with why.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScriptSources {
     pub files: BTreeMap<String, ScriptFile>,
+    /// Why each file the tree has but that cannot run is none, said after its path ("tem mais
+    /// de 1 MB", "não é texto UTF-8", "não pôde ser lido agora…"). Attaching or requiring one
+    /// is that error; the others only warn, so one bad file never keeps the rest from running.
+    pub unreadable: BTreeMap<String, String>,
+    /// The folders of the tree whose files these sources cannot have, with why said after the
+    /// path of a script in them: one that could not be listed now ("não pôde ser lido agora: a
+    /// pasta Pista não pôde ser lida agora…"), a link, another project or an exported game
+    /// ("fica fora do projeto: Outro é outro projeto ou um jogo exportado").
+    pub folders: BTreeMap<String, String>,
 }
 impl ScriptSources {
     pub fn get(&self, path: &str) -> Option<&ScriptFile> {
@@ -396,8 +410,92 @@ impl ScriptSources {
                 .into_iter()
                 .map(|(path, text)| (path.to_owned(), ScriptFile::new(text.to_owned())))
                 .collect(),
+            ..Self::default()
         }
     }
+    /// The script `path` names as these sources have it: itself, or the only one whose path
+    /// differs from it in case alone (Windows opens it, and OXY keeps the case the disk has).
+    pub fn known(&self, path: &str) -> Option<&str> {
+        if let Some((known, _)) = self.files.get_key_value(path) {
+            return Some(known);
+        }
+        let mut alike = self
+            .files
+            .keys()
+            .filter(|known| crate::names::same_name(known, path));
+        match (alike.next(), alike.next()) {
+            (Some(known), None) => Some(known),
+            _ => None,
+        }
+    }
+    /// Why these sources lack the script `path`, said after its path, when the tree has the file
+    /// but it cannot run (see [`Self::unreadable`]) or it is in a folder they could not look
+    /// into (see [`Self::folders`]); none when it is not there.
+    pub fn why_none(&self, path: &str) -> Option<&str> {
+        if let Some(reason) = self.unreadable.get(path) {
+            return Some(reason);
+        }
+        let parts: Vec<&str> = path.split('/').collect();
+        self.folders
+            .iter()
+            .filter(|(folder, _)| {
+                let depth = if folder.is_empty() {
+                    0
+                } else {
+                    folder.split('/').count()
+                };
+                // A link may be the file itself.
+                depth <= parts.len() && crate::names::same_name(&parts[..depth].join("/"), folder)
+            })
+            .max_by_key(|(folder, _)| folder.len())
+            .map(|(_, why)| why.as_str())
+    }
+    /// Whether a file these sources could not read may read now with nothing about it changed:
+    /// another program held it, for one (see [`crate::project_tree::NOT_NOW`]).
+    pub fn held(&self) -> bool {
+        self.unreadable
+            .values()
+            .any(|why| why.starts_with(crate::project_tree::NOT_NOW))
+    }
+    /// The script the person likely means by `path`, which these sources lack: the one whose
+    /// path differs only in case (Windows opens it, `require` and the project do not) or in an
+    /// accent written apart from its letter, else the nearest.
+    pub fn near(&self, path: &str) -> Option<&str> {
+        let paths = || {
+            self.files
+                .keys()
+                .chain(self.unreadable.keys())
+                .map(String::as_str)
+        };
+        let composed = crate::names::composed(path);
+        paths()
+            .find(|known| crate::names::same_name(known, path))
+            .or_else(|| paths().find(|known| crate::names::composed(known) == composed))
+            .or_else(|| closest(path, paths()))
+    }
+    /// What these sources say of the script `path` they lack, for a message: why the file
+    /// cannot be read, or that it does not exist, with the script it likely is (`o script
+    /// pista/porta.luau não existe na pasta do projeto; quis dizer Pista/porta.luau?`).
+    pub fn absent(&self, path: &str) -> String {
+        if let Some(why) = self.why_none(path) {
+            return format!("o script {path} {why}");
+        }
+        let hint = self.near(path).map_or_else(String::new, |near| {
+            loose_marks(path, near).unwrap_or_else(|| format!("; quis dizer {near}?"))
+        });
+        format!("o script {path} não existe na pasta do projeto{hint}")
+    }
+}
+
+/// What a message adds when the file `near` and the path `path` someone wrote for it differ
+/// only in accents written apart from their letters, which look the same: how to rename it.
+pub(crate) fn loose_marks(path: &str, near: &str) -> Option<String> {
+    (crate::names::composed(path) == crate::names::composed(near)).then(|| {
+        format!(
+            "; o nome de {near} tem um acento separado da letra: renomeie o arquivo digitando a \
+             letra acentuada"
+        )
+    })
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptFile {
@@ -413,54 +511,93 @@ impl ScriptFile {
     }
 }
 
-/// `path` as scripts are named: from the project's folder with `/`, inside [`FOLDER`] and ending
-/// in `.luau`, as `scripts/fases/porta.luau`. `\` reads as `/`, and `.` and empty parts go;
-/// `..`, absolute paths, drives and names Windows would not keep are refused.
+/// `path` as a new script is named: a `.luau` file anywhere in the project's tree, by its path
+/// from the project's folder with `/`, as `Pista/Checkpoint.luau` or `scripts/porta.luau`. `\`
+/// reads as `/`, and `.` and empty parts go; `..`, absolute paths, drives, names Windows would
+/// read otherwise or keeps for devices, parts starting with a dot (outside the project),
+/// `init.luau` and paths past [`crate::names::MAX_PATH_BYTES`] are refused, with why.
 pub fn normalize_path(path: &str) -> Result<String, String> {
-    let invalid = || {
-        format!(
-            "caminho de script inválido \"{path}\"; use um arquivo .{EXTENSION} dentro da pasta \
-             {FOLDER}, como {FOLDER}/porta.{EXTENSION}"
-        )
-    };
+    let normal = normal_form(path)?;
+    match path_problem(&normal) {
+        Some(reason) => Err(invalid_path(path, &reason)),
+        None => Ok(normal),
+    }
+}
+
+/// `path` written as scripts are named, as [`normalize_path`] does but for the rules of names a
+/// path already saved may break (a dot, a device name, `init.luau`, the length): an object that
+/// attaches such a file keeps it, and the file is told missing or unreadable, never the
+/// project.
+pub(crate) fn normal_form(path: &str) -> Result<String, String> {
     let unified = path.trim().replace('\\', "/");
     if unified.starts_with('/') {
-        return Err(invalid());
+        return Err(invalid_path(path, "começa na raiz do disco"));
     }
     let mut parts = Vec::new();
     for part in unified.split('/') {
         match part {
             "" | "." => {}
-            ".." => return Err(invalid()),
-            part if part.ends_with(['.', ' '])
-                || part
-                    .chars()
-                    .any(|c| c.is_control() || r#"<>:"|?*"#.contains(c)) =>
+            ".." => return Err(invalid_path(path, "sai da pasta do projeto")),
+            part if part
+                .chars()
+                .any(|c| c.is_control() || r#"<>:"|?*"#.contains(c))
+                || part.ends_with(['.', ' ']) =>
             {
-                return Err(invalid());
+                let reason = crate::names::check_part(part).err().unwrap_or_default();
+                return Err(invalid_path(path, &reason));
             }
             part => parts.push(part),
         }
     }
-    match parts.as_slice() {
-        [FOLDER, .., file]
-            if file
-                .strip_suffix(EXTENSION)
-                .and_then(|stem| stem.strip_suffix('.'))
-                .is_some_and(|stem| !stem.is_empty()) =>
-        {
-            Ok(parts.join("/"))
-        }
-        _ => Err(invalid()),
+    let named = parts.last().is_some_and(|file| {
+        file.strip_suffix(EXTENSION)
+            .and_then(|stem| stem.strip_suffix('.'))
+            .is_some_and(|stem| !stem.is_empty())
+    });
+    if !named {
+        return Err(invalid_path(
+            path,
+            &format!("não é um arquivo .{EXTENSION}"),
+        ));
     }
+    Ok(parts.join("/"))
 }
 
-/// Checks the scripts an object attaches: each path written as [`normalize_path`] writes it,
-/// and none twice.
+fn invalid_path(path: &str, reason: &str) -> String {
+    format!(
+        "caminho de script inválido \"{path}\": {reason}; use o caminho de um arquivo .{EXTENSION} \
+         a partir da pasta do projeto, como Pista/porta.{EXTENSION}"
+    )
+}
+
+/// Why the path `path`, in the form scripts are named, names no script OXY writes or attaches:
+/// what [`crate::names::check_path`] refuses, a name of the files Windows and editors leave
+/// behind, which the tree skips, and `init.luau`, which Luau reads as its folder's module.
+pub(crate) fn path_problem(path: &str) -> Option<String> {
+    if let Err(reason) = crate::names::check_path(path) {
+        return Some(reason);
+    }
+    let file = path.rsplit('/').next().unwrap_or(path);
+    if crate::project_tree::leftover(file) {
+        return Some(format!(
+            "\"{file}\" tem o nome dos arquivos que o Windows e os editores deixam para trás \
+             (como ~$…), que ficam fora do projeto; dê outro nome ao arquivo"
+        ));
+    }
+    file.eq_ignore_ascii_case("init.luau").then(|| {
+        format!(
+            "\"{file}\" é o nome que o Luau dá ao módulo de uma pasta, que os scripts da OXY não \
+             usam; dê outro nome ao arquivo"
+        )
+    })
+}
+
+/// Checks the scripts an object attaches: each path written as scripts are named (a name the
+/// rules of new paths refuse is told when the file is looked for), and none twice.
 pub fn validate(scripts: &[ScriptRef]) -> Result<(), String> {
     let mut seen = HashSet::new();
     for script in scripts {
-        let normal = normalize_path(&script.path)?;
+        let normal = normal_form(&script.path)?;
         if normal != script.path {
             return Err(format!(
                 "o caminho de script \"{}\" deve ser escrito {normal}",
@@ -479,7 +616,7 @@ pub fn any_attached(project: &Project) -> bool {
     every_entity(project).any(|(_, e)| !e.scripts.is_empty())
 }
 
-/// A script an object attaches that the project's folder lacks.
+/// A script an object attaches that the project's tree lacks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MissingScript {
     /// The object's ID, which tells two objects of one name apart; never shown.
@@ -531,8 +668,37 @@ const OBJECTS_LISTED: usize = 3;
 /// script scripts/porta.luau não existe na pasta do projeto`; with how many objects attach it.
 /// One file shared by many objects is one line.
 pub fn missing_by_file(missing: &[MissingScript]) -> Vec<(String, usize)> {
+    by_file(missing, |path| {
+        format!("o script {path} não existe na pasta do projeto")
+    })
+}
+
+/// What keeps the scripts the objects of `project` attach from running with `sources`, one line
+/// per file as [`missing_by_file`] tells them, with how many objects attach it: the files the
+/// sources lack, then those they could not read or that are in a folder they could not look
+/// into, with why (`Porta: o script Pista/porta.luau tem mais de 1 MB`; see
+/// [`ScriptSources::why_none`]).
+pub fn absent_by_file(project: &Project, sources: &ScriptSources) -> Vec<(String, usize)> {
+    let lacking = missing(project, |path| {
+        sources.get(path).is_some() || sources.why_none(path).is_some()
+    });
+    let unreadable = missing(project, |path| {
+        sources.get(path).is_some() || sources.why_none(path).is_none()
+    });
+    let mut lines = missing_by_file(&lacking);
+    lines.extend(by_file(&unreadable, |path| {
+        format!(
+            "o script {path} {}",
+            sources.why_none(path).unwrap_or_default()
+        )
+    }));
+    lines
+}
+
+/// `found` told once per file, the objects before what `says` of its path.
+fn by_file(found: &[MissingScript], says: impl Fn(&str) -> String) -> Vec<(String, usize)> {
     let mut files: Vec<(&str, Vec<&str>)> = Vec::new();
-    for found in missing {
+    for found in found {
         match files.iter_mut().find(|(path, _)| *path == found.path) {
             Some((_, names)) => names.push(&found.name),
             None => files.push((&found.path, vec![&found.name])),
@@ -552,12 +718,40 @@ pub fn missing_by_file(missing: &[MissingScript]) -> Vec<(String, usize)> {
                     names.len() - OBJECTS_LISTED
                 ),
             };
-            (
-                format!("{objects}: o script {path} não existe na pasta do projeto"),
-                names.len(),
-            )
+            (format!("{objects}: {}", says(path)), names.len())
         })
         .collect()
+}
+
+/// The scripts the scripts `attached` use: themselves, and every script a `require` with a
+/// literal path reaches from them, in any of their functions, as far as `sources` has them. A
+/// `require` whose path the script builds is not followed.
+pub fn used_scripts(
+    sources: &ScriptSources,
+    attached: impl IntoIterator<Item = String>,
+) -> BTreeSet<String> {
+    let mut used = BTreeSet::new();
+    let mut pending: Vec<String> = attached.into_iter().collect();
+    while let Some(path) = pending.pop() {
+        if !used.insert(path.clone()) {
+            continue;
+        }
+        let Some(Ok((_, report))) = sources
+            .get(&path)
+            .map(|file| load::check(&path, &file.text))
+        else {
+            continue;
+        };
+        for literal in &report.literals {
+            if let bytecode::Site::Call { function, arg: 0 } = &literal.site
+                && function == "require"
+                && let Ok(required) = sandbox::resolve(Some(&path), &literal.text)
+            {
+                pending.push(required);
+            }
+        }
+    }
+    used
 }
 
 /// The first script an object of `project` attaches, in a scene or a model, that `exists` does
@@ -664,9 +858,13 @@ mod tests {
     use crate::document::{Entity, Primitive, new_id, validate_project};
 
     #[test]
-    fn paths_are_normalized_into_the_scripts_folder() {
+    fn paths_name_luau_files_anywhere_in_the_project() {
         for (given, normal) in [
             ("scripts/porta.luau", "scripts/porta.luau"),
+            ("Pista/Checkpoint.luau", "Pista/Checkpoint.luau"),
+            ("porta.luau", "porta.luau"),
+            ("outros/porta.luau", "outros/porta.luau"),
+            ("Scripts/porta.luau", "Scripts/porta.luau"),
             (
                 r"scripts\fases\Porta com chave.luau",
                 "scripts/fases/Porta com chave.luau",
@@ -675,37 +873,60 @@ mod tests {
                 "./scripts//dados/./cartas.luau",
                 "scripts/dados/cartas.luau",
             ),
-            ("  scripts/ação.luau ", "scripts/ação.luau"),
+            ("  Pista/Fase ação/ação.luau ", "Pista/Fase ação/ação.luau"),
+            ("Pista/COM10.luau", "Pista/COM10.luau"),
+            ("Pista/initial.luau", "Pista/initial.luau"),
+            ("Velho.bak/porta.luau", "Velho.bak/porta.luau"),
         ] {
             assert_eq!(normalize_path(given).as_deref(), Ok(normal), "{given}");
         }
-        for refused in [
-            "",
-            "scripts",
-            "scripts/",
-            "porta.luau",
-            "outros/porta.luau",
-            "Scripts/porta.luau",
-            "scripts/porta.lua",
-            "scripts/porta.luau.txt",
-            "scripts/.luau",
-            "scripts/../porta.luau",
-            "../scripts/porta.luau",
-            "/scripts/porta.luau",
-            r"\\servidor\scripts\porta.luau",
-            "C:/projeto/scripts/porta.luau",
-            "C:scripts/porta.luau",
-            "scripts/por?ta.luau",
-            "scripts/fases./porta.luau",
-            "scripts/fase /porta.luau",
-            "scripts/linha\n.luau",
+        for (refused, reason) in [
+            ("", "não é um arquivo .luau"),
+            ("scripts", "não é um arquivo .luau"),
+            ("scripts/", "não é um arquivo .luau"),
+            ("scripts/porta.lua", "não é um arquivo .luau"),
+            ("scripts/porta.LUAU", "não é um arquivo .luau"),
+            ("scripts/porta.luau.txt", "não é um arquivo .luau"),
+            ("scripts/.luau", "não é um arquivo .luau"),
+            ("scripts/../porta.luau", "sai da pasta do projeto"),
+            ("../scripts/porta.luau", "sai da pasta do projeto"),
+            ("/scripts/porta.luau", "começa na raiz do disco"),
+            (r"\\servidor\scripts\porta.luau", "começa na raiz do disco"),
+            (
+                "C:/projeto/scripts/porta.luau",
+                ":, que o Windows não aceita",
+            ),
+            ("C:scripts/porta.luau", ":, que o Windows não aceita"),
+            ("scripts/por?ta.luau", "?, que o Windows não aceita"),
+            ("scripts/fases./porta.luau", "termina em ponto"),
+            ("scripts/fase /porta.luau", "termina em espaço"),
+            ("scripts/linha\n.luau", "caractere de controle"),
+            (".oxy/porta.luau", "começa com ponto"),
+            ("Pista/.rascunho.luau", "começa com ponto"),
+            ("Pista/con.luau", "reserva para dispositivos"),
+            ("COM1.luau", "reserva para dispositivos"),
+            ("Pista/init.luau", "módulo de uma pasta"),
+            ("Pista/Init.luau", "módulo de uma pasta"),
+            ("Pista/~$porta.luau", "deixam para trás"),
         ] {
             let error = normalize_path(refused).unwrap_err();
             assert!(
-                error.starts_with("caminho de script inválido") && error.contains("scripts/"),
-                "{refused}: {error}"
+                error.starts_with(&format!("caminho de script inválido \"{refused}\": "))
+                    && error.contains(reason)
+                    && error.ends_with("como Pista/porta.luau"),
+                "{refused:?}: {error}"
             );
         }
+        // 180 bytes at most: Luau cuts a chunk's name near 255 and the messages would lose it.
+        let longest = format!("{}/{}.luau", "a".repeat(80), "b".repeat(94));
+        assert_eq!(longest.len(), crate::names::MAX_PATH_BYTES);
+        assert_eq!(normalize_path(&longest).as_deref(), Ok(longest.as_str()));
+        let longer = format!("{}/{}.luau", "a".repeat(80), "b".repeat(95));
+        assert!(
+            normalize_path(&longer)
+                .unwrap_err()
+                .contains("longo demais")
+        );
     }
 
     #[test]
@@ -729,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn projects_refuse_scripts_outside_the_folder_unnormalized_or_twice() {
+    fn projects_refuse_scripts_outside_the_project_unnormalized_or_twice() {
         let attach = |paths: &[&str]| {
             let mut project = Project::new("Scripts");
             let mut e = Entity::new("Porta", Some(Primitive::Cube));
@@ -739,10 +960,24 @@ mod tests {
         };
         attach(&[]).unwrap();
         attach(&["scripts/porta.luau", "scripts/comum/som.luau"]).unwrap();
+        attach(&[
+            "porta.luau",
+            "Pista/Checkpoints/porta.luau",
+            "outros/porta.luau",
+        ])
+        .unwrap();
+        // A name the rules of new paths refuse, saved before them, keeps the project opening:
+        // the file is told missing or unreadable instead.
+        attach(&[
+            "scripts/con.luau",
+            "Pista/init.luau",
+            ".rascunhos/porta.luau",
+        ])
+        .unwrap();
         assert_eq!(
             attach(&["../porta.luau"]).unwrap_err(),
-            "Porta: caminho de script inválido \"../porta.luau\"; use um arquivo .luau dentro \
-             da pasta scripts, como scripts/porta.luau"
+            "Porta: caminho de script inválido \"../porta.luau\": sai da pasta do projeto; use o \
+             caminho de um arquivo .luau a partir da pasta do projeto, como Pista/porta.luau"
         );
         assert_eq!(
             attach(&[r"scripts\porta.luau"]).unwrap_err(),
@@ -757,17 +992,153 @@ mod tests {
         let mut project = Project::new("Modelo");
         let scene = project.scenes[0].id.clone();
         let mut piece = Entity::new("Peça", Some(Primitive::Cube));
-        piece.scripts = vec![ScriptRef::new("scripts/peça.luau")];
+        piece.scripts = vec![ScriptRef::new("Pista/peça.luau")];
         let id = piece.id.clone();
         project.scenes[0].entities.push(piece);
         project.save_model(&scene, &id, "Bloco").unwrap();
         project.scenes[0].entities.clear();
         validate_project(&project).unwrap();
-        project.assets[0].model.as_mut().unwrap()[0].scripts = vec![ScriptRef::new("peça.luau")];
+        project.assets[0].model.as_mut().unwrap()[0].scripts = vec![ScriptRef::new("../peça.luau")];
         assert!(
             validate_project(&project)
                 .unwrap_err()
-                .contains("caminho de script inválido \"peça.luau\"")
+                .contains("caminho de script inválido \"../peça.luau\"")
+        );
+    }
+
+    #[test]
+    fn sources_say_why_a_script_is_none_and_which_one_was_meant() {
+        let mut sources = ScriptSources::from_texts([
+            ("Pista/Checkpoint.luau", "return {}"),
+            ("Pista/dados.luau", "return {}"),
+        ]);
+        sources
+            .unreadable
+            .insert("Pista/grande.luau".into(), "tem mais de 1 MB".into());
+        assert_eq!(
+            sources.absent("pista/checkpoint.luau"),
+            "o script pista/checkpoint.luau não existe na pasta do projeto; quis dizer \
+             Pista/Checkpoint.luau?"
+        );
+        assert_eq!(
+            sources.absent("Pista/dado.luau"),
+            "o script Pista/dado.luau não existe na pasta do projeto; quis dizer Pista/dados.luau?"
+        );
+        assert_eq!(
+            sources.absent("Menu/tela.luau"),
+            "o script Menu/tela.luau não existe na pasta do projeto"
+        );
+        assert_eq!(
+            sources.absent("Pista/grande.luau"),
+            "o script Pista/grande.luau tem mais de 1 MB"
+        );
+        // A file whose name has an accent apart from its letter looks like the one written.
+        let mut marks = ScriptSources::from_texts([("Pista/ac\u{327}a\u{303}o.luau", "return {}")]);
+        assert_eq!(
+            marks.absent("Pista/ação.luau"),
+            "o script Pista/ação.luau não existe na pasta do projeto; o nome de \
+             Pista/ac\u{327}a\u{303}o.luau tem um acento separado da letra: renomeie o arquivo \
+             digitando a letra acentuada"
+        );
+        // In a folder the tree skips or could not list: why, the deepest folder first, in the
+        // case written too.
+        marks.folders.insert(
+            "Outro".into(),
+            "fica fora do projeto: Outro é outro projeto ou um jogo exportado".into(),
+        );
+        marks.folders.insert(
+            "Outro/Fase".into(),
+            "não pôde ser lido agora: a pasta Outro/Fase não pôde ser lida agora (negado)".into(),
+        );
+        assert_eq!(
+            marks.absent("outro/x.luau"),
+            "o script outro/x.luau fica fora do projeto: Outro é outro projeto ou um jogo \
+             exportado"
+        );
+        assert_eq!(
+            marks.why_none("Outro/Fase/x.luau"),
+            Some("não pôde ser lido agora: a pasta Outro/Fase não pôde ser lida agora (negado)")
+        );
+        assert_eq!(marks.why_none("Outros/x.luau"), None);
+        assert!(!marks.held());
+        marks.unreadable.insert(
+            "Pista/preso.luau".into(),
+            "não pôde ser lido agora (preso)".into(),
+        );
+        assert!(marks.held());
+        // Lines per file for a run: the missing ones, then those that cannot be read.
+        let mut project = Project::new("Ausentes");
+        for (name, path) in [
+            ("Porta", "Pista/porta.luau"),
+            ("Bloco", "Pista/grande.luau"),
+            ("Bloco 2", "Pista/grande.luau"),
+            ("Marco", "Pista/Checkpoint.luau"),
+            ("Elo", "Pista/Fase/elo.luau"),
+        ] {
+            let mut e = Entity::new(name, None);
+            e.scripts = vec![ScriptRef::new(path)];
+            project.scenes[0].entities.push(e);
+        }
+        sources.folders.insert(
+            "Pista/Fase".into(),
+            "não pôde ser lido agora: a pasta Pista/Fase não pôde ser lida agora (negado)".into(),
+        );
+        assert_eq!(
+            absent_by_file(&project, &sources),
+            [
+                (
+                    "Porta: o script Pista/porta.luau não existe na pasta do projeto".to_owned(),
+                    1
+                ),
+                (
+                    "Bloco e Bloco 2: o script Pista/grande.luau tem mais de 1 MB".to_owned(),
+                    2
+                ),
+                (
+                    "Elo: o script Pista/Fase/elo.luau não pôde ser lido agora: a pasta \
+                     Pista/Fase não pôde ser lida agora (negado)"
+                        .to_owned(),
+                    1
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_scripts_used_are_those_attached_and_what_their_literal_requires_reach() {
+        let sources = ScriptSources::from_texts([
+            (
+                "Pista/Checkpoints/porta.luau",
+                "local Dados = require('../dados')\nlocal M = {}\nfunction M.on_start(self) \
+                 local Sons = require('@project/Comum/sons') end\nreturn M\n",
+            ),
+            ("Pista/dados.luau", "return require('./tabela')"),
+            ("Pista/tabela.luau", "return {}"),
+            ("Comum/sons.luau", "return {}"),
+            // Built names are not followed; nothing requires the others.
+            (
+                "Comum/montado.luau",
+                "local M = {}\nfunction M.carregar(nome) return require('./' .. nome) end\n\
+                 return M",
+            ),
+            ("Rascunhos/quebrado.luau", "return {"),
+            ("Comum/x.luau", "return {}"),
+        ]);
+        let used = used_scripts(&sources, ["Pista/Checkpoints/porta.luau".to_owned()]);
+        assert_eq!(
+            used.iter().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "Comum/sons.luau",
+                "Pista/Checkpoints/porta.luau",
+                "Pista/dados.luau",
+                "Pista/tabela.luau"
+            ]
+        );
+        // A script attached that is missing is used all the same.
+        let used = used_scripts(&sources, ["Comum/montado.luau".into(), "nada.luau".into()]);
+        assert_eq!(
+            used.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["Comum/montado.luau", "nada.luau"]
         );
     }
 

@@ -17,10 +17,12 @@ or 3D); a scene is a flat list of objects with parent links; objects have a tran
 shape, material, attributes, components (colliders, character, platform, camera control, 2D \
 movement), a logic graph of nodes and animation clips. Start with oxy_status, then oxy_project and \
 oxy_scene; when the person wants a new game, oxy_new_project creates its project (on files) in the \
-folder they name. Read oxy_catalog before building logic. Logic can also be Luau scripts in the \
-project's scripts folder: write and check them with oxy_scripts (or your file tools), attach them \
-with oxy_apply attach_script and test with oxy_simulate; their errors come as scripts/x.luau:LINE, \
-and oxy_scripts vscode sets VS Code up for the person. Reads are compact JSON with floats rounded \
+folder they name. Read oxy_catalog before building logic. Logic can also be Luau scripts: .luau \
+files in any folder of the project folder (folders starting with '.' are outside), named by their \
+path from it (Pista/porta.luau); write and check them with oxy_scripts (or your file tools), \
+require modules with require(\"@project/Folder/name\"), attach them with oxy_apply attach_script \
+and test with oxy_simulate; their errors come as <path>.luau:LINE, and oxy_scripts vscode sets VS \
+Code up for the person. Reads are compact JSON with floats rounded \
 to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long lists come in pages \
 (limit, offset, next_offset), oxy_entity summarizes logic and geometry unless asked in full, and \
 world positions and boxes (oxy_scene fields, oxy_entity) measure distances across parent groups. \

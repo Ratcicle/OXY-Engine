@@ -4,7 +4,7 @@
 use super::errors::{ScriptError, ScriptErrorKind, describe};
 use super::handles::{self, MARK_OBJECT};
 use super::memory::{self, Memory};
-use super::{Callbacks, FOLDER, ScriptArg, ScriptSources, load, messages, sandbox};
+use super::{Callbacks, EXTENSION, ScriptArg, ScriptSources, load, messages, sandbox};
 use crate::document::{Id, Value};
 use crate::runtime::{Runtime, ScriptLocation};
 use mlua::thread::ThreadStatus;
@@ -594,11 +594,16 @@ pub(crate) unsafe fn locate_raw(l: *mut mlua::ffi::lua_State) -> Option<ScriptLo
     None
 }
 
-/// `@scripts/porta.luau` (a chunk name) → `scripts/porta.luau`.
+/// `@Pista/porta.luau` (a chunk name, the script's path after `@`) → `Pista/porta.luau`; none
+/// for a chunk of the engine's own.
 pub(crate) fn script_path(source: &str) -> Option<String> {
     source
         .strip_prefix('@')
-        .filter(|path| path.starts_with(&format!("{FOLDER}/")))
+        .filter(|path| {
+            path.strip_suffix(EXTENSION)
+                .and_then(|stem| stem.strip_suffix('.'))
+                .is_some_and(|stem| !stem.is_empty() && !stem.ends_with('/'))
+        })
         .map(str::to_owned)
 }
 

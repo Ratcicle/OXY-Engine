@@ -23,9 +23,9 @@ use std::{
     sync::Arc,
 };
 
-/// The scripts a run of `project`, kept in the folder `root`, needs: those of the folder when its
-/// objects attach one, as the editor's test reads them (a file an object attaches that the
-/// folder lacks refuses the run), or when the setup's attach_script attaches one; none
+/// The scripts a run of `project`, kept in the folder `root`, needs: those of its tree when its
+/// objects attach one, as the editor's test reads them (a file an object attaches that the tree
+/// lacks or cannot read refuses the run), or when the setup's attach_script attaches one; none
 /// otherwise.
 fn run_scripts(
     project: &Project,
@@ -275,7 +275,7 @@ set_transform takes it); scale (local); dimensions (of its shape); visual_bounds
 box collider), with sensor: true for areas and enabled: false when off; bounds, both boxes.";
 const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
 radians plus rotation_degrees, material, attributes, components, logic graph, scripts [{path, \
-missing?}] (the Luau files it runs, in order, after its graph; missing: true when the scripts \
+missing?}] (the Luau files it runs, in order, after its graph; missing: true when the project \
 folder lacks the file), animation clips, \
 each keyframe with rotation_degrees too, as set_clip takes it, which update_entity refuses in \
 keyframes, as they keep radians; empty (null) parts are left out) plus world {position, \
@@ -565,8 +565,8 @@ pub fn definitions() -> Json {
             json!({"project": project,
                    "action": {"type": "string", "enum": script_files::ACTIONS},
                    "path": {"type": "string", "description":
-                       "A script of the project's scripts folder, as scripts/porta.luau \
-                        (subfolders too)."},
+                       "A .luau file of the project, by its path from the project folder, as \
+                        Pista/porta.luau (folders are created; none starting with '.')."},
                    "text": {"type": "string", "description":
                        "write: the whole text of the file (UTF-8, up to 1 MB). check: a text \
                         checked as path would be, without saving it."}}),
@@ -596,10 +596,11 @@ pub fn definitions() -> Json {
              the game reads instead), action.component nodes whose target parameter names an \
              object lacking the part they switch and variable.set nodes whose value parameter \
              is not of the variable's type (both stop with an error in the game), scripts \
-             objects attach that the project's scripts folder lacks (the project opens and \
-             saves, but the editor's test and the export refuse it until the file is back or \
-             detach_script) and the lint of names of the folder's scripts, as oxy_scripts \
-             check gives it.",
+             objects attach that the project folder lacks (the project opens and saves, but the \
+             editor's test and the export refuse it until the file is back or detach_script), \
+             the lint of names of the project's scripts, as oxy_scripts check gives it, and what \
+             its folder holds that is no script by mistake (.LUAU, links, a subfolder's \
+             .luaurc giving @project another folder).",
             json!({"project": project}),
             json!([])
         ),
@@ -985,15 +986,18 @@ what a playing clip poses). delete_clip {entity, clip}, refused while a node pla
 (oxy_catalog movement_profiles) into a 3D character; they stay editable
 - set_attribute {entity, name, value?} (no value removes); attribute values are always tagged, \
 e.g. {\"Number\": 3}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>\"}
-- attach_script {entity, path, index?}: runs the Luau file path of the project's scripts folder \
-(scripts/porta.luau) on the object, at index of its list (default the end; its scripts run in \
+- attach_script {entity, path, index?}: runs the Luau file path of the project (its path from \
+the project folder, Pista/porta.luau) on the object, at index of its list (default the end; its \
+scripts run in \
 that order, after its logic graph), and gives the object, with their defaults, the attributes the \
 script declares in Module.attributes that it lacks (one it has keeps its value). A type that \
 differs from the object's or between its scripts, and a script that does not load or declares \
 no table of defaults (its attributes unread), come back in warnings, with the lint of names of \
 oxy_scripts check once per script, on its last attach in the batch. Again on an attached script: \
 moves it to index and \
-creates what is missing. A file the folder lacks is refused (oxy_scripts write creates it). The \
+creates what is missing. A path in another case attaches the file in the case the disk has, \
+with a warning; a file the project lacks is refused, with the one meant (oxy_scripts write \
+creates it). The \
 first attach in a project without this version's VS Code types writes them (vscode in the \
 answer, as oxy_scripts vscode). detach_script {entity, path}: takes it off, keeping the \
 attributes
@@ -1107,20 +1111,26 @@ to the project folder), width and height (images), seconds (sounds), applied_to?
 texture, an interface element's ui.texture (update_entity) or the asset parameter of an \
 action.sound (once), action.sound_loop or action.sound_stop node.";
 
-const SCRIPTS_DESCRIPTION: &str = "Luau scripts: the .luau files of the project's scripts \
-folder, which objects run once attached (oxy_apply attach_script; they run after the object's \
-logic graph, which is legacy and still runs). The disk is the truth, live too: a write is saved \
+const SCRIPTS_DESCRIPTION: &str = "Luau scripts: the .luau files in any folder of the project \
+folder, by their path from it (Pista/porta.luau; folders starting with '.' are outside), which \
+objects run once attached (oxy_apply attach_script; they run after the object's logic graph, \
+which is legacy and still runs). A script requires another with require(\"@project/Folder/name\") \
+(its path without .luau) or ./name and ../name from its own folder. The disk is the truth, live \
+too: a write is saved \
 at once, a test running in the editor reloads it between steps, and Ctrl+Z in the editor does \
 not undo it. read {path}: {path, lines, text}, each line of text after its number and a tab (not \
 part of the file). write {path, text}: the whole file, all-or-nothing: checked as the game loads \
-it (syntax, a top-level local some function changes, the module's top run, the folder's other \
-scripts serving require) and refused as \"scripts/x.luau:LINE: reason\" with nothing written; \
+it (syntax, a top-level local some function changes, the module's top run, the project's other \
+scripts serving require) and refused as \"<path>.luau:LINE: reason\" with nothing written; a \
+path in another case is the file the disk has, and answers name it so; \
 answers {path, saved, created, lines, added?, removed?, previous_version? \
-(.oxy/agente/scripts/<file>.bak, out of the scripts folder, the file as it was before this \
+(.oxy/agente/<path>.bak, outside the project's scripts, the file as it was before this \
 session first changed it; live, the editor's session), warnings?, \
 vscode? (the first write or attach_script sets VS Code up)}. check {path?, text?}: a script, text as that script \
-without saving it, or every script: {ok, checked, errors?, warnings?}, each \"scripts/x.luau:LINE: \
-message\"; warnings are functions named like callbacks that are none (they never run), a \
+without saving it, or every script: {ok, checked, errors?, warnings?}, each \"<path>.luau:LINE: \
+message\" (every script: also a .luau that cannot be one, over 1 MB or not UTF-8, as an error, \
+and a .LUAU or a subfolder's .luaurc changing @project as warnings); warnings are functions \
+named like callbacks that are none (they never run), a \
 Module.attributes that is no table of defaults (except in a module other scripts require and no \
 object attaches) and the lint of names: a name the script writes as a literal text that the \
 project lacks (sound, game variable, attribute no object has and no script declares, scene, \
@@ -1129,8 +1139,9 @@ obj.attr.Vidaa, action == \"pular\" in on_input, compared exactly), a text outsi
 parameter's choices and an API name scripts lack (audio.paly), each once at its first line with \
 the nearest name (write warns the same and saves); types are not checked (types_unavailable: VS \
 Code checks them). vscode: writes what VS Code with the luau-lsp extension (1.70.1) needs: \
-.oxy/tipos/oxy.d.luau (the API's types), .luaurc when there is none and the luau-lsp keys \
-.vscode/settings.json lacks, never changing a key it has: {written, notes?}. The API of this \
+.oxy/tipos/oxy.d.luau (the API's types), .luaurc with the alias \"project\": \"./\" (added to \
+the person's) and the luau-lsp keys .vscode/settings.json lacks, never changing a key it has: \
+{written, notes?}. The API of this \
 version: callbacks on_start(self), on_step(self, dt), on_input(self, action, phase \
 \"pressed\"|\"released\"), on_click(self), on_area_enter(self, other), on_area_exit(self, other), \
 on_marker(self, marker, clip), on_character(self, event), on_pause(self, paused), \
@@ -1190,8 +1201,8 @@ const EXPORT_DESCRIPTION: &str = "Exports the game as the editor's Projeto > Exp
 does, into <destination>\\<game name>: the game name is game.title of oxy_project (set with \
 set_game_settings, as are its window and full screen) without the characters Windows refuses in \
 file names; the folder holds <game name>.exe (the player that comes with OXY: oxy_player.exe next \
-to the editor live, next to oxy-mcp.exe on files), data (the project, its images and sounds), \
-licenses and LEIA-ME.txt. The game is written to a work folder in destination, loaded, run for 2 \
+to the editor live, next to oxy-mcp.exe on files), data (the project, its images and sounds and \
+every .luau of its folders that compiles, at its path), licenses and LEIA-ME.txt. The game is written to a work folder in destination, loaded, run for 2 \
 seconds by its own executable (--verificar) and only then put in place, so the answer takes \
 seconds or more; when anything fails, nothing at the destination changes. Export only when the \
 person asks, to the folder they name. Live, it exports what the editor has in memory, unsaved \
@@ -1199,8 +1210,8 @@ changes and painted images included, without saving or changing the project (no 
 the Console shows Agente · Jogo exportado; refused during a test, while the editor is busy or \
 already exporting, and for a project never saved (it has no folder yet). On files, it exports the \
 saved project and leaves its file as it is. Answers {folder, executable, files, bytes, replaced, \
-warnings (what the game will take otherwise than it may seem, as in oxy_validate, and an earlier \
-export that could not be removed), verify {ok, engine, game, start_scene, seconds, errors, \
+warnings (what the game will take otherwise than it may seem, as in oxy_validate, a broken script \
+nothing uses, left out of the game, and an earlier export that could not be removed), verify {ok, engine, game, start_scene, seconds, errors, \
 logs?}}.";
 
 const EXPORT_DESTINATION: &str = "Absolute path of a folder on a drive of this computer \
@@ -1861,7 +1872,7 @@ impl Tools {
                 let root = file
                     .parent()
                     .map_or_else(|| PathBuf::from("."), Path::to_owned);
-                // attach_script reads the scripts of the project's folder.
+                // attach_script reads the scripts of the project's tree.
                 let scripts = if command::needs_scripts(&parsed) {
                     persistence::load_scripts(&root).map_err(|e| e.to_string())?
                 } else {
@@ -3332,6 +3343,89 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn files_write_attach_and_run_scripts_in_any_folder_of_the_project() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-tree-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Pista", SceneKind::ThreeD).unwrap();
+        project.scenes[0].entities.push(Entity::new("Porta", None));
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        call(
+            "oxy_scripts",
+            json!({"action": "write", "path": "Pista/dados.luau",
+                   "text": "return { nome = 'pista' }\n"}),
+        )
+        .unwrap();
+        let written = call(
+            "oxy_scripts",
+            json!({"action": "write", "path": "Pista/Checkpoints/porta.luau",
+                   "text": "local Dados = require('@project/Pista/dados')\nlocal Mesmo = \
+                            require('../dados')\nlocal M = {}\nfunction M.on_start(self) \
+                            print(Dados.nome, rawequal(Dados, Mesmo)) end\nreturn M\n"}),
+        )
+        .unwrap();
+        assert_eq!(written["created"], true);
+        // The first write sets VS Code up with the project's alias.
+        let luaurc: Json =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(".luaurc")).unwrap()).unwrap();
+        assert_eq!(luaurc["aliases"]["project"], "./");
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "attach_script", "entity": "Porta",
+                                 "path": "Pista/Checkpoints/porta.luau"}]}),
+        )
+        .unwrap();
+        assert!(applied.get("warnings").is_none(), "{applied}");
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        assert_eq!(report["logs"][0]["text"], "Porta · pista true");
+        // A path in another case attaches the file in the case the disk has, as oxy_scripts
+        // write takes it, and says so; one the project lacks names the file it likely is.
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "attach_script", "entity": "Porta",
+                                 "path": "pista/checkpoints/porta.luau"}]}),
+        )
+        .unwrap();
+        assert!(
+            applied.to_string().contains(
+                "o script pista/checkpoints/porta.luau está no disco como \
+                 Pista/Checkpoints/porta.luau, e foi anexado assim"
+            ),
+            "{applied}"
+        );
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "attach_script", "entity": "Porta",
+                                 "path": "Pista/Checkpoints/prota.luau"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(
+                "o script Pista/Checkpoints/prota.luau não existe na pasta do projeto; quis \
+                 dizer Pista/Checkpoints/porta.luau?"
+            ),
+            "{error}"
+        );
+        let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
+        assert_eq!(
+            entity["scripts"],
+            json!([{"path": "Pista/Checkpoints/porta.luau"}])
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// The lint of names on files: a name the script writes that the project lacks comes back
     /// from oxy_scripts check and write, from attach_script and from oxy_validate, with the
     /// line and the nearest name.
@@ -3485,7 +3579,7 @@ mod tests {
             json!(backup.display().to_string())
         );
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), second);
-        // The scripts folder keeps only the scripts.
+        // The agent's copy is outside the project's scripts.
         let folder: Vec<String> = std::fs::read_dir(dir.join("scripts"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -3558,7 +3652,8 @@ mod tests {
             json!(["read", "write", "check", "vscode"])
         );
         assert!(SCRIPTS_DESCRIPTION.contains("Ctrl+Z in the editor does not undo it"));
-        assert!(SCRIPTS_DESCRIPTION.contains(".oxy/agente/scripts/<file>.bak"));
+        assert!(SCRIPTS_DESCRIPTION.contains(".oxy/agente/<path>.bak"));
+        assert!(SCRIPTS_DESCRIPTION.contains("require(\"@project/Folder/name\")"));
         assert!(!SCRIPTS_DESCRIPTION.contains("agente.bak"));
         for text in [
             "item k (k-1) × interval after the call",

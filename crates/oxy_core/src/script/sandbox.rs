@@ -6,7 +6,8 @@
 use super::errors::closest;
 use super::handles;
 use super::host::{Extra, Shared, api, locate, located};
-use super::{FOLDER, load, registry};
+use super::{PROJECT_ALIAS, ScriptSources, load, registry};
+use crate::names;
 use mlua::chunk::Compiler;
 use mlua::{
     Function, Lua, LuaOptions, LuaString, MultiValue, StdLib, Table, Value as LuaValue, VmState,
@@ -327,8 +328,7 @@ fn install_base(lua: &Lua, base: &Table, shared: &Rc<Shared>) -> mlua::Result<()
     Ok(())
 }
 
-/// `require(path)`: a module of the scripts' folder (see `resolve`), loaded the first time and
-/// frozen.
+/// `require(path)`: a module of the project (see `resolve`), loaded the first time and frozen.
 pub(crate) fn require(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> {
     let s = shared.clone();
     lua.create_function(move |lua, name: LuaString| {
@@ -338,17 +338,17 @@ pub(crate) fn require(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Function> 
             let path = resolve(from.as_deref(), &name).map_err(|e| located(lua, e))?;
             // Noted before the file is looked for: a reload that takes away a module still
             // required finds which text to keep.
-            if let Some(from) = from {
+            if let Some(from) = &from {
                 s.requires
                     .borrow_mut()
-                    .entry(from)
+                    .entry(from.clone())
                     .or_default()
                     .insert(path.clone());
             }
             if s.sources.get(&path).is_none() {
                 return Err(located(
                     lua,
-                    format!("require(\"{name}\"): {path} não existe"),
+                    missing_module(&s.sources, from.as_deref(), &name, &path),
                 ));
             }
             match load::module(lua, &s, &path) {
@@ -376,41 +376,159 @@ fn guard<R>(
     }
 }
 
-/// The path of the module `name` names from the script `from`, as Luau's require-by-string
-/// reads it: `./` from the script's folder, `../` from the folder above, never out of
-/// `scripts`; the file `<name>.luau`, whether or not it exists. `@native/` is reserved for Rust
-/// modules of a game (0.7 has none) and other aliases do not exist.
-fn resolve(from: Option<&str>, name: &str) -> Result<String, String> {
-    if name.starts_with("@native/") {
-        return Err(format!(
-            "require(\"{name}\"): módulos Rust por jogo ainda não existem (@native/)"
+/// The path of the module `name` names from the script `from`, with `.luau` added, as Luau's
+/// require-by-string reads it (`\` as `/`): `./` from the script's folder and `../` from the
+/// one above, never out of the project's folder, or `@project/` from the project's folder (the
+/// alias in any case), so `./dados` in `Pista/a.luau` and `@project/Pista/dados` are one module,
+/// whether or not it exists. `@native/` is reserved for Rust modules of a game (0.7 has none);
+/// `@self`, the aliases of a `.luaurc` (an exported game reads none) and `.luau` at the end, which
+/// luau-lsp takes and Luau does not, are refused with what to write.
+pub(crate) fn resolve(from: Option<&str>, name: &str) -> Result<String, String> {
+    let refuse = |why: &str| Err(format!("require(\"{name}\"): {why}"));
+    let unified = name.replace('\\', "/");
+    let (mut parts, rest): (Vec<&str>, &str) = if let Some(aliased) = unified.strip_prefix('@') {
+        let (alias, rest) = aliased.split_once('/').unwrap_or((aliased, ""));
+        if alias.eq_ignore_ascii_case("native") {
+            return refuse("módulos Rust por jogo ainda não existem (@native/)");
+        }
+        if alias.eq_ignore_ascii_case("self") {
+            return refuse(
+                "a OXY não usa @self; use ./nome, a partir da pasta deste script, ou @project/…, \
+                 a partir da pasta do projeto",
+            );
+        }
+        if alias.eq_ignore_ascii_case("oxy") {
+            return refuse(&format!(
+                "esse apelido não existe; os tipos da API chegam ao VS Code sem require, e os \
+                 módulos do projeto usam @{PROJECT_ALIAS}/…"
+            ));
+        }
+        if !alias.eq_ignore_ascii_case(PROJECT_ALIAS) {
+            return refuse(&format!(
+                "a OXY só conhece o apelido @{PROJECT_ALIAS} (os apelidos do .luaurc não valem no \
+                 jogo); use @{PROJECT_ALIAS}/…, a partir da pasta do projeto"
+            ));
+        }
+        if rest.split('/').any(|part| part == "..") {
+            return refuse(&format!(
+                "@{PROJECT_ALIAS}/ já começa na pasta do projeto e não aceita ../"
+            ));
+        }
+        (Vec::new(), rest)
+    } else if unified.starts_with("./") || unified.starts_with("../") {
+        let from = from.ok_or_else(|| format!("require(\"{name}\") fora de um script"))?;
+        let mut folder: Vec<&str> = from.split('/').collect();
+        folder.pop();
+        (folder, &unified)
+    } else {
+        return refuse(&format!(
+            "o caminho começa com ./ ou ../, a partir deste script, ou com @{PROJECT_ALIAS}/, a \
+             partir da pasta do projeto (como require(\"@{PROJECT_ALIAS}/Pista/dados\"))"
         ));
+    };
+    if let Some(stem) = name
+        .len()
+        .checked_sub(".luau".len())
+        .filter(|&end| name.is_char_boundary(end) && name[end..].eq_ignore_ascii_case(".luau"))
+        .map(|end| &name[..end])
+    {
+        return refuse(&format!("tire o .luau: require(\"{stem}\")"));
     }
-    if name.starts_with('@') {
-        return Err(format!("require(\"{name}\"): esse apelido não existe"));
-    }
-    if !name.starts_with("./") && !name.starts_with("../") {
-        return Err(format!(
-            "require(\"{name}\"): o caminho começa com ./ ou ../, a partir deste script (como \
-             require(\"./dados/cartas\"))"
-        ));
-    }
-    let from = from.ok_or_else(|| format!("require(\"{name}\") fora de um script"))?;
-    let mut parts: Vec<&str> = from.split('/').collect();
-    parts.pop();
-    for part in name.split('/') {
+    // Whether the path ends in a name of its own: `./` and `./x/..` name the folder, never the
+    // file beside it.
+    let mut named = false;
+    for part in rest.split('/') {
         match part {
             "" | "." => {}
             ".." => {
-                if parts.len() <= 1 {
-                    return Err(format!("require(\"{name}\"): fora da pasta {FOLDER}"));
+                if parts.pop().is_none() {
+                    return refuse("sai da pasta do projeto");
                 }
-                parts.pop();
+                named = false;
             }
-            part => parts.push(part),
+            part => {
+                parts.push(part);
+                named = true;
+            }
         }
     }
+    if !named {
+        return refuse("falta o nome do arquivo");
+    }
     Ok(format!("{}.luau", parts.join("/")))
+}
+
+/// Why `require("name")`, from the script `from`, finds no module at `path`, which `sources`
+/// lack: the file cannot be read, or is in a folder the tree skips or could not list (see
+/// [`ScriptSources::why_none`]), a part starts with a dot (outside the scripts), the folder of
+/// that name has an `init.luau`, or it does not exist, with the module the person likely means:
+/// in the case the disk has, written as they wrote it (`./dados` for `./DADOS`), else by the
+/// project's alias.
+fn missing_module(sources: &ScriptSources, from: Option<&str>, name: &str, path: &str) -> String {
+    if let Some(why) = sources.why_none(path) {
+        return format!("require(\"{name}\"): {path} {why}");
+    }
+    if path.split('/').any(|part| part.starts_with('.')) {
+        return format!(
+            "require(\"{name}\"): {path} não existe; pastas e arquivos que começam com ponto \
+             ficam fora dos scripts"
+        );
+    }
+    let folder_module = format!("{}/init.luau", path.strip_suffix(".luau").unwrap_or(path));
+    if let Some(init) = sources
+        .files
+        .keys()
+        .chain(sources.unreadable.keys())
+        .find(|known| names::same_name(known, &folder_module))
+    {
+        return format!(
+            "require(\"{name}\"): {path} não existe; {init} é o módulo de uma pasta no Luau, que \
+             a OXY não usa: renomeie-o para {path}"
+        );
+    }
+    let hint = sources
+        .near(path)
+        .filter(|near| Some(*near) != from)
+        .map_or_else(String::new, |near| {
+            super::loose_marks(path, near).unwrap_or_else(|| {
+                format!("; quis dizer {}?", written_like(from, name, path, near))
+            })
+        });
+    format!("require(\"{name}\"): {path} não existe{hint}")
+}
+
+/// `name`, which `require` read as `path`, written for the module `near` instead: the same
+/// words in the case `near` has when only the case differs, else `@project/` and its path.
+fn written_like(from: Option<&str>, name: &str, path: &str, near: &str) -> String {
+    let near = near.strip_suffix(".luau").unwrap_or(near);
+    if !names::same_name(path.strip_suffix(".luau").unwrap_or(path), near) {
+        return format!("@{PROJECT_ALIAS}/{near}");
+    }
+    let near: Vec<&str> = near.split('/').collect();
+    let unified = name.replace('\\', "/");
+    let mut pieces: Vec<&str> = unified.split('/').collect();
+    // Where each piece of the name lands in the path: the folder it starts from first.
+    let (start, base) = if unified.starts_with('@') {
+        (1, 0)
+    } else {
+        (0, from.map_or(0, |from| from.split('/').count() - 1))
+    };
+    let mut landed: Vec<Option<usize>> = vec![None; base];
+    for (i, piece) in pieces.iter().enumerate().skip(start) {
+        match *piece {
+            "" | "." => {}
+            ".." => {
+                landed.pop();
+            }
+            _ => landed.push(Some(i)),
+        }
+    }
+    for (at, piece) in landed.iter().enumerate() {
+        if let (Some(i), Some(word)) = (piece, near.get(at)) {
+            pieces[*i] = *word;
+        }
+    }
+    pieces.join("/")
 }
 
 /// What `print` writes of a value: text as it is, a table's first level, the rest as the

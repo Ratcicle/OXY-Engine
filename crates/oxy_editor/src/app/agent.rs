@@ -17,9 +17,10 @@ pub(crate) const AGENT_PREFIX: &str = "Agente · ";
 
 const NO_TEST: &str = "Não há teste do jogo em andamento no editor.";
 
-/// The scripts an agent's batch for the project saved at `path` reads: those of its folder when
-/// a command attaches one (see [`command::needs_scripts`]), else none. A project never saved
-/// has no folder for them.
+/// The scripts an agent's batch for the project saved at `path` reads: those of its tree, read
+/// from the disk again, when a command attaches one (see [`command::needs_scripts`]), so a
+/// script the agent just wrote with its own file tools is there; else none. A project never
+/// saved has no folder for them.
 fn agent_scripts(path: Option<&Path>, commands: &[Command]) -> Result<ScriptSources, String> {
     if !command::needs_scripts(commands) {
         return Ok(ScriptSources::default());
@@ -522,10 +523,20 @@ mod tests {
         let error = agent_scripts(None, &attach).unwrap_err();
         assert!(error.contains("ainda não foi salvo"), "{error}");
         assert!(agent_scripts(None, &detach).unwrap().files.is_empty());
-        // A folder that cannot be read refuses the batch with the reason.
+        // A file that cannot be read keeps none of the others from the batch: attaching it says
+        // why; and a script the agent wrote in any folder is read at once.
         std::fs::write(root.join("scripts/binario.luau"), [0xff, 0xfe]).unwrap();
-        let error = agent_scripts(Some(&path), &attach).unwrap_err();
-        assert!(error.contains("scripts/binario.luau"), "{error}");
+        std::fs::create_dir_all(root.join("Pista")).unwrap();
+        std::fs::write(root.join("Pista/marco.luau"), "return {}\n").unwrap();
+        let read = agent_scripts(Some(&path), &attach).unwrap();
+        assert_eq!(
+            read.files.keys().collect::<Vec<_>>(),
+            ["Pista/marco.luau", "scripts/porta.luau"]
+        );
+        assert_eq!(
+            read.absent("scripts/binario.luau"),
+            "o script scripts/binario.luau não é texto UTF-8"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

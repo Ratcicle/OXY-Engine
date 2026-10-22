@@ -1,10 +1,11 @@
-//! Hot reload while testing in the editor (design §4.11, §6.5): a thread looks at the size and
-//! the time of each file of the project's scripts folder every [`LOOK_EVERY`] and reads the
-//! folder again only once a change held still for two looks (editors write a temporary file and
-//! rename it); a text that came back the same is no change. The test takes the new texts between
-//! two steps, paused too (`Runtime::reload_scripts`): the game goes on where it was, and a text
-//! that does not load leaves the old one running. Each reload is told in text lines of the
-//! Console, never in the test's log, whose lines are part of the game's state.
+//! Hot reload while testing in the editor (design §4.11, §6.5): a thread walks the project's
+//! tree every [`LOOK_EVERY`], only while a test runs, looking at the size and the time of each
+//! `.luau` file in any folder, and reads the scripts again only once a change held still for two
+//! looks (editors write a temporary file and rename it); a text that came back the same is no
+//! change. The test takes the new texts between two steps, paused too
+//! (`Runtime::reload_scripts`): the game goes on where it was, and a text that does not load, or
+//! a file that cannot be read, leaves the old one running. Each reload is told in text lines of
+//! the Console, never in the test's log, whose lines are part of the game's state.
 use super::*;
 use oxy_core::persistence::ScriptStamp;
 use oxy_core::script::ScriptReload;
@@ -16,24 +17,24 @@ use std::sync::{
 };
 use std::time::Duration;
 
-/// How often the folder is looked at (design: every 250–500 ms).
+/// How often the tree is looked at (design: every 250–500 ms).
 const LOOK_EVERY: Duration = Duration::from_millis(300);
 
-/// What a look at the folder found.
+/// What a look at the tree found.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Change {
-    /// The scripts of the folder, after a change that held still.
+    /// The scripts of the tree, after a change that held still.
     Sources(Arc<ScriptSources>),
-    /// Why the folder could not be read; told once until it reads again.
+    /// Why the tree could not be walked; told once until it walks again.
     Unreadable(String),
 }
 
-/// The looks at the folder, each against the one before it.
+/// The looks at the tree, each against the one before it.
 pub(crate) struct Scanner {
     root: PathBuf,
     /// The stamps of the last look.
     last: Option<BTreeMap<String, ScriptStamp>>,
-    /// The stamps of the files when the folder was last read.
+    /// The stamps of the files when the scripts were last read.
     read: Option<BTreeMap<String, ScriptStamp>>,
     /// The texts the test last took.
     known: Arc<ScriptSources>,
@@ -66,6 +67,11 @@ impl Scanner {
         match persistence::load_scripts(&self.root) {
             Ok(sources) => {
                 self.told = None;
+                // A file another program held is read again at the next look, until it reads:
+                // its stamp may stay as it was. One too large or not text waits for its stamp.
+                if sources.held() {
+                    self.read = None;
+                }
                 if sources == *self.known {
                     return None;
                 }
@@ -94,8 +100,8 @@ pub(crate) struct ScriptWatch {
 }
 
 impl ScriptWatch {
-    /// Watches the scripts folder of the project saved in `root` for a test that started with
-    /// `running`; asks `ctx` for a frame when something changed, so a test paused while the
+    /// Watches the scripts of the tree of the project saved in `root` for a test that started
+    /// with `running`; asks `ctx` for a frame when something changed, so a test paused while the
     /// person writes in another window takes it too. None when the thread could not start.
     pub(crate) fn start(
         root: PathBuf,
@@ -179,10 +185,38 @@ pub(crate) fn reload_lines(
     lines
 }
 
+/// The Console's lines about the files of `after` that cannot be scripts now, newly or for
+/// another reason than in `before`, that the reload's `report` did not name: a script that ran
+/// goes on with its old text, and a new one stays out.
+pub(crate) fn unreadable_lines(
+    report: &ScriptReload,
+    before: &ScriptSources,
+    after: &ScriptSources,
+) -> Vec<(String, bool)> {
+    after
+        .unreadable
+        .iter()
+        .filter(|(path, reason)| {
+            before.unreadable.get(*path) != Some(*reason)
+                && !report.errors.iter().any(|error| error.path == **path)
+        })
+        .map(|(path, reason)| {
+            let line = if before.get(path).is_some() {
+                format!(
+                    "Script não recarregado: {path} {reason}. O teste segue com a versão anterior."
+                )
+            } else {
+                format!("Script com erro: {path} {reason}.")
+            };
+            (line, true)
+        })
+        .collect()
+}
+
 impl Editor {
-    /// Watches the scripts folder during the test that just started with `running`, when the
-    /// project has a folder and its objects attach a script (only then can a reload matter:
-    /// the document does not change during a test).
+    /// Watches the scripts of the project's tree during the test that just started with
+    /// `running`, when the project has a folder and its objects attach a script (only then can a
+    /// reload matter: the document does not change during a test). It stops with the test.
     pub(crate) fn watch_test_scripts(&mut self, running: Arc<ScriptSources>) {
         let root = self.path.as_deref().and_then(Path::parent);
         self.play.script_watch = match root {
@@ -205,8 +239,9 @@ impl Editor {
             match change {
                 Change::Sources(sources) => {
                     let before = std::mem::replace(&mut watch.running, sources.clone());
-                    let report = runtime.reload_scripts(sources);
+                    let report = runtime.reload_scripts(sources.clone());
                     lines.extend(reload_lines(&report, &before, runtime.scene()));
+                    lines.extend(unreadable_lines(&report, &before, &sources));
                 }
                 Change::Unreadable(error) => {
                     lines.push((format!("Scripts não recarregados: {error}"), true));
@@ -261,22 +296,87 @@ mod tests {
         std::fs::write(root.join(PATH), format!("{second}\n")).unwrap();
         std::fs::write(root.join(PATH), &second).unwrap();
         assert_eq!((scanner.look(), scanner.look()), (None, None));
-        // A file that cannot be read is told once, and a fix reads again.
+        // A file that cannot be read is no script, with why, and the others are read; it is
+        // told once, and a fix reads again.
         std::fs::write(root.join("scripts/binario.luau"), [0xff, 0xfe]).unwrap();
         scanner.look();
-        let Some(Change::Unreadable(error)) = scanner.look() else {
+        let Some(Change::Sources(sources)) = scanner.look() else {
             panic!("the unreadable file");
         };
-        assert!(error.contains("scripts/binario.luau"), "{error}");
+        assert_eq!(
+            sources.unreadable["scripts/binario.luau"],
+            "não é texto UTF-8"
+        );
+        assert_eq!(sources.get(PATH).unwrap().text, second);
         assert_eq!((scanner.look(), scanner.look()), (None, None));
+        // Until its stamp changes, the scripts are not read again at every look.
+        assert!(!sources.held() && scanner.read.is_some());
         std::fs::remove_file(root.join("scripts/binario.luau")).unwrap();
         std::fs::write(root.join("scripts/nova.luau"), "return {}\n").unwrap();
         scanner.look();
         let Some(Change::Sources(sources)) = scanner.look() else {
-            panic!("the folder read again");
+            panic!("the scripts read again");
         };
-        assert!(sources.get("scripts/nova.luau").is_some());
-        std::fs::remove_dir_all(root).unwrap();
+        assert!(sources.get("scripts/nova.luau").is_some() && sources.unreadable.is_empty());
+        // Scripts in any folder of the tree; what starts with a dot is none.
+        std::fs::create_dir_all(root.join("Pista/Checkpoints")).unwrap();
+        std::fs::write(root.join("Pista/Checkpoints/marco.luau"), "return {}\n").unwrap();
+        std::fs::create_dir_all(root.join(".oxy/agente")).unwrap();
+        std::fs::write(root.join(".oxy/agente/marco.luau"), "return {}\n").unwrap();
+        scanner.look();
+        let Some(Change::Sources(sources)) = scanner.look() else {
+            panic!("the script of Pista");
+        };
+        assert_eq!(
+            sources.files.keys().collect::<Vec<_>>(),
+            ["Pista/Checkpoints/marco.luau", "scripts/nova.luau", PATH]
+        );
+        // A tree that cannot be walked is told once.
+        std::fs::remove_dir_all(&root).unwrap();
+        let Some(Change::Unreadable(error)) = scanner.look() else {
+            panic!("the tree gone");
+        };
+        assert!(
+            error.starts_with("Não foi possível ler a pasta do projeto"),
+            "{error}"
+        );
+        assert_eq!(scanner.look(), None);
+    }
+
+    #[test]
+    fn a_file_that_can_no_longer_be_read_is_told_once_with_why() {
+        let mut before = ScriptSources::from_texts([(PATH, DOOR)]);
+        let mut after = ScriptSources::default();
+        after
+            .unreadable
+            .insert(PATH.into(), "tem mais de 1 MB".into());
+        after
+            .unreadable
+            .insert("Pista/nova.luau".into(), "não é texto UTF-8".into());
+        let report = ScriptReload::default();
+        assert_eq!(
+            unreadable_lines(&report, &before, &after),
+            [
+                (
+                    "Script com erro: Pista/nova.luau não é texto UTF-8.".to_owned(),
+                    true
+                ),
+                (
+                    "Script não recarregado: scripts/porta.luau tem mais de 1 MB. O teste segue \
+                     com a versão anterior."
+                        .to_owned(),
+                    true
+                ),
+            ]
+        );
+        // Named by the reload already, or as it was before: nothing more.
+        let named = ScriptReload {
+            errors: vec![oxy_core::script::check(PATH, "local x = (\n").unwrap_err()],
+            ..Default::default()
+        };
+        before.unreadable = after.unreadable.clone();
+        before.unreadable.remove(PATH);
+        assert!(unreadable_lines(&named, &before, &after).is_empty());
     }
 
     /// A test of `project` running the folder at `root`, a step in.

@@ -91,10 +91,13 @@ pub(crate) fn module(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module
 }
 
 fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptError> {
-    let source = shared
-        .sources
-        .get(path)
-        .ok_or_else(|| ScriptError::new(path, 0, "o script não existe na pasta do projeto"))?;
+    let source = shared.sources.get(path).ok_or_else(|| {
+        let message = match shared.sources.why_none(path) {
+            Some(reason) => format!("o arquivo {reason}"),
+            None => "o script não existe na pasta do projeto".into(),
+        };
+        ScriptError::new(path, 0, message)
+    })?;
     let (bytes, report) = check(path, &source.text)?;
     let chunk = format!("@{path}");
     shared

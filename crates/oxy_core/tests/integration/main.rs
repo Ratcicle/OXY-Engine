@@ -55,6 +55,7 @@ mod scripts_objects;
 mod scripts_registry;
 mod scripts_state;
 mod scripts_timers;
+mod scripts_tree;
 mod scripts_world;
 mod simulation;
 mod step_budget;

@@ -288,7 +288,7 @@ impl Runtime {
     /// require a new text. An attribute a new text declares is not created on the objects that
     /// lack it, since the document does not change during a test: the report warns. Nothing goes
     /// to the runtime's log, so a reload leaves the state's summary as it was; the editor's test
-    /// calls it when its watcher sees a file of the scripts folder change.
+    /// calls it when its watcher sees a script of the project's tree change.
     pub fn reload_scripts(&mut self, sources: Arc<ScriptSources>) -> ScriptReload {
         self.rebuild_scripts(sources, &ScriptHost::new)
             .unwrap_or_else(|error| ScriptReload {

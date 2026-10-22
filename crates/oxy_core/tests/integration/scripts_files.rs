@@ -289,10 +289,46 @@ fn writes_are_all_or_nothing_and_keep_the_file_as_the_session_found_it() {
         write(&mut kept, "scripts/grande.luau", &huge).unwrap_err(),
         "O script scripts/grande.luau tem mais de 1 MB"
     );
-    // A file saved in Latin-1 stops the folder from being read, not a text that replaces it.
+    // A file saved in Latin-1 is a problem of its own: the others are read and checked, it is
+    // an error once something uses it (here, nothing does) and a text replaces it.
     std::fs::write(root.join("scripts/latin.luau"), b"-- n\xe3o\nreturn {}\n").unwrap();
-    let refused = call(&root, &mut kept, json!({"action": "check"})).unwrap_err();
-    assert!(refused.contains("scripts/latin.luau"), "{refused}");
+    let (told, _) = call(&root, &mut kept, json!({"action": "check"})).unwrap();
+    assert_eq!(told["ok"], true);
+    assert_eq!(
+        told["checked"],
+        json!(["scripts/fases/chave.luau", "scripts/porta.luau"])
+    );
+    assert_eq!(
+        told["warnings"],
+        json!(["O script scripts/latin.luau não é texto UTF-8"])
+    );
+    std::fs::write(
+        root.join("scripts/porta.luau"),
+        "local Texto = require('./latin')\nreturn {}\n",
+    )
+    .unwrap();
+    let (refused, _) = call(&root, &mut kept, json!({"action": "check"})).unwrap();
+    assert_eq!(refused["ok"], false);
+    assert!(
+        refused["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| error
+                .as_str()
+                .unwrap()
+                .contains("scripts/latin.luau não é texto UTF-8")),
+        "{refused}"
+    );
+    assert_eq!(
+        call(
+            &root,
+            &mut kept,
+            json!({"action": "read", "path": "scripts/latin.luau"})
+        )
+        .unwrap_err(),
+        "O script scripts/latin.luau não é texto UTF-8"
+    );
     let (checked, _) = call(
         &root,
         &mut kept,
@@ -342,9 +378,13 @@ fn the_first_write_sets_vscode_up_and_settings_keep_what_the_person_wrote() {
             .collect::<std::collections::BTreeMap<_, _>>(),
         script_files::settings()
     );
+    // The project's alias, which the runtime knows by itself, for luau-lsp.
     let luaurc: Json =
         serde_json::from_str(&std::fs::read_to_string(root.join(".luaurc")).unwrap()).unwrap();
-    assert_eq!(luaurc, json!({"languageMode": "nonstrict"}));
+    assert_eq!(
+        luaurc,
+        json!({"languageMode": "nonstrict", "aliases": {"project": "./"}})
+    );
     // Once set up, writes leave the files alone.
     let (answer, console) = call(
         &root,
@@ -360,12 +400,31 @@ fn the_first_write_sets_vscode_up_and_settings_keep_what_the_person_wrote() {
     let (answer, console) = call(&root, &mut kept, json!({"action": "vscode"})).unwrap();
     assert_eq!(answer, json!({"written": []}));
     assert_eq!(console, ["Arquivos do VS Code em dia"]);
-    // A .luaurc of the person's stays as it was, with a note.
+    // A .luaurc of the person's gets the alias, the rest as it was; one with another value for
+    // it, or with comments, stays as it was, with a note.
     std::fs::write(root.join(".luaurc"), "{ \"languageMode\": \"strict\" }\n").unwrap();
+    let (answer, _) = call(&root, &mut kept, json!({"action": "vscode"})).unwrap();
+    assert_eq!(answer, json!({"written": [".luaurc"]}));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".luaurc")).unwrap(),
+        "{ \"languageMode\": \"strict\", \"aliases\": {\n        \"project\": \"./\"\n    } }\n"
+    );
+    std::fs::write(
+        root.join(".luaurc"),
+        "{\"aliases\": {\"Project\": \"./Pista\"}}",
+    )
+    .unwrap();
     let (answer, console) = call(&root, &mut kept, json!({"action": "vscode"})).unwrap();
     assert_eq!(answer["written"], json!([]));
     assert!(
-        console[1].starts_with("o .luaurc que já existe ficou como estava"),
+        console[1].starts_with("o .luaurc dá ao apelido Project o valor \"./Pista\""),
+        "{console:?}"
+    );
+    std::fs::write(root.join(".luaurc"), "{\n  // meu\n}\n").unwrap();
+    let (answer, console) = call(&root, &mut kept, json!({"action": "vscode"})).unwrap();
+    assert_eq!(answer["written"], json!([]));
+    assert!(
+        console[1].starts_with("o .luaurc não é JSON puro (tem comentários?) e ficou como estava"),
         "{console:?}"
     );
     // Types of another version are written again; a settings file with comments is left as
@@ -709,6 +768,46 @@ fn luau_lsp_reads_the_types_without_false_errors_and_catches_wrong_names() {
 }
 
 #[test]
+fn luau_lsp_resolves_the_requires_the_engine_takes_with_the_luaurc_oxy_writes() {
+    // Optional, as the test above: the parity of `require` in the host's tests, on disk.
+    let Some(lsp) = std::env::var_os("OXY_LUAU_LSP").map(PathBuf::from) else {
+        return;
+    };
+    let root = folder(&[
+        ("Pista/dados.luau", "return { velocidade = 3 }\n"),
+        ("Pista/Dados da pista.luau", "return { volta = 1 }\n"),
+        ("Comum/sons.luau", "return { pulo = 'Pulo' }\n"),
+        ("Fases/Fase ação/fase.luau", "return { numero = 1 }\n"),
+        ("raiz.luau", "return { raiz = true }\n"),
+    ]);
+    script_files::setup_vscode(&root).unwrap();
+    let check = |name: &str| {
+        // A key the module lacks: luau-lsp names it only when the path resolved.
+        std::fs::write(
+            root.join("Pista/Checkpoint.luau"),
+            format!("--!strict\nlocal Modulo = require(\"{name}\")\nlocal _ = Modulo.naoexiste\nreturn {{}}\n"),
+        )
+        .unwrap();
+        analyze(&lsp, &root, &["Pista/Checkpoint.luau"], false).1
+    };
+    for name in [
+        "./dados",
+        "../Comum/sons",
+        "./Dados da pista",
+        "../Fases/Fase ação/fase",
+        "../raiz",
+        "@project/Pista/dados",
+        "@Project/Comum/sons",
+    ] {
+        let said = check(name);
+        assert!(said.contains("Key 'naoexiste' not found"), "{name}: {said}");
+    }
+    let said = check("./naoexiste");
+    assert!(said.contains("Unknown require"), "{said}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
     // Optional, as the test above.
     let Some(lsp) = std::env::var_os("OXY_LUAU_LSP").map(PathBuf::from) else {
@@ -723,13 +822,9 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
         .collect();
     let mut files: Vec<(String, String)> = examples.clone();
     files.push(("scripts/tipado.luau".into(), TYPED.into()));
-    // The module require's example loads, next to the examples in both forms.
-    for folder in ["scripts", "modulo"] {
-        files.push((
-            format!("{folder}/api/dados.luau"),
-            "return { custo = 2 }\n".into(),
-        ));
-    }
+    // The module require's example loads by the project's alias, which the .luaurc OXY writes
+    // gives luau-lsp, for the examples in both forms.
+    files.push(("Pista/dados.luau".into(), "return { custo = 2 }\n".into()));
     // Names the script does not declare, and an empty object attribute read unchecked.
     for (name, from, to) in [
         (

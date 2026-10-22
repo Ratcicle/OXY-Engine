@@ -246,19 +246,18 @@ impl Player {
         let loaded = persistence::load_project(&self.path)
             .map_err(String::from)
             .and_then(|project| {
-                // The game's scripts, next to its project (data\scripts in an exported game);
-                // none is read when no object attaches one.
+                // The game's scripts, the tree of its project's folder (data in an exported
+                // game); none is read when no object attaches one.
                 let scripts = if script::any_attached(&project) {
                     persistence::load_scripts(&root).map_err(String::from)?
                 } else {
                     Default::default()
                 };
-                let missing = script::missing(&project, |path| scripts.get(path).is_some());
                 // The progress is read before the run, which starts from it.
                 let (progress, problems) = load_progress_in(saves, &project);
                 notes = problems;
                 notes.extend(
-                    script::missing_by_file(&missing)
+                    script::absent_by_file(&project, &scripts)
                         .into_iter()
                         .map(|(line, _)| line),
                 );

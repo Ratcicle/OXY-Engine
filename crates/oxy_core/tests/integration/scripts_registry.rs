@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 const PATH: &str = "scripts/exemplo.luau";
 
-/// The module `require`'s example loads, next to the example.
-const MODULE: (&str, &str) = ("scripts/dados.luau", "return { custo = 2 }\n");
+/// The module `require`'s example loads, by the project's alias.
+const MODULE: (&str, &str) = ("Pista/dados.luau", "return { custo = 2 }\n");
 
 /// A project with the door every example runs on: its attributes and its child `Maçaneta`, the
 /// sound `Bipe`, the game variable `Pontos`, the model `Bala`, the scene `Menu` and the surface

@@ -15,7 +15,7 @@ use crate::{
 use glam::{EulerRot, Quat, Vec3};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value as Json, json};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 fn kind_name(kind: SceneKind) -> &'static str {
     match kind {
@@ -334,9 +334,12 @@ pub fn validation(project: &Project) -> Json {
 }
 
 /// [`validation`] of the project saved in the folder `root`, whose warnings also name the
-/// scripts its objects attach that the folder lacks (see `persistence::script_warnings`) and
-/// what the lint of names finds in the folder's scripts (see `script::lint`): names of the
-/// project they give that it lacks, names of the API they read that it lacks.
+/// scripts its objects attach that the tree lacks (see `persistence::script_warnings`), what
+/// the lint of names finds in the tree's scripts (see `script::lint`): names of the project
+/// they give that it lacks, names of the API they read that it lacks; the `.luau` files that
+/// cannot be scripts (over 1 MB, not UTF-8 text, held by another program), and what the tree
+/// warns of (see `script_files::tree_warnings`): `.LUAU` files, links, names that are not UTF-8,
+/// a configuration that gives the project's alias another folder.
 pub fn validation_in(project: &Project, root: Option<&std::path::Path>) -> Json {
     let mut result = match validate_project(project) {
         Ok(()) => json!({"valid": true}),
@@ -348,14 +351,24 @@ pub fn validation_in(project: &Project, root: Option<&std::path::Path>) -> Json 
         .collect();
     if let Some(root) = root {
         warnings.extend(crate::persistence::script_warnings(project, root));
-        // A folder that cannot be read is told by the check of the scripts.
-        if let Ok(sources) = crate::persistence::load_scripts(root) {
-            let paths = sources.files.keys().map(String::as_str);
-            warnings.extend(
-                crate::script::lint(&sources, paths, Some(project))
-                    .iter()
-                    .map(ToString::to_string),
-            );
+        match crate::persistence::load_scripts_in_tree(root) {
+            Ok((sources, tree)) => {
+                let paths = sources.files.keys().map(String::as_str);
+                warnings.extend(
+                    crate::script::lint(&sources, paths, Some(project))
+                        .iter()
+                        .map(ToString::to_string),
+                );
+                warnings.extend(
+                    sources
+                        .unreadable
+                        .iter()
+                        .map(|(path, reason)| format!("O script {path} {reason}")),
+                );
+                warnings.extend(crate::script_files::tree_warnings(root, &tree));
+            }
+            // A folder too large for a project, or one that cannot be listed now.
+            Err(error) => warnings.push(error.to_string()),
         }
     }
     if !warnings.is_empty() {
@@ -797,9 +810,10 @@ pub fn entities(project: &Project, scene: &str, query: &EntityQuery) -> Result<J
 }
 
 /// Marks with `missing: true`, in an answer of [`entities`], each script an object attaches that
-/// the scripts folder of the project saved in `root` lacks. Nothing changes when the folder
-/// cannot be read.
+/// the tree of the project saved in `root` lacks, each path looked for alone (see
+/// `project_tree::presence`). A file that cannot be read now is not marked.
 pub fn mark_missing_scripts(answer: &mut Json, root: &std::path::Path) {
+    use crate::project_tree::{Presence, presence};
     let objects: Vec<&mut Json> = if answer.get("objects").is_some() {
         match answer.get_mut("objects") {
             Some(Json::Array(objects)) => objects.iter_mut().collect(),
@@ -808,23 +822,19 @@ pub fn mark_missing_scripts(answer: &mut Json, root: &std::path::Path) {
     } else {
         vec![answer]
     };
-    let mut files = None;
+    let mut seen: BTreeMap<String, bool> = BTreeMap::new();
     for object in objects {
         let Some(Json::Array(scripts)) = object.get_mut("scripts") else {
             continue;
         };
-        if files.is_none() {
-            match crate::persistence::script_stamps(root) {
-                Ok(found) => files = Some(found),
-                Err(_) => return,
-            }
-        }
-        let files = files.as_ref().expect("read above");
         for script in scripts {
-            if script["path"]
-                .as_str()
-                .is_some_and(|p| !files.contains_key(p))
-            {
+            let Some(path) = script["path"].as_str() else {
+                continue;
+            };
+            let missing = *seen
+                .entry(path.to_owned())
+                .or_insert_with(|| presence(root, path) == Presence::Missing);
+            if missing {
                 script["missing"] = json!(true);
             }
         }

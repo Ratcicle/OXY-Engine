@@ -184,8 +184,9 @@ pub fn fitted_name(text: &str, fallback: &str) -> String {
     )
 }
 /// `text` with each letter and the accent written after it joined into one character, for the
-/// letters of Portuguese and the rest of Latin-1; the other loose accents go.
-fn composed(text: &str) -> String {
+/// letters of Portuguese and the rest of Latin-1; the other loose accents go. Two names it makes
+/// one look alike, though Windows keeps them apart.
+pub fn composed(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         if !is_mark(c) {

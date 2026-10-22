@@ -1,5 +1,5 @@
-//! Format 6: objects attach scripts by their path in the project's `scripts` folder, which
-//! holds the files; graph-only projects read, run and save as in format 5 but for the version.
+//! Format 6: objects attach scripts by their path from the project's folder, whose tree holds
+//! the files; graph-only projects read, run and save as in format 5 but for the version.
 use oxy_core::{
     document::*,
     persistence::{self, PersistenceError},
@@ -191,7 +191,7 @@ fn a_missing_attached_script_opens_and_saves_with_a_warning_and_stops_the_test()
 }
 
 #[test]
-fn scripts_are_read_from_the_folder_as_text_of_up_to_1_mb() {
+fn scripts_are_read_from_the_whole_tree_each_file_on_its_own() {
     let root = folder("fontes");
     assert!(persistence::load_scripts(&root).unwrap().files.is_empty());
     write(&root, "scripts/porta.luau", "return {}\n");
@@ -199,34 +199,68 @@ fn scripts_are_read_from_the_folder_as_text_of_up_to_1_mb() {
     write(&root, "scripts/notas.txt", "não é script");
     write(&root, "scripts/antigo.lua", "return 1");
     write(&root, "outros/fora.luau", "return 1");
+    write(&root, ".solucoes/porta.luau", "return 1");
     let sources = persistence::load_scripts(&root).unwrap();
     assert_eq!(
         sources.files.keys().collect::<Vec<_>>(),
-        ["scripts/dados/cartas.luau", "scripts/porta.luau"]
+        [
+            "outros/fora.luau",
+            "scripts/dados/cartas.luau",
+            "scripts/porta.luau"
+        ]
     );
     assert_eq!(
         sources.get("scripts/dados/cartas.luau"),
         Some(&ScriptFile::new("return { \"Ás\" }\n".into()))
     );
+    // A file over 1 MB or not UTF-8 is no script, with why; the others are read all the same.
     let big = format!("--{}\n", "a".repeat(1024 * 1024));
     write(&root, "scripts/grande.luau", &big);
-    let error = persistence::load_scripts(&root).unwrap_err();
-    assert!(matches!(error, PersistenceError::ScriptTooLarge(_)));
-    assert_eq!(
-        error.to_string(),
-        "O script scripts/grande.luau tem mais de 1 MB"
-    );
-    std::fs::remove_file(root.join("scripts/grande.luau")).unwrap();
     std::fs::write(root.join("scripts/dados/latin1.luau"), b"-- \xe1rvore\n").unwrap();
+    write(&root, "Pista/init.luau", "return {}\n");
+    let sources = persistence::load_scripts(&root).unwrap();
+    assert_eq!(sources.files.len(), 3);
     assert_eq!(
-        persistence::load_scripts(&root).unwrap_err().to_string(),
-        "O script scripts/dados/latin1.luau não é texto UTF-8"
+        sources.unreadable,
+        [
+            (
+                "Pista/init.luau".to_owned(),
+                "tem um caminho que os scripts não aceitam: \"init.luau\" é o nome que o Luau dá \
+                 ao módulo de uma pasta, que os scripts da OXY não usam; dê outro nome ao arquivo"
+                    .to_owned()
+            ),
+            (
+                "scripts/dados/latin1.luau".to_owned(),
+                "não é texto UTF-8".to_owned()
+            ),
+            (
+                "scripts/grande.luau".to_owned(),
+                "tem mais de 1 MB".to_owned()
+            ),
+        ]
+        .into()
     );
+    // Only a run that needs one of them stops, saying why.
+    let mut project = Project::new("Grande");
+    let mut e = Entity::new("Painel", None);
+    e.scripts = vec![ScriptRef::new("scripts/porta.luau")];
+    project.scenes[0].entities.push(e);
+    assert!(persistence::load_scripts_to_run(&project, &root).is_ok());
+    project.scenes[0].entities[0]
+        .scripts
+        .push(ScriptRef::new("scripts/grande.luau"));
+    assert_eq!(
+        persistence::load_scripts_to_run(&project, &root).unwrap_err(),
+        "Painel: o script scripts/grande.luau tem mais de 1 MB; restaure o arquivo ou remova o \
+         script do objeto"
+    );
+    // A file that cannot be read now is not missing: opening warns of none.
+    assert!(persistence::script_warnings(&project, &root).is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn a_copy_takes_every_file_of_the_scripts_folder_as_it_is() {
+fn a_copy_takes_every_script_of_the_tree_as_it_is() {
     let source = folder("origem");
     let project = door();
     for path in [
@@ -234,11 +268,13 @@ fn a_copy_takes_every_file_of_the_scripts_folder_as_it_is() {
         "scripts/comum/som.luau",
         "scripts/comum/peça.luau",
         "scripts/dados/cartas.luau",
+        "Pista/Checkpoints/marco.luau",
     ] {
         write(&source, path, &format!("-- {path}\nreturn {{}}\n"));
     }
     write(&source, "scripts/notas.txt", "fica");
     write(&source, "scripts/.luaurc", "{}");
+    write(&source, ".solucoes/porta.luau", "return {}\n");
     // Bytes go as they are: reading scripts is for the runtime, not for a copy.
     std::fs::write(source.join("scripts/dados/latin1.luau"), b"-- \xe1rvore\n").unwrap();
     let big = format!("--{}\n", "a".repeat(1024 * 1024));
@@ -255,18 +291,20 @@ fn a_copy_takes_every_file_of_the_scripts_folder_as_it_is() {
     assert_eq!(
         files(&copied),
         [
+            "Pista/Checkpoints/marco.luau",
             "project.oxy.json",
-            "scripts/.luaurc",
             "scripts/comum/peça.luau",
             "scripts/comum/som.luau",
             "scripts/dados/cartas.luau",
             "scripts/dados/latin1.luau",
             "scripts/grande.luau",
-            "scripts/notas.txt",
             "scripts/porta.luau",
         ]
     );
-    for path in &files(&copied)[1..] {
+    for path in files(&copied)
+        .iter()
+        .filter(|path| *path != persistence::PROJECT_FILE)
+    {
         assert_eq!(
             std::fs::read(source.join(path)).unwrap(),
             std::fs::read(copied.join(path)).unwrap()

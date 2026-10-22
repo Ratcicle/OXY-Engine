@@ -32,6 +32,7 @@ pub mod painting;
 pub mod persistence;
 pub mod physics3d;
 mod prepared_graph;
+pub mod project_tree;
 pub mod qa;
 pub mod query;
 pub mod random;

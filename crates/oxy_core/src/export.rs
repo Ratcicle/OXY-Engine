@@ -143,44 +143,74 @@ pub fn check(project: &Project, source_root: Option<&Path>, unsaved: &HashSet<Id
     if unsaved.iter().any(|id| project.asset(id).is_none()) {
         errors.push("Uma imagem pintada não pertence mais ao projeto".into());
     }
-    errors.extend(script_errors(project, source_root));
-    let warnings = command::warnings(project)
+    let (script_errors, script_warnings) = script_errors(project, source_root);
+    errors.extend(script_errors);
+    let mut warnings: Vec<String> = command::warnings(project)
         .into_iter()
         .map(|warning| warning.message)
         .collect();
+    warnings.extend(script_warnings);
     ExportCheck { errors, warnings }
 }
 
-/// What stops exporting the scripts of `project`, whose folder is `root`: a script an object
-/// attaches that the folder lacks, a file of the folder that cannot be read as a script (too
-/// big, not text) and one that does not compile or that loading refuses before it runs. A
-/// project whose objects attach no script exports none and checks none.
-fn script_errors(project: &Project, root: Option<&Path>) -> Vec<String> {
-    if !script::any_attached(project) {
-        return Vec::new();
-    }
+/// What stops exporting the scripts of `project`, whose folder is `root`, and what is only
+/// warned. Every script of the tree that compiles goes to the game, attached or not (a
+/// `require` may build the name it loads); the export stops for a script an object attaches
+/// that the tree lacks, and for one the game uses (attached, or reached by a literal `require`
+/// from one, see [`script::used_scripts`]) that does not compile, that loading refuses before
+/// it runs or that cannot be read. One nothing uses only warns, and stays out of the game.
+fn script_errors(project: &Project, root: Option<&Path>) -> (Vec<String>, Vec<String>) {
+    let attached = script::attached_paths(project);
     let Some(root) = root else {
-        return vec![
-            "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; salve antes de \
-             exportar"
-                .into(),
-        ];
+        if attached.is_empty() {
+            return Default::default();
+        }
+        return (
+            vec![
+                "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; salve \
+                 antes de exportar"
+                    .into(),
+            ],
+            Vec::new(),
+        );
     };
     let sources = match persistence::load_scripts(root) {
         Ok(sources) => sources,
-        Err(error) => return vec![error.to_string()],
+        Err(error) if attached.is_empty() => {
+            return (
+                Vec::new(),
+                vec![format!("Os scripts não vão para o jogo: {error}")],
+            );
+        }
+        Err(error) => return (vec![error.to_string()], Vec::new()),
     };
-    let missing = script::missing(project, |path| sources.get(path).is_some());
-    let mut errors: Vec<String> = script::missing_by_file(&missing)
+    let used = script::used_scripts(&sources, attached.iter().cloned());
+    let mut errors: Vec<String> = script::absent_by_file(project, &sources)
         .into_iter()
         .map(|(line, objects)| format!("{line}; {}", persistence::missing_fix(objects)))
         .collect();
+    let mut warnings = Vec::new();
+    let unused = "nenhum objeto usa este script, e ele fica fora do jogo";
     for (path, file) in &sources.files {
         if let Err(error) = script::check(path, &file.text) {
-            errors.push(error.to_string());
+            if used.contains(path) {
+                errors.push(error.to_string());
+            } else {
+                warnings.push(format!("{error}; {unused}"));
+            }
         }
     }
-    errors
+    for (path, reason) in &sources.unreadable {
+        let line = format!("O script {path} {reason}");
+        if attached.contains(path) {
+            // Told above, with the objects.
+        } else if used.contains(path) {
+            errors.push(line);
+        } else {
+            warnings.push(format!("{line}; {unused}"));
+        }
+    }
+    (errors, warnings)
 }
 
 /// What an exported game's check found: the project loads and its start scene runs without
@@ -207,9 +237,9 @@ pub struct VerifyReport {
 }
 
 /// Checks the game in the data folder `data`: the project loads as the player loads it (every
-/// image and sound read in full, every script its objects attach found in `data/scripts` and
-/// every script there checked as the export checks them) and its start scene runs for
-/// `seconds` without a window, its scripts with it.
+/// image and sound read in full, every script its objects attach found in the tree of `data`,
+/// and every script there, all of which the export checked, checked again) and its start scene
+/// runs for `seconds` without a window, its scripts with it.
 pub fn verify(data: &Path, seconds: f64) -> VerifyReport {
     let mut report = VerifyReport {
         engine: engine_version(),
@@ -229,9 +259,8 @@ pub fn verify(data: &Path, seconds: f64) -> VerifyReport {
                     ScriptSources::default()
                 }
             };
-            let missing = script::missing(&project, |path| scripts.get(path).is_some());
             report.errors.extend(
-                script::missing_by_file(&missing)
+                script::absent_by_file(&project, &scripts)
                     .into_iter()
                     .map(|(line, _)| line),
             );
@@ -240,6 +269,12 @@ pub fn verify(data: &Path, seconds: f64) -> VerifyReport {
             for (path, file) in &scripts.files {
                 if let Err(error) = script::check(path, &file.text) {
                     report.errors.push(error.to_string());
+                }
+            }
+            let attached = script::attached_paths(&project);
+            for (path, reason) in &scripts.unreadable {
+                if !attached.contains(path) {
+                    report.errors.push(format!("O script {path} {reason}"));
                 }
             }
             let ran = serde_json::from_value::<SimulationRequest>(
@@ -703,14 +738,18 @@ fn stage(request: &ExportRequest, staging: &Path, executable: &str) -> Result<()
             }
         }
     }
-    // Every script of the folder, attached or not: a require may build the name it loads.
-    // `verify` checks what was copied.
-    if let Some(root) = request.source_root
-        && script::any_attached(project)
-    {
-        let sources = persistence::load_scripts(root)
-            .map_err(|error| ExportError::Invalid(vec![error.to_string()]))?;
+    // Every script of the tree that compiles, at its path, attached or not: a require may build
+    // the name it loads. The check warned of the others; `verify` checks what was copied.
+    if let Some(root) = request.source_root {
+        let sources = match persistence::load_scripts(root) {
+            Ok(sources) => sources,
+            Err(_) if !script::any_attached(project) => ScriptSources::default(),
+            Err(error) => return Err(ExportError::Invalid(vec![error.to_string()])),
+        };
         for (path, file) in &sources.files {
+            if script::check(path, &file.text).is_err() {
+                continue;
+            }
             let target = persistence::resolve_asset_path(&data, path)
                 .map_err(|error| ExportError::Invalid(vec![error.to_string()]))?;
             let failed = format!("Não foi possível exportar o script {path}");
@@ -1602,7 +1641,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_broken_script_stops_the_export() {
+    fn a_missing_or_broken_script_the_game_uses_stops_the_export() {
         let mut fixture = Fixture::new("scripts-recusados");
         scripted(&mut fixture);
         let painted = HashSet::from([fixture.painted.clone()]);
@@ -1611,16 +1650,23 @@ mod tests {
         fs::remove_file(fixture.folder.join("scripts/porta.luau")).unwrap();
         fs::write(fixture.folder.join("scripts/quebrado.luau"), "return {\n").unwrap();
         let found = check(&fixture.project, Some(&fixture.folder), &painted);
-        assert_eq!(found.errors.len(), 2, "{found:?}");
         assert_eq!(
-            found.errors[0],
-            "Porta: o script scripts/porta.luau não existe na pasta do projeto; restaure o \
-             arquivo ou remova o script do objeto"
+            found.errors,
+            [
+                "Porta: o script scripts/porta.luau não existe na pasta do projeto; restaure o \
+              arquivo ou remova o script do objeto"
+            ]
         );
+        // A broken script nothing uses only warns, and stays out of the game.
+        let broken = found
+            .warnings
+            .iter()
+            .find(|w| w.starts_with("scripts/quebrado.luau:"))
+            .unwrap_or_else(|| panic!("{found:?}"));
         assert!(
-            found.errors[1].starts_with("scripts/quebrado.luau:")
-                && found.errors[1].contains("erro de sintaxe"),
-            "{found:?}"
+            broken.contains("erro de sintaxe")
+                && broken.ends_with("nenhum objeto usa este script, e ele fica fora do jogo"),
+            "{broken}"
         );
         let destination = fixture.base.join("Jogos");
         let error = export_with(&fixture.request(&destination, false), checked).unwrap_err();
@@ -1629,6 +1675,47 @@ mod tests {
             "{error}"
         );
         assert!(!destination.exists());
+        // A module the attached script requires is used: broken, it stops the export.
+        fs::write(
+            fixture.folder.join("scripts/porta.luau"),
+            "local Textos = require('./dados/textos')\nreturn {}\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.folder.join("scripts/dados/textos.luau"),
+            "return {\n",
+        )
+        .unwrap();
+        let found = check(&fixture.project, Some(&fixture.folder), &painted);
+        assert_eq!(found.errors.len(), 1, "{found:?}");
+        assert!(
+            found.errors[0].starts_with("scripts/dados/textos.luau:2: erro de sintaxe"),
+            "{found:?}"
+        );
+        // A module that cannot be read, too; one nothing uses only warns.
+        fs::write(
+            fixture.folder.join("scripts/dados/textos.luau"),
+            b"return { '\xe1' }\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.folder.join("scripts/latin1.luau"),
+            b"-- \xe1rvore\n",
+        )
+        .unwrap();
+        let found = check(&fixture.project, Some(&fixture.folder), &painted);
+        assert_eq!(
+            found.errors,
+            ["O script scripts/dados/textos.luau não é texto UTF-8"]
+        );
+        assert!(
+            found.warnings.contains(
+                &"O script scripts/latin1.luau não é texto UTF-8; nenhum objeto usa este script, \
+                  e ele fica fora do jogo"
+                    .to_owned()
+            ),
+            "{found:?}"
+        );
         // A project never saved has no folder for its scripts.
         let found = check(&fixture.project, None, &painted);
         assert!(
@@ -1638,6 +1725,74 @@ mod tests {
                 .any(|error| error.contains("onde ficam os seus scripts")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_game_mirrors_the_projects_tree_of_scripts() {
+        let mut fixture = Fixture::new("arvore");
+        let mut door = Entity::new("Porta", None);
+        door.scripts = vec![crate::script::ScriptRef::new(
+            "Pista/Checkpoints/porta.luau",
+        )];
+        fixture.project.scenes[0].entities.push(door);
+        let write = |path: &str, text: &str| {
+            let file = fixture.folder.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, text).unwrap();
+        };
+        write(
+            "Pista/Checkpoints/porta.luau",
+            "local Dados = require('../dados')\nlocal Sons = require('@project/Comum/sons')\n\
+             local M = {}\nfunction M.on_start(self) print(Dados.nome .. ' ' .. Sons.pulo) \
+             end\nreturn M\n",
+        );
+        write("Pista/dados.luau", "return { nome = 'pista' }\n");
+        write("Comum/sons.luau", "return { pulo = 'Pulo' }\n");
+        // Attached by nothing: it goes all the same, a require may build its name.
+        write("Menu/tela.luau", "return {}\n");
+        write("Rascunhos/quebrado.luau", "return {\n");
+        write("Pista/notas.txt", "fica de fora");
+        write(".solucoes/porta.luau", "return {}\n");
+        write(".oxy/agente/Pista/dados.luau.bak", "return {}\n");
+        // An earlier export of the game inside the project, and another project.
+        write("Jogo antigo/data/export.oxy.json", "{}");
+        write("Jogo antigo/data/Pista/dados.luau", "return {}\n");
+        write("Outro/project.oxy.json", "{}");
+        write("Outro/x.luau", "return {}\n");
+        persistence::save_project(&fixture.folder.join(PROJECT_FILE), &fixture.project).unwrap();
+        let painted = HashSet::from([fixture.painted.clone()]);
+        let found = check(&fixture.project, Some(&fixture.folder), &painted);
+        assert!(found.errors.is_empty(), "{found:?}");
+        let destination = fixture.base.join("Jogos");
+        let report = export_with(&fixture.request(&destination, false), checked).unwrap();
+        let data = report.folder.join("data");
+        let scripts: Vec<String> = files(&data)
+            .into_iter()
+            .filter(|file| file.ends_with(".luau"))
+            .collect();
+        assert_eq!(
+            scripts,
+            [
+                "Comum/sons.luau",
+                "Menu/tela.luau",
+                "Pista/Checkpoints/porta.luau",
+                "Pista/dados.luau"
+            ]
+        );
+        assert!(report.verify.ok, "{:?}", report.verify);
+        assert!(
+            report
+                .verify
+                .logs
+                .iter()
+                .any(|line| line.ends_with("Porta · pista Pulo")),
+            "{:?}",
+            report.verify.logs
+        );
+        // The game reads its tree as the project does: the player's sources are these.
+        let sources = persistence::load_scripts(&data).unwrap();
+        assert_eq!(sources.files.keys().cloned().collect::<Vec<_>>(), scripts);
+        assert!(sources.unreadable.is_empty());
     }
 
     #[test]

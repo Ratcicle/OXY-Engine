@@ -4,11 +4,12 @@ use crate::{
     fs_ops::{self, Stamp},
     migration::MigrationError,
     painting::PaintImage,
+    project_tree::{self, Presence, Tree, TreeFile},
     script::{self, ScriptFile, ScriptSources},
     texture_cache::TextureCache,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
@@ -98,7 +99,7 @@ pub enum PersistenceError {
     /// A folder a new project may not go in (see [`create_project`]).
     #[error("{0}")]
     ProjectFolder(String),
-    /// An object attaches a script the project's `scripts` folder lacks.
+    /// An object attaches a script the project's folder lacks.
     #[error("{object}: o script {path} não existe na pasta do projeto")]
     ScriptMissing { object: String, path: String },
     #[error("O script {0} tem mais de 1 MB")]
@@ -107,11 +108,12 @@ pub enum PersistenceError {
     ScriptNotText(String),
     #[error("Falha ao ler o script {path}: {source}")]
     ScriptRead { path: String, source: io::Error },
-    #[error("Nome de arquivo inválido na pasta scripts: {0}")]
-    ScriptName(String),
-    /// A copy would replace a different file of the `scripts` folder where it goes.
+    /// A copy would replace a different script where it goes.
     #[error("A pasta escolhida já contém um arquivo diferente: {0}. Escolha uma pasta vazia.")]
     ScriptConflict(String),
+    /// The project's folder is past what a project holds (see [`crate::project_tree::walk`]).
+    #[error("A pasta do projeto é grande demais: {0}; mova o projeto para uma pasta só dele")]
+    TreeTooLarge(String),
 }
 impl From<PersistenceError> for String {
     fn from(error: PersistenceError) -> Self {
@@ -364,8 +366,8 @@ pub fn save_cached_bundle(
     save_cached_bundle_from(path, project, images, None)
 }
 
-/// Save an independent copy, including lazily loaded PNG/WAV resources and every file of the
-/// `scripts` folder. Source files are only read. All destination writes share one transaction.
+/// Save an independent copy, including lazily loaded PNG/WAV resources and every script of the
+/// tree, at its path. Source files are only read. All destination writes share one transaction.
 pub fn save_cached_copy(
     path: &Path,
     project: &Project,
@@ -433,12 +435,20 @@ fn save_cached_bundle_from(
         }
     }
     if let Some(source_root) = source_root {
-        // The whole folder goes as it is, attached or not: a script may require any other.
-        for (path, source) in scripts_folder_files(source_root)? {
-            let bytes = fs::read(&source).map_err(|source| PersistenceError::CopySource {
-                name: path.clone(),
-                source,
-            })?;
+        // Every script of the tree goes as it is, attached or not: a script may require any
+        // other.
+        for file in project_tree::walk(source_root)?.scripts() {
+            let path = file.path.clone();
+            let source = resolve_asset_path(source_root, &path)?;
+            let bytes = match fs::read(&source) {
+                Ok(bytes) => bytes,
+                // It went in the meantime, or its name is not UTF-8 (the walk warns) and no
+                // object or require can name it.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(source) => {
+                    return Err(PersistenceError::CopySource { name: path, source });
+                }
+            };
             let target = resolve_asset_path(root, &path)?;
             writes.extend(copy_write(target, bytes, || {
                 PersistenceError::ScriptConflict(path.clone())
@@ -633,97 +643,112 @@ fn validate_asset_file(asset: &Asset, path: &Path) -> Result<(), PersistenceErro
     }
     Ok(())
 }
-/// Every file in the `scripts` folder of the project at `root` or in the folder's subfolders, by
-/// its path from the project's folder with `/`; none without the folder. Links in it are not
-/// followed, so nothing outside it is read.
-fn scripts_folder_files(root: &Path) -> Result<BTreeMap<String, PathBuf>, PersistenceError> {
-    let mut found = BTreeMap::new();
-    let folder = resolve_asset_path(root, script::FOLDER)?;
-    if !folder.is_dir() {
-        return Ok(found);
-    }
-    let listing = || io_context("Falha ao ler a pasta scripts");
-    let mut pending = vec![(folder, script::FOLDER.to_owned())];
-    while let Some((folder, name)) = pending.pop() {
-        for entry in fs::read_dir(&folder).map_err(listing())? {
-            let entry = entry.map_err(listing())?;
-            let kind = entry.file_type().map_err(listing())?;
-            let file = entry.file_name();
-            let Some(file) = file.to_str() else {
-                return Err(PersistenceError::ScriptName(format!(
-                    "{name}/{}",
-                    file.to_string_lossy()
-                )));
-            };
-            let path = format!("{name}/{file}");
-            if kind.is_dir() {
-                pending.push((entry.path(), path));
-            } else if kind.is_file() {
-                found.insert(path, entry.path());
+/// The scripts of the project at `root`: every `.luau` file of its tree (see
+/// [`project_tree::walk`]), by path. A file that cannot be a script now (over 1 MB, not UTF-8
+/// text, held by another program, a name scripts may not have) is left in `unreadable` with
+/// why, and the rest are read all the same; so are, in `folders`, the folders the walk could not
+/// list or skipped as links, other projects or exported games. Only a tree that cannot be walked
+/// fails.
+pub fn load_scripts(root: &Path) -> Result<ScriptSources, PersistenceError> {
+    Ok(read_scripts(root, None)?.0)
+}
+/// [`load_scripts`] without the script `path`, whose text a write replaces: neither read nor
+/// told unreadable.
+pub fn load_scripts_except(root: &Path, path: &str) -> Result<ScriptSources, PersistenceError> {
+    Ok(read_scripts(root, Some(path))?.0)
+}
+/// [`load_scripts`] with the tree they came from, whose warnings and configurations the checks
+/// of every script tell.
+pub fn load_scripts_in_tree(root: &Path) -> Result<(ScriptSources, Tree), PersistenceError> {
+    read_scripts(root, None)
+}
+fn read_scripts(
+    root: &Path,
+    skip: Option<&str>,
+) -> Result<(ScriptSources, Tree), PersistenceError> {
+    let tree = project_tree::walk(root)?;
+    let mut sources = ScriptSources::default();
+    for file in tree.scripts() {
+        if skip == Some(file.path.as_str()) {
+            continue;
+        }
+        match read_script_file(root, file) {
+            Ok(Some(text)) => {
+                sources
+                    .files
+                    .insert(file.path.clone(), ScriptFile::new(text));
+            }
+            // It went in the meantime.
+            Ok(None) => {}
+            Err(reason) => {
+                sources.unreadable.insert(file.path.clone(), reason);
             }
         }
     }
-    Ok(found)
-}
-/// The script files of the project at `root`: the `.luau` files of its `scripts` folder, by path
-/// (see [`crate::script`]).
-fn script_files(root: &Path) -> Result<BTreeMap<String, PathBuf>, PersistenceError> {
-    let mut files = scripts_folder_files(root)?;
-    files.retain(|path, _| {
-        Path::new(path)
-            .extension()
-            .is_some_and(|extension| extension == script::EXTENSION)
-    });
-    Ok(files)
-}
-/// The scripts of the project at `root`, read from its `scripts` folder (none without it): each
-/// must be UTF-8 text of up to 1 MB.
-pub fn load_scripts(root: &Path) -> Result<ScriptSources, PersistenceError> {
-    read_scripts(root, None)
-}
-/// [`load_scripts`] without the script `path`, whose text a write replaces: a file of it that is
-/// not UTF-8 or is over 1 MB does not stop the others from being read.
-pub fn load_scripts_except(root: &Path, path: &str) -> Result<ScriptSources, PersistenceError> {
-    read_scripts(root, Some(path))
-}
-fn read_scripts(root: &Path, skip: Option<&str>) -> Result<ScriptSources, PersistenceError> {
-    let mut sources = ScriptSources::default();
-    for (path, file) in script_files(root)? {
-        if skip == Some(path.as_str()) {
-            continue;
-        }
-        let read = |source| PersistenceError::ScriptRead {
-            path: path.clone(),
-            source,
+    // A script attached or required in a folder the tree did not look into is no missing one.
+    for (folder, reason) in &tree.unreadable {
+        let shown = if folder.is_empty() {
+            "a pasta do projeto".to_owned()
+        } else {
+            format!("a pasta {folder}")
         };
-        if fs::metadata(&file).map_err(read)?.len() > script::MAX_BYTES {
-            return Err(PersistenceError::ScriptTooLarge(path));
-        }
-        let bytes = fs::read(&file).map_err(read)?;
-        let text =
-            String::from_utf8(bytes).map_err(|_| PersistenceError::ScriptNotText(path.clone()))?;
-        sources.files.insert(path, ScriptFile::new(text));
+        let why = format!("{}: {shown} {reason}", project_tree::NOT_NOW);
+        sources.folders.insert(folder.clone(), why);
     }
-    Ok(sources)
+    for (folder, reason) in &tree.skipped {
+        let why = format!("fica fora do projeto: {folder} {reason}");
+        sources.folders.insert(folder.clone(), why);
+    }
+    Ok((sources, tree))
+}
+/// The text of the script `file` of the tree at `root`, none when it went, or why it is no
+/// script now, said after its path.
+fn read_script_file(root: &Path, file: &TreeFile) -> Result<Option<String>, String> {
+    let stamp = file.stamp.clone()?;
+    if let Some(reason) = script::path_problem(&file.path) {
+        return Err(format!(
+            "tem um caminho que os scripts não aceitam: {reason}"
+        ));
+    }
+    let too_large = || "tem mais de 1 MB".to_owned();
+    if stamp.len > script::MAX_BYTES {
+        return Err(too_large());
+    }
+    let target = resolve_asset_path(root, &file.path).map_err(|error| error.to_string())?;
+    let bytes = match fs_ops::retrying(|| fs::read(&target)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(project_tree::now_unreadable(&error)),
+    };
+    if bytes.len() as u64 > script::MAX_BYTES {
+        return Err(too_large());
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| "não é texto UTF-8".into())
 }
 /// What tells that a script file changed without reading it: its size and when it was written.
 pub type ScriptStamp = Stamp;
 
 /// The stamp of each script file of the project at `root` (the files [`load_scripts`] reads),
-/// by path, from the folder's listing; none without the folder. A file that cannot be looked at
-/// (one that went in the meantime) is left out: reading the folder says why it fails.
+/// by path, from the tree's listing. A file whose stamp cannot be read now is left out: reading
+/// the scripts says why.
 pub fn script_stamps(root: &Path) -> Result<BTreeMap<String, ScriptStamp>, PersistenceError> {
-    Ok(script_files(root)?
-        .into_iter()
-        .filter_map(|(path, file)| Some((path, Stamp::read(&file).ok()?)))
+    Ok(project_tree::walk(root)?
+        .scripts()
+        .filter_map(|file| Some((file.path.clone(), file.stamp.clone().ok()?)))
         .collect())
 }
 
 /// The text of the script `path` of the project at `root` (`path` as [`script::normalize_path`]
-/// writes it), with the checks of [`load_scripts`]; none when the file does not exist.
+/// writes it), with the checks of [`load_scripts`]; none when the tree lacks the file (see
+/// [`project_tree::presence`]: in another case, under a link or in another project, too).
 pub fn read_script(root: &Path, path: &str) -> Result<Option<String>, PersistenceError> {
     if script::normalize_path(path).as_deref() != Ok(path) {
         return Err(PersistenceError::InvalidAssetPath(path.to_owned()));
+    }
+    if project_tree::presence(root, path) == Presence::Missing {
+        return Ok(None);
     }
     let file = resolve_asset_path(root, path)?;
     let read = |source| PersistenceError::ScriptRead {
@@ -745,12 +770,12 @@ pub fn read_script(root: &Path, path: &str) -> Result<Option<String>, Persistenc
         .map_err(|_| PersistenceError::ScriptNotText(path.to_owned()))
 }
 
-/// Where the agents' copies of script files go, from the project's folder: out of the `scripts`
-/// folder, so that it holds only scripts.
+/// Where the agents' copies of script files go, from the project's folder: out of the tree, so
+/// that no copy is ever a script.
 pub const SCRIPT_BACKUPS: &str = ".oxy/agente";
 
 /// The copy of a script file an agent keeps, as it was before its session first changed the
-/// file, by the script's path: `scripts/porta.luau` keeps `.oxy/agente/scripts/porta.luau.bak`.
+/// file, by the script's path: `Pista/porta.luau` keeps `.oxy/agente/Pista/porta.luau.bak`.
 pub fn script_backup_path(path: &str) -> String {
     format!("{SCRIPT_BACKUPS}/{path}.bak")
 }
@@ -758,8 +783,9 @@ pub fn script_backup_path(path: &str) -> String {
 /// Writes `text` as the script `path` of the project at `root` (`path` as
 /// [`script::normalize_path`] writes it), creating its folders, in one transaction with, when
 /// `backup` is set and the file exists, the copy of it as it was at [`script_backup_path`].
-/// The file is replaced only while it holds what was read, and created only while absent.
-/// Answers the text the file had, if it existed.
+/// The file is replaced only while it holds what was read, and created only while absent; never
+/// under a link or in another project, where the tree would not find it. Answers the text the
+/// file had, if it existed.
 pub fn write_script(
     root: &Path,
     path: &str,
@@ -768,6 +794,12 @@ pub fn write_script(
 ) -> Result<Option<String>, PersistenceError> {
     if script::normalize_path(path).as_deref() != Ok(path) {
         return Err(PersistenceError::InvalidAssetPath(path.to_owned()));
+    }
+    if let Some(reason) = project_tree::outside_reason(root, path) {
+        return Err(PersistenceError::InvalidPath {
+            path: path.to_owned(),
+            reason,
+        });
     }
     if text.len() as u64 > script::MAX_BYTES {
         return Err(PersistenceError::ScriptTooLarge(path.to_owned()));
@@ -815,11 +847,11 @@ pub(crate) fn missing_fix(objects: usize) -> &'static str {
     }
 }
 
-/// Checks that every script an object attaches, in a scene or a model, is in the `scripts`
-/// folder at `root`: the first one missing is the error. Opening and saving do not ask for it
+/// Checks that every script an object attaches, in a scene or a model, is in the tree of the
+/// project at `root`: the first one missing is the error. Opening and saving do not ask for it
 /// (a script renamed or deleted outside OXY must not keep the project from opening or saving:
-/// they warn, see [`script_warnings`]); playing it in the editor and exporting it do. The folder
-/// is read only when some object attaches a script.
+/// they warn, see [`script_warnings`]); playing it in the editor and exporting it do. The files
+/// are looked for only when some object attaches a script.
 pub fn validate_script_files(project: &Project, root: &Path) -> Result<(), PersistenceError> {
     match missing_scripts(project, root)?.into_iter().next() {
         Some(missing) => Err(PersistenceError::ScriptMissing {
@@ -829,21 +861,23 @@ pub fn validate_script_files(project: &Project, root: &Path) -> Result<(), Persi
         None => Ok(()),
     }
 }
-/// The scripts the objects of `project` attach, in scenes and models, that the `scripts` folder
-/// at `root` lacks; the folder is read only when some object attaches a script.
+/// The scripts the objects of `project` attach, in scenes and models, that the tree of the
+/// project at `root` lacks: each file is looked for alone (see [`project_tree::presence`]), so
+/// one that cannot be read now is no missing one. Nothing is looked for when no object attaches
+/// a script.
 pub fn missing_scripts(
     project: &Project,
     root: &Path,
 ) -> Result<Vec<script::MissingScript>, PersistenceError> {
-    if !script::any_attached(project) {
-        return Ok(Vec::new());
-    }
-    let files = script_files(root)?;
-    Ok(script::missing(project, |path| files.contains_key(path)))
+    let lacking: HashSet<String> = script::attached_paths(project)
+        .into_iter()
+        .filter(|path| project_tree::presence(root, path) == Presence::Missing)
+        .collect();
+    Ok(script::missing(project, |path| !lacking.contains(path)))
 }
 /// What opening or saving the project at `root` warns about its scripts, one line per file:
-/// every script its objects attach that the `scripts` folder lacks, by its path and the names
-/// of the objects (see [`script::missing_by_file`]). The project opens and saves all the same;
+/// every script its objects attach that the tree lacks, by its path and the names of the
+/// objects (see [`script::missing_by_file`]). The project opens and saves all the same;
 /// playing it in the editor and exporting it are refused until the file is back or no object
 /// attaches it.
 pub fn script_warnings(project: &Project, root: &Path) -> Vec<String> {
@@ -865,7 +899,7 @@ fn missing_warnings(missing: &[script::MissingScript]) -> Vec<String> {
         .collect()
 }
 /// The lines of [`script_warnings`] that an edit adds to the project it left, `after`: the
-/// scripts its objects attach that the folder at `root` lacks, but those `known` before the
+/// scripts its objects attach that the tree at `root` lacks, but those `known` before the
 /// edit (its [`missing_scripts`]); a copy of an object whose script is missing, for one.
 pub fn added_script_warnings(
     known: &[script::MissingScript],
@@ -883,16 +917,16 @@ pub fn added_script_warnings(
     missing_warnings(&missing)
 }
 /// The scripts of the project at `root` for a run that needs every one its objects attach, as
-/// the editor's test: the first file missing from the folder refuses it, with the objects that
-/// attach it, as [`load_scripts`] refuses a file it cannot read. The message says what to do.
-/// Without attached scripts nothing is read: none would run.
+/// the editor's test: the first file missing from the tree, or that cannot be read, refuses it,
+/// with the objects that attach it (see [`script::absent_by_file`]); a file nothing attaches
+/// that cannot be read does not. The message says what to do. Without attached scripts nothing
+/// is read: none would run.
 pub fn load_scripts_to_run(project: &Project, root: &Path) -> Result<ScriptSources, String> {
     if !script::any_attached(project) {
         return Ok(ScriptSources::default());
     }
     let sources = load_scripts(root).map_err(|error| error.to_string())?;
-    let missing = script::missing(project, |path| sources.get(path).is_some());
-    match script::missing_by_file(&missing).into_iter().next() {
+    match script::absent_by_file(project, &sources).into_iter().next() {
         Some((line, objects)) => Err(format!("{line}; {}", missing_fix(objects))),
         None => Ok(sources),
     }

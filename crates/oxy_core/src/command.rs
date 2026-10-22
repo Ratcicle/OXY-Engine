@@ -509,14 +509,15 @@ pub enum Command {
         #[serde(default)]
         shape: Option<FitShape>,
     },
-    /// Attaches the script `path` (a `.luau` file of the project's `scripts` folder, written as
-    /// `scripts/porta.luau`) to the object, at `index` of its list of scripts (default the end),
-    /// and gives the object, with their defaults, the attributes the script declares in
-    /// `Module.attributes` that it lacks (decision Q6 of 0.7). An attribute it has keeps its
-    /// value, whatever its type; one of another type than the declared, or declared with two
-    /// types by its scripts, is warned about. Attaching a script the object has moves it to
-    /// `index`, when given, and only creates the declared attributes still missing. Needs the
-    /// project's scripts (see [`apply_with_scripts`]).
+    /// Attaches the script `path` (a `.luau` file of the project's tree, by its path from the
+    /// project's folder, as `Pista/porta.luau`, in the case the disk has: `pista/porta.luau`
+    /// attaches it so, with a warning) to the object, at `index` of its list of scripts
+    /// (default the end), and gives the object, with their defaults, the attributes the script
+    /// declares in `Module.attributes` that it lacks (decision Q6 of 0.7). An attribute it has
+    /// keeps its value, whatever its type; one of another type than the declared, or declared
+    /// with two types by its scripts, is warned about. Attaching a script the object has moves
+    /// it to `index`, when given, and only creates the declared attributes still missing. Needs
+    /// the project's scripts (see [`apply_with_scripts`]).
     AttachScript {
         #[serde(default)]
         scene: Option<Id>,
@@ -965,7 +966,10 @@ fn lint_attached(
         let Command::AttachScript { path, .. } = command else {
             continue;
         };
-        let Ok(path) = script::normalize_path(path) else {
+        let Some(path) = script::normalize_path(path)
+            .ok()
+            .and_then(|given| scripts.known(&given).map(str::to_owned))
+        else {
             continue;
         };
         last.retain(|(attached, _)| *attached != path);
@@ -1060,6 +1064,9 @@ enum Check {
         path: String,
         error: String,
     },
+    /// attach_script was given `given`, the script `path` in another case, and attached `path`,
+    /// in the case the disk has.
+    ScriptCase { given: String, path: String },
 }
 impl Check {
     /// The warning, when what was checked is still so in `project`.
@@ -1331,6 +1338,9 @@ impl Check {
                     )
                 })
             }
+            Self::ScriptCase { given, path } => Some(format!(
+                "o script {given} está no disco como {path}, e foi anexado assim"
+            )),
         }
     }
 }
@@ -3105,9 +3115,16 @@ fn apply_one(
             index,
         } => {
             let id = scene_id(project, scene, default)?;
-            let path = script::normalize_path(path)?;
-            if scripts.get(&path).is_none() {
-                return Err(format!("o script {path} não existe na pasta do projeto"));
+            let given = script::normalize_path(path)?;
+            // The path in the case the disk has, as it is kept.
+            let Some(path) = scripts.known(&given).map(str::to_owned) else {
+                return Err(scripts.absent(&given));
+            };
+            if path != given {
+                checks.push(Check::ScriptCase {
+                    given,
+                    path: path.clone(),
+                });
             }
             // A Superfície declared by name is the project's of that name.
             let surfaces = project.surfaces.clone();
@@ -3169,7 +3186,8 @@ fn apply_one(
             path,
         } => {
             let id = scene_id(project, scene, default)?;
-            let path = script::normalize_path(path)?;
+            // A path saved before a rule of names came is still taken off.
+            let path = script::normal_form(path)?;
             let e = entity_mut(scene_mut(project, &id), entity)?;
             let Some(at) = e.scripts.iter().position(|s| s.path == path) else {
                 return Err(format!("{} não tem o script {path}", e.name));

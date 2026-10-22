@@ -4008,28 +4008,36 @@ pub static API: &[ApiFn] = &[
         params: &[param(
             "path",
             "string",
-            "o caminho do arquivo sem `.luau`, a partir da pasta deste script: `./` nela, \
-             `../` na de cima",
+            "o caminho do arquivo sem `.luau`: `@project/` a partir da pasta do projeto, `./` a \
+             partir da pasta deste script, `../` da pasta de cima",
         )],
         returns: "any",
-        summary: "Carrega um módulo da pasta `scripts` e devolve o que ele devolve.",
-        doc: "`require(\"./dados/cartas\")` num script de `scripts/fases/` lê \
-              `scripts/fases/dados/cartas.luau`; o caminho nunca sai da pasta `scripts`. O \
-              módulo roda na primeira vez que um script o pede, e todos recebem a mesma tabela, \
-              travada: ninguém a muda depois. Costuma ficar no topo do script (`local \
-              Cartas = require(\"./dados/cartas\")`). `@native/` fica reservado para os módulos \
-              em Rust de um jogo, que ainda não existem.",
-        help_en: "Loads a module of the scripts folder, the path from this script's folder \
-                  (./ or ../, no .luau); every script gets the same frozen table.",
+        summary: "Carrega um módulo (outro `.luau` do projeto) e devolve o que ele devolve.",
+        doc: "`require(\"@project/Pista/dados\")` lê `Pista/dados.luau` de qualquer script; num \
+              script de `Pista/Checkpoints/`, `require(\"../dados\")` lê o mesmo arquivo, e \
+              `require(\"./sons\")`, `Pista/Checkpoints/sons.luau`. O caminho nunca sai da pasta \
+              do projeto, e o que começa com ponto fica fora dos scripts. Pedido pelos dois \
+              caminhos, o módulo é um só: roda na primeira vez que um script o pede, e todos \
+              recebem a mesma tabela, travada: ninguém a muda depois. Costuma ficar no topo do \
+              script (`local Dados = require(\"@project/Pista/dados\")`), e `@project/` continua \
+              certo quando o script muda de pasta. `@native/` fica reservado para os módulos em \
+              Rust de um jogo, que ainda não existem.",
+        help_en: "Loads a module, another .luau file of the project, by its path without \
+                  .luau: @project/ from the project folder, ./ or ../ from this script's folder; \
+                  every script gets the same frozen table.",
         errors: &[
-            "um caminho que não começa com `./` nem `../`, ou que sai da pasta `scripts`",
-            "um arquivo que não existe",
+            "um caminho que não começa com `@project/`, `./` nem `../`, ou que sai da pasta do \
+             projeto",
+            "um caminho que termina em `.luau` (tire o `.luau`)",
+            "um arquivo que não existe, ou escrito com outras maiúsculas (a mensagem diz o nome \
+             certo)",
+            "um arquivo que não pode ser script (maior que 1 MB, que não é texto)",
             "um erro no módulo, com o arquivo e a linha dele",
             "um módulo que pede, direta ou indiretamente, o script que o pediu (require \
              circular)",
-            "um apelido com `@` (`@native/` está reservado)",
+            "outro apelido com `@`, como `@self` ou os do `.luaurc` (`@native/` está reservado)",
         ],
-        example: "local dados = require(\"./dados\")\nprint(dados.custo)",
+        example: "local dados = require(\"@project/Pista/dados\")\nprint(dados.custo)",
         domain: Domain::Pure,
         since: V07,
         nodes: &[],
