@@ -1,7 +1,36 @@
 use super::*;
 use crate::character::{
-    BodyFacing, CameraLookAt, CameraMode, JumpMode, MovementProfile, TeleportOptions,
+    BodyFacing, CameraLookAt, CameraMode, CharacterConfig, JumpMode, MovementProfile,
+    TeleportOptions,
 };
+const UNKNOWN_PARAMETER: &str = "Parâmetro não permitido; use uma opção disponível no nó.";
+/// The field of the character's motor `parameter` names, as Alterar parâmetro do personagem
+/// lists them.
+fn parameter_field<'a>(c: &'a mut CharacterConfig, parameter: &str) -> Option<&'a mut f32> {
+    Some(match parameter {
+        "speed" => &mut c.speed,
+        "sprint_speed" => &mut c.sprint_speed,
+        "crouch_speed" => &mut c.crouch_speed,
+        "gravity" => &mut c.gravity,
+        "jump_speed" => &mut c.jump_speed,
+        "ground_acceleration" => &mut c.ground_acceleration,
+        "ground_braking" => &mut c.ground_braking,
+        "ground_friction" => &mut c.ground_friction,
+        "air_acceleration" => &mut c.air_acceleration,
+        "air_projected_limit" => &mut c.air_projected_limit,
+        "air_resistance" => &mut c.air_resistance,
+        "horizontal_limit" => &mut c.horizontal_limit,
+        "jump_retention" => &mut c.jump_retention,
+        "landing_retention" => &mut c.landing_retention,
+        "coyote_ms" => &mut c.coyote_ms,
+        "jump_buffer_ms" => &mut c.jump_buffer_ms,
+        "slide_duration" => &mut c.slide_duration,
+        "slide_friction" => &mut c.slide_friction,
+        "slide_control" => &mut c.slide_control,
+        "angular_speed" => &mut c.angular_speed,
+        _ => return None,
+    })
+}
 impl Runtime {
     pub(in crate::runtime) fn movement_action(
         &mut self,
@@ -305,31 +334,19 @@ impl Runtime {
             .entity(id)
             .and_then(|e| e.character3d.clone())
             .ok_or("Objeto não possui personagem 3D")?;
-        let field = match parameter {
-            "speed" => &mut c.speed,
-            "sprint_speed" => &mut c.sprint_speed,
-            "crouch_speed" => &mut c.crouch_speed,
-            "gravity" => &mut c.gravity,
-            "jump_speed" => &mut c.jump_speed,
-            "ground_acceleration" => &mut c.ground_acceleration,
-            "ground_braking" => &mut c.ground_braking,
-            "ground_friction" => &mut c.ground_friction,
-            "air_acceleration" => &mut c.air_acceleration,
-            "air_projected_limit" => &mut c.air_projected_limit,
-            "air_resistance" => &mut c.air_resistance,
-            "horizontal_limit" => &mut c.horizontal_limit,
-            "jump_retention" => &mut c.jump_retention,
-            "landing_retention" => &mut c.landing_retention,
-            "coyote_ms" => &mut c.coyote_ms,
-            "jump_buffer_ms" => &mut c.jump_buffer_ms,
-            "slide_duration" => &mut c.slide_duration,
-            "slide_friction" => &mut c.slide_friction,
-            "slide_control" => &mut c.slide_control,
-            "angular_speed" => &mut c.angular_speed,
-            _ => return Err("Parâmetro não permitido; use uma opção disponível no nó.".into()),
-        };
-        *field = value;
+        *parameter_field(&mut c, parameter).ok_or(UNKNOWN_PARAMETER)? = value;
         self.configure_character(id, c, allow_limit)
+    }
+    /// The value of `parameter` in the motor of the 3D character `id`, by the names
+    /// `set_character_parameter` takes.
+    pub fn character_parameter(&self, id: &str, parameter: &str) -> Result<f32, String> {
+        let mut c = self
+            .entity(id)
+            .and_then(|e| e.character3d.clone())
+            .ok_or("Objeto não possui personagem 3D")?;
+        parameter_field(&mut c, parameter)
+            .map(|field| *field)
+            .ok_or_else(|| UNKNOWN_PARAMETER.into())
     }
     pub fn set_character_option(
         &mut self,

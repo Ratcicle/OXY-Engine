@@ -42,8 +42,7 @@ impl Runtime {
             }),
             "character.state" => {
                 let id = self.target(graph, node, context, budget, depth + 1)?;
-                let state = self.inspect_character(&id)?;
-                state_value(&state, output)?
+                self.character_value(&id, output)?
             }
             "transform.read" => {
                 let id = self.target(graph, node, context, budget, depth + 1)?;
@@ -72,10 +71,7 @@ impl Runtime {
                 let forward = self.camera_orientation()? * -Vec3::Z;
                 match output {
                     "camera" => Value::Object(self.active_camera().map(str::to_owned)),
-                    "look" => Value::Vector2([
-                        (-forward.x).atan2(-forward.z).to_degrees(),
-                        forward.y.clamp(-1., 1.).asin().to_degrees(),
-                    ]),
+                    "look" => Value::Vector2(look_of(forward)),
                     "forward" => Value::Vector3(forward.to_array()),
                     "mode" => Value::Text(
                         match self.active_camera().and_then(|id| self.camera_mode(id)) {

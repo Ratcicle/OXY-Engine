@@ -1,12 +1,14 @@
 //! What the API's registry gives besides the VM (design §5.3, §5.7): the definitions file
 //! luau-lsp reads, the plan-B module (`require("@oxy")`, unused by default), the data of the
 //! Guide's pages and docs/api-scripts.md. All of it comes from [`registry::API`] and
-//! [`registry::TYPES`], so a new row reaches every one of them.
+//! [`registry::TYPES`], so a new row reaches every one of them; the reference also lists what
+//! plain Luau does of the nodes ([`registry::SYNTAX`]).
 //!
 //! The definitions keep to the one form both of Luau's solvers read in luau-lsp 1.70.1 (S2): only
-//! `export type`, `declare name: type` and `declare function`; objects as table types whose
-//! methods are function fields with an explicit `self`; `AnyObject` after `ScriptObject`.
-use super::registry::{API, ApiFn, ApiKind, ApiParam, Area, TYPES, TypeDef};
+//! `export type`, `declare name: type` and `declare function`; objects and their views as table
+//! types whose methods are function fields with an explicit `self`; `AnyObject` after
+//! `ScriptObject`. Luau's own functions (`error`) and the names of 0.8 are not declared.
+use super::registry::{API, ApiFn, ApiKind, ApiParam, Area, SYNTAX, TYPES, TypeDef, View};
 use crate::graph;
 use serde::Serialize;
 
@@ -56,11 +58,15 @@ fn defined_param(param: &ApiParam, shape: &Shape) -> String {
     }
 }
 
-/// The type of a function or method: `<X...>(self: Object, seconds: number, …) -> number`.
+/// The type of a function or method: `<X...>(self: Object, seconds: number, …) -> number`; a
+/// view's method takes the view (`self: Character`).
 fn function_type(f: &ApiFn, shape: &Shape) -> String {
     let mut params: Vec<String> = Vec::new();
     if f.kind == ApiKind::Method {
-        params.push(format!("self: {}", shape.object));
+        match f.view() {
+            Some(View::Object) | None => params.push(format!("self: {}", shape.object)),
+            Some(view) => params.push(format!("self: {}", view.name())),
+        }
     }
     params.extend(f.params.iter().map(|p| typed_param(p, shape)));
     format!(
@@ -78,9 +84,9 @@ fn help(out: &mut String, indent: &str, lines: &[&str]) {
     }
 }
 
-/// The members of objects as a table type for `shape`.
-fn object_body(out: &mut String, shape: &Shape) {
-    for f in API.iter().filter(|f| f.of_objects()) {
+/// The members of `view` as a table type for `shape`.
+fn view_body(out: &mut String, view: View, shape: &Shape) {
+    for f in API.iter().filter(|f| f.view() == Some(view)) {
         help(out, "    ", &[f.summary, f.doc]);
         let ty = match f.kind {
             ApiKind::Method => function_type(f, shape),
@@ -108,20 +114,34 @@ fn types(out: &mut String) {
             }
             TypeDef::Object { typed } => {
                 out.push_str(&format!("export type {}{} = {{\n", t.name, t.generics));
-                object_body(out, if typed { &TYPED } else { &PLAIN });
+                view_body(out, View::Object, if typed { &TYPED } else { &PLAIN });
+                out.push_str("}\n\n");
+            }
+            TypeDef::View(view) => {
+                out.push_str(&format!("export type {}{} = {{\n", t.name, t.generics));
+                view_body(out, view, &PLAIN);
                 out.push_str("}\n\n");
             }
         }
     }
 }
 
-/// The functions the types declare: all but those luau-lsp types itself (`require`).
+/// The functions and the values of global tables the types declare: all but those luau-lsp
+/// types itself (`require`), Luau's own and the names of 0.8.
 fn declared_functions() -> impl Iterator<Item = &'static ApiFn> {
     API.iter()
-        .filter(|f| f.kind == ApiKind::Function && f.in_types())
+        .filter(|f| matches!(f.kind, ApiKind::Function | ApiKind::Constant) && f.in_types())
 }
 
-/// The global tables, in the order of their first row, each with its functions.
+/// A member of a global table as its type declares it: a function's type, a value's.
+fn table_member(f: &ApiFn) -> String {
+    match f.kind {
+        ApiKind::Constant => resolve(f.returns, &PLAIN),
+        _ => function_type(f, &PLAIN),
+    }
+}
+
+/// The global tables, in the order of their first row, each with its functions and values.
 fn tables() -> Vec<(&'static str, Vec<&'static ApiFn>)> {
     let mut tables: Vec<(&'static str, Vec<&'static ApiFn>)> = Vec::new();
     for f in declared_functions() {
@@ -139,7 +159,7 @@ fn tables() -> Vec<(&'static str, Vec<&'static ApiFn>)> {
 
 /// The functions of the base the types declare (`print`, `warn`).
 fn base_functions() -> impl Iterator<Item = &'static ApiFn> {
-    declared_functions().filter(|f| f.holder().is_empty())
+    declared_functions().filter(|f| f.kind == ApiKind::Function && f.holder().is_empty())
 }
 
 /// The comment that opens the definitions: the callbacks and the declarations, which are the
@@ -181,11 +201,7 @@ pub fn definitions() -> String {
         out.push_str(&format!("declare {name}: {{\n"));
         for f in rows {
             help(&mut out, "    ", &[f.summary, f.doc]);
-            out.push_str(&format!(
-                "    {}: {},\n",
-                f.member(),
-                function_type(f, &PLAIN)
-            ));
+            out.push_str(&format!("    {}: {},\n", f.member(), table_member(f)));
         }
         out.push_str("}\n\n");
     }
@@ -220,11 +236,7 @@ pub fn module() -> String {
         out.push_str(&format!("    {name}: {{\n"));
         for f in rows {
             help(&mut out, "        ", &[f.summary, f.doc]);
-            out.push_str(&format!(
-                "        {}: {},\n",
-                f.member(),
-                function_type(f, &PLAIN)
-            ));
+            out.push_str(&format!("        {}: {},\n", f.member(), table_member(f)));
         }
         out.push_str("    },\n");
     }
@@ -240,8 +252,9 @@ pub fn module() -> String {
 }
 
 /// A row as the Guide and the reference write it: `audio.play(name: string, options:
-/// PlayOptions?)`, `obj:after<X...>(…): number`, `obj.position: vector`, `on_start(self:
-/// Object)`, `Modulo.attributes: { [string]: any }`.
+/// PlayOptions?)`, `obj:after<X...>(…): number`, `obj.position: vector`,
+/// `obj.character:jump()`, `on_start(self: Object)`, `Modulo.attributes: { [string]: any }`,
+/// `time.dt: number`; a name of 0.8 as it will be used.
 pub fn signature(f: &ApiFn) -> String {
     let params = |with_self: bool| {
         let mut params: Vec<String> = Vec::new();
@@ -255,17 +268,21 @@ pub fn signature(f: &ApiFn) -> String {
         unit if unit == "()" => String::new(),
         returns => format!(": {returns}"),
     };
+    let path = f.view().map_or("obj", View::path);
     match f.kind {
         ApiKind::Function => format!("{}{}({}){returns}", f.name, f.generics, params(false)),
         ApiKind::Method => format!(
-            "obj:{}{}({}){returns}",
+            "{path}:{}{}({}){returns}",
             f.member(),
             f.generics,
             params(false)
         ),
-        ApiKind::Property { .. } => format!("obj.{}{returns}", f.member()),
+        ApiKind::Property { .. } => format!("{path}.{}{returns}", f.member()),
         ApiKind::Callback => format!("{}({})", f.name, params(true)),
         ApiKind::Declaration => format!("Modulo.{}{returns}", f.name),
+        ApiKind::Constant => format!("{}{returns}", f.name),
+        ApiKind::Reserved if f.holder() == "Modulo" => format!("{}({})", f.name, params(true)),
+        ApiKind::Reserved => f.name.to_owned(),
     }
 }
 
@@ -406,7 +423,18 @@ pub fn markdown() -> String {
             ));
         }
     }
-    out.push_str("## Tipos\n\n```lua\n");
+    out.push_str(
+        "## Nós que viram Luau\n\nO que estas operações dos nós fazem o próprio Luau faz, sem \
+         uma função da API; as outras estão nas páginas acima, no item **Nós**.\n\n",
+    );
+    for (id, luau) in SYNTAX {
+        let label = graph::registry()
+            .iter()
+            .find(|op| op.id == *id)
+            .map_or(*id, |op| op.label);
+        out.push_str(&format!("- {label} (`{id}`): {luau}\n"));
+    }
+    out.push_str("\n## Tipos\n\n```lua\n");
     let mut shared = String::new();
     types(&mut shared);
     out.push_str(shared.trim_end());
@@ -483,13 +511,19 @@ mod tests {
                 ApiKind::Function if f.holder().is_empty() => {
                     format!("declare function {}(", f.name)
                 }
-                ApiKind::Function | ApiKind::Method | ApiKind::Property { .. } => {
-                    format!("    {}: ", f.member())
-                }
+                ApiKind::Function
+                | ApiKind::Method
+                | ApiKind::Property { .. }
+                | ApiKind::Constant => format!("    {}: ", f.member()),
                 ApiKind::Callback => format!("--   {}(self", f.name),
                 ApiKind::Declaration => format!("--   Modulo.{}", f.name),
+                ApiKind::Reserved => unreachable!("not in the types"),
             };
             assert!(text.contains(&found), "{}: {found}", f.name);
+        }
+        // Luau's own functions and the names of 0.8 are left out.
+        for name in ["function error(", "function assert(", "players", "online:"] {
+            assert!(!text.contains(name), "{name}");
         }
         assert!(text.contains(
             "    after: <X...>(self: ScriptObject<A, S>, seconds: number, fn: (ScriptObject<A, \
@@ -497,6 +531,11 @@ mod tests {
         ));
         assert!(text.contains("declare function warn(...: any): ()"));
         assert!(text.contains("    object: () -> Object?,"));
+        // Views are types of their own, whose methods take the view.
+        assert!(text.contains("export type Character = {\n"));
+        assert!(text.contains("    character: Character,\n"));
+        assert!(text.contains("    jump: (self: Character) -> (),\n"));
+        assert!(text.contains("    dt: number,\n"));
     }
 
     #[test]
@@ -555,6 +594,15 @@ mod tests {
         assert_eq!(
             signature(crate::script::registry::find("Object.position").unwrap()),
             "obj.position: vector"
+        );
+        let find = |name| crate::script::registry::find(name).unwrap();
+        assert_eq!(signature(find("Character:jump")), "obj.character:jump()");
+        assert_eq!(signature(find("UiElement.text")), "obj.ui.text: string");
+        assert_eq!(signature(find("time.dt")), "time.dt: number");
+        assert_eq!(signature(find("players")), "players");
+        assert_eq!(
+            signature(find("on_player_join")),
+            "on_player_join(self: Object, player: any)"
         );
     }
 }

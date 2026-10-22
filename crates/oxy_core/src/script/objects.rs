@@ -69,7 +69,7 @@ fn receiver(s: &Shared, runtime: &Runtime, me: &LuaValue, method: &str) -> Resul
 }
 
 /// A vector argument, or `refused`.
-fn vector(value: &LuaValue, refused: &str) -> Result<Vec3, String> {
+pub(crate) fn vector(value: &LuaValue, refused: &str) -> Result<Vec3, String> {
     match value {
         LuaValue::Vector(v) if [v.x(), v.y(), v.z()].iter().all(|c| c.is_finite()) => {
             Ok(Vec3::new(v.x(), v.y(), v.z()))

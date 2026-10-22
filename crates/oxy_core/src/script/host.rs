@@ -164,6 +164,8 @@ pub(crate) struct Shared {
     pub handles: RefCell<HashMap<u64, Id>>,
     /// Handle keys to surface IDs: the project's, in any scene.
     surfaces: RefCell<HashMap<u64, Id>>,
+    /// Handle keys to the names of sequences of draws (`random.stream`).
+    streams: RefCell<HashMap<u64, String>>,
     /// The scene a call asked for (`scene.change`), which opens when the call ends.
     scene_change: RefCell<Option<Id>>,
     /// The object running went in the call (`self:destroy()`): the call ends without an error
@@ -205,6 +207,7 @@ impl Shared {
             poisoned: RefCell::default(),
             handles: RefCell::default(),
             surfaces: RefCell::default(),
+            streams: RefCell::default(),
             scene_change: RefCell::default(),
             vanished: Cell::new(false),
             nil_read: RefCell::default(),
@@ -306,6 +309,29 @@ impl Shared {
             .entry(key)
             .or_insert_with(|| id.to_owned());
         key
+    }
+
+    /// The sequence of draws whose handle has `key`, by name.
+    pub(crate) fn stream(&self, key: u64) -> Option<String> {
+        self.streams.borrow().get(&key).cloned()
+    }
+
+    /// The handle key of the sequence of draws `name`, registering it; why not when another
+    /// name has the key (one chance in ~10¹² for a thousand names).
+    pub(crate) fn register_stream(&self, name: &str) -> Result<u64, String> {
+        let key = handles::key(name);
+        let mut streams = self.streams.borrow_mut();
+        match streams.get(&key) {
+            Some(other) if other != name => Err(format!(
+                "as sequências \"{other}\" e \"{name}\" têm a mesma chave nos scripts; dê outro \
+                 nome a uma delas"
+            )),
+            Some(_) => Ok(key),
+            None => {
+                streams.insert(key, name.to_owned());
+                Ok(key)
+            }
+        }
     }
 
     /// The scene `id` opens when the call ends; a later request in the call replaces it.

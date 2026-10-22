@@ -1145,8 +1145,31 @@ the rest on the grid of a graph's waits), self:schedule({ {delay, Module.f, data
 self:cancel(id); audio.play(name, {volume?, audience?}) (audience changes nothing before 0.8: \
 the one player hears every sound, so check the character's own attribute to play it only for \
 them); vars.get(name, key?) (a key never written reads the variable's initial value; a name the \
-project lacks is an error with the nearest one), vars.set(name, value, key?); print and warn. \
-Game variables keep their values when a scene restarts: reset in on_start what must start over. \
+project lacks is an error with the nearest one), vars.set(name, value, key?); views of an object \
+with the component (on one without it, reading the view is an error naming the object: check \
+obj:has_component(kind)): obj.character (its state read only: position, velocity, speed, \
+grounded, posture, support, surface (the ground's), body_surface (the body's, writable), aim (a \
+unit direction from the simulated input's look, not from the camera image) and look (degrees, x \
+turn and y pitch); its commands move(axis), jump(), set_posture, add_velocity, set_velocity, \
+block, apply_profile, set_param, get_param, set_option, set_yaw and teleport(feet, {search?, \
+keep_velocity?, yaw?, look?}) returning ok, reason, destination: no room is no error but false \
+and why), obj.collider.enabled/is_area/surface, obj.platform.enabled, obj.controller.enabled, \
+obj.animation:play(clip, restart?)/playing/clip, obj.ui.text and obj.ui.color (a vector of red, \
+green, blue from 0 to 1); physics.raycast/sphere_cast/capsule_cast (a hit {object, point, normal, \
+distance, fraction, surface} or nil; a refused query returns nil and the reason) and \
+physics.capsule_fits; camera.active/look/forward/mode() and \
+camera.activate/set_mode/follow/look_at/release_look/set(camera, ...); audio.loop(name, \
+{channel?, volume?, fade?}), audio.stop({sound?, channel?, fade?}), audio.set_volume(channel, v), \
+audio.volume(channel); game.pause/resume/paused/show_cursor/hide_cursor/quit(); \
+save.write/clear/exists(); input.pressed/held/released(action), input.movement(), input.look(), \
+input.wheel() (no player argument before 0.8); time.now(), time.dt, time.format(seconds, \
+format); random.number/integer(min, max), random.seed(n), random.stream(name):number/integer (the \
+engine's draws, a sequence per object and script); print, warn, error and assert. A wrong name of \
+a parameter, option, mode, clip or action is refused with the nearest one and the list. \
+players, Player, session, game.online/is_host/is_server, on_request and \
+on_player_join/on_player_leave are kept for 0.8: using them is an error that says it \"chega na \
+0.8\". Game variables keep their values when a scene restarts: reset in on_start what must start \
+over. \
 Module.attributes = {Name = default} declares what attach_script gives an object \
 (param.object() an empty Object attribute, param.surface(name?) a Surface of the project, \
 param.vector2(x, y) a Vector2; in Module.state they declare fields that start empty). An error \
@@ -3507,6 +3530,12 @@ mod tests {
             "audience changes nothing before 0.8",
             "a key never written reads the variable's initial value",
             "keep their values when a scene restarts",
+            "returning ok, reason, destination",
+            "body_surface (the body's, writable)",
+            "a refused query returns nil and the reason",
+            "no player argument before 0.8",
+            "random.stream(name):number/integer",
+            "\"chega na 0.8\"",
         ] {
             assert!(SCRIPTS_DESCRIPTION.contains(text), "{text}");
         }

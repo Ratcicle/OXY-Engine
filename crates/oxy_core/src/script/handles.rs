@@ -6,7 +6,9 @@
 //! `__namecall`, `__tostring` and `__len` written in C through `mlua::ffi`: the key is read
 //! with `lua_tolstring` and the method with `lua_namecallatom`, without creating mlua values.
 //! A surface of the project (an attribute Superfície) is a handle too, with a mark of its own
-//! and only `.name`.
+//! and only `.name`. So are the views of an object (`obj.character`, `obj.collider`…, see
+//! `views`): the object's key with the view's mark, whose members are the registry's rows of
+//! that view, and a sequence of draws (`random.stream`), whose key names it.
 //!
 //! `self.state` is the object with the "memory" mark (see `memory`): its fields go through the
 //! same C functions, and a table read from it or assigned to it stays in a table of touched
@@ -17,8 +19,9 @@
 //! What an object has for scripts is the registry's (`registry`): its properties ([`Property`])
 //! are resolved here by name, `obj:exists()` and `obj:has_attribute(name)` run in C
 //! ([`FastMethod`]), and the other methods (the timers of `timers`, `obj:send` of `messages`,
-//! those of `objects`) are mlua functions in the table of methods, made from the registry's
-//! rows. The properties read and write through the `Runtime`'s operations, as the nodes do:
+//! those of `objects`, and the views' of `character`, `views` and `game`) are mlua functions in
+//! the tables of methods, one per mark, made from the registry's rows. The properties read and
+//! write through the `Runtime`'s operations, as the nodes do:
 //! - `obj.attr`: its attributes, `obj.attr.Vida` (nil when it lacks one, or an empty Objeto or
 //!   Superfície) and `obj.attr.Vida = 3` (it must have it, with a value of the same type; a
 //!   Vetor2 takes a vector's x and y);
@@ -29,7 +32,9 @@
 //!   a playing clip poses); `obj.yaw`, its horizontal turn in the world, only reads;
 //! - `obj.visible` and `obj.logic_enabled`, the switches of Ativar / desativar componente
 //!   (visible and behavior: the graph only), and `obj.id`, `obj.name` and `obj.parent`;
-//! - `self.state`, the memory of the script running (see `memory`).
+//! - `self.state`, the memory of the script running (see `memory`);
+//! - `obj.character`, `obj.collider`, `obj.platform`, `obj.controller`, `obj.animation` and
+//!   `obj.ui`, its views, an error on an object without the component (see `views`).
 //!
 //! An object gone reads as an error, but for `obj:exists()`; when it is the object running,
 //! the call ends there instead (see `Shared::gone`).
@@ -37,8 +42,8 @@ use super::errors::closest;
 use super::host::{Limit, NilRead, Phase, Shared, door, locate_raw, peek};
 use super::math;
 use super::memory::{self, Key, Memory, ScriptValue};
-use super::registry::{self, Imp};
-use super::value_kind;
+use super::registry::{self, Imp, View};
+use super::{value_kind, views};
 use crate::document::Value;
 use crate::runtime::{ObjectComponent, Runtime, TransformPart, TransformSpace};
 use glam::{Quat, Vec3};
@@ -55,16 +60,22 @@ pub(crate) const MARK_OBJECT: u64 = 1;
 pub(crate) const MARK_ATTRIBUTES: u64 = 2;
 pub(crate) const MARK_STATE: u64 = 3;
 pub(crate) const MARK_SURFACE: u64 = 4;
+pub(crate) const MARK_CHARACTER: u64 = 5;
+pub(crate) const MARK_COLLIDER: u64 = 6;
+pub(crate) const MARK_PLATFORM: u64 = 7;
+pub(crate) const MARK_CONTROLLER: u64 = 8;
+pub(crate) const MARK_ANIMATION: u64 = 9;
+pub(crate) const MARK_UI: u64 = 10;
+pub(crate) const MARK_STREAM: u64 = 11;
 const KEY_MASK: u64 = (1 << 56) - 1;
 
 /// What a handle with `mark` is, in words.
 pub(crate) fn mark_kind(mark: u64) -> &'static str {
     match mark {
-        MARK_OBJECT => "objeto",
         MARK_ATTRIBUTES => "os atributos de um objeto",
         MARK_STATE => "a memória de um objeto",
         MARK_SURFACE => "superfície",
-        _ => "valor desconhecido da engine",
+        _ => View::of_mark(mark).map_or("valor desconhecido da engine", View::kind),
     }
 }
 
@@ -96,7 +107,7 @@ pub(crate) fn collision(runtime: &Runtime, a: &str, b: &str) -> String {
     )
 }
 
-/// The properties of objects, which `__index` and `__newindex` resolve.
+/// The properties of objects and of their views, which `__index` and `__newindex` resolve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Property {
     Id,
@@ -112,6 +123,26 @@ pub(crate) enum Property {
     Orientation,
     Scale,
     Yaw,
+    /// The views of objects (see `views`).
+    Character,
+    Collider,
+    Platform,
+    Controller,
+    Animation,
+    Ui,
+    /// A value of the 3D character's state, by the name of the output of Ler personagem 3D.
+    CharacterState(&'static str),
+    Posture,
+    Aim,
+    Look,
+    /// Whether the collider, the platform or the 2D movement is on.
+    Enabled,
+    IsArea,
+    Surface,
+    Playing,
+    Clip,
+    Text,
+    Color,
 }
 
 impl Property {
@@ -126,6 +157,11 @@ impl Property {
                 | Self::Rotation
                 | Self::Orientation
                 | Self::Scale
+                | Self::Enabled
+                | Self::Surface
+                | Self::Playing
+                | Self::Text
+                | Self::Color
         )
     }
 }
@@ -147,7 +183,11 @@ const STATE_SHAPE: &str = "self.state não se mede, não se percorre e não se c
 /// tables of script memory.
 pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<(Table, Table)> {
     let me = LightUserData(Rc::as_ptr(shared) as *mut c_void);
+    // By mark, the methods of the handles with it.
     let methods = lua.create_table()?;
+    for view in View::ALL {
+        methods.raw_set(view.mark(), lua.create_table()?)?;
+    }
     let touched = lua.create_table()?;
     for f in registry::API {
         let method: Function = match f.imp {
@@ -161,7 +201,12 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<(Table, Ta
             },
             _ => continue,
         };
-        methods.raw_set(f.member(), method)?;
+        let view = f.view().expect("a method belongs to a view");
+        let table: Table = methods.raw_get(view.mark())?;
+        table.raw_set(f.member(), method)?;
+    }
+    for view in View::ALL {
+        methods.raw_get::<Table>(view.mark())?.set_readonly(true);
     }
     methods.set_readonly(true);
     // The tests read what scripts reach.
@@ -207,7 +252,7 @@ pub(crate) fn install(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<(Table, Ta
 }
 
 /// What an access gives back, computed in Rust before anything touches the Lua stack.
-enum Out {
+pub(crate) enum Out {
     Nil,
     /// Nil read from an attribute, which a later error about a nil names (see `NilRead`).
     NilFrom(NilRead),
@@ -217,8 +262,30 @@ enum Out {
     Quat([f32; 4]),
     Text(String),
     Handle(u64, u64),
-    /// The method under the key, from the table of methods.
-    Method,
+    /// The method under the key, from the table of methods of the handles with this mark.
+    Method(u64),
+}
+
+impl Out {
+    /// A value of the engine's, as a script reads it: an object or a surface as its handle,
+    /// registering it, a Vetor2 as a vector with z 0, an empty reference as nil.
+    pub(crate) fn of(shared: &Shared, runtime: &Runtime, value: Value) -> Result<Self, String> {
+        Ok(match value {
+            Value::Number(n) => Self::Number(n),
+            Value::Bool(b) => Self::Bool(b),
+            Value::Text(text) => Self::Text(text),
+            Value::Vector3(v) => Self::Vector(v),
+            Value::Vector2([x, y]) => Self::Vector([x, y, 0.]),
+            Value::Object(None) | Value::Surface(None) => Self::Nil,
+            Value::Object(Some(id)) => Self::Handle(
+                MARK_OBJECT,
+                shared
+                    .register(&id)
+                    .map_err(|first| collision(runtime, &first, &id))?,
+            ),
+            Value::Surface(Some(id)) => Self::Handle(MARK_SURFACE, shared.register_surface(&id)),
+        })
+    }
 }
 
 /// A value a script writes, read off the stack first.
@@ -273,12 +340,12 @@ impl In {
 
 /// The property objects have under `name`, none for a method; why not when they have neither.
 fn property(name: &[u8]) -> Result<Option<Property>, String> {
-    match registry::object_member(name) {
+    match registry::member(View::Object, name) {
         Some(f) => Ok(match f.imp {
             Imp::Property(property) => Some(property),
             _ => None,
         }),
-        None => Err(unknown_member(name)),
+        None => Err(unknown_member(View::Object, name)),
     }
 }
 
@@ -287,7 +354,11 @@ fn utf8(bytes: &[u8]) -> Result<&str, String> {
 }
 
 /// The object whose handle has `key`, in the scene: its ID; why not.
-fn object_id(shared: &Shared, runtime: &Runtime, key: u64) -> Result<crate::document::Id, String> {
+pub(crate) fn object_id(
+    shared: &Shared,
+    runtime: &Runtime,
+    key: u64,
+) -> Result<crate::document::Id, String> {
     shared
         .id(key)
         .filter(|id| runtime.entity(id).is_some())
@@ -298,7 +369,7 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
     match mark {
         MARK_OBJECT => {
             let Some(property) = property(name.unwrap_or_default())? else {
-                return Ok(Out::Method);
+                return Ok(Out::Method(MARK_OBJECT));
             };
             match property {
                 Property::Attr => return Ok(Out::Handle(MARK_ATTRIBUTES, key)),
@@ -346,6 +417,7 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
                     Out::Number(f64::from(crate::runtime::yaw_of(rotation * -Vec3::Z)))
                 }
                 Property::Attr | Property::State => unreachable!("answered above"),
+                view => views::open(e, view, key)?,
             })
         }
         MARK_ATTRIBUTES => {
@@ -390,7 +462,10 @@ fn index(shared: &Shared, mark: u64, key: u64, name: Option<&[u8]>) -> Result<Ou
             let runtime = door(shared)?;
             Ok(Out::Text(surface_name(shared, runtime, key)?))
         }
-        _ => Err("valor desconhecido da engine".into()),
+        mark => match View::of_mark(mark) {
+            Some(view) => views::index(shared, view, key, name.unwrap_or_default()),
+            None => Err("valor desconhecido da engine".into()),
+        },
     }
 }
 
@@ -531,50 +606,59 @@ fn state_assign(shared: &Shared, key: u64, name: &[u8]) -> Result<(), String> {
         .map_err(|r| r.message())
 }
 
-/// The member of objects `name` likely means, when it has none: one of the same name in another
-/// case, one other engines or Portuguese call so (with its help, since the name differs), or
-/// the nearest by spelling.
-fn meant(name: &str) -> Option<(&'static str, bool)> {
+/// The member of `view` `name` likely means, when it has none: one of the same name in another
+/// case, one other engines or Portuguese call so (objects only, with its help, since the name
+/// differs), or the nearest by spelling.
+fn meant(view: View, name: &str) -> Option<(&'static str, bool)> {
     let lower = name.to_lowercase();
-    if let Some(member) = registry::object_members().find(|m| *m == lower) {
+    if let Some(member) = registry::members(view).find(|m| *m == lower) {
         return Some((member, false));
     }
-    if let Some(member) = registry::member_alias(&lower) {
+    if view == View::Object
+        && let Some(member) = registry::member_alias(&lower)
+    {
         return Some((member, true));
     }
-    closest(name, registry::object_members().filter(|m| *m != name)).map(|m| (m, false))
+    closest(name, registry::members(view).filter(|m| *m != name)).map(|m| (m, false))
 }
 
 /// `; quis dizer 'position'?`, and what the member is when it was found by meaning.
-fn hint(name: &str) -> Option<String> {
-    let (member, by_meaning) = meant(name)?;
+fn hint(view: View, name: &str) -> Option<String> {
+    let (member, by_meaning) = meant(view, name)?;
     let mut hint = format!("; quis dizer '{member}'?");
-    if by_meaning && let Some(f) = registry::object_member(member.as_bytes()) {
+    if by_meaning && let Some(f) = registry::member(view, member.as_bytes()) {
         hint.push_str(&format!(" ({})", f.summary));
     }
     Some(hint)
 }
 
-fn unknown_member(name: &[u8]) -> String {
+pub(crate) fn unknown_member(view: View, name: &[u8]) -> String {
     let name = String::from_utf8_lossy(name);
-    format!("Object não tem '{name}'{}", hint(&name).unwrap_or_default())
+    format!(
+        "{} não tem '{name}'{}",
+        view.name(),
+        hint(view, &name).unwrap_or_default()
+    )
 }
 
-/// `obj:name()` of a name that is no method.
-fn not_a_method(name: &[u8]) -> String {
-    match registry::object_member(name) {
+/// `obj:name()` of a name that is no method of `view`.
+fn not_a_method(view: View, name: &[u8]) -> String {
+    match registry::member(view, name) {
         Some(f) => {
             let property = f.member();
-            format!("{property} é uma propriedade, não um método (use obj.{property})")
+            format!(
+                "{property} é uma propriedade, não um método (use {}.{property})",
+                view.path()
+            )
         }
-        None => unknown_member(name),
+        None => unknown_member(view, name),
     }
 }
 
 /// `obj.name = v` of a name objects do not have: a property it likely means, and where values of
 /// its own go.
 fn loose_field(name: &str) -> String {
-    match hint(name) {
+    match hint(View::Object, name) {
         Some(hint) => format!(
             "{name} não é uma propriedade de Object{hint} Para um valor do próprio script, use \
              self.state ou um atributo"
@@ -585,7 +669,7 @@ fn loose_field(name: &str) -> String {
 
 fn newindex(shared: &Shared, mark: u64, key: u64, name: &[u8], value: In) -> Result<(), String> {
     if mark == MARK_OBJECT {
-        let member = registry::object_member(name);
+        let member = registry::member(View::Object, name);
         let name = String::from_utf8_lossy(name);
         return match member.map(|f| f.imp) {
             Some(Imp::Property(property)) if property.writable() => {
@@ -596,6 +680,18 @@ fn newindex(shared: &Shared, mark: u64, key: u64, name: &[u8], value: In) -> Res
             }
             Some(_) => Err(format!("{name} é só leitura")),
             None => Err(loose_field(&name)),
+        };
+    }
+    if let Some(view) = View::of_mark(mark) {
+        let member = registry::member(view, name);
+        let text = String::from_utf8_lossy(name);
+        return match member.map(|f| f.imp) {
+            Some(Imp::Property(property)) if property.writable() => {
+                views::write(shared, view, key, property, &text, value)
+            }
+            Some(Imp::Method(_)) => Err(format!("{text} é um método e é só leitura")),
+            Some(_) => Err(format!("{}.{text} é só leitura", view.path())),
+            None => Err(unknown_member(view, name)),
         };
     }
     let name = String::from_utf8_lossy(name);
@@ -870,10 +966,12 @@ unsafe fn push(l: *mut ffi::lua_State, shared: &Shared, out: Out) {
             Out::Quat(q) => math::push_quat(l, q),
             Out::Text(text) => push_text(l, &text),
             Out::Handle(mark, key) => ffi::lua_pushlightuserdatatagged(l, handle(mark, key), 0),
-            Out::Method => {
-                // The key at 2 names a method of the registry, which the table has.
+            Out::Method(mark) => {
+                // The key at 2 names a method of the registry, which the mark's table has.
+                ffi::lua_rawgeti_(l, ffi::lua_upvalueindex(2), mark as c_int);
                 ffi::lua_pushvalue(l, 2);
-                ffi::lua_rawget(l, ffi::lua_upvalueindex(2));
+                ffi::lua_rawget(l, -2);
+                ffi::lua_remove(l, -2);
             }
         }
     }
@@ -1046,23 +1144,25 @@ unsafe fn run_method(l: *mut ffi::lua_State, shared: &Shared, method: FastMethod
     }
 }
 
-/// A method of the table of methods (upvalue 2 of the running closure), called with the
-/// object and the arguments as they came; its errors unwind from it.
+/// A method of the table of methods of `view` (in upvalue 2 of the running closure), called
+/// with the handle and the arguments as they came; its errors unwind from it.
 ///
 /// # Safety
 /// Called from a C function Luau runs, with nothing of Rust to drop; `name` is the method's
 /// name, NUL-terminated, which the table has.
-unsafe fn call_listed(l: *mut ffi::lua_State, name: *const c_char) -> c_int {
+unsafe fn call_listed(l: *mut ffi::lua_State, view: View, name: *const c_char) -> c_int {
     unsafe {
         let n = ffi::lua_gettop(l);
-        ffi::lua_rawgetfield(l, ffi::lua_upvalueindex(2), name);
+        ffi::lua_rawgeti_(l, ffi::lua_upvalueindex(2), view.mark() as c_int);
+        ffi::lua_rawgetfield(l, -1, name);
+        ffi::lua_remove(l, -2);
         ffi::lua_insert(l, 1);
         ffi::lua_call(l, n, ffi::LUA_MULTRET);
         ffi::lua_gettop(l)
     }
 }
 
-/// `obj:method(...)`. Upvalues: the `Shared` and the table of methods.
+/// `obj:method(...)`, and a view's. Upvalues: the `Shared` and the tables of methods.
 unsafe extern "C-unwind" fn object_namecall(l: *mut ffi::lua_State) -> c_int {
     unsafe {
         let shared = shared_of(l);
@@ -1072,17 +1172,21 @@ unsafe extern "C-unwind" fn object_namecall(l: *mut ffi::lua_State) -> c_int {
         } else {
             CStr::from_ptr(atom).to_bytes()
         };
-        if handle_at(l, 1).is_some_and(|(mark, _)| mark == MARK_SURFACE) {
+        let mark = handle_at(l, 1).map_or(MARK_OBJECT, |(mark, _)| mark);
+        if mark == MARK_SURFACE {
             raise(
                 l,
                 shared,
                 "uma superfície não tem métodos; leia surface.name".into(),
             )
         }
-        match registry::object_member(name).map(|f| f.imp) {
-            Some(Imp::Method(_)) => call_listed(l, atom),
+        // The attributes and the memory answer as objects do, so `self.attr:exists()` says
+        // what it is.
+        let view = View::of_mark(mark).unwrap_or(View::Object);
+        match registry::member(view, name).map(|f| f.imp) {
+            Some(Imp::Method(_)) => call_listed(l, view, atom),
             Some(Imp::FastMethod(method)) => run_method(l, shared, method),
-            _ => raise(l, shared, not_a_method(name)),
+            _ => raise(l, shared, not_a_method(view, name)),
         }
     }
 }
@@ -1111,6 +1215,10 @@ unsafe extern "C-unwind" fn object_tostring(l: *mut ffi::lua_State) -> c_int {
                 let name = peek(shared).and_then(|runtime| surface_name(shared, runtime, key).ok());
                 return Ok(name.unwrap_or_else(|| "superfície".into()));
             }
+            if mark == MARK_STREAM {
+                let name = shared.stream(key).unwrap_or_default();
+                return Ok(format!("random.stream(\"{name}\")"));
+            }
             let name = peek(shared)
                 .zip(shared.id(key))
                 .and_then(|(runtime, id)| runtime.entity(&id).map(|e| e.name.clone()))
@@ -1118,7 +1226,12 @@ unsafe extern "C-unwind" fn object_tostring(l: *mut ffi::lua_State) -> c_int {
             Ok(match mark {
                 MARK_ATTRIBUTES => format!("atributos de {name}"),
                 MARK_STATE => format!("memória de {name}"),
-                _ => name,
+                MARK_OBJECT => name,
+                mark => match View::of_mark(mark) {
+                    // `Porta.character`.
+                    Some(view) => format!("{name}{}", view.path().trim_start_matches("obj")),
+                    None => name,
+                },
             })
         });
         match text {
@@ -1136,11 +1249,12 @@ unsafe extern "C-unwind" fn object_len(l: *mut ffi::lua_State) -> c_int {
         let shared = shared_of(l);
         let (mark, _) = handle_at(l, 1).unwrap_or_default();
         let message = match mark {
-            MARK_STATE => STATE_SHAPE,
-            MARK_ATTRIBUTES => "os atributos de um objeto não têm tamanho (#)",
-            MARK_SURFACE => "uma superfície não tem tamanho (#)",
-            _ => "um objeto não tem tamanho (#)",
+            MARK_STATE => STATE_SHAPE.to_owned(),
+            MARK_ATTRIBUTES => "os atributos de um objeto não têm tamanho (#)".to_owned(),
+            MARK_SURFACE => "uma superfície não tem tamanho (#)".to_owned(),
+            MARK_OBJECT => "um objeto não tem tamanho (#)".to_owned(),
+            mark => format!("{} não tem tamanho (#)", mark_kind(mark)),
         };
-        raise(l, shared, message.to_owned())
+        raise(l, shared, message)
     }
 }

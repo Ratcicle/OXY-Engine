@@ -17,12 +17,19 @@
 //!   `obj:destroy()`…; `obj:send(name, value)` of `messages`);
 //! - timers (`timers`): `self:after`, `self:every`, `self:sequence`, `self:schedule` and
 //!   `self:cancel`;
+//! - the views of objects (`views`): `obj.character` (its state, and its commands of
+//!   `character`), `obj.collider`, `obj.platform`, `obj.controller`, `obj.animation` and
+//!   `obj.ui`;
 //! - the global tables: `scene` (`objects`: finding objects, models, scene changes), `vmath`
-//!   and `quat` (`math`), and those of `api`: `audio.play(name, { volume = …, audience = obj
-//!   })`, `vars.get(name, key?)`, `vars.set(name, value, key?)`, and `param.object()`,
-//!   `param.surface(name?)` and `param.vector2(x, y)` for declarations;
-//! - `print` and `warn`, which log the object's name, the text and the script line;
-//! - `require(path)` of `sandbox`, a frozen module of the scripts' folder.
+//!   and `quat` (`math`), `physics` (`physics`: the 3D queries), `camera` (`camera`), those of
+//!   `game`: `game`, `save`, `input`, `time` and `random`, and those of `api`: `audio` (sounds,
+//!   loops and volumes), `vars.get(name, key?)`, `vars.set(name, value, key?)`, and
+//!   `param.object()`, `param.surface(name?)` and `param.vector2(x, y)` for declarations;
+//! - `print` and `warn`, which log the object's name, the text and the script line, and Luau's
+//!   own `error` and `assert`;
+//! - `require(path)` of `sandbox`, a frozen module of the scripts' folder;
+//! - the names of 0.8 (`players`, `game.online`, `on_request`…), kept: using one is an error
+//!   that says it comes in 0.8.
 //!
 //! A module may declare `Module.attributes = { Velocidade = 90, Alvo = param.object() }`, the
 //! attributes attaching it gives an object that lacks them, with those defaults (decision Q6;
@@ -61,7 +68,10 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 mod api;
 mod bytecode;
+mod camera;
+mod character;
 mod errors;
+mod game;
 pub mod generate;
 mod handles;
 mod host;
@@ -72,6 +82,7 @@ mod math;
 pub(crate) mod memory;
 pub(crate) mod messages;
 mod objects;
+mod physics;
 pub mod registry;
 mod sandbox;
 #[cfg(test)]
@@ -79,6 +90,7 @@ mod state_tests;
 #[cfg(test)]
 mod task_tests;
 pub(crate) mod timers;
+mod views;
 
 pub(crate) use errors::closest;
 pub use errors::{ScriptError, ScriptErrorKind};
@@ -156,10 +168,6 @@ impl Callback {
         })
     }
 }
-
-/// Callback names a module may already define that the engine calls in a later version
-/// (players in 0.8): no warning for them.
-pub(crate) const LATER_CALLBACKS: [&str; 3] = ["on_request", "on_player_join", "on_player_leave"];
 
 /// The callbacks a module defines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -303,13 +311,17 @@ pub fn attached_paths(project: &Project) -> BTreeSet<String> {
 }
 
 /// A function of the module `path`, defined at `line`, named like a callback that is none
-/// (`near` the one it likely means): it never runs by itself.
+/// (`near` the one it likely means), or like one the engine calls from 0.8: it never runs by
+/// itself.
 pub(crate) fn unknown_callback(
     path: &str,
     name: &str,
     line: u32,
     near: Option<&str>,
 ) -> ScriptError {
+    if registry::reserved(name).is_some() {
+        return ScriptError::new(path, line, registry::later(name));
+    }
     let hint = near.map_or_else(String::new, |near| format!("; quis dizer {near}?"));
     ScriptError::new(
         path,
@@ -569,7 +581,8 @@ pub fn declared_attributes<'a>(
                         .clone()
                         .map_err(|message| ScriptError::new(path, 0, message))?;
                     for (attribute, surface) in &module.surfaces {
-                        let id = surface_named(surfaces, surface).map_err(|message| {
+                        let what = format!("param.surface(\"{surface}\")");
+                        let id = surface_named(surfaces, surface, &what).map_err(|message| {
                             ScriptError::new(
                                 path,
                                 0,
@@ -590,9 +603,13 @@ pub fn declared_attributes<'a>(
         .collect()
 }
 
-/// The surface of `surfaces` that `param.surface(name)` names: by its name, else ignoring case
-/// and the spaces at its ends, as the project lists them.
-fn surface_named(surfaces: &[SurfaceMaterial], name: &str) -> Result<Id, String> {
+/// The surface of `surfaces` that `name` names (in `what`, as `param.surface("Gelo")`): by its
+/// name, else ignoring case and the spaces at its ends, as the project lists them.
+pub(crate) fn surface_named(
+    surfaces: &[SurfaceMaterial],
+    name: &str,
+    what: &str,
+) -> Result<Id, String> {
     let wanted = name.trim().to_lowercase();
     let found = surfaces.iter().find(|s| s.name == name).or_else(|| {
         surfaces
@@ -604,15 +621,14 @@ fn surface_named(surfaces: &[SurfaceMaterial], name: &str) -> Result<Id, String>
     }
     if surfaces.is_empty() {
         return Err(format!(
-            "param.surface(\"{name}\") nomeia uma superfície, e o projeto não tem superfícies"
+            "{what} nomeia uma superfície, e o projeto não tem superfícies"
         ));
     }
     let names: Vec<&str> = surfaces.iter().map(|s| s.name.as_str()).collect();
     let hint = closest(name, names.iter().copied())
         .map_or_else(|| ".".to_owned(), |near| format!("; quis dizer {near}?"));
     Err(format!(
-        "param.surface(\"{name}\") nomeia uma superfície que o projeto não tem{hint} \
-         Superfícies: {}",
+        "{what} nomeia uma superfície que o projeto não tem{hint} Superfícies: {}",
         names.join(", ")
     ))
 }

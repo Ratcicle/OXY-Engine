@@ -143,11 +143,9 @@ impl Runtime {
         Ok(value)
     }
 
-    /// `random_number` for the script `script` that `owner` attaches, from its sequence
-    /// `stream` (the empty name is its own): counted apart from the graph's draws and from
-    /// every other script's and sequence's. Provisional: the script API calls it in a later
-    /// stage; tests now.
-    #[doc(hidden)]
+    /// `random_number` for the script `script` that `owner` attaches (`random.number`,
+    /// `random.integer`), from its sequence `stream` (the empty name is its own): counted apart
+    /// from the graph's draws and from every other script's and sequence's.
     pub fn script_random_number(
         &mut self,
         owner: &str,

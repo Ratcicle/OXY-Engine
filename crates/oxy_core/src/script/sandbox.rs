@@ -1,11 +1,12 @@
 //! The VM scripts run in (design §3.10): one set of globals for every script, read-only behind
 //! a proxy whose `__index` refuses unknown names at the line that reads them and whose
-//! `__newindex` refuses globals with a hint; frozen metatables; no clock, disk, `buffer`,
-//! `integer`, debug library, global draws or addresses in text.
+//! `__newindex` refuses globals with a hint, and says when a name kept for 0.8 (`players`)
+//! comes; frozen metatables; no clock, disk, `buffer`, `integer`, debug library, global draws or
+//! addresses in text. `error` and `assert` stay Luau's.
 use super::errors::closest;
 use super::handles;
 use super::host::{Extra, Shared, api, locate, located};
-use super::{FOLDER, load};
+use super::{FOLDER, load, registry};
 use mlua::chunk::Compiler;
 use mlua::{
     Function, Lua, LuaOptions, LuaString, MultiValue, StdLib, Table, Value as LuaValue, VmState,
@@ -146,6 +147,9 @@ fn install_proxy(lua: &Lua, base: &Table) -> mlua::Result<()> {
             let name = key.to_string().unwrap_or_default();
             if ABSENT.contains(&name.as_str()) {
                 return Err(located(lua, format!("{name} não existe nos scripts")));
+            }
+            if registry::reserved(&name).is_some() {
+                return Err(located(lua, registry::later(&name)));
             }
             let hint = closest(&name, names.iter().map(String::as_str))
                 .map(|near| format!("; quis dizer {near}?"))

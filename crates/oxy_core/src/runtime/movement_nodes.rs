@@ -175,6 +175,12 @@ impl Runtime {
         state.uniform_scale = scale.x;
         Ok(std::borrow::Cow::Owned(state))
     }
+    /// One value of the state of the 3D character `id`, by the name of the output of Ler
+    /// personagem 3D that gives it (`position`, `relative`, `support`…).
+    pub fn character_value(&self, id: &str, key: &str) -> Result<Value, String> {
+        let state = self.inspect_character(id)?;
+        state_value(&state, key)
+    }
     pub(super) fn event_used(&self, id: &str) -> bool {
         self.event_catalog().operations.contains(id)
     }

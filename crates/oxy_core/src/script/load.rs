@@ -6,7 +6,7 @@ use super::api::Marker;
 use super::errors::{ScriptError, closest, describe};
 use super::host::{Module, Phase, Shared, suspended_error};
 use super::sandbox::compiler;
-use super::{Callback, Callbacks, LATER_CALLBACKS, api, bytecode, math, memory, registry};
+use super::{Callback, Callbacks, api, bytecode, math, memory, registry};
 use crate::document::Value;
 use mlua::chunk::ChunkMode;
 use mlua::{Function, Lua, Table, Value as LuaValue, ffi};
@@ -181,14 +181,15 @@ fn load(lua: &Lua, shared: &Shared, path: &str) -> Result<Rc<Module>, ScriptErro
             .or_insert_with(|| name.as_str().into());
         if let Some(callback) = registry::callback(name) {
             callbacks.insert(callback);
-        } else if name.starts_with("on_") && !LATER_CALLBACKS.contains(&name.as_str()) {
+        } else if name.starts_with("on_") {
+            // A callback of 0.8 is told so, without a near name.
             let known = Callback::ALL.map(Callback::name).into_iter();
             let line = f.info().line_defined.unwrap_or(0) as u32;
-            unknown.push((
-                name.clone(),
-                line,
-                closest(name, known.chain(LATER_CALLBACKS)),
-            ));
+            let near = match registry::reserved(name) {
+                Some(_) => None,
+                None => closest(name, known.chain(registry::later_callbacks())),
+            };
+            unknown.push((name.clone(), line, near));
         }
     }
     Ok(Rc::new(Module {

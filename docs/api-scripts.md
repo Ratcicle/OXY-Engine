@@ -1071,9 +1071,988 @@ local id = self:after(5, M.fechar)
 self:cancel(id)
 ```
 
+## Personagem 3D
+
+O Personagem 3D de um objeto, por `obj.character`: o estado dele (onde pisa, a velocidade, a mira) e os comandos, os mesmos dos nós de personagem. Os comandos de movimento valem no próximo passo de movimento: renove `move` a cada passo (`on_step`). Num objeto sem Personagem 3D, `obj.character` é um erro.
+
+### `obj.character: Character`
+
+O Personagem 3D do objeto: o estado e os comandos dele.
+
+Só leitura, num objeto com Personagem 3D; num objeto sem ele, é um erro (confira antes com `obj:has_component("character")`). O personagem anda pelos comandos (`move`, `jump`, `teleport`…), não pela `position` do objeto.
+
+- Para com erro: o objeto não tem Personagem 3D; o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.grounded)
+```
+
+### `obj.character.position: vector`
+
+A posição dos pés do personagem no mundo, em metros.
+
+Só leitura, como a Posição de Ler personagem 3D: a origem do corpo, nos pés. Para mover o personagem, use `move`, `set_velocity` ou `teleport`.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.position)
+```
+
+### `obj.character.velocity: vector`
+
+A velocidade total do personagem, em m/s, com a do apoio.
+
+Só leitura, como a Velocidade total de Ler personagem 3D: sobre uma plataforma que anda, inclui a velocidade dela.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.velocity)
+```
+
+### `obj.character.own_velocity: vector`
+
+A velocidade própria do personagem, em m/s: o embalo, sem a do apoio.
+
+Só leitura, como a Velocidade própria de Ler personagem 3D.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.own_velocity)
+```
+
+### `obj.character.horizontal_velocity: vector`
+
+A velocidade total do personagem no plano, em m/s: a mesma com y = 0.
+
+Só leitura, como a Velocidade horizontal de Ler personagem 3D.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.horizontal_velocity)
+```
+
+### `obj.character.speed: number`
+
+A rapidez horizontal do personagem, em m/s.
+
+Só leitura, como a Rapidez horizontal de Ler personagem 3D: o comprimento de `horizontal_velocity`.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+self.attr.Aviso = string.format("%.1f m/s", self.character.speed)
+```
+
+### `obj.character.grounded: boolean`
+
+Se o personagem está no chão, num apoio em que pode ficar em pé.
+
+Só leitura, como No chão de Ler personagem 3D; uma parede não é apoio.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+if self.character.grounded then
+    print("no chão")
+end
+```
+
+### `obj.character.rising: boolean`
+
+Se o personagem está no ar, subindo.
+
+Só leitura, como Subindo de Ler personagem 3D.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.rising)
+```
+
+### `obj.character.falling: boolean`
+
+Se o personagem está no ar, caindo.
+
+Só leitura, como Caindo de Ler personagem 3D.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.falling)
+```
+
+### `obj.character.posture: "standing" | "crouched" | "sliding"`
+
+A postura do personagem: "standing" (em pé), "crouched" (agachado) ou "sliding" (deslizando).
+
+Só leitura; muda com `set_posture`. A Postura de Ler personagem 3D é a mesma, em português.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+if self.character.posture == "crouched" then
+    print("agachado")
+end
+```
+
+### `obj.character.support: Object?`
+
+O objeto em que o personagem pisa, ou nil no ar.
+
+Só leitura, como Apoio de Ler personagem 3D.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local chao = self.character.support
+if chao then
+    print(chao.name)
+end
+```
+
+### `obj.character.surface: Surface?`
+
+A superfície física em que o personagem pisa, ou nil no ar ou na padrão.
+
+Só leitura, como Superfície de Ler personagem 3D: a do apoio, e não a do corpo do personagem (`body_surface`).
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local piso = self.character.surface
+if piso then
+    print(piso.name)
+end
+```
+
+### `obj.character.body_surface: Surface?`
+
+A superfície física do corpo do personagem, ou nil para a padrão. Leitura e escrita.
+
+Como Ler superfície do colisor e Aplicar superfície ao colisor num Personagem 3D: a do corpo, e não a do chão em que ele pisa (`surface`). Recebe uma superfície (de um atributo Superfície, de um colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Vale só durante a partida.
+
+- Para com erro: uma superfície que o projeto não tem; escrever outra coisa que uma superfície, um nome ou nil; o objeto não existe mais.
+- Nós: Ler superfície do colisor (surface.get), Aplicar superfície ao colisor (surface.apply).
+- 0.8: T (do objeto alvo). Desde a 0.7.0.
+
+```lua
+local antes = self.character.body_surface
+self.character.body_surface = nil
+self.character.body_surface = antes
+```
+
+### `obj.character.support_point: vector`
+
+O ponto de apoio sob os pés, no mundo, em metros; zero no ar.
+
+Só leitura, como Ponto de apoio de Ler personagem 3D.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.support_point)
+```
+
+### `obj.character.support_normal: vector`
+
+Para onde o chão sob os pés aponta (a normal do apoio); zero no ar.
+
+Só leitura, como Normal de apoio de Ler personagem 3D: num chão plano, (0, 1, 0).
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.support_normal)
+```
+
+### `obj.character.support_velocity: vector`
+
+A velocidade do apoio, em m/s, como a de uma plataforma que anda; zero no ar.
+
+Só leitura, como Velocidade do apoio de Ler personagem 3D.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.support_velocity)
+```
+
+### `obj.character.movement_blocked: boolean`
+
+Se algum motivo bloqueia o movimento do personagem.
+
+Só leitura; os motivos vêm de `block`, e `block_reasons("movement")` os lista.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.movement_blocked)
+```
+
+### `obj.character.look_blocked: boolean`
+
+Se algum motivo bloqueia o olhar do personagem.
+
+Só leitura; os motivos vêm de `block`, e `block_reasons("look")` os lista.
+
+- Para com erro: o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.look_blocked)
+```
+
+### `obj.character.aim: vector`
+
+A direção da mira do personagem no mundo, de comprimento 1, vinda da entrada do jogo.
+
+Só leitura: o giro e a inclinação do olhar que a entrada deu ao personagem (o mouse, pela câmera que o acompanha), e não a imagem da câmera, que pode estar suavizada ou em transição. Para mirar e atirar, dá o mesmo em toda máquina.
+
+- Para com erro: o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local alvo = physics.raycast(self.character.position + vector.create(0, 1.6, 0), self.character.aim, 50, { exclude = self })
+if alvo then
+    print(alvo.object.name)
+end
+```
+
+### `obj.character.look: vector`
+
+O olhar do personagem em graus: x é o giro (0 olha para -Z, 90 para -X) e y a inclinação (positiva para cima).
+
+Só leitura; z é 0. É o que `teleport` recebe em `look`: guarde-o com a posição para o jogador voltar a um ponto olhando para o mesmo lado.
+
+- Para com erro: o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character.look)
+```
+
+### `obj.character:block_reasons(channel: "movement" | "look"): { string }`
+
+Os motivos que bloqueiam o movimento ou o olhar do personagem, em ordem.
+
+Uma lista nova a cada chamada, vazia sem bloqueio; os motivos vêm de `block`. Ler personagem 3D dá os mesmos, juntos num texto.
+
+- `channel` (`"movement" | "look"`): "movement" (o movimento) ou "look" (o olhar)
+- Para com erro: um canal que não é movement nem look; o objeto não existe mais.
+- Nós: Ler personagem 3D (character.state).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+for _, motivo in self.character:block_reasons("movement") do
+    print(motivo)
+end
+```
+
+### `obj.character:move(axis: vector)`
+
+Pede ao personagem que ande no próximo passo: x para a direita, y para a frente.
+
+Como Definir intenção para este passo: vale só no próximo passo de movimento, então renove a cada passo (`on_step`); um vetor mais longo que 1 é encurtado. A direção segue a referência do personagem (eixos da cena, do corpo ou da câmera). O pedido vence as teclas naquele passo; `input.movement()` dá o eixo das teclas, e com as ações automáticas desligadas (`set_option`) o personagem só anda assim.
+
+- `axis` (`vector`): x para a direita e y para a frente, de comprimento até 1 (z não conta)
+- Para com erro: axis que não é um vetor finito; o objeto não existe mais.
+- Nós: Definir intenção para este passo (character.intent).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    self.character:move(input.movement())
+end
+```
+
+### `obj.character:jump()`
+
+Pede um pulo ao personagem, como a tecla de pular.
+
+Como Pedir pulo: pula no chão ou logo depois da borda; no ar, o pedido espera pela antecipação do pulo. Vários pedidos no mesmo passo são um pulo só; a altura vem da velocidade de pulo (`get_param("jump_speed")`).
+
+- Para com erro: o objeto não existe mais.
+- Nós: Pedir pulo (character.jump).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+if self.character.grounded then
+    self.character:jump()
+end
+```
+
+### `obj.character:set_posture(kind: "sprint" | "crouch" | "slide", on: boolean)`
+
+Liga ou desliga correr, agachar ou deslizar.
+
+Como Correr / agachar / deslizar, e vale até mudar de novo. Ficar em pé pede espaço acima; deslizar pede o deslize permitido no personagem e embalo, e desligá-lo levanta o personagem se couber.
+
+- `kind` (`"sprint" | "crouch" | "slide"`): "sprint" (correr), "crouch" (agachar) ou "slide" (deslizar)
+- `on` (`boolean`): true liga, false desliga
+- Para com erro: um comando que não é sprint, crouch nem slide; deslizar num personagem com o deslize desligado; o objeto não existe mais.
+- Nós: Correr / agachar / deslizar (character.posture).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:set_posture("crouch", true)
+```
+
+### `obj.character:add_velocity(velocity: vector)`
+
+Soma uma velocidade em m/s, no mundo, ao embalo do personagem.
+
+Como o modo Adicionar de Adicionar / definir velocidade: preserva o embalo, e para cima tira o personagem do chão. Não é força: `vector.create(0, 8, 0)` é um impulso de 8 m/s para cima.
+
+- `velocity` (`vector`): a velocidade somada, no mundo, em m/s
+- Para com erro: velocity que não é um vetor finito; o objeto não existe mais.
+- Nós: Adicionar / definir velocidade (m/s) (character.velocity).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:add_velocity(vector.create(0, 8, 0))
+```
+
+### `obj.character:set_velocity(velocity: vector)`
+
+Troca a velocidade total do personagem por esta, em m/s, no mundo.
+
+Como o modo Definir de Adicionar / definir velocidade: o embalo vira o que falta para a velocidade total, contando a do apoio.
+
+- `velocity` (`vector`): a nova velocidade total, no mundo, em m/s
+- Para com erro: velocity que não é um vetor finito; o objeto não existe mais.
+- Nós: Adicionar / definir velocidade (m/s) (character.velocity).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:set_velocity(vector.zero)
+```
+
+### `obj.character:block(channel: "movement" | "look", reason: string, on: boolean)`
+
+Bloqueia ou libera o movimento ou o olhar do personagem por um motivo.
+
+Como Bloquear / liberar entrada por motivo: os motivos se somam, e liberar um não libera os outros. Não desliga a gravidade, a colisão nem a câmera.
+
+- `channel` (`"movement" | "look"`): "movement" (o movimento) ou "look" (o olhar)
+- `reason` (`string`): o motivo, de 1 a 256 bytes
+- `on` (`boolean`): true bloqueia, false libera o motivo
+- Para com erro: um canal que não é movement nem look; um motivo vazio ou de mais de 256 bytes; o objeto não existe mais.
+- Nós: Bloquear / liberar entrada por motivo (character.block).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:block("movement", "diálogo", true)
+```
+
+### `obj.character:apply_profile(profile: "direct" | "agile" | "chained", allow_limit: boolean?)`
+
+Aplica ao personagem um perfil de movimento pronto.
+
+Como Aplicar perfil de movimento, com os valores do botão do editor; o nome antigo `"parkour"` vale como `"agile"`. Não teleporta nem zera a velocidade; um limite horizontal menor que o embalo de agora é recusado sem `allow_limit`. Vale só durante a partida.
+
+- `profile` (`"direct" | "agile" | "chained"`): "direct" (Direto), "agile" (Ágil com embalo) ou "chained" (Saltos encadeados)
+- `allow_limit` (`boolean?`): true deixa um limite horizontal novo reduzir o embalo de agora
+- Para com erro: um perfil que não é direct, agile nem chained; um limite horizontal que reduziria o embalo, sem allow_limit; o objeto não existe mais.
+- Nós: Aplicar perfil de movimento (character.profile).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:apply_profile("agile")
+```
+
+### `obj.character:set_param(name: "speed" | "sprint_speed" | "crouch_speed" | "gravity" | "jump_speed" | "ground_acceleration" | "ground_braking" | "ground_friction" | "air_acceleration" | "air_projected_limit" | "air_resistance" | "horizontal_limit" | "jump_retention" | "landing_retention" | "coyote_ms" | "jump_buffer_ms" | "slide_duration" | "slide_friction" | "slide_control" | "angular_speed", value: number, allow_limit: boolean?)`
+
+Muda um valor do motor do personagem durante a partida.
+
+Como Alterar parâmetro do personagem: velocidades em m/s (`speed`, `sprint_speed`, `crouch_speed`, `jump_speed`, `air_projected_limit`, `horizontal_limit`), acelerações em m/s² (`gravity`, `ground_acceleration`, `ground_braking`, `air_acceleration`, `slide_control`), atritos e resistência por segundo, conservações de 0 a 1, tolerâncias em milissegundos (`coyote_ms`, `jump_buffer_ms`), o deslize em segundos e o giro em graus por segundo. Um valor que o personagem não aceita é um erro e nada muda. Vale só durante a partida.
+
+- `name` (`"speed" | "sprint_speed" | "crouch_speed" | "gravity" | "jump_speed" | "ground_acceleration" | "ground_braking" | "ground_friction" | "air_acceleration" | "air_projected_limit" | "air_resistance" | "horizontal_limit" | "jump_retention" | "landing_retention" | "coyote_ms" | "jump_buffer_ms" | "slide_duration" | "slide_friction" | "slide_control" | "angular_speed"`): o parâmetro, pelo nome que Alterar parâmetro do personagem dá
+- `value` (`number`): o valor, na unidade do parâmetro
+- `allow_limit` (`boolean?`): true deixa um limite horizontal novo reduzir o embalo de agora
+- Para com erro: um parâmetro que o personagem não tem (o erro lista os nomes); um valor que o personagem não aceita; um limite horizontal que reduziria o embalo, sem allow_limit; o objeto não existe mais.
+- Nós: Alterar parâmetro do personagem (character.parameter).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:set_param("speed", 3)
+```
+
+### `obj.character:get_param(name: "speed" | "sprint_speed" | "crouch_speed" | "gravity" | "jump_speed" | "ground_acceleration" | "ground_braking" | "ground_friction" | "air_acceleration" | "air_projected_limit" | "air_resistance" | "horizontal_limit" | "jump_retention" | "landing_retention" | "coyote_ms" | "jump_buffer_ms" | "slide_duration" | "slide_friction" | "slide_control" | "angular_speed"): number`
+
+Lê um valor do motor do personagem, como está na partida.
+
+Os nomes e as unidades de `set_param`; dá o valor de agora, com o que `set_param` e `apply_profile` mudaram.
+
+- `name` (`"speed" | "sprint_speed" | "crouch_speed" | "gravity" | "jump_speed" | "ground_acceleration" | "ground_braking" | "ground_friction" | "air_acceleration" | "air_projected_limit" | "air_resistance" | "horizontal_limit" | "jump_retention" | "landing_retention" | "coyote_ms" | "jump_buffer_ms" | "slide_duration" | "slide_friction" | "slide_control" | "angular_speed"`): o parâmetro, como `set_param` o nomeia
+- Para com erro: um parâmetro que o personagem não tem (o erro lista os nomes); o objeto não existe mais.
+- Nós: Alterar parâmetro do personagem (character.parameter).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.character:get_param("jump_speed"))
+```
+
+### `obj.character:set_option(name: "automatic_input" | "slide_enabled" | "crouch_toggle" | "automatic_jump" | "face_look", on: boolean)`
+
+Liga ou desliga uma opção do personagem durante a partida.
+
+Como Alterar opção do personagem: `automatic_input` (as teclas movem o personagem; desligada, só `move`, `jump` e `set_posture`), `slide_enabled` (deslize permitido), `crouch_toggle` (a tecla de agachar alterna), `automatic_jump` (pular ao segurar) e `face_look` (o corpo vira para o olhar). Vale só durante a partida.
+
+- `name` (`"automatic_input" | "slide_enabled" | "crouch_toggle" | "automatic_jump" | "face_look"`): a opção
+- `on` (`boolean`): true liga, false desliga
+- Para com erro: uma opção que o personagem não tem (o erro lista os nomes); o objeto não existe mais.
+- Nós: Alterar opção do personagem (character.option).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:set_option("automatic_input", false)
+```
+
+### `obj.character:set_yaw(degrees: number)`
+
+Gira o corpo do personagem para um giro horizontal do mundo, em graus.
+
+Como Definir giro horizontal do personagem: 0 olha para -Z e 90 para -X, como `obj.yaw` lê. Se o corpo girado ocupar um obstáculo, nada muda e é um erro; em primeira pessoa, a câmera que o segue gira junto.
+
+- `degrees` (`number`): o giro no mundo, em graus
+- Para com erro: degrees que não é um número finito; o corpo girado ocuparia um obstáculo; o objeto não existe mais.
+- Nós: Definir giro horizontal do personagem (character.yaw).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.character:set_yaw(90)
+```
+
+### `obj.character:teleport(feet: vector, options: TeleportOptions?): (boolean, string?, vector?)`
+
+Põe os pés do personagem num ponto do mundo, se houver espaço; devolve ok, o motivo da recusa e o destino usado.
+
+Como Teleportar com segurança. Opções: `search`, até quantos metros procurar um lugar livre perto (0 a 2; sem ela, um destino ocupado é recusado); `keep_velocity` (sem ela, a velocidade zera); `yaw`, o giro do corpo em graus, e `look`, o olhar como `character.look` o dá (sem eles, ficam como estão). Uma recusa não é erro: `ok` é false, o segundo valor diz por quê e o personagem fica onde estava. Os eventos do trajeto abandonado que ainda não rodaram caem, como no nó.
+
+- `feet` (`vector`): onde os pés ficam, no mundo, em metros
+- `options` (`TeleportOptions?`): `{ search = 1, keep_velocity = true, yaw = 90, look = character.look }`
+- Para com erro: feet que não é um vetor; uma opção desconhecida ou de outro tipo; o objeto não existe mais.
+- Nós: Teleportar com segurança (character.teleport).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+local ok, motivo = self.character:teleport(vector.create(0, 2, 0), { search = 1 })
+if not ok then
+    warn(motivo)
+end
+```
+
+## Física
+
+Os colisores, as plataformas móveis e o Movimento 2D de um objeto, que se ligam e desligam, e as consultas à física 3D (raios e formas varridas), que não movem nada. Uma consulta sem contato devolve nil; uma recusada (cena 2D, mais de 256 consultas no passo) devolve nil e o motivo.
+
+### `obj.collider: Collider`
+
+O colisor do objeto: 2D, 3D ou área.
+
+Só leitura, num objeto com colisor ou área; num objeto sem eles, é um erro (confira antes com `obj:has_component("collider")`). O corpo de um Personagem 3D não é um colisor: use `obj.character` (a superfície do corpo é `obj.character.body_surface`).
+
+- Para com erro: o objeto não tem colisor nem área; o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.collider.enabled)
+```
+
+### `obj.collider.enabled: boolean`
+
+Se o colisor (ou a área) está ligado. Leitura e escrita.
+
+Como Ativar / desativar componente (Colisor): desligado, não colide nem sente quem entra. Religar uma área começa uma ativação nova: quem está dentro entra de novo (`on_area_enter`), e `first_hit` recomeça.
+
+- Para com erro: escrever outra coisa que true ou false; o objeto não existe mais.
+- Nós: Ativar / desativar componente (action.component).
+- 0.8: T (do objeto alvo). Desde a 0.7.0.
+
+```lua
+self.collider.enabled = false
+```
+
+### `obj.collider.is_area: boolean`
+
+Se o colisor é uma área (sensor), que sente quem entra sem colidir.
+
+Só leitura, como as Propriedades marcam.
+
+- Para com erro: o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.collider.is_area)
+```
+
+### `obj.collider.surface: Surface?`
+
+A superfície física do colisor 3D, ou nil para a padrão. Leitura e escrita.
+
+Como Ler superfície do colisor e Aplicar superfície ao colisor: recebe uma superfície (de um atributo Superfície, de outro colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Só um colisor 3D tem superfície; a do corpo de um personagem é `obj.character.body_surface`. Vale só durante a partida.
+
+- Para com erro: um colisor 2D, que não tem superfície; uma superfície que o projeto não tem; escrever outra coisa que uma superfície, um nome ou nil; o objeto não existe mais.
+- Nós: Ler superfície do colisor (surface.get), Aplicar superfície ao colisor (surface.apply).
+- 0.8: T (do objeto alvo). Desde a 0.7.0.
+
+```lua
+local antes = self.collider.surface
+self.collider.surface = nil
+self.collider.surface = antes
+```
+
+### `obj.platform: Platform`
+
+A plataforma móvel do objeto.
+
+Só leitura, num objeto com plataforma móvel; num objeto sem ela, é um erro (confira antes com `obj:has_component("platform")`).
+
+- Para com erro: o objeto não tem plataforma móvel; o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.platform.enabled)
+```
+
+### `obj.platform.enabled: boolean`
+
+Se a plataforma móvel leva quem está em cima. Leitura e escrita.
+
+Como Ativar / desativar componente (Plataforma móvel).
+
+- Para com erro: escrever outra coisa que true ou false; o objeto não existe mais.
+- Nós: Ativar / desativar componente (action.component).
+- 0.8: T (do objeto alvo). Desde a 0.7.0.
+
+```lua
+self.platform.enabled = false
+```
+
+### `obj.controller: Controller`
+
+O Movimento 2D do objeto.
+
+Só leitura, num objeto com Movimento 2D; num objeto sem ele, é um erro (confira antes com `obj:has_component("controller")`).
+
+- Para com erro: o objeto não tem Movimento 2D; o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.controller.enabled)
+```
+
+### `obj.controller.enabled: boolean`
+
+Se o Movimento 2D do objeto obedece às teclas. Leitura e escrita.
+
+Como Ativar / desativar componente (Controlador).
+
+- Para com erro: escrever outra coisa que true ou false; o objeto não existe mais.
+- Nós: Ativar / desativar componente (action.component).
+- 0.8: T (do objeto alvo). Desde a 0.7.0.
+
+```lua
+self.controller.enabled = false
+```
+
+### `physics.raycast(origin: vector, direction: vector, distance: number, options: QueryOptions?): (Hit?, string?)`
+
+Lança um raio e devolve o primeiro contato, ou nil.
+
+Como Consultar raio. Sem contato, devolve nil; uma consulta recusada (cena 2D, mais de 256 consultas no passo, direção zero) devolve nil e o motivo. Um raio que sai de dentro de um corpo o atinge na distância 0: ponha o objeto em `exclude`. Não move nada.
+
+- `origin` (`vector`): de onde o raio sai, no mundo, em metros
+- `direction` (`vector`): para onde ele vai, no mundo (qualquer comprimento)
+- `distance` (`number`): até onde ele vai, em metros
+- `options` (`QueryOptions?`): `{ exclude = obj, areas = true, mask = { "Personagens" } }`
+- Para com erro: origin ou direction que não é um vetor, distance que não é um número de 0 ou mais; uma opção desconhecida ou de outro tipo, um grupo de colisão que não existe.
+- Nós: Consultar raio (query.ray).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local hit = physics.raycast(self.world_position, vector.create(0, -1, 0), 10, { exclude = self })
+if hit then
+    print(hit.object.name, hit.distance)
+end
+```
+
+### `physics.sphere_cast(origin: vector, radius: number, direction: vector, distance: number, options: QueryOptions?): (Hit?, string?)`
+
+Varre uma esfera e devolve o primeiro contato, ou nil.
+
+Como Varrer esfera, com as regras de `raycast`: uma esfera que já toca algo na partida o atinge na distância 0.
+
+- `origin` (`vector`): o centro da esfera na partida, no mundo
+- `radius` (`number`): o raio da esfera, em metros
+- `direction` (`vector`): para onde ela vai, no mundo
+- `distance` (`number`): até onde ela vai, em metros
+- `options` (`QueryOptions?`): as opções de `raycast`
+- Para com erro: um argumento de outro tipo, uma opção desconhecida, um grupo de colisão que não existe.
+- Nós: Varrer esfera (query.sphere).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local hit = physics.sphere_cast(self.world_position, 0.5, vector.create(0, 0, -1), 5, { exclude = self })
+print(hit ~= nil)
+```
+
+### `physics.capsule_cast(origin: vector, radius: number, height: number, direction: vector, distance: number, options: QueryOptions?): (Hit?, string?)`
+
+Varre uma cápsula em pé e devolve o primeiro contato, ou nil.
+
+Como Varrer cápsula, com as regras de `raycast`: serve para saber se um corpo do tamanho de um personagem passa por um vão.
+
+- `origin` (`vector`): o centro da cápsula na partida, no mundo
+- `radius` (`number`): o raio da cápsula, em metros
+- `height` (`number`): a altura total da cápsula em pé, em metros
+- `direction` (`vector`): para onde ela vai, no mundo
+- `distance` (`number`): até onde ela vai, em metros
+- `options` (`QueryOptions?`): as opções de `raycast`
+- Para com erro: um argumento de outro tipo, uma opção desconhecida, um grupo de colisão que não existe.
+- Nós: Varrer cápsula (query.capsule).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local hit = physics.capsule_cast(self.world_position + vector.create(0, 1, 0), 0.3, 1.8, vector.create(0, 0, -1), 2, { exclude = self })
+print(hit == nil)
+```
+
+### `physics.capsule_fits(position: vector, radius: number, height: number, options: QueryOptions?): (boolean, Hit?, string?)`
+
+Diz se uma cápsula em pé cabe num lugar, sem mover nada.
+
+Como Testar espaço livre para cápsula: true quando ela não toca nada; senão, false e o contato (a distância é a penetração, negativa). Uma consulta recusada dá false, nil e o motivo.
+
+- `position` (`vector`): o centro da cápsula, no mundo
+- `radius` (`number`): o raio da cápsula, em metros
+- `height` (`number`): a altura total da cápsula em pé, em metros
+- `options` (`QueryOptions?`): as opções de `raycast`
+- Para com erro: um argumento de outro tipo, uma opção desconhecida, um grupo de colisão que não existe.
+- Nós: Testar espaço livre para cápsula (query.space).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local cabe = physics.capsule_fits(self.world_position + vector.create(0, 3, 0), 0.3, 1.8, { exclude = self })
+print(cabe)
+```
+
+## Animação
+
+Os clipes de animação de um objeto, por `obj.animation`, pelos nomes que eles têm no Estúdio. Os marcadores dos clipes chegam a `on_marker`.
+
+### `obj.animation: Animation`
+
+As animações (clipes) do objeto.
+
+Só leitura, num objeto com clipes; num objeto sem eles, é um erro (confira antes com `obj:has_component("animation")`).
+
+- Para com erro: o objeto não tem animações; o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.animation.clip)
+```
+
+### `obj.animation:play(clip: string, restart: boolean?)`
+
+Toca um clipe do objeto pelo nome.
+
+Como Reproduzir animação: o nome vale sem diferenciar maiúsculas. Os marcadores do clipe chegam a `on_marker`; um objeto que um clipe tocando posiciona não aceita `position` até ele parar.
+
+- `clip` (`string`): o nome do clipe, como no Estúdio
+- `restart` (`boolean?`): false deixa um clipe que já toca seguir de onde está (padrão: recomeça)
+- Para com erro: um clipe que o objeto não tem (o erro lista os clipes); o objeto não existe mais.
+- Nós: Reproduzir animação (action.animation).
+- 0.8: T (do objeto alvo). Desde a 0.7.0.
+
+```lua
+self.animation:play("Abrir")
+```
+
+### `obj.animation.playing: boolean`
+
+Se o clipe do objeto está tocando: false pausa onde está, true retoma. Leitura e escrita.
+
+Como Ativar / desativar componente (Animação). Antes de algum clipe tocar, é false e true não faz nada: comece com `play`.
+
+- Para com erro: escrever outra coisa que true ou false; o objeto não existe mais.
+- Nós: Ativar / desativar componente (action.component).
+- 0.8: T (do objeto alvo). Desde a 0.7.0.
+
+```lua
+self.animation.playing = false
+```
+
+### `obj.animation.clip: string?`
+
+O nome do clipe que toca (ou que parou), ou nil se nenhum tocou.
+
+Só leitura; um clipe que acabou ou foi pausado continua sendo o clipe, com `playing` false.
+
+- Para com erro: o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+if self.animation.clip == "Abrir" then
+    print("abrindo")
+end
+```
+
+## Câmera
+
+A câmera de jogo: qual está ativa, para onde olha, e os comandos dos nós de câmera. As funções recebem o objeto câmera; os modos e o olhar assistido pedem uma câmera com Controle de câmera.
+
+### `camera.active(): Object?`
+
+A câmera de jogo ativa, ou nil.
+
+A que `camera.activate` escolheu, ou a primeira marcada como ativa na ordem da cena.
+
+- Nós: Ler câmera de jogo (camera.read).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+local ativa = camera.active()
+if ativa then
+    print(ativa.name)
+end
+```
+
+### `camera.look(): vector`
+
+O olhar da câmera ativa em graus: x é o giro (0 olha para -Z) e y a inclinação.
+
+O da simulação, sem a suavização da imagem; z é 0. Numa câmera Fixa, vem da rotação do objeto câmera.
+
+- Para com erro: nenhuma câmera ativa, ou o Controle de câmera dela ainda não começou.
+- Nós: Ler câmera de jogo (camera.read).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    self.attr.Aviso = tostring(camera.look())
+end
+```
+
+### `camera.forward(): vector`
+
+A direção do olhar da câmera ativa no mundo, de comprimento 1.
+
+A da simulação, como `camera.look`. Para mirar pelo personagem, que vale igual em toda máquina, use `obj.character.aim`.
+
+- Para com erro: nenhuma câmera ativa, ou o Controle de câmera dela ainda não começou.
+- Nós: Ler câmera de jogo (camera.read).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    self.attr.Aviso = tostring(camera.forward())
+end
+```
+
+### `camera.mode(): string?`
+
+O modo da câmera ativa: "first_person", "third_person" ou "fixed"; nil sem câmera ativa.
+
+Uma câmera sem Controle de câmera é sempre "fixed".
+
+- Nós: Ler câmera de jogo (camera.read).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+if camera.mode() == "first_person" then
+    print("primeira pessoa")
+end
+```
+
+### `camera.activate(camera: AnyObject, seconds: number?)`
+
+Torna uma câmera a câmera de jogo ativa, com uma transição.
+
+Como Ativar câmera de jogo: a câmera mantém o modo e quem acompanha.
+
+- `camera` (`AnyObject`): o objeto com Câmera
+- `seconds` (`number?`): a transição, em segundos (padrão 0,25; 0 corta seco)
+- Para com erro: um objeto sem Câmera; seconds negativo ou que não é um número.
+- Nós: Ativar câmera de jogo (camera.activate).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+camera.activate(self, 0)
+```
+
+### `camera.set_mode(camera: AnyObject, mode: "first_person" | "third_person" | "fixed" | "fixed_object", seconds: number?)`
+
+Troca o modo de uma câmera com Controle de câmera.
+
+Como Trocar modo da câmera: `"fixed"` para a câmera onde a vista está (mover o objeto câmera depois move a vista), e `"fixed_object"` leva a vista ao objeto câmera como ele está.
+
+- `camera` (`AnyObject`): o objeto com Controle de câmera
+- `mode` (`"first_person" | "third_person" | "fixed" | "fixed_object"`): "first_person", "third_person", "fixed" (parada na vista de agora) ou "fixed_object" (parada no objeto câmera)
+- `seconds` (`number?`): a transição, em segundos (padrão 0,25)
+- Para com erro: um objeto sem Controle de câmera; um modo desconhecido; seconds negativo ou que não é um número.
+- Nós: Trocar modo da câmera (camera.mode).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+camera.set_mode(self, "third_person", 0.5)
+```
+
+### `camera.follow(camera: AnyObject, target: AnyObject)`
+
+Troca o objeto que uma câmera com Controle de câmera acompanha.
+
+Como Definir personagem acompanhado, normalmente um personagem 3D; a câmera segue no modo em que está. Vale só durante a partida.
+
+- `camera` (`AnyObject`): o objeto com Controle de câmera
+- `target` (`AnyObject`): o objeto que ela passa a acompanhar
+- Para com erro: um objeto sem Controle de câmera; a própria câmera como alvo; um alvo que não existe mais.
+- Nós: Definir personagem acompanhado (camera.target).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+local jogador = scene.find("Jogador")
+if jogador then
+    camera.follow(self, jogador)
+end
+```
+
+### `camera.look_at(camera: AnyObject, target: vector | AnyObject)`
+
+Vira uma câmera para um ponto ou um objeto e a mantém assim, até `release_look`.
+
+Como Olhar assistido: o mouse não gira a câmera até `camera.release_look`. A câmera precisa estar ativa.
+
+- `camera` (`AnyObject`): o objeto com Controle de câmera, ativo
+- `target` (`vector | AnyObject`): um ponto do mundo, em metros, ou um objeto
+- Para com erro: um objeto sem Controle de câmera; uma câmera que não está ativa; um alvo que não é vetor nem objeto.
+- Nós: Olhar assistido / liberar olhar (camera.look_at).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    camera.look_at(self, vector.create(0, 0, -10))
+end
+```
+
+### `camera.release_look(camera: AnyObject)`
+
+Devolve o olhar de uma câmera ao jogador, da vista de agora.
+
+Como Liberar olhar ao jogador, do nó Olhar assistido / liberar olhar.
+
+- `camera` (`AnyObject`): o objeto com Controle de câmera
+- Para com erro: um objeto sem Controle de câmera; uma câmera que não está ativa.
+- Nós: Olhar assistido / liberar olhar (camera.look_at).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    camera.release_look(self)
+end
+```
+
+### `camera.set(camera: AnyObject, setting: "fov" | "distance" | "shoulder", value: number, seconds: number?)`
+
+Ajusta o enquadramento de uma câmera: campo de visão, distância ou ombro.
+
+Como Ajustar enquadramento da câmera: a distância e o ombro pedem Controle de câmera, e o campo de visão vale para qualquer câmera. Diante de uma parede, a câmera chega mais perto que a distância pedida.
+
+- `camera` (`AnyObject`): o objeto com Câmera
+- `setting` (`"fov" | "distance" | "shoulder"`): "fov" (campo de visão vertical, 10° a 150°), "distance" (distância em terceira pessoa, m) ou "shoulder" (deslocamento do ombro, m)
+- `value` (`number`): o valor, na unidade do ajuste
+- `seconds` (`number?`): a suavização, em segundos (padrão 0,15)
+- Para com erro: um objeto sem Câmera (ou sem Controle de câmera, para distance e shoulder); um ajuste desconhecido; um valor que a câmera não aceita.
+- Nós: Ajustar enquadramento da câmera (camera.setting).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+camera.set(self, "fov", 75, 0.3)
+```
+
+## Interface
+
+O elemento de interface de um objeto (texto, imagem, botão ou barra), por `obj.ui`: o texto e a cor dele mudam durante a partida. Esconder um elemento é `obj.visible = false`; um clique num botão chega a `on_click`.
+
+### `obj.ui: UiElement`
+
+O elemento de interface do objeto: texto, imagem, botão ou barra.
+
+Só leitura, num elemento de interface; num objeto que não é um, é um erro (confira antes com `obj:has_component("ui")`).
+
+- Para com erro: o objeto não é um elemento de interface; o objeto não existe mais.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(self.ui.text)
+```
+
+### `obj.ui.text: string`
+
+O texto do elemento; um valor vinculado ainda entra no lugar de `{valor}`. Leitura e escrita.
+
+Escrever troca o texto durante a partida, até 4.096 bytes. Num elemento vinculado a um atributo, o valor dele continua aparecendo em `{valor}` (ou depois do texto, sem a marca); ler dá o texto escrito, sem o valor. Com `time.format`, dispensa um atributo só para o texto.
+
+- Para com erro: escrever outra coisa que um texto, ou mais de 4.096 bytes; o objeto não existe mais.
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+self.ui.text = "Tempo: " .. time.format(time.now(), "mm:ss")
+```
+
+### `obj.ui.color: vector`
+
+A cor do elemento: vermelho, verde e azul de 0 a 1, em x, y e z. Leitura e escrita.
+
+Escrever recusa um componente fora de 0 a 1; a opacidade fica como está.
+
+- Para com erro: escrever outra coisa que um vetor, ou um componente fora de 0 a 1; o objeto não existe mais.
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+self.ui.color = vector.create(1, 0.2, 0.2)
+```
+
 ## Áudio
 
-Sons da Biblioteca, pelo nome que eles têm lá.
+Sons da Biblioteca, pelo nome que eles têm lá: uma vez nos efeitos, em loop na música ou nos efeitos, e os volumes dos canais (geral, música e efeitos).
 
 ### `audio.play(name: string, options: PlayOptions?)`
 
@@ -1091,9 +2070,159 @@ O nome vale também sem diferenciar maiúsculas nem os espaços das pontas. `aud
 audio.play("Bipe", { volume = 0.5 })
 ```
 
-## Variáveis do jogo
+### `audio.loop(name: string, options: LoopOptions?)`
 
-As variáveis do jogo do projeto (Lógica > Variáveis do jogo), pelo nome. Elas guardam o valor quando a cena reinicia.
+Toca um som em loop, na música ou nos efeitos.
+
+Como Tocar em loop: na música (o padrão), o mesmo som continua ao trocar ou reiniciar a cena, e outro entra com a transição enquanto o anterior sai; nos efeitos, o loop acaba com a cena (até 32, um por som). Pedir um loop que já toca só muda o volume dele. A pausa do jogo congela os efeitos e deixa a música.
+
+- `name` (`string`): o nome do som na Biblioteca
+- `options` (`LoopOptions?`): `{ channel = "effects", volume = 0.5, fade = 1 }`
+- Para com erro: um som que o projeto não tem (o erro lista os sons); uma opção desconhecida, um canal que não é music nem effects, fade fora de 0 a 60; mais de 32 loops nos efeitos.
+- Nós: Tocar em loop (action.sound_loop).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+audio.loop("Bipe", { channel = "music", fade = 1 })
+```
+
+### `audio.stop(options: StopOptions?)`
+
+Para os loops de um som, ou todos os de um canal.
+
+Como Parar som: sem `sound`, para todos os loops do canal; o canal padrão é "all", a música e os efeitos. Parar um som que não toca não faz nada, e os sons de `audio.play` não param: acabam sozinhos.
+
+- `options` (`StopOptions?`): `{ sound = "Trilha", channel = "music", fade = 2 }`
+- Para com erro: um som que o projeto não tem; uma opção desconhecida, um canal que não é music, effects nem all, fade fora de 0 a 60.
+- Nós: Parar som (action.sound_stop).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+audio.stop({ channel = "music", fade = 2 })
+```
+
+### `audio.set_volume(channel: "master" | "music" | "effects", volume: number)`
+
+Muda o volume geral, da música ou dos efeitos, de 0 a 1.
+
+Como Volume do canal: vale para a partida toda, também depois de trocar a cena, e fora de 0 a 1 fica no limite. Cada som toca no volume geral vezes o do canal vezes o dele; para lembrar a escolha, guarde-a numa variável salva entre partidas.
+
+- `channel` (`"master" | "music" | "effects"`): "master" (geral), "music" ou "effects"
+- `volume` (`number`): de 0 a 1
+- Para com erro: um canal que não é master, music nem effects; um volume que não é um número finito.
+- Nós: Volume do canal (action.volume).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+audio.set_volume("music", 0.5)
+```
+
+### `audio.volume(channel: "master" | "music" | "effects"): number`
+
+O volume de agora de um canal, de 0 a 1.
+
+Como Ler volumes: começa em 1 em cada partida e muda só com `audio.set_volume`.
+
+- `channel` (`"master" | "music" | "effects"`): "master" (geral), "music" ou "effects"
+- Para com erro: um canal que não é master, music nem effects.
+- Nós: Ler volumes (audio.read).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+audio.set_volume("effects", math.clamp(audio.volume("effects") + 0.1, 0, 1))
+```
+
+## Jogo
+
+O jogo como um todo: a pausa do jogo (o mundo para, a interface e a lógica seguem), o cursor do mouse e sair do jogo.
+
+### `game.pause()`
+
+Pausa o jogo: o mundo para; a interface, a entrada e a lógica seguem.
+
+Como Pausar / retomar jogo (pausar): `on_pause` roda nos objetos que o ouvem, e `on_step`, os temporizadores, os personagens e as animações param até `game.resume`; cliques, ações de entrada e mensagens seguem chegando. Pausar um jogo já pausado não faz nada.
+
+- Nós: Pausar / retomar jogo (game.pause).
+- 0.8: A (autoridade). Desde a 0.7.0.
+
+```lua
+game.pause()
+```
+
+### `game.resume()`
+
+Retoma o jogo pausado.
+
+Como Pausar / retomar jogo (retomar): `on_pause` roda de novo, com `paused` false. O que a lógica pediu aos personagens durante a pausa cai.
+
+- Nós: Pausar / retomar jogo (game.pause).
+- 0.8: A (autoridade). Desde a 0.7.0.
+
+```lua
+game.resume()
+```
+
+### `game.paused(): boolean`
+
+Se o jogo está pausado.
+
+Como Ler estado do jogo. Alternar a pausa, como o modo Alternar do nó, é `if game.paused() then game.resume() else game.pause() end`.
+
+- Nós: Ler estado do jogo (game.read).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+if game.paused() then
+    game.resume()
+else
+    game.pause()
+end
+```
+
+### `game.show_cursor()`
+
+Mostra o cursor do mouse e o solta da câmera.
+
+Como Mostrar / esconder cursor (mostrar): o mouse fica livre e visível, para clicar na interface, e o olhar com o mouse para. Uma cena começa com ele escondido.
+
+- Nós: Mostrar / esconder cursor (game.cursor).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+game.show_cursor()
+```
+
+### `game.hide_cursor()`
+
+Esconde o cursor do mouse e o devolve à câmera.
+
+Como Mostrar / esconder cursor (esconder).
+
+- Nós: Mostrar / esconder cursor (game.cursor).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+game.hide_cursor()
+```
+
+### `game.quit()`
+
+Sai do jogo: o jogo exportado fecha e o teste do editor para.
+
+Como Sair do jogo; uma simulação termina. O resto da função ainda roda.
+
+- Nós: Sair do jogo (game.quit).
+- 0.8: L (local). Desde a 0.7.0.
+
+```lua
+if self.attr.Vida <= 0 then
+    game.quit()
+end
+```
+
+## Variáveis e progresso
+
+As variáveis do jogo do projeto (Lógica > Variáveis do jogo), pelo nome, e o progresso salvo: as variáveis marcadas como salvas entre partidas. Elas guardam o valor quando a cena reinicia.
 
 ### `vars.get(name: string, key: string?): any`
 
@@ -1128,6 +2257,302 @@ Com `key`, grava o valor daquela chave, até 1.024 chaves por variável. Uma var
 vars.set("Pontos", 10)
 ```
 
+### `save.write()`
+
+Salva o progresso: os valores de agora das variáveis salvas entre partidas.
+
+Como Salvar progresso, com os valores das chaves: a próxima partida começa com eles. As variáveis que não são salvas entre partidas (Lógica > Variáveis do jogo) ficam de fora.
+
+- Nós: Salvar progresso (save.write).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+vars.set("Pontos", 10)
+save.write()
+```
+
+### `save.clear()`
+
+Apaga o progresso salvo e volta as variáveis salvas ao valor inicial.
+
+Como Apagar progresso: as chaves delas também somem.
+
+- Nós: Apagar progresso (save.clear).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+save.clear()
+```
+
+### `save.exists(): boolean`
+
+Se há progresso salvo.
+
+Como Ler progresso salvo: o que a partida recebeu ao começar, depois do que `save.write` e `save.clear` fizeram.
+
+- Nós: Ler progresso salvo (save.state).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+if save.exists() then
+    print("continuar")
+end
+```
+
+## Entrada
+
+As ações de entrada do projeto (Lógica > Ações de entrada), pelo nome, e os eixos do passo. É a entrada do jogador que controla o objeto: na 0.7, o único jogador; o argumento `player` chega na 0.8.
+
+### `input.pressed(action: string): boolean`
+
+Se a ação de entrada foi apertada neste passo.
+
+Como Ler ação de entrada (Pressionada): verdadeiro só no passo em que a tecla desce. Lê sem consumir: outros scripts, o grafo e o personagem veem o mesmo. O nome vale sem diferenciar maiúsculas; um segundo argumento, o jogador, chega na 0.8 e hoje é um erro.
+
+- `action` (`string`): o nome da ação, como em Lógica > Ações de entrada
+- Para com erro: uma ação que o projeto não tem (o erro lista as ações); um segundo argumento (o jogador chega na 0.8).
+- Nós: Ler ação de entrada (input.read).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    if input.pressed("Pular") then
+        print("pulou")
+    end
+end
+```
+
+### `input.held(action: string): boolean`
+
+Se a ação de entrada está segura neste passo.
+
+Como Ler ação de entrada (Mantida), com as regras de `input.pressed`.
+
+- `action` (`string`): o nome da ação, como em Lógica > Ações de entrada
+- Para com erro: uma ação que o projeto não tem (o erro lista as ações); um segundo argumento (o jogador chega na 0.8).
+- Nós: Ler ação de entrada (input.read).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    if input.held("Atacar") then
+        self.attr.Aviso = "carregando"
+    end
+end
+```
+
+### `input.released(action: string): boolean`
+
+Se a ação de entrada foi solta neste passo.
+
+Como Ler ação de entrada (Solta): verdadeiro só no passo em que a tecla sobe, com as regras de `input.pressed`.
+
+- `action` (`string`): o nome da ação, como em Lógica > Ações de entrada
+- Para com erro: uma ação que o projeto não tem (o erro lista as ações); um segundo argumento (o jogador chega na 0.8).
+- Nós: Ler ação de entrada (input.read).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    if input.released("Atacar") then
+        self.attr.Aviso = ""
+    end
+end
+```
+
+### `input.movement(): vector`
+
+O eixo de movimento deste passo: x para a direita e y para a frente, de comprimento até 1.
+
+Como Ler eixos de entrada (Movimento), com z 0: as teclas de movimento do Personagem 3D do objeto que roda o script, ou as do projeto (Mover à esquerda, à direita, para frente e para trás) num objeto sem ele. É o que `character:move` recebe.
+
+- Para com erro: um argumento (o jogador chega na 0.8).
+- Nós: Ler eixos de entrada (input.axes).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    local eixo = input.movement()
+    self.position += vector.create(eixo.x, 0, -eixo.y) * 0.1
+end
+```
+
+### `input.look(): vector`
+
+Quanto o mouse andou neste passo: x para a direita e y para baixo.
+
+Como Ler eixos de entrada (Olhar), com z 0: em unidades do dispositivo, não em graus. Com o cursor à mostra ou o jogo pausado, o olhar fica parado.
+
+- Para com erro: um argumento (o jogador chega na 0.8).
+- Nós: Ler eixos de entrada (input.axes).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    self.attr.Aviso = tostring(input.look().x)
+end
+```
+
+### `input.wheel(): number`
+
+Quanto a roda do mouse girou neste passo, em linhas: positivo para cima.
+
+Como Ler eixos de entrada (Roda).
+
+- Para com erro: um argumento (o jogador chega na 0.8).
+- Nós: Ler eixos de entrada (input.axes).
+- 0.8: J (do jogador). Desde a 0.7.0.
+
+```lua
+function M.on_step(self: Object)
+    if input.wheel() > 0 then
+        print("roda para cima")
+    end
+end
+```
+
+## Tempo e sorteio
+
+O tempo de jogo, que para na pausa do jogo, e os sorteios da engine: cada objeto e script tem a própria sequência, e a mesma semente dá os mesmos números em toda máquina. `math.random` não existe nos scripts.
+
+### `time.now(): number`
+
+O tempo de jogo, em segundos desde o começo da partida.
+
+Como Ler tempo da simulação: para na pausa do jogo e atravessa o reinício da cena. Guarde momentos (`self.state.pronto_em = time.now() + 0.5`) em vez de somar `dt` a cada passo.
+
+- Nós: Ler tempo da simulação (time.read).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+self.attr.Aviso = time.format(time.now(), "mm:ss")
+```
+
+### `time.dt: number`
+
+A duração de um passo de jogo, 1/60 s.
+
+Um número, não uma função: o mesmo `dt` que `on_step` recebe, como a Duração do passo de Ler tempo da simulação.
+
+- Nós: Ler tempo da simulação (time.read).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+self.position += vector.create(0, 0, 2 * time.dt)
+```
+
+### `time.format(seconds: number, format: "mm:ss" | "mm:ss.cc" | "m:ss.cc" | "ss.cc" | "mm:ss.mmm" | "h:mm:ss"): string`
+
+Escreve segundos como tempo: `time.format(75.5, "mm:ss.cc")` dá "01:15.50".
+
+Como Formatar tempo: corta (não arredonda) no último dígito do formato, e os minutos passam de 59 sem `h:mm:ss`. Não mexe no mundo: o topo do script pode usá-la.
+
+- `seconds` (`number`): os segundos
+- `format` (`"mm:ss" | "mm:ss.cc" | "m:ss.cc" | "ss.cc" | "mm:ss.mmm" | "h:mm:ss"`): o formato, como em Formatar tempo
+- Para com erro: seconds que não é um número finito; um formato desconhecido (o erro lista os formatos).
+- Nós: Formatar tempo (text.time).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+self.attr.Aviso = time.format(75.5, "mm:ss.cc")
+```
+
+### `random.number(min: number, max: number): number`
+
+Sorteia um número real de min até max, sem max.
+
+Como Sortear número (Real), da sequência do objeto e do script: outro script ou outro objeto sorteando a mais não muda estes números, e a mesma semente dá os mesmos em toda máquina.
+
+- `min` (`number`): o menor valor
+- `max` (`number`): o maior, que nunca sai (salvo min = max)
+- Para com erro: min ou max que não é um número finito; min maior que max.
+- Nós: Sortear número (random.number).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.attr.Vida = random.number(1, 10)
+```
+
+### `random.integer(min: number, max: number): number`
+
+Sorteia um inteiro de min até max, os dois incluídos.
+
+Como Sortear número (Inteiro), com as regras de `random.number`: `random.integer(1, 6)` é um dado.
+
+- `min` (`number`): o menor inteiro
+- `max` (`number`): o maior inteiro, que também pode sair
+- Para com erro: min ou max que não é um número finito; nenhum inteiro de min a max; min ou max além de 2^53.
+- Nós: Sortear número (random.number).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+self.attr.Vida = random.integer(1, 6)
+```
+
+### `random.seed(seed: number)`
+
+Troca a semente dos sorteios: todas as sequências recomeçam.
+
+Como Definir semente aleatória: vale para o grafo e para todos os scripts, e a mesma semente repete os mesmos números.
+
+- `seed` (`number`): um inteiro de 0 a 2^53
+- Para com erro: uma semente que não é um inteiro de 0 a 2^53.
+- Nós: Definir semente aleatória (random.seed).
+- 0.8: A (autoridade). Desde a 0.7.0.
+
+```lua
+random.seed(42)
+```
+
+### `random.stream(name: string): RandomStream`
+
+Uma sequência de sorteios com nome, independente da do script.
+
+Os sorteios dela não mudam os de `random.number` nem os de outra sequência: um sorteio a mais nos inimigos não muda as cartas. A sequência é do objeto e do script que sorteiam. Não mexe no mundo: o topo do script pode guardá-la num local.
+
+- `name` (`string`): o nome da sequência, de 1 a 256 bytes
+- Para com erro: um nome vazio ou de mais de 256 bytes.
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+local ondas = random.stream("ondas")
+self.attr.Vida = ondas:integer(1, 3)
+```
+
+### `stream:number(min: number, max: number): number`
+
+Sorteia um número real de min até max, sem max, desta sequência.
+
+Como `random.number`, na sequência de `random.stream`.
+
+- `min` (`number`): o menor valor
+- `max` (`number`): o maior, que nunca sai (salvo min = max)
+- Para com erro: min ou max que não é um número finito; min maior que max.
+- Nós: Sortear número (random.number).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+local cartas = random.stream("cartas")
+print(cartas:number(0, 1))
+```
+
+### `stream:integer(min: number, max: number): number`
+
+Sorteia um inteiro de min até max, os dois incluídos, desta sequência.
+
+Como `random.integer`, na sequência de `random.stream`.
+
+- `min` (`number`): o menor inteiro
+- `max` (`number`): o maior inteiro, que também pode sair
+- Para com erro: min ou max que não é um número finito; nenhum inteiro de min a max.
+- Nós: Sortear número (random.number).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+local cartas = random.stream("cartas")
+print(cartas:integer(1, 52))
+```
+
 ## Diagnóstico
 
 Linhas no Console com o nome do objeto e a linha do script. `error(texto)` e `assert` do Luau param a chamada com o texto, também na linha.
@@ -1160,6 +2585,35 @@ Como `print`, com "aviso:" antes do texto.
 warn("sem alvo")
 ```
 
+### `error(message: string)`
+
+Para a chamada com um erro: a mensagem vai ao Console com o arquivo e a linha.
+
+A função do próprio Luau. Como qualquer erro de script, só aquela chamada para: o que ela fez até ali fica, e o erro aparece uma vez, com um contador. Use para o que nunca deveria acontecer; uma falha esperada (um teleporte sem espaço) se confere pelo que a função devolve.
+
+- `message` (`string`): o que deu errado
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+if self.attr.Vida < 0 then
+    error("Vida negativa em " .. self.name)
+end
+```
+
+### `assert(value: any, message: string?): any`
+
+Para a chamada com um erro quando o valor é false ou nil; senão, devolve-o.
+
+A função do próprio Luau, com as regras de `error`: `assert(scene.find("Porta"), "falta a Porta")` dá a Porta ou para ali.
+
+- `value` (`any`): o que deve ser verdadeiro
+- `message` (`string?`): a mensagem do erro
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+assert(self.attr.Vida >= 0, "Vida negativa")
+```
+
 ## Módulos
 
 Funções e dados que vários scripts usam, em outros arquivos `.luau` da pasta `scripts`: tabelas de cartas, de fases, de inimigos. Um módulo só guarda funções, constantes e dados; o que muda no jogo fica nos atributos e na memória.
@@ -1178,6 +2632,169 @@ Carrega um módulo da pasta `scripts` e devolve o que ele devolve.
 local dados = require("./dados")
 print(dados.custo)
 ```
+
+## Reservado para a 0.8
+
+Nomes que chegam na 0.8, com a rede e vários jogadores. Na 0.7, usar um deles é um erro que diz isso, e uma função do módulo com o nome de um evento da 0.8 gera um aviso: a engine ainda não a chama.
+
+### `players`
+
+Os jogadores da partida, a partir da 0.8.
+
+Na 0.7 há um jogador só, o de quem joga: ler `players` é um erro que diz que ele chega na 0.8.
+
+- Para com erro: qualquer uso na 0.7 (chega na 0.8).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+print(pcall(function()
+    return players
+end))
+```
+
+### `Player`
+
+Um jogador da partida, a partir da 0.8.
+
+O nome fica guardado para o tipo e a tabela dos jogadores; na 0.7, ler `Player` é um erro que diz que ele chega na 0.8.
+
+- Para com erro: qualquer uso na 0.7 (chega na 0.8).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+print(pcall(function()
+    return Player
+end))
+```
+
+### `session`
+
+A sessão em rede, a partir da 0.8.
+
+Na 0.7 não há rede: ler `session` é um erro que diz que ela chega na 0.8.
+
+- Para com erro: qualquer uso na 0.7 (chega na 0.8).
+- 0.8: M (partida). Desde a 0.7.0.
+
+```lua
+print(pcall(function()
+    return session
+end))
+```
+
+### `game.online`
+
+Se a partida é em rede, a partir da 0.8.
+
+Na 0.7 toda partida é local: ler `game.online` é um erro que diz que ele chega na 0.8.
+
+- Para com erro: qualquer uso na 0.7 (chega na 0.8).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(pcall(function()
+    return game.online
+end))
+```
+
+### `game.is_host`
+
+Se esta máquina hospeda a partida, a partir da 0.8.
+
+Ler `game.is_host` na 0.7 é um erro que diz que ele chega na 0.8.
+
+- Para com erro: qualquer uso na 0.7 (chega na 0.8).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(pcall(function()
+    return game.is_host
+end))
+```
+
+### `game.is_server`
+
+Se o script roda na autoridade da partida, a partir da 0.8.
+
+Ler `game.is_server` na 0.7 é um erro que diz que ele chega na 0.8.
+
+- Para com erro: qualquer uso na 0.7 (chega na 0.8).
+- 0.8: leitura pura. Desde a 0.7.0.
+
+```lua
+print(pcall(function()
+    return game.is_server
+end))
+```
+
+### `on_request(self: Object, player: any, name: string, value: any)`
+
+Um jogador pediu algo à partida, a partir da 0.8.
+
+Na 0.8, uma mensagem de um script local para a partida chega aqui. Na 0.7 a engine nunca chama esta função, e a conferência avisa.
+
+- `player` (`any`): o jogador que pede
+- `name` (`string`): o nome do pedido
+- `value` (`any`): o valor do pedido
+- 0.8: A (autoridade). Desde a 0.7.0.
+
+```lua
+function M.on_request(self: Object, player: any, name: string, value: any)
+    print(name)
+end
+```
+
+### `on_player_join(self: Object, player: any)`
+
+Um jogador entrou na partida, a partir da 0.8.
+
+Na 0.7 a engine nunca chama esta função, e a conferência avisa.
+
+- `player` (`any`): o jogador que entrou
+- 0.8: A (autoridade). Desde a 0.7.0.
+
+```lua
+function M.on_player_join(self: Object, player: any)
+    print("entrou")
+end
+```
+
+### `on_player_leave(self: Object, player: any)`
+
+Um jogador saiu da partida, a partir da 0.8.
+
+Na 0.7 a engine nunca chama esta função, e a conferência avisa.
+
+- `player` (`any`): o jogador que saiu
+- 0.8: A (autoridade). Desde a 0.7.0.
+
+```lua
+function M.on_player_leave(self: Object, player: any)
+    print("saiu")
+end
+```
+
+## Nós que viram Luau
+
+O que estas operações dos nós fazem o próprio Luau faz, sem uma função da API; as outras estão nas páginas acima, no item **Nós**.
+
+- Número (`value.number`): Um número escrito no código: `3`, `0.5`.
+- Texto (`value.text`): Um texto escrito no código: `"Porta"`.
+- Booleano (`value.bool`): `true` e `false`.
+- Operação aritmética (`math.binary`): `a + b`, `a - b`, `a * b`, `a / b`, `a % b` (não negativo com divisor positivo, como o nó), `math.min(a, b)` e `math.max(a, b)`; dividir por zero dá `inf`, que a engine recusa ao gravar.
+- Função matemática (`math.unary`): `math.floor`, `math.ceil`, `math.round` (metades para longe do zero, como o nó), `math.abs`, `math.sign`, `math.sqrt` e, para truncar, `(math.modf(x))`.
+- Limitar entre mínimo e máximo (`math.clamp`): `math.clamp(x, min, max)`.
+- Comparar (`condition.compare`): `==`, `~=`, `<`, `<=`, `>` e `>=`.
+- Se / Senão (`condition.branch`): `if … then … else … end`.
+- Sequência (`control.sequence`): Uma linha depois da outra, na mesma função.
+- Vetor2 constante (`value.vector2`): `vector.create(x, y, 0)`: um Vetor2 chega aos scripts como vetor com z 0.
+- Construir Vetor2 (`vector2.make`): `vector.create(x, y, 0)`.
+- Decompor Vetor2 (`vector2.parts`): `v.x` e `v.y`.
+- Operações com Vetor2 (`vector2.math`): `a + b`, `a - b`, `a * s`, `vector.magnitude(a)`, `vector.dot(a, b)` e `vmath.normalize_or_zero(a)`.
+- Vetor3 constante (`value.vector3`): `vector.create(x, y, z)`.
+- Construir Vetor3 (`vector3.make`): `vector.create(x, y, z)`.
+- Decompor Vetor3 (`vector3.parts`): `v.x`, `v.y` e `v.z`.
+- Operações com Vetor3 (`vector3.math`): `a + b`, `a - b`, `a * s`, `vector.magnitude(a)` e `vector.dot(a, b)`; o normalizado com zero seguro é `vmath.normalize_or_zero(a)`.
 
 ## Tipos
 
@@ -1304,6 +2921,24 @@ export type Object = {
     --- Cancela o que falta de um temporizador do objeto; diz se ainda faltava algo.
     --- Vale para os temporizadores de qualquer script do mesmo objeto.
     cancel: (self: Object, id: number) -> boolean,
+    --- O Personagem 3D do objeto: o estado e os comandos dele.
+    --- Só leitura, num objeto com Personagem 3D; num objeto sem ele, é um erro (confira antes com `obj:has_component("character")`). O personagem anda pelos comandos (`move`, `jump`, `teleport`…), não pela `position` do objeto.
+    character: Character,
+    --- O colisor do objeto: 2D, 3D ou área.
+    --- Só leitura, num objeto com colisor ou área; num objeto sem eles, é um erro (confira antes com `obj:has_component("collider")`). O corpo de um Personagem 3D não é um colisor: use `obj.character` (a superfície do corpo é `obj.character.body_surface`).
+    collider: Collider,
+    --- A plataforma móvel do objeto.
+    --- Só leitura, num objeto com plataforma móvel; num objeto sem ela, é um erro (confira antes com `obj:has_component("platform")`).
+    platform: Platform,
+    --- O Movimento 2D do objeto.
+    --- Só leitura, num objeto com Movimento 2D; num objeto sem ele, é um erro (confira antes com `obj:has_component("controller")`).
+    controller: Controller,
+    --- As animações (clipes) do objeto.
+    --- Só leitura, num objeto com clipes; num objeto sem eles, é um erro (confira antes com `obj:has_component("animation")`).
+    animation: Animation,
+    --- O elemento de interface do objeto: texto, imagem, botão ou barra.
+    --- Só leitura, num elemento de interface; num objeto que não é um, é um erro (confira antes com `obj:has_component("ui")`).
+    ui: UiElement,
 }
 
 --- Objeto com atributos e memória tipados pelo script: `type Self = ScriptObject<typeof(Modulo.attributes), typeof(Modulo.state)>`. Um nome que o script não declara é acusado.
@@ -1401,6 +3036,24 @@ export type ScriptObject<A, S> = {
     --- Cancela o que falta de um temporizador do objeto; diz se ainda faltava algo.
     --- Vale para os temporizadores de qualquer script do mesmo objeto.
     cancel: (self: ScriptObject<A, S>, id: number) -> boolean,
+    --- O Personagem 3D do objeto: o estado e os comandos dele.
+    --- Só leitura, num objeto com Personagem 3D; num objeto sem ele, é um erro (confira antes com `obj:has_component("character")`). O personagem anda pelos comandos (`move`, `jump`, `teleport`…), não pela `position` do objeto.
+    character: Character,
+    --- O colisor do objeto: 2D, 3D ou área.
+    --- Só leitura, num objeto com colisor ou área; num objeto sem eles, é um erro (confira antes com `obj:has_component("collider")`). O corpo de um Personagem 3D não é um colisor: use `obj.character` (a superfície do corpo é `obj.character.body_surface`).
+    collider: Collider,
+    --- A plataforma móvel do objeto.
+    --- Só leitura, num objeto com plataforma móvel; num objeto sem ela, é um erro (confira antes com `obj:has_component("platform")`).
+    platform: Platform,
+    --- O Movimento 2D do objeto.
+    --- Só leitura, num objeto com Movimento 2D; num objeto sem ele, é um erro (confira antes com `obj:has_component("controller")`).
+    controller: Controller,
+    --- As animações (clipes) do objeto.
+    --- Só leitura, num objeto com clipes; num objeto sem eles, é um erro (confira antes com `obj:has_component("animation")`).
+    animation: Animation,
+    --- O elemento de interface do objeto: texto, imagem, botão ou barra.
+    --- Só leitura, num elemento de interface; num objeto que não é um, é um erro (confira antes com `obj:has_component("ui")`).
+    ui: UiElement,
 }
 
 --- Qualquer objeto, tipado pelo script ou não.
@@ -1426,5 +3079,225 @@ export type SpawnOptions = {
     parent: Object?,
     --- Valores de atributos que a cópia já tem, antes do `on_start` dela.
     attributes: { [string]: any }?,
+}
+
+--- O Personagem 3D de um objeto, por `obj.character`: o estado e os comandos dele.
+export type Character = {
+    --- A posição dos pés do personagem no mundo, em metros.
+    --- Só leitura, como a Posição de Ler personagem 3D: a origem do corpo, nos pés. Para mover o personagem, use `move`, `set_velocity` ou `teleport`.
+    position: vector,
+    --- A velocidade total do personagem, em m/s, com a do apoio.
+    --- Só leitura, como a Velocidade total de Ler personagem 3D: sobre uma plataforma que anda, inclui a velocidade dela.
+    velocity: vector,
+    --- A velocidade própria do personagem, em m/s: o embalo, sem a do apoio.
+    --- Só leitura, como a Velocidade própria de Ler personagem 3D.
+    own_velocity: vector,
+    --- A velocidade total do personagem no plano, em m/s: a mesma com y = 0.
+    --- Só leitura, como a Velocidade horizontal de Ler personagem 3D.
+    horizontal_velocity: vector,
+    --- A rapidez horizontal do personagem, em m/s.
+    --- Só leitura, como a Rapidez horizontal de Ler personagem 3D: o comprimento de `horizontal_velocity`.
+    speed: number,
+    --- Se o personagem está no chão, num apoio em que pode ficar em pé.
+    --- Só leitura, como No chão de Ler personagem 3D; uma parede não é apoio.
+    grounded: boolean,
+    --- Se o personagem está no ar, subindo.
+    --- Só leitura, como Subindo de Ler personagem 3D.
+    rising: boolean,
+    --- Se o personagem está no ar, caindo.
+    --- Só leitura, como Caindo de Ler personagem 3D.
+    falling: boolean,
+    --- A postura do personagem: "standing" (em pé), "crouched" (agachado) ou "sliding" (deslizando).
+    --- Só leitura; muda com `set_posture`. A Postura de Ler personagem 3D é a mesma, em português.
+    posture: "standing" | "crouched" | "sliding",
+    --- O objeto em que o personagem pisa, ou nil no ar.
+    --- Só leitura, como Apoio de Ler personagem 3D.
+    support: Object?,
+    --- A superfície física em que o personagem pisa, ou nil no ar ou na padrão.
+    --- Só leitura, como Superfície de Ler personagem 3D: a do apoio, e não a do corpo do personagem (`body_surface`).
+    surface: Surface?,
+    --- A superfície física do corpo do personagem, ou nil para a padrão.
+    --- Como Ler superfície do colisor e Aplicar superfície ao colisor num Personagem 3D: a do corpo, e não a do chão em que ele pisa (`surface`). Recebe uma superfície (de um atributo Superfície, de um colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Vale só durante a partida.
+    body_surface: Surface?,
+    --- O ponto de apoio sob os pés, no mundo, em metros; zero no ar.
+    --- Só leitura, como Ponto de apoio de Ler personagem 3D.
+    support_point: vector,
+    --- Para onde o chão sob os pés aponta (a normal do apoio); zero no ar.
+    --- Só leitura, como Normal de apoio de Ler personagem 3D: num chão plano, (0, 1, 0).
+    support_normal: vector,
+    --- A velocidade do apoio, em m/s, como a de uma plataforma que anda; zero no ar.
+    --- Só leitura, como Velocidade do apoio de Ler personagem 3D.
+    support_velocity: vector,
+    --- Se algum motivo bloqueia o movimento do personagem.
+    --- Só leitura; os motivos vêm de `block`, e `block_reasons("movement")` os lista.
+    movement_blocked: boolean,
+    --- Se algum motivo bloqueia o olhar do personagem.
+    --- Só leitura; os motivos vêm de `block`, e `block_reasons("look")` os lista.
+    look_blocked: boolean,
+    --- A direção da mira do personagem no mundo, de comprimento 1, vinda da entrada do jogo.
+    --- Só leitura: o giro e a inclinação do olhar que a entrada deu ao personagem (o mouse, pela câmera que o acompanha), e não a imagem da câmera, que pode estar suavizada ou em transição. Para mirar e atirar, dá o mesmo em toda máquina.
+    aim: vector,
+    --- O olhar do personagem em graus: x é o giro (0 olha para -Z, 90 para -X) e y a inclinação (positiva para cima).
+    --- Só leitura; z é 0. É o que `teleport` recebe em `look`: guarde-o com a posição para o jogador voltar a um ponto olhando para o mesmo lado.
+    look: vector,
+    --- Os motivos que bloqueiam o movimento ou o olhar do personagem, em ordem.
+    --- Uma lista nova a cada chamada, vazia sem bloqueio; os motivos vêm de `block`. Ler personagem 3D dá os mesmos, juntos num texto.
+    block_reasons: (self: Character, channel: "movement" | "look") -> { string },
+    --- Pede ao personagem que ande no próximo passo: x para a direita, y para a frente.
+    --- Como Definir intenção para este passo: vale só no próximo passo de movimento, então renove a cada passo (`on_step`); um vetor mais longo que 1 é encurtado. A direção segue a referência do personagem (eixos da cena, do corpo ou da câmera). O pedido vence as teclas naquele passo; `input.movement()` dá o eixo das teclas, e com as ações automáticas desligadas (`set_option`) o personagem só anda assim.
+    move: (self: Character, axis: vector) -> (),
+    --- Pede um pulo ao personagem, como a tecla de pular.
+    --- Como Pedir pulo: pula no chão ou logo depois da borda; no ar, o pedido espera pela antecipação do pulo. Vários pedidos no mesmo passo são um pulo só; a altura vem da velocidade de pulo (`get_param("jump_speed")`).
+    jump: (self: Character) -> (),
+    --- Liga ou desliga correr, agachar ou deslizar.
+    --- Como Correr / agachar / deslizar, e vale até mudar de novo. Ficar em pé pede espaço acima; deslizar pede o deslize permitido no personagem e embalo, e desligá-lo levanta o personagem se couber.
+    set_posture: (self: Character, kind: "sprint" | "crouch" | "slide", on: boolean) -> (),
+    --- Soma uma velocidade em m/s, no mundo, ao embalo do personagem.
+    --- Como o modo Adicionar de Adicionar / definir velocidade: preserva o embalo, e para cima tira o personagem do chão. Não é força: `vector.create(0, 8, 0)` é um impulso de 8 m/s para cima.
+    add_velocity: (self: Character, velocity: vector) -> (),
+    --- Troca a velocidade total do personagem por esta, em m/s, no mundo.
+    --- Como o modo Definir de Adicionar / definir velocidade: o embalo vira o que falta para a velocidade total, contando a do apoio.
+    set_velocity: (self: Character, velocity: vector) -> (),
+    --- Bloqueia ou libera o movimento ou o olhar do personagem por um motivo.
+    --- Como Bloquear / liberar entrada por motivo: os motivos se somam, e liberar um não libera os outros. Não desliga a gravidade, a colisão nem a câmera.
+    block: (self: Character, channel: "movement" | "look", reason: string, on: boolean) -> (),
+    --- Aplica ao personagem um perfil de movimento pronto.
+    --- Como Aplicar perfil de movimento, com os valores do botão do editor; o nome antigo `"parkour"` vale como `"agile"`. Não teleporta nem zera a velocidade; um limite horizontal menor que o embalo de agora é recusado sem `allow_limit`. Vale só durante a partida.
+    apply_profile: (self: Character, profile: "direct" | "agile" | "chained", allow_limit: boolean?) -> (),
+    --- Muda um valor do motor do personagem durante a partida.
+    --- Como Alterar parâmetro do personagem: velocidades em m/s (`speed`, `sprint_speed`, `crouch_speed`, `jump_speed`, `air_projected_limit`, `horizontal_limit`), acelerações em m/s² (`gravity`, `ground_acceleration`, `ground_braking`, `air_acceleration`, `slide_control`), atritos e resistência por segundo, conservações de 0 a 1, tolerâncias em milissegundos (`coyote_ms`, `jump_buffer_ms`), o deslize em segundos e o giro em graus por segundo. Um valor que o personagem não aceita é um erro e nada muda. Vale só durante a partida.
+    set_param: (self: Character, name: "speed" | "sprint_speed" | "crouch_speed" | "gravity" | "jump_speed" | "ground_acceleration" | "ground_braking" | "ground_friction" | "air_acceleration" | "air_projected_limit" | "air_resistance" | "horizontal_limit" | "jump_retention" | "landing_retention" | "coyote_ms" | "jump_buffer_ms" | "slide_duration" | "slide_friction" | "slide_control" | "angular_speed", value: number, allow_limit: boolean?) -> (),
+    --- Lê um valor do motor do personagem, como está na partida.
+    --- Os nomes e as unidades de `set_param`; dá o valor de agora, com o que `set_param` e `apply_profile` mudaram.
+    get_param: (self: Character, name: "speed" | "sprint_speed" | "crouch_speed" | "gravity" | "jump_speed" | "ground_acceleration" | "ground_braking" | "ground_friction" | "air_acceleration" | "air_projected_limit" | "air_resistance" | "horizontal_limit" | "jump_retention" | "landing_retention" | "coyote_ms" | "jump_buffer_ms" | "slide_duration" | "slide_friction" | "slide_control" | "angular_speed") -> number,
+    --- Liga ou desliga uma opção do personagem durante a partida.
+    --- Como Alterar opção do personagem: `automatic_input` (as teclas movem o personagem; desligada, só `move`, `jump` e `set_posture`), `slide_enabled` (deslize permitido), `crouch_toggle` (a tecla de agachar alterna), `automatic_jump` (pular ao segurar) e `face_look` (o corpo vira para o olhar). Vale só durante a partida.
+    set_option: (self: Character, name: "automatic_input" | "slide_enabled" | "crouch_toggle" | "automatic_jump" | "face_look", on: boolean) -> (),
+    --- Gira o corpo do personagem para um giro horizontal do mundo, em graus.
+    --- Como Definir giro horizontal do personagem: 0 olha para -Z e 90 para -X, como `obj.yaw` lê. Se o corpo girado ocupar um obstáculo, nada muda e é um erro; em primeira pessoa, a câmera que o segue gira junto.
+    set_yaw: (self: Character, degrees: number) -> (),
+    --- Põe os pés do personagem num ponto do mundo, se houver espaço; devolve ok, o motivo da recusa e o destino usado.
+    --- Como Teleportar com segurança. Opções: `search`, até quantos metros procurar um lugar livre perto (0 a 2; sem ela, um destino ocupado é recusado); `keep_velocity` (sem ela, a velocidade zera); `yaw`, o giro do corpo em graus, e `look`, o olhar como `character.look` o dá (sem eles, ficam como estão). Uma recusa não é erro: `ok` é false, o segundo valor diz por quê e o personagem fica onde estava. Os eventos do trajeto abandonado que ainda não rodaram caem, como no nó.
+    teleport: (self: Character, feet: vector, options: TeleportOptions?) -> (boolean, string?, vector?),
+}
+
+--- O colisor (2D, 3D ou área) de um objeto, por `obj.collider`.
+export type Collider = {
+    --- Se o colisor (ou a área) está ligado.
+    --- Como Ativar / desativar componente (Colisor): desligado, não colide nem sente quem entra. Religar uma área começa uma ativação nova: quem está dentro entra de novo (`on_area_enter`), e `first_hit` recomeça.
+    enabled: boolean,
+    --- Se o colisor é uma área (sensor), que sente quem entra sem colidir.
+    --- Só leitura, como as Propriedades marcam.
+    is_area: boolean,
+    --- A superfície física do colisor 3D, ou nil para a padrão.
+    --- Como Ler superfície do colisor e Aplicar superfície ao colisor: recebe uma superfície (de um atributo Superfície, de outro colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Só um colisor 3D tem superfície; a do corpo de um personagem é `obj.character.body_surface`. Vale só durante a partida.
+    surface: Surface?,
+}
+
+--- A plataforma móvel de um objeto, por `obj.platform`.
+export type Platform = {
+    --- Se a plataforma móvel leva quem está em cima.
+    --- Como Ativar / desativar componente (Plataforma móvel).
+    enabled: boolean,
+}
+
+--- O Movimento 2D de um objeto, por `obj.controller`.
+export type Controller = {
+    --- Se o Movimento 2D do objeto obedece às teclas.
+    --- Como Ativar / desativar componente (Controlador).
+    enabled: boolean,
+}
+
+--- As animações (clipes) de um objeto, por `obj.animation`.
+export type Animation = {
+    --- Toca um clipe do objeto pelo nome.
+    --- Como Reproduzir animação: o nome vale sem diferenciar maiúsculas. Os marcadores do clipe chegam a `on_marker`; um objeto que um clipe tocando posiciona não aceita `position` até ele parar.
+    play: (self: Animation, clip: string, restart: boolean?) -> (),
+    --- Se o clipe do objeto está tocando: false pausa onde está, true retoma.
+    --- Como Ativar / desativar componente (Animação). Antes de algum clipe tocar, é false e true não faz nada: comece com `play`.
+    playing: boolean,
+    --- O nome do clipe que toca (ou que parou), ou nil se nenhum tocou.
+    --- Só leitura; um clipe que acabou ou foi pausado continua sendo o clipe, com `playing` false.
+    clip: string?,
+}
+
+--- O elemento de interface de um objeto, por `obj.ui`.
+export type UiElement = {
+    --- O texto do elemento; um valor vinculado ainda entra no lugar de `{valor}`.
+    --- Escrever troca o texto durante a partida, até 4.096 bytes. Num elemento vinculado a um atributo, o valor dele continua aparecendo em `{valor}` (ou depois do texto, sem a marca); ler dá o texto escrito, sem o valor. Com `time.format`, dispensa um atributo só para o texto.
+    text: string,
+    --- A cor do elemento: vermelho, verde e azul de 0 a 1, em x, y e z.
+    --- Escrever recusa um componente fora de 0 a 1; a opacidade fica como está.
+    color: vector,
+}
+
+--- Uma sequência de sorteios com nome, de `random.stream`: independente das outras.
+export type RandomStream = {
+    --- Sorteia um número real de min até max, sem max, desta sequência.
+    --- Como `random.number`, na sequência de `random.stream`.
+    number: (self: RandomStream, min: number, max: number) -> number,
+    --- Sorteia um inteiro de min até max, os dois incluídos, desta sequência.
+    --- Como `random.integer`, na sequência de `random.stream`.
+    integer: (self: RandomStream, min: number, max: number) -> number,
+}
+
+--- Opções de `obj.character:teleport`.
+export type TeleportOptions = {
+    --- Até quantos metros procurar um lugar livre perto do destino, de 0 a 2; 0 (o padrão) recusa um destino ocupado.
+    search: number?,
+    --- true mantém a velocidade total; sem ela, o personagem chega parado.
+    keep_velocity: boolean?,
+    --- O giro do corpo no mundo, em graus (0 olha para -Z); sem ele, fica o de agora.
+    yaw: number?,
+    --- O olhar, como `character.look` dá: x o giro e y a inclinação, em graus; sem ele, fica o de agora.
+    look: vector?,
+}
+
+--- O primeiro contato de uma consulta de `physics`.
+export type Hit = {
+    --- O objeto atingido.
+    object: Object,
+    --- O ponto do contato, no mundo, em metros.
+    point: vector,
+    --- A normal da superfície atingida, no mundo.
+    normal: vector,
+    --- A distância percorrida até o contato, em metros (em `capsule_fits`, a penetração, negativa).
+    distance: number,
+    --- A fração do percurso até o contato, de 0 a 1.
+    fraction: number,
+    --- A superfície física do que foi atingido, ou nil para a padrão.
+    surface: Surface?,
+}
+
+--- Opções das consultas de `physics`.
+export type QueryOptions = {
+    --- true inclui as áreas (sensores); sem ela, só o que colide.
+    areas: boolean?,
+    --- Um objeto que a consulta ignora, com tudo o que está nele: o próprio personagem, para não se atingir.
+    exclude: AnyObject?,
+    --- Os grupos de colisão a que a consulta pertence: os nomes dos grupos (como no editor) ou a máscara em número (padrão 1, Cenário padrão).
+    category: (number | string | { string })?,
+    --- Os grupos de colisão que a consulta encontra: os nomes ou a máscara em número (padrão: todos).
+    mask: (number | string | { string })?,
+}
+
+--- Opções de `audio.loop`.
+export type LoopOptions = {
+    --- O canal: "music" (o padrão) ou "effects".
+    channel: ("music" | "effects")?,
+    --- Volume de 0 a 1 (padrão 1).
+    volume: number?,
+    --- A entrada suave, em segundos, de 0 a 60 (padrão 0).
+    fade: number?,
+}
+
+--- Opções de `audio.stop`.
+export type StopOptions = {
+    --- O som que para, pelo nome na Biblioteca; sem ele, todos os do canal.
+    sound: string?,
+    --- O canal: "music", "effects" ou "all" (o padrão), os dois.
+    channel: ("music" | "effects" | "all")?,
+    --- A saída suave, em segundos, de 0 a 60 (padrão 0).
+    fade: number?,
 }
 ```

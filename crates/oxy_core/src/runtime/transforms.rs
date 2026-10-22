@@ -27,6 +27,15 @@ pub fn yaw_of(direction: Vec3) -> f32 {
     (-direction.x).atan2(-direction.z).to_degrees()
 }
 
+/// The turn and the pitch, in degrees, of a view along `direction` (length 1), as Ler câmera de
+/// jogo reads the look: the turn as [`yaw_of`], the pitch positive upward.
+pub fn look_of(direction: Vec3) -> [f32; 2] {
+    [
+        yaw_of(direction),
+        direction.y.clamp(-1., 1.).asin().to_degrees(),
+    ]
+}
+
 impl Runtime {
     /// Where `id` stands and how it is turned, in `space`. In the world, where its pivot is, as
     /// Properties shows it and `write_transform` places it, or a 3D character's origin, where

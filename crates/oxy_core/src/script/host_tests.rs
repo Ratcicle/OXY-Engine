@@ -191,6 +191,13 @@ fn the_globals_are_the_engines_list_read_only_and_frozen() {
         "vmath:table",
         "warn:function",
         "xpcall:function",
+        "camera:table",
+        "game:table",
+        "input:table",
+        "physics:table",
+        "random:table",
+        "save:table",
+        "time:table",
     ];
     expected.sort();
     assert_eq!(names, expected.join(" "), "os globais da partida mudaram");

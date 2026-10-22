@@ -7,8 +7,9 @@
 //! node. The layer is:
 //! - objects: `attribute`, `set_attribute`, `damage`, `first_hit`, `spawn_copy` (and
 //!   `script_spawn_copy`, `script_spawn_model`, `place_spawned`), `set_component_enabled`,
-//!   `logic_enabled`, `play_animation`, `object_surface` (here), `remove_object` (`runtime.rs`)
-//!   and `apply_surface` (`movement_nodes/queries.rs`);
+//!   `logic_enabled`, `play_animation`, `animation_playing`, `object_surface`, `set_ui_text`,
+//!   `set_ui_color` (here), `remove_object` (`runtime.rs`) and `apply_surface`
+//!   (`movement_nodes/queries.rs`);
 //! - transforms (`transforms.rs`): `object_pose`, `world_rotation`, `write_transform`;
 //! - the game (`game_nodes.rs`): `change_scene_from_logic`, `variable`, `set_variable`,
 //!   `save_progress`, `clear_progress`, `has_saved_progress`, `game_paused`,
@@ -21,7 +22,8 @@
 //!   `input_wheel`, `input_movement`;
 //! - 3D characters (`characters/`, `movement_nodes.rs`, `movement_nodes/actions.rs`), cameras
 //!   (`cameras.rs`) and scene queries (`movement_nodes/queries.rs`): their `pub` methods, such
-//!   as `inspect_character`, `teleport_character`, `set_camera_mode` and `query_scene`.
+//!   as `inspect_character`, `character_value`, `character_parameter`, `teleport_character`,
+//!   `set_camera_mode` and `query_scene`.
 use super::*;
 use glam::Vec2;
 
@@ -185,6 +187,54 @@ impl Runtime {
             self.animations
                 .insert(target.into(), AnimationPlayer::new(clip_id));
         }
+        Ok(())
+    }
+
+    /// The clip `target` plays, by its ID, and whether it is playing (a paused clip keeps its
+    /// place); none before a clip first plays on it.
+    pub fn animation_playing(&self, target: &str) -> Option<(&str, bool)> {
+        self.animations
+            .get(target)
+            .map(|player| (player.clip_id.as_str(), player.playing))
+    }
+
+    /// The interface element of `target`, which it must be.
+    fn ui_element(&mut self, target: &str) -> Result<&mut crate::document::UiElement, String> {
+        let entity = self.entity_mut(target).ok_or("Objeto ausente")?;
+        let name = entity.name.clone();
+        entity.ui.as_mut().ok_or_else(|| {
+            format!("{name} não é um elemento de interface (texto, imagem, botão ou barra)")
+        })
+    }
+
+    /// Writes the text the interface element `target` shows, at most
+    /// [`crate::variables::MAX_TEXT`] bytes; a bound value still takes the place of `{valor}`.
+    pub fn set_ui_text(&mut self, target: &str, text: &str) -> Result<(), String> {
+        let element = self.ui_element(target)?;
+        if text.len() > crate::variables::MAX_TEXT {
+            return Err(format!(
+                "O texto passa de {} bytes",
+                crate::variables::MAX_TEXT
+            ));
+        }
+        element.text = text.to_owned();
+        Ok(())
+    }
+
+    /// Writes the red, green and blue (0 to 1 each) of the interface element `target`; its
+    /// opacity stays.
+    pub fn set_ui_color(&mut self, target: &str, color: [f32; 3]) -> Result<(), String> {
+        let element = self.ui_element(target)?;
+        if !color
+            .iter()
+            .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+        {
+            let [r, g, b] = color;
+            return Err(format!(
+                "A cor precisa de vermelho, verde e azul de 0 a 1; recebeu ({r}, {g}, {b})"
+            ));
+        }
+        element.color[..3].copy_from_slice(&color);
         Ok(())
     }
 

@@ -60,7 +60,7 @@ pub use movement_nodes::{SceneQuery, SceneQueryShape};
 pub use operations::ObjectComponent;
 pub use script_state::{SCRIPT_ENTRIES_WARNING, ScriptCost};
 pub use state_hash::{StateDifference, StateDigest, StatePart};
-pub use transforms::{TransformPart, TransformSpace, yaw_of};
+pub use transforms::{TransformPart, TransformSpace, look_of, yaw_of};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;

@@ -714,10 +714,12 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
     let Some(lsp) = std::env::var_os("OXY_LUAU_LSP").map(PathBuf::from) else {
         return;
     };
+    // The names of 0.8 are not in the types: their examples only show the error of using them.
     let examples: Vec<(String, String)> = registry::API
         .iter()
         .enumerate()
-        .map(|(i, f)| (format!("scripts/api/{i:02}.luau"), f.example_script()))
+        .filter(|(_, f)| f.kind != registry::ApiKind::Reserved)
+        .map(|(i, f)| (format!("scripts/api/{i:03}.luau"), f.example_script()))
         .collect();
     let mut files: Vec<(String, String)> = examples.clone();
     files.push(("scripts/tipado.luau".into(), TYPED.into()));
@@ -770,14 +772,8 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
     }
     files.push((
         "modulo/errado.luau".into(),
-        module_form(
-            &examples[registry::API
-                .iter()
-                .position(|f| f.name == "audio.play")
-                .unwrap()]
-            .1,
-        )
-        .replace("audio.play(", "audio.paly("),
+        module_form(&registry::find("audio.play").unwrap().example_script())
+            .replace("audio.play(", "audio.paly("),
     ));
     files.push((
         MODULE_SETTINGS.into(),
