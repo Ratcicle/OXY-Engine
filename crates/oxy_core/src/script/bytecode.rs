@@ -1,9 +1,11 @@
 //! A small reader of the bytecode the engine's fixed compiler emits (version 9, type information
 //! version 3 in Luau 0.740), enough for the load checks: top-level locals that some function
 //! writes (captures by reference in the main function), closures that share a mutable upvalue
-//! with their creator, and the global paths a script imports. Any other version is refused, so
-//! an mlua update that changes the format fails the contract test instead of passing unread.
-use std::collections::BTreeSet;
+//! with their creator, the global paths a script imports and, for the lint of names, the
+//! literal texts it passes to calls, uses as keys of a field, writes to one or compares a
+//! parameter with. Any other version is refused, so an mlua update that changes the format fails
+//! the contract test instead of passing unread.
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The versions in the bytecode's first two bytes.
 pub const VERSION: u8 = 9;
@@ -13,11 +15,28 @@ pub const TYPES_VERSION: u8 = 3;
 const LCT_VAL: u32 = 0;
 const LCT_REF: u32 = 1;
 const LCT_UPVAL: u32 = 2;
+const OP_LOADK: u32 = 5;
+const OP_MOVE: u32 = 6;
+const OP_GETGLOBAL: u32 = 7;
 const OP_SETUPVAL: u32 = 10;
 const OP_GETIMPORT: u32 = 12;
+const OP_GETTABLE: u32 = 13;
+const OP_SETTABLE: u32 = 14;
+const OP_GETTABLEKS: u32 = 15;
+const OP_SETTABLEKS: u32 = 16;
 const OP_NEWCLOSURE: u32 = 19;
+const OP_NAMECALL: u32 = 20;
+const OP_CALL: u32 = 21;
+const OP_JUMPIFEQ: u32 = 27;
+const OP_JUMPIFNOTEQ: u32 = 30;
 const OP_DUPCLOSURE: u32 = 64;
+const OP_LOADKX: u32 = 66;
 const OP_CAPTURE: u32 = 70;
+const OP_JUMPXEQKS: u32 = 80;
+const OP_GETUDATAKS: u32 = 83;
+const OP_SETUDATAKS: u32 = 84;
+const OP_NAMECALLUDATA: u32 = 85;
+const OP_CALLFB: u32 = 87;
 const OP_COUNT: u32 = 91;
 
 /// `Luau::getOpLength` (Common/include/Luau/BytecodeUtils.h): the instructions an AUX word follows.
@@ -61,7 +80,10 @@ struct Local {
 
 #[derive(Clone, Debug, Default)]
 struct Proto {
+    parameters: u8,
     upvalues: u8,
+    /// The function's name, as `on_input` for `function M.on_input`.
+    name: Option<String>,
     code: Vec<u32>,
     constants: Vec<Constant>,
     children: Vec<u32>,
@@ -188,7 +210,7 @@ pub fn parse(bytes: &[u8]) -> Result<Module, String> {
 fn read_proto(r: &mut Reader) -> Result<Proto, String> {
     let mut p = Proto::default();
     let _max_stack = r.u8()?;
-    let _parameters = r.u8()?;
+    p.parameters = r.u8()?;
     p.upvalues = r.u8()?;
     let _vararg = r.u8()?;
     let _flags = r.u8()?;
@@ -245,7 +267,7 @@ fn read_proto(r: &mut Reader) -> Result<Proto, String> {
     }
     p.children = (0..r.count()?).map(|_| r.var()).collect::<Result<_, _>>()?;
     let _line_defined = r.var()?;
-    let _name = r.string()?;
+    p.name = r.string()?;
     if r.u8()? != 0 {
         p.line_gap = r.u8()?;
         if p.line_gap > 31 {
@@ -295,15 +317,52 @@ pub struct TopLevelWrite {
     pub changed_at: Option<u32>,
 }
 
+/// Where a chunk gives a literal text that may name something: an argument, a key or the other
+/// side of a comparison.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Site {
+    /// Argument `arg` (from 0) of a call of the global path `function` (`audio.play`).
+    Call { function: String, arg: usize },
+    /// Argument `arg` (from 0, after the receiver) of a call of the method `name` on a value
+    /// read as the field `field` of another (`obj.animation:play`), or on any other value.
+    Method {
+        name: String,
+        field: Option<String>,
+        arg: usize,
+    },
+    /// A key, read or written, of a value read as the field `field` of another (`obj.attr.Vida`,
+    /// `obj.attr["Vida"]`).
+    Key { field: String },
+    /// The value written to the key `key` of a value read as the field `field` of another
+    /// (`obj.collider.surface = "Gelo"`).
+    Set { field: String, key: String },
+    /// A comparison of parameter `param` (from 0, `self` included) of a function named
+    /// `function` (`action == "Pular"` in `M.on_input`).
+    Compare { function: String, param: usize },
+}
+
+/// A literal text of a chunk at a site, with its line when the bytecode carries lines.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Literal {
+    pub site: Site,
+    pub text: String,
+    pub line: Option<u32>,
+}
+
 /// What the load checks read from a chunk.
 #[derive(Clone, Debug, Default)]
 pub struct Report {
     pub top_level_writes: Vec<TopLevelWrite>,
     /// The global paths the chunk imports, as `math.floor`.
     pub imports: BTreeSet<String>,
+    /// The lines each of `imports` is read at, when the bytecode carries lines.
+    pub import_lines: BTreeMap<String, BTreeSet<u32>>,
     /// The functions (proto indexes, `lua_Debug.bytecodeid`) whose closures share a mutable
     /// upvalue with the function that creates them.
     pub stateful_protos: BTreeSet<u32>,
+    /// The literal texts at the sites of [`Site`], function by function as the walk reaches
+    /// them, each function's in the order of its code.
+    pub literals: Vec<Literal>,
 }
 
 /// Walks the functions from the main one, checking that every capture follows a closure
@@ -320,6 +379,7 @@ pub fn analyze(m: &Module) -> Result<Report, String> {
     seen[m.main] = true;
     while let Some(id) = queue.pop() {
         let p = &m.protos[id];
+        literals(p, &mut report.literals);
         let mut pc = 0;
         while pc < p.code.len() {
             let insn = p.code[pc];
@@ -341,16 +401,12 @@ pub fn analyze(m: &Module) -> Result<Report, String> {
                 OP_CAPTURE => return Err("CAPTURE fora de uma criação de função".into()),
                 OP_GETIMPORT => {
                     let aux = *p.code.get(pc + 1).ok_or("GETIMPORT sem AUX")?;
-                    let count = (aux >> 30) as usize;
-                    let path: Vec<String> = [aux >> 20, aux >> 10, aux]
-                        .iter()
-                        .take(count)
-                        .map(|&k| match p.constants.get((k & 1023) as usize) {
-                            Some(Constant::Text(Some(name))) => name.clone(),
-                            _ => "?".into(),
-                        })
-                        .collect();
-                    report.imports.insert(path.join("."));
+                    let path = import_path(p, aux);
+                    if let Some(line) = p.line(pc) {
+                        let lines = report.import_lines.entry(path.clone()).or_default();
+                        lines.insert(line);
+                    }
+                    report.imports.insert(path);
                     None
                 }
                 _ => None,
@@ -443,6 +499,250 @@ fn upvalue_write(m: &Module, id: usize, upvalue: usize, depth: usize) -> Option<
         pc += upvalues;
     }
     None
+}
+
+/// The global path of a GETIMPORT whose AUX word is `aux`, as `math.floor`.
+fn import_path(p: &Proto, aux: u32) -> String {
+    let count = (aux >> 30) as usize;
+    let path: Vec<&str> = [aux >> 20, aux >> 10, aux]
+        .iter()
+        .take(count)
+        .map(|&k| match p.constants.get((k & 1023) as usize) {
+            Some(Constant::Text(Some(name))) => name.as_str(),
+            _ => "?",
+        })
+        .collect();
+    path.join(".")
+}
+
+/// What a register holds, as far as the walk for literals knows it.
+#[derive(Clone, Debug, PartialEq)]
+enum Held {
+    Unknown,
+    Text(String),
+    /// A global path (`scene`, `scene.find`).
+    Global(String),
+    /// A value read as the field of another (`obj.attr`).
+    Field(String),
+    /// What a NAMECALL loads: the method's name and the field its receiver was read as.
+    Method(String, Option<String>),
+    /// A parameter of the function, its register written by no instruction since.
+    Parameter(usize),
+}
+
+/// The instruction a jump at `pc` goes to; none for every other instruction and for the jumps
+/// of fast calls, which only skip the CALL that follows them.
+fn jump_target(pc: usize, insn: u32) -> Option<usize> {
+    let offset = match insn & 0xff {
+        // LOADB jumps by C when C is not 0.
+        3 => match insn >> 24 {
+            0 => return None,
+            c => c as i64,
+        },
+        // JUMP to JUMPIFNOTLT, the loops' instructions, JUMPXEQK* and CMPPROTO jump by D.
+        23..=32 | 56..=59 | 61 | 76..=80 | 88 => i64::from(insn as i32 >> 16),
+        // JUMPX jumps by E.
+        67 => i64::from(insn as i32 >> 8),
+        _ => return None,
+    };
+    usize::try_from(pc as i64 + 1 + offset).ok()
+}
+
+/// The registers instruction `insn` writes, from its A on: none, A alone, A and A+1, or every
+/// one from A (calls, varargs and loops, whose results reach the top); every one for an
+/// instruction it does not know.
+fn written(insn: u32) -> std::ops::Range<usize> {
+    let a = ((insn >> 8) & 0xff) as usize;
+    let end = match insn & 0xff {
+        2..=7 | 9 | 12 | 13 | 15 | 17 | 19 | 33..=54 | 64 | 66 | 71 | 72 | 81..=83 | 90 => a + 1,
+        20 | 85 => a + 2,
+        21 | 56..=59 | 61 | 63 | 76 | 87 => 256,
+        0
+        | 1
+        | 8
+        | 10
+        | 11
+        | 14
+        | 16
+        | 18
+        | 22..=32
+        | 55
+        | 60
+        | 62
+        | 65
+        | 67..=70
+        | 73..=75
+        | 77..=80
+        | 84
+        | 86
+        | 88
+        | 89 => return 0..0,
+        _ => return 0..256,
+    };
+    a..end.min(256)
+}
+
+/// Collects the literal texts of `p` at the sites of [`Site`], walking its code in order with
+/// what each register holds. What reaches an instruction by a jump is not followed: at a jump's
+/// target every register is unknown again, but the parameters no instruction writes. So a text
+/// counts only when it is loaded on the way to its use, as the compiler loads arguments.
+fn literals(p: &Proto, found: &mut Vec<Literal>) {
+    // The jumps' targets and the registers some instruction writes, AUX words skipped.
+    let mut targets = BTreeSet::new();
+    let mut changed = [false; 256];
+    let mut pc = 0;
+    while pc < p.code.len() {
+        targets.extend(jump_target(pc, p.code[pc]));
+        changed[written(p.code[pc])].fill(true);
+        pc += op_length(p.code[pc] & 0xff);
+    }
+    let parameters = usize::from(p.parameters);
+    let start = |held: &mut [Held], all: bool| {
+        for (r, slot) in held.iter_mut().enumerate() {
+            *slot = if r < parameters && (all || !changed[r]) {
+                Held::Parameter(r)
+            } else {
+                Held::Unknown
+            };
+        }
+    };
+    let text = |k: usize| match p.constants.get(k) {
+        Some(Constant::Text(Some(text))) => Some(text.clone()),
+        _ => None,
+    };
+    let mut held = vec![Held::Unknown; 256];
+    start(&mut held, true);
+    let mut pc = 0;
+    while pc < p.code.len() {
+        if targets.contains(&pc) {
+            start(&mut held, false);
+        }
+        let insn = p.code[pc];
+        let op = insn & 0xff;
+        let (a, b, c) = (
+            ((insn >> 8) & 0xff) as usize,
+            ((insn >> 16) & 0xff) as usize,
+            (insn >> 24) as usize,
+        );
+        let aux = p.code.get(pc + 1).copied().unwrap_or(0);
+        let line = p.line(pc);
+        let mut add = |site: Site, literal: &str| {
+            found.push(Literal {
+                site,
+                text: literal.to_owned(),
+                line,
+            })
+        };
+        match op {
+            OP_LOADK => {
+                held[a] = text((insn as i32 >> 16) as usize).map_or(Held::Unknown, Held::Text)
+            }
+            OP_LOADKX => held[a] = text(aux as usize).map_or(Held::Unknown, Held::Text),
+            OP_MOVE => held[a] = held[b].clone(),
+            OP_GETGLOBAL => held[a] = text(aux as usize).map_or(Held::Unknown, Held::Global),
+            OP_GETIMPORT => held[a] = Held::Global(import_path(p, aux)),
+            OP_GETTABLEKS | OP_GETUDATAKS | OP_SETTABLEKS | OP_SETUDATAKS => {
+                // The userdata forms keep the constant in the low 16 bits of AUX.
+                let k = match op {
+                    OP_GETTABLEKS | OP_SETTABLEKS => aux,
+                    _ => aux & 0xffff,
+                };
+                let key = text(k as usize);
+                if let (Held::Field(field), Some(key)) = (&held[b], &key) {
+                    let field = field.clone();
+                    add(Site::Key { field }, key);
+                }
+                if (op == OP_SETTABLEKS || op == OP_SETUDATAKS)
+                    && let (Held::Field(field), Some(key), Held::Text(value)) =
+                        (&held[b], &key, &held[a])
+                {
+                    let (field, key) = (field.clone(), key.clone());
+                    add(Site::Set { field, key }, value);
+                }
+                if op == OP_GETTABLEKS || op == OP_GETUDATAKS {
+                    held[a] = match (&held[b], key) {
+                        (Held::Global(path), Some(key)) => Held::Global(format!("{path}.{key}")),
+                        (_, Some(key)) => Held::Field(key),
+                        (_, None) => Held::Unknown,
+                    };
+                }
+            }
+            OP_GETTABLE | OP_SETTABLE => {
+                let key = match &held[c] {
+                    Held::Text(key) => Some(key.clone()),
+                    _ => None,
+                };
+                if let (Held::Field(field), Some(key)) = (&held[b], &key) {
+                    let field = field.clone();
+                    add(Site::Key { field }, key);
+                }
+                if op == OP_GETTABLE {
+                    held[a] = key.map_or(Held::Unknown, Held::Field);
+                }
+            }
+            OP_NAMECALL | OP_NAMECALLUDATA => {
+                let k = if op == OP_NAMECALL { aux } else { aux & 0xffff };
+                let receiver = held[b].clone();
+                held[a] = match (&receiver, text(k as usize)) {
+                    (Held::Global(_) | Held::Text(_), _) | (_, None) => Held::Unknown,
+                    (Held::Field(field), Some(name)) => Held::Method(name, Some(field.clone())),
+                    (_, Some(name)) => Held::Method(name, None),
+                };
+                if let Some(slot) = held.get_mut(a + 1) {
+                    *slot = receiver;
+                }
+            }
+            OP_CALL | OP_CALLFB => {
+                // B is the arguments + 1, or 0 for all up to the top: the registers past the
+                // last argument were left unknown by the call that filled the top.
+                let count = if b == 0 { 255 - a } else { b - 1 };
+                let arguments = held.iter().skip(a + 1).take(count);
+                match &held[a] {
+                    Held::Global(function) => {
+                        for (arg, value) in arguments.enumerate() {
+                            if let Held::Text(literal) = value {
+                                let function = function.clone();
+                                add(Site::Call { function, arg }, literal);
+                            }
+                        }
+                    }
+                    Held::Method(name, field) => {
+                        for (arg, value) in arguments.skip(1).enumerate() {
+                            if let Held::Text(literal) = value {
+                                let (name, field) = (name.clone(), field.clone());
+                                add(Site::Method { name, field, arg }, literal);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                held[a..].fill(Held::Unknown);
+            }
+            OP_JUMPXEQKS | OP_JUMPIFEQ | OP_JUMPIFNOTEQ => {
+                let compared = if op == OP_JUMPXEQKS {
+                    text((aux & 0xff_ffff) as usize).map(|literal| (&held[a], literal))
+                } else {
+                    match (&held[a], &held[(aux & 0xff) as usize]) {
+                        (Held::Text(literal), other) | (other, Held::Text(literal)) => {
+                            Some((other, literal.clone()))
+                        }
+                        _ => None,
+                    }
+                };
+                if let (Some((Held::Parameter(param), literal)), Some(function)) =
+                    (compared, &p.name)
+                {
+                    let site = Site::Compare {
+                        function: function.clone(),
+                        param: *param,
+                    };
+                    add(site, &literal);
+                }
+            }
+            _ => held[written(insn)].fill(Held::Unknown),
+        }
+        pc += op_length(op);
+    }
 }
 
 /// The name of the top-level local behind `write`, read from the same source compiled with

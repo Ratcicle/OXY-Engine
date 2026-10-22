@@ -56,9 +56,11 @@ export type Object = {
     children: (self: Object) -> { Object },
     --- O primeiro filho com o nome, na ordem da cena, ou nil.
     --- Para quando a ausência é esperada; um filho fixo de um modelo se pega com `get_child`, que dá um erro claro quando ele falta.
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     find_child: (self: Object, name: string, deep: boolean?) -> Object?,
     --- O primeiro filho com o nome, na ordem da cena; um erro se não houver.
     --- Como `find_child`, mas o filho é certo: o erro diz o nome mais parecido e os filhos que existem (um filho renomeado quebra o script na linha, e não depois).
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     get_child: (self: Object, name: string, deep: boolean?) -> Object,
     --- Diz se o objeto ainda está na cena.
     --- Um objeto removido continua sendo um valor no script (num atributo, na memória ou numa mensagem), mas ler ou escrever nele é um erro; confira antes com `exists`.
@@ -113,9 +115,11 @@ export type Object = {
     to_local_direction: (self: Object, direction: vector) -> vector,
     --- Os atributos do objeto, pelo nome.
     --- `obj.attr.Vida` lê o atributo, ou nil quando o objeto não o tem; `obj.attr.Vida = 2` escreve um atributo que o objeto tem, com um valor do mesmo tipo. Um Vetor2 lê como vetor com z = 0 e recebe o x e o y de um vetor; um atributo Objeto lê o objeto, e um Superfície, a superfície (com `.name`), ou nil quando vazios, e recebem nil para ficar vazios. Nomes com espaços vão entre colchetes: `obj.attr["Ponto de retorno"]`. Quando a chamada para num erro com nil, o erro diz o último atributo que ela leu como nil.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     attr: { [string]: any },
     --- Diz se o objeto tem o atributo.
     --- Confira antes de agir sobre outro objeto, como o que entrou numa área.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     has_attribute: (self: Object, name: string) -> boolean,
     --- A memória deste script neste objeto, com os campos de `Modulo.state`.
     --- Só em `self`. Um campo simples (número, texto, booleano, vetor, objeto, superfície) é lido e gravado na engine na hora, conferido na linha; um campo de objeto ou de superfície recebe nil para ficar vazio. Uma tabela é montada na primeira leitura da chamada e gravada de volta quando a chamada termina, com ou sem erro. O primeiro nível não se percorre nem se mede (`pairs`, `#`, `table.clone`): guarde listas num campo.
@@ -171,9 +175,11 @@ export type ScriptObject<A, S> = {
     children: (self: ScriptObject<A, S>) -> { Object },
     --- O primeiro filho com o nome, na ordem da cena, ou nil.
     --- Para quando a ausência é esperada; um filho fixo de um modelo se pega com `get_child`, que dá um erro claro quando ele falta.
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     find_child: (self: ScriptObject<A, S>, name: string, deep: boolean?) -> Object?,
     --- O primeiro filho com o nome, na ordem da cena; um erro se não houver.
     --- Como `find_child`, mas o filho é certo: o erro diz o nome mais parecido e os filhos que existem (um filho renomeado quebra o script na linha, e não depois).
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     get_child: (self: ScriptObject<A, S>, name: string, deep: boolean?) -> Object,
     --- Diz se o objeto ainda está na cena.
     --- Um objeto removido continua sendo um valor no script (num atributo, na memória ou numa mensagem), mas ler ou escrever nele é um erro; confira antes com `exists`.
@@ -228,9 +234,11 @@ export type ScriptObject<A, S> = {
     to_local_direction: (self: ScriptObject<A, S>, direction: vector) -> vector,
     --- Os atributos do objeto, pelo nome.
     --- `obj.attr.Vida` lê o atributo, ou nil quando o objeto não o tem; `obj.attr.Vida = 2` escreve um atributo que o objeto tem, com um valor do mesmo tipo. Um Vetor2 lê como vetor com z = 0 e recebe o x e o y de um vetor; um atributo Objeto lê o objeto, e um Superfície, a superfície (com `.name`), ou nil quando vazios, e recebem nil para ficar vazios. Nomes com espaços vão entre colchetes: `obj.attr["Ponto de retorno"]`. Quando a chamada para num erro com nil, o erro diz o último atributo que ela leu como nil.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     attr: A & {},
     --- Diz se o objeto tem o atributo.
     --- Confira antes de agir sobre outro objeto, como o que entrou numa área.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     has_attribute: (self: ScriptObject<A, S>, name: string) -> boolean,
     --- A memória deste script neste objeto, com os campos de `Modulo.state`.
     --- Só em `self`. Um campo simples (número, texto, booleano, vetor, objeto, superfície) é lido e gravado na engine na hora, conferido na linha; um campo de objeto ou de superfície recebe nil para ficar vazio. Uma tabela é montada na primeira leitura da chamada e gravada de volta quando a chamada termina, com ou sem erro. O primeiro nível não se percorre nem se mede (`pairs`, `#`, `table.clone`): guarde listas num campo.
@@ -332,6 +340,7 @@ export type Character = {
     surface: Surface?,
     --- A superfície física do corpo do personagem, ou nil para a padrão.
     --- Como Ler superfície do colisor e Aplicar superfície ao colisor num Personagem 3D: a do corpo, e não a do chão em que ele pisa (`surface`). Recebe uma superfície (de um atributo Superfície, de um colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Vale só durante a partida.
+    --- A conferência avisa de uma superfície que o projeto não tem.
     body_surface: Surface?,
     --- O ponto de apoio sob os pés, no mundo, em metros; zero no ar.
     --- Só leitura, como Ponto de apoio de Ler personagem 3D.
@@ -405,6 +414,7 @@ export type Collider = {
     is_area: boolean,
     --- A superfície física do colisor 3D, ou nil para a padrão.
     --- Como Ler superfície do colisor e Aplicar superfície ao colisor: recebe uma superfície (de um atributo Superfície, de outro colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Só um colisor 3D tem superfície; a do corpo de um personagem é `obj.character.body_surface`. Vale só durante a partida.
+    --- A conferência avisa de uma superfície que o projeto não tem.
     surface: Surface?,
 }
 
@@ -426,6 +436,7 @@ export type Controller = {
 export type Animation = {
     --- Toca um clipe do objeto pelo nome.
     --- Como Reproduzir animação: o nome vale sem diferenciar maiúsculas. Os marcadores do clipe chegam a `on_marker`; um objeto que um clipe tocando posiciona não aceita `position` até ele parar.
+    --- A conferência avisa de um clipe que nenhum objeto tem.
     play: (self: Animation, clip: string, restart: boolean?) -> (),
     --- Se o clipe do objeto está tocando: false pausa onde está, true retoma.
     --- Como Ativar / desativar componente (Animação). Antes de algum clipe tocar, é false e true não faz nada: comece com `play`.
@@ -518,24 +529,30 @@ export type StopOptions = {
 declare scene: {
     --- O primeiro objeto da cena com o nome, na ordem da cena, ou nil.
     --- O nome é o exato, com maiúsculas e espaços. Para apontar um objeto que pode ser renomeado, prefira um atributo Objeto (`param.object()`), escolhido nas Propriedades.
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     find: (name: string) -> Object?,
     --- O primeiro objeto da cena com o nome; um erro se não houver.
     --- Como `scene.find`, para um objeto que tem de existir: o erro diz o nome mais parecido da cena.
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     get: (name: string) -> Object,
     --- Todos os objetos da cena com o nome, na ordem da cena.
     --- Uma lista nova a cada chamada, vazia quando nenhum tem o nome.
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     find_all: (name: string) -> { Object },
     --- Todos os objetos da cena que têm o atributo, na ordem da cena.
     --- Um atributo serve de marca: os inimigos de uma onda, os interruptores de uma porta.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     with_attribute: (name: string) -> { Object },
     --- Põe uma cópia de um modelo da Biblioteca na cena e devolve a raiz dela.
     --- O nome do modelo vale sem diferenciar maiúsculas. A cópia, com os nomes que os objetos têm no modelo, vai para a raiz da cena (ou para `parent`), na posição salva no modelo (ou em `position`, nos eixos do pai); o `on_start` dos scripts dela roda depois desta chamada. Os IDs saem deste objeto, deste script e de quantas cópias ele já fez, como em `obj:clone`.
+    --- A conferência avisa de um modelo que o projeto não tem.
     spawn_model: (model: string, options: SpawnOptions?) -> Object,
     --- O nome da cena que está rodando.
     --- O mesmo nome que `scene.change` recebe.
     current: () -> string,
     --- Abre outra cena quando a função termina.
     --- O nome vale sem diferenciar maiúsculas. O resto da função ainda roda na cena atual; depois ela fecha, com os temporizadores e as mensagens dela, e a nova começa, como no nó Mudar de cena. Chamar de novo na mesma função troca o destino. As variáveis do jogo continuam.
+    --- A conferência avisa de uma cena que o projeto não tem.
     change: (name: string) -> (),
     --- Começa a cena atual de novo quando a função termina.
     --- Como `scene.change(scene.current())`. As variáveis do jogo guardam o valor: zere no `on_start` o que precisa recomeçar.
@@ -596,6 +613,7 @@ declare param: {
     object: () -> Object?,
     --- Declara um atributo Superfície, com a superfície do projeto de nome `name`.
     --- Em `Modulo.attributes = { Piso = param.surface("Gelo") }`: anexar procura a superfície pelo nome (sem diferenciar maiúsculas) e avisa, sem criar nada, quando o projeto não a tem. Lido no script, é a superfície (com `.name`) ou nil para a padrão. Em `Modulo.state`, só `param.surface()`: um campo que começa vazio.
+    --- A conferência avisa de uma superfície que o projeto não tem.
     surface: (name: string?) -> Surface?,
     --- Declara um atributo Vetor2 com o valor padrão (x, y).
     --- Em `Modulo.attributes = { Tamanho = param.vector2(1, 1) }`, e num campo de `Modulo.state`. Lido no script, um Vetor2 é um vetor com z = 0; escrito, recebe o x e o y de um vetor.
@@ -653,9 +671,11 @@ declare camera: {
 declare audio: {
     --- Toca uma vez o som `name`, pelo nome que ele tem na Biblioteca.
     --- O nome vale também sem diferenciar maiúsculas nem os espaços das pontas. `audience` é aceito desde já, mas só escolhe quem ouve a partir da 0.8, com vários jogadores: hoje o único jogador ouve todo som.
+    --- A conferência avisa de um som que o projeto não tem.
     play: (name: string, options: PlayOptions?) -> (),
     --- Toca um som em loop, na música ou nos efeitos.
     --- Como Tocar em loop: na música (o padrão), o mesmo som continua ao trocar ou reiniciar a cena, e outro entra com a transição enquanto o anterior sai; nos efeitos, o loop acaba com a cena (até 32, um por som). Pedir um loop que já toca só muda o volume dele. A pausa do jogo congela os efeitos e deixa a música.
+    --- A conferência avisa de um som que o projeto não tem.
     loop: (name: string, options: LoopOptions?) -> (),
     --- Para os loops de um som, ou todos os de um canal.
     --- Como Parar som: sem `sound`, para todos os loops do canal; o canal padrão é "all", a música e os efeitos. Parar um som que não toca não faz nada, e os sons de `audio.play` não param: acabam sozinhos.
@@ -692,9 +712,11 @@ declare game: {
 declare vars: {
     --- Lê uma variável do jogo pelo nome.
     --- O nome vale sem diferenciar maiúsculas. Com `key`, o valor daquela chave; numa chave nunca gravada, o valor inicial da variável, como o nó Ler variável do jogo, e nunca nil. Um Vetor2 lê como vetor com z = 0. As variáveis guardam o valor quando a cena reinicia: zere no `on_start` o que precisa recomeçar.
+    --- A conferência avisa de uma variável que o projeto não tem.
     get: (name: string, key: string?) -> any,
     --- Grava uma variável do jogo pelo nome, com um valor do tipo dela.
     --- Com `key`, grava o valor daquela chave, até 1.024 chaves por variável. Uma variável Vetor2 recebe o x e o y de um vetor.
+    --- A conferência avisa de uma variável que o projeto não tem.
     set: (name: string, value: VarValue, key: string?) -> (),
 }
 
@@ -713,12 +735,15 @@ declare save: {
 declare input: {
     --- Se a ação de entrada foi apertada neste passo.
     --- Como Ler ação de entrada (Pressionada): verdadeiro só no passo em que a tecla desce. Lê sem consumir: outros scripts, o grafo e o personagem veem o mesmo. O nome vale sem diferenciar maiúsculas; um segundo argumento, o jogador, chega na 0.8 e hoje é um erro.
+    --- A conferência avisa de uma ação de entrada que o projeto não tem.
     pressed: (action: string) -> boolean,
     --- Se a ação de entrada está segura neste passo.
     --- Como Ler ação de entrada (Mantida), com as regras de `input.pressed`.
+    --- A conferência avisa de uma ação de entrada que o projeto não tem.
     held: (action: string) -> boolean,
     --- Se a ação de entrada foi solta neste passo.
     --- Como Ler ação de entrada (Solta): verdadeiro só no passo em que a tecla sobe, com as regras de `input.pressed`.
+    --- A conferência avisa de uma ação de entrada que o projeto não tem.
     released: (action: string) -> boolean,
     --- O eixo de movimento deste passo: x para a direita e y para a frente, de comprimento até 1.
     --- Como Ler eixos de entrada (Movimento), com z 0: as teclas de movimento do Personagem 3D do objeto que roda o script, ou as do projeto (Mover à esquerda, à direita, para frente e para trás) num objeto sem ele. É o que `character:move` recebe.

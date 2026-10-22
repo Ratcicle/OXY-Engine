@@ -1,5 +1,5 @@
 //! The rows of the API, area by area, and what plain Luau does of the nodes (design §5.5).
-use super::{ApiFn, ApiKind, Area, Domain, Imp, param};
+use super::{ApiFn, ApiKind, Area, Domain, Imp, NameKind, named, param};
 use crate::script::{
     Callback, api, camera, character, game, handles, math, messages, objects, physics, sandbox,
     timers, views,
@@ -119,9 +119,10 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Callback,
         generics: "",
         params: &[
-            param(
+            named(
                 "action",
                 "string",
+                NameKind::Action,
                 "o nome da ação, como em Lógica > Ações de entrada",
             ),
             param(
@@ -206,8 +207,8 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Callback,
         generics: "",
         params: &[
-            param("marker", "string", "o nome do marcador"),
-            param("clip", "string", "o nome da animação"),
+            named("marker", "string", NameKind::Marker, "o nome do marcador"),
+            named("clip", "string", NameKind::Clip, "o nome da animação"),
         ],
         returns: "()",
         summary: "Uma animação do objeto passou por um marcador.",
@@ -376,7 +377,7 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Method,
         generics: "",
         params: &[
-            param("name", "string", "o nome do filho"),
+            named("name", "string", NameKind::Object, "o nome do filho"),
             param(
                 "deep",
                 "boolean?",
@@ -403,7 +404,7 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Method,
         generics: "",
         params: &[
-            param("name", "string", "o nome do filho"),
+            named("name", "string", NameKind::Object, "o nome do filho"),
             param(
                 "deep",
                 "boolean?",
@@ -644,9 +645,10 @@ pub static API: &[ApiFn] = &[
         area: Area::Scene,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param(
+        params: &[named(
             "name",
             "string",
+            NameKind::Object,
             "o nome do objeto, como na Hierarquia",
         )],
         returns: "Object?",
@@ -667,9 +669,10 @@ pub static API: &[ApiFn] = &[
         area: Area::Scene,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param(
+        params: &[named(
             "name",
             "string",
+            NameKind::Object,
             "o nome do objeto, como na Hierarquia",
         )],
         returns: "Object",
@@ -693,9 +696,10 @@ pub static API: &[ApiFn] = &[
         area: Area::Scene,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param(
+        params: &[named(
             "name",
             "string",
+            NameKind::Object,
             "o nome dos objetos, como na Hierarquia",
         )],
         returns: "{ Object }",
@@ -714,7 +718,12 @@ pub static API: &[ApiFn] = &[
         area: Area::Scene,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param("name", "string", "o nome do atributo")],
+        params: &[named(
+            "name",
+            "string",
+            NameKind::Attribute,
+            "o nome do atributo",
+        )],
         returns: "{ Object }",
         summary: "Todos os objetos da cena que têm o atributo, na ordem da cena.",
         doc: "Um atributo serve de marca: os inimigos de uma onda, os interruptores de uma porta.",
@@ -732,7 +741,12 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Function,
         generics: "",
         params: &[
-            param("model", "string", "o nome do modelo na Biblioteca"),
+            named(
+                "model",
+                "string",
+                NameKind::Model,
+                "o nome do modelo na Biblioteca",
+            ),
             param(
                 "options",
                 "SpawnOptions?",
@@ -783,7 +797,12 @@ pub static API: &[ApiFn] = &[
         area: Area::Scene,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param("name", "string", "o nome da cena, como no projeto")],
+        params: &[named(
+            "name",
+            "string",
+            NameKind::Scene,
+            "o nome da cena, como no projeto",
+        )],
         returns: "()",
         summary: "Abre outra cena quando a função termina.",
         doc: "O nome vale sem diferenciar maiúsculas. O resto da função ainda roda na cena \
@@ -1353,7 +1372,12 @@ pub static API: &[ApiFn] = &[
         area: Area::Attributes,
         kind: ApiKind::Method,
         generics: "",
-        params: &[param("name", "string", "o nome do atributo")],
+        params: &[named(
+            "name",
+            "string",
+            NameKind::Attribute,
+            "o nome do atributo",
+        )],
         returns: "boolean",
         summary: "Diz se o objeto tem o atributo.",
         doc: "Confira antes de agir sobre outro objeto, como o que entrou numa área.",
@@ -1421,9 +1445,10 @@ pub static API: &[ApiFn] = &[
         area: Area::Attributes,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param(
+        params: &[named(
             "name",
             "string?",
+            NameKind::Surface,
             "o nome de uma superfície do projeto; sem ele, a superfície padrão",
         )],
         returns: "Surface?",
@@ -2752,7 +2777,12 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Method,
         generics: "",
         params: &[
-            param("clip", "string", "o nome do clipe, como no Estúdio"),
+            named(
+                "clip",
+                "string",
+                NameKind::Clip,
+                "o nome do clipe, como no Estúdio",
+            ),
             param(
                 "restart",
                 "boolean?",
@@ -3153,7 +3183,12 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Function,
         generics: "",
         params: &[
-            param("name", "string", "o nome do som na Biblioteca"),
+            named(
+                "name",
+                "string",
+                NameKind::Sound,
+                "o nome do som na Biblioteca",
+            ),
             param(
                 "options",
                 "PlayOptions?",
@@ -3186,7 +3221,12 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Function,
         generics: "",
         params: &[
-            param("name", "string", "o nome do som na Biblioteca"),
+            named(
+                "name",
+                "string",
+                NameKind::Sound,
+                "o nome do som na Biblioteca",
+            ),
             param(
                 "options",
                 "LoopOptions?",
@@ -3409,7 +3449,12 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Function,
         generics: "",
         params: &[
-            param("name", "string", "o nome da variável do jogo"),
+            named(
+                "name",
+                "string",
+                NameKind::Variable,
+                "o nome da variável do jogo",
+            ),
             param(
                 "key",
                 "string?",
@@ -3440,7 +3485,12 @@ pub static API: &[ApiFn] = &[
         kind: ApiKind::Function,
         generics: "",
         params: &[
-            param("name", "string", "o nome da variável do jogo"),
+            named(
+                "name",
+                "string",
+                NameKind::Variable,
+                "o nome da variável do jogo",
+            ),
             param("value", "VarValue", "um valor do tipo da variável"),
             param(
                 "key",
@@ -3527,9 +3577,10 @@ pub static API: &[ApiFn] = &[
         area: Area::Input,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param(
+        params: &[named(
             "action",
             "string",
+            NameKind::Action,
             "o nome da ação, como em Lógica > Ações de entrada",
         )],
         returns: "boolean",
@@ -3556,9 +3607,10 @@ pub static API: &[ApiFn] = &[
         area: Area::Input,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param(
+        params: &[named(
             "action",
             "string",
+            NameKind::Action,
             "o nome da ação, como em Lógica > Ações de entrada",
         )],
         returns: "boolean",
@@ -3581,9 +3633,10 @@ pub static API: &[ApiFn] = &[
         area: Area::Input,
         kind: ApiKind::Function,
         generics: "",
-        params: &[param(
+        params: &[named(
             "action",
             "string",
+            NameKind::Action,
             "o nome da ação, como em Lógica > Ações de entrada",
         )],
         returns: "boolean",

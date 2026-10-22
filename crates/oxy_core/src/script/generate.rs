@@ -8,7 +8,9 @@
 //! `export type`, `declare name: type` and `declare function`; objects and their views as table
 //! types whose methods are function fields with an explicit `self`; `AnyObject` after
 //! `ScriptObject`. Luau's own functions (`error`) and the names of 0.8 are not declared.
-use super::registry::{API, ApiFn, ApiKind, ApiParam, Area, SYNTAX, TYPES, TypeDef, View};
+use super::registry::{
+    API, ApiFn, ApiKind, ApiParam, Area, NameKind, SYNTAX, TYPES, TypeDef, View,
+};
 use crate::graph;
 use serde::Serialize;
 
@@ -84,10 +86,18 @@ fn help(out: &mut String, indent: &str, lines: &[&str]) {
     }
 }
 
+/// The help of a row: its summary, its doc and, for each kind of name of the project it takes,
+/// what the lint of names checks.
+fn row_help(f: &ApiFn) -> Vec<&'static str> {
+    let mut lines = vec![f.summary, f.doc];
+    lines.extend(f.names().into_iter().map(NameKind::checked));
+    lines
+}
+
 /// The members of `view` as a table type for `shape`.
 fn view_body(out: &mut String, view: View, shape: &Shape) {
     for f in API.iter().filter(|f| f.view() == Some(view)) {
-        help(out, "    ", &[f.summary, f.doc]);
+        help(out, "    ", &row_help(f));
         let ty = match f.kind {
             ApiKind::Method => function_type(f, shape),
             _ => resolve(f.returns, shape),
@@ -200,13 +210,13 @@ pub fn definitions() -> String {
     for (name, rows) in tables() {
         out.push_str(&format!("declare {name}: {{\n"));
         for f in rows {
-            help(&mut out, "    ", &[f.summary, f.doc]);
+            help(&mut out, "    ", &row_help(f));
             out.push_str(&format!("    {}: {},\n", f.member(), table_member(f)));
         }
         out.push_str("}\n\n");
     }
     for f in base_functions() {
-        help(&mut out, "", &[f.summary, f.doc]);
+        help(&mut out, "", &row_help(f));
         let params: Vec<String> = f.params.iter().map(|p| defined_param(p, &PLAIN)).collect();
         out.push_str(&format!(
             "declare function {}{}({}): {}\n\n",
@@ -235,13 +245,13 @@ pub fn module() -> String {
     for (name, rows) in tables() {
         out.push_str(&format!("    {name}: {{\n"));
         for f in rows {
-            help(&mut out, "        ", &[f.summary, f.doc]);
+            help(&mut out, "        ", &row_help(f));
             out.push_str(&format!("        {}: {},\n", f.member(), table_member(f)));
         }
         out.push_str("    },\n");
     }
     for f in base_functions() {
-        help(&mut out, "    ", &[f.summary, f.doc]);
+        help(&mut out, "    ", &row_help(f));
         out.push_str(&format!("    {}: {},\n", f.name, function_type(f, &PLAIN)));
     }
     out.push_str(
@@ -307,6 +317,9 @@ pub struct GuideParam {
     #[serde(rename = "type")]
     pub ty: String,
     pub doc: &'static str,
+    /// What its text names in the project, which the lint of names checks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub names: Option<NameKind>,
 }
 
 /// A row on a page of the Guide.
@@ -320,6 +333,9 @@ pub struct GuideEntry {
     pub doc: &'static str,
     pub params: Vec<GuideParam>,
     pub errors: &'static [&'static str],
+    /// What the lint of names checks of the names of the project it takes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checked: Vec<&'static str>,
     pub example: &'static str,
     /// The equivalent nodes, by label and operation ID.
     pub nodes: Vec<String>,
@@ -359,9 +375,11 @@ pub fn guide() -> Vec<GuidePage> {
                             name: p.name,
                             ty: resolve(p.ty, &PLAIN),
                             doc: p.doc,
+                            names: p.names,
                         })
                         .collect(),
                     errors: f.errors,
+                    checked: f.names().into_iter().map(NameKind::checked).collect(),
                     example: f.example,
                     nodes: nodes(f),
                     domain: f.domain.label(),
@@ -388,7 +406,10 @@ pub fn markdown() -> String {
          A referência das funções que os scripts em Luau alcançam, gerada da mesma tabela que \
          instala a API no jogo e que escreve os tipos do VS Code (`.oxy/tipos/oxy.d.luau`). Os \
          nomes da API são em inglês; os de objetos, atributos, sons, ações e variáveis são os do \
-         projeto, e as mensagens de erro são em português, com o arquivo e a linha. Como \
+         projeto, e as mensagens de erro são em português, com o arquivo e a linha. A \
+         conferência dos scripts (`oxy_scripts check`, o `oxy_validate` e o `attach_script`) \
+         avisa, com o nome mais parecido, de um nome do projeto escrito como texto no código \
+         que o projeto não tem, onde a função diz que confere. Como \
          escrever, anexar e testar scripts está em [Agentes de IA \
          (MCP)](agentes-mcp.md#scripts-com-o-agente).\n\n\
          Cada exemplo usa um módulo chamado `M` e roda num teste da engine. **0.8** diz onde a \
@@ -413,6 +434,9 @@ pub fn markdown() -> String {
             }
             if !entry.errors.is_empty() {
                 out.push_str(&format!("- Para com erro: {}.\n", entry.errors.join("; ")));
+            }
+            for checked in &entry.checked {
+                out.push_str(&format!("- {checked}\n"));
             }
             if !entry.nodes.is_empty() {
                 out.push_str(&format!("- Nós: {}.\n", entry.nodes.join(", ")));
@@ -563,6 +587,68 @@ mod tests {
         assert!(text.ends_with("local oxy: Oxy = (nil :: any)\n\nreturn oxy\n"));
     }
 
+    /// The section of `f` in the reference, from its heading, which only it has, to the next.
+    fn section<'t>(reference: &'t str, f: &ApiFn) -> &'t str {
+        let heading = format!("### `{}`\n", signature(f));
+        assert_eq!(reference.matches(&heading).count(), 1, "{}", f.name);
+        let start = reference.find(&heading).unwrap() + heading.len();
+        let rest = &reference[start..];
+        let end = [rest.find("\n### "), rest.find("\n## ")]
+            .into_iter()
+            .flatten()
+            .min();
+        &rest[..end.unwrap_or(rest.len())]
+    }
+
+    /// The help lines right before each declaration of `f` in the definitions `text`, in the
+    /// table or the type that holds it: an object's member is in `Object` and `ScriptObject`.
+    fn declared_help<'t>(text: &'t str, f: &ApiFn) -> Vec<Vec<&'t str>> {
+        let (start, holders) = match f.view() {
+            Some(View::Object) => (
+                format!("    {}: ", f.member()),
+                vec![
+                    "export type Object = {".to_owned(),
+                    "export type ScriptObject<A, S> = {".to_owned(),
+                ],
+            ),
+            Some(view) => (
+                format!("    {}: ", f.member()),
+                vec![format!("export type {} = {{", view.name())],
+            ),
+            None if f.holder().is_empty() => (format!("declare function {}(", f.name), vec![]),
+            None => (
+                format!("    {}: ", f.member()),
+                vec![format!("declare {}: {{", f.holder())],
+            ),
+        };
+        let mut found = Vec::new();
+        let (mut block, mut help) = ("", Vec::new());
+        for line in text.lines() {
+            if let Some(line) = line.trim_start().strip_prefix("--- ") {
+                help.push(line);
+                continue;
+            }
+            let held = holders.is_empty() || holders.iter().any(|holder| holder == block);
+            if held && line.starts_with(&start) {
+                found.push(std::mem::take(&mut help));
+            }
+            if !line.starts_with(' ') {
+                block = line;
+            }
+            help.clear();
+        }
+        found
+    }
+
+    /// The lines of `lines` that say what the lint of names checks.
+    fn told<'t>(lines: &[&'t str]) -> Vec<&'t str> {
+        lines
+            .iter()
+            .copied()
+            .filter(|line| line.starts_with("A conferência avisa"))
+            .collect()
+    }
+
     #[test]
     fn the_guide_has_a_page_per_area_with_every_row() {
         let pages = guide();
@@ -586,6 +672,35 @@ mod tests {
         let json = serde_json::to_value(&pages).unwrap();
         assert_eq!(json[0]["area"], "events");
         assert_eq!(json[0]["entries"][0]["signature"], "on_start(self: Object)");
+        // Every row is in the reference too, and a row that takes names of the project says
+        // that the check warns of them, and no other row does, in its own section of the
+        // reference and in the help of its own declarations in the types.
+        let reference = markdown();
+        let definitions = definitions();
+        for f in API {
+            let checked: Vec<&str> = f.names().into_iter().map(NameKind::checked).collect();
+            let section: Vec<&str> = section(&reference, f)
+                .lines()
+                .filter_map(|line| line.strip_prefix("- "))
+                .collect();
+            assert_eq!(told(&section), checked, "{}", f.name);
+            if !f.in_types() || matches!(f.kind, ApiKind::Callback | ApiKind::Declaration) {
+                continue;
+            }
+            let declared = declared_help(&definitions, f);
+            assert_eq!(
+                declared.len(),
+                if f.of_objects() { 2 } else { 1 },
+                "{}",
+                f.name
+            );
+            for help in declared {
+                assert_eq!(told(&help), checked, "{}", f.name);
+            }
+        }
+        assert_eq!(play.checked, [NameKind::Sound.checked()]);
+        assert_eq!(play.params[0].names, Some(NameKind::Sound));
+        assert_eq!(json[0]["entries"][2]["params"][0]["names"], "action");
         let after = crate::script::registry::find("Object:after").unwrap();
         assert_eq!(
             signature(after),

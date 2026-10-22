@@ -207,7 +207,17 @@ fn every_row_of_the_api_runs_its_example() {
         let (mut project, door) = project();
         prepare(f, &mut project, &door);
         let warnings = attach(&mut project, &door, &sources);
-        assert!(warnings.is_empty(), "{}: {warnings:?}", f.name);
+        if reserved && !f.name.starts_with("on_") {
+            // The lint of names says it comes in 0.8, as reading it does.
+            let said = format!("{} chega na 0.8", f.name);
+            assert!(
+                warnings.len() == 1 && warnings[0].contains(&said),
+                "{}: {warnings:?}",
+                f.name
+            );
+        } else {
+            assert!(warnings.is_empty(), "{}: {warnings:?}", f.name);
+        }
         // Three seconds: the examples' timers go off, and the character lands.
         let mut rt = run(&project, sources, 0);
         let mut landed = false;

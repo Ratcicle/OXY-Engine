@@ -947,8 +947,48 @@ pub fn apply_with_scripts(
                 .push(format!("{}: {message}", which(index, &command.op)));
         }
     }
+    lint_attached(&draft, commands, scripts, &mut applied);
     *project = draft;
     Ok(applied)
+}
+
+/// Adds to the last attach_script of `commands` that attached each script the lint of the
+/// names it gives (see [`script::lint`]), against `project` as the batch left it.
+fn lint_attached(
+    project: &Project,
+    commands: &[Command],
+    scripts: &ScriptSources,
+    applied: &mut [Applied],
+) {
+    let mut last: Vec<(String, usize)> = Vec::new();
+    for (index, command) in commands.iter().enumerate() {
+        let Command::AttachScript { path, .. } = command else {
+            continue;
+        };
+        let Ok(path) = script::normalize_path(path) else {
+            continue;
+        };
+        last.retain(|(attached, _)| *attached != path);
+        last.push((path, index));
+    }
+    if last.is_empty() {
+        return;
+    }
+    let warnings = script::lint(
+        scripts,
+        last.iter().map(|(path, _)| path.as_str()),
+        Some(project),
+    );
+    for (path, index) in &last {
+        let command = &mut applied[*index];
+        let label = which(*index, &command.op);
+        command.warnings.extend(
+            warnings
+                .iter()
+                .filter(|warning| warning.path == *path)
+                .map(|warning| format!("{label}: {warning}")),
+        );
+    }
 }
 
 /// Lays out the nodes `unplaced` ((scene, object, node)) with [`graph::arrange`], each object's

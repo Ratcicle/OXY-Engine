@@ -893,6 +893,7 @@ return M
     )
     .unwrap();
     let warnings: Vec<String> = applied.into_iter().flat_map(|a| a.warnings).collect();
+    // The lint of names points at the line too.
     assert_eq!(
         warnings,
         [
@@ -900,7 +901,9 @@ return M
              scripts/granito.luau declara não foram criados (scripts/granito.luau: \
              Modulo.attributes.Piso: param.surface(\"Granito\") nomeia uma superfície que o \
              projeto não tem. Superfícies: Gelo, Lama); corrija o script e anexe-o de novo para \
-             criá-los"
+             criá-los",
+            "Comando 1 (attach_script, o 2º do lote): scripts/granito.luau:2: param.surface: a \
+             superfície \"Granito\" não existe no projeto. Superfícies: Gelo, Lama"
         ]
     );
     let attributes = &project.scenes[0].entity(&id).unwrap().attributes;

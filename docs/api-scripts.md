@@ -2,7 +2,7 @@
 
 <!-- Gerado da tabela da API (crates/oxy_core/src/script/registry.rs). Não edite: rode os testes do oxy_core com OXY_UPDATE_API=1 para gravar de novo. -->
 
-A referência das funções que os scripts em Luau alcançam, gerada da mesma tabela que instala a API no jogo e que escreve os tipos do VS Code (`.oxy/tipos/oxy.d.luau`). Os nomes da API são em inglês; os de objetos, atributos, sons, ações e variáveis são os do projeto, e as mensagens de erro são em português, com o arquivo e a linha. Como escrever, anexar e testar scripts está em [Agentes de IA (MCP)](agentes-mcp.md#scripts-com-o-agente).
+A referência das funções que os scripts em Luau alcançam, gerada da mesma tabela que instala a API no jogo e que escreve os tipos do VS Code (`.oxy/tipos/oxy.d.luau`). Os nomes da API são em inglês; os de objetos, atributos, sons, ações e variáveis são os do projeto, e as mensagens de erro são em português, com o arquivo e a linha. A conferência dos scripts (`oxy_scripts check`, o `oxy_validate` e o `attach_script`) avisa, com o nome mais parecido, de um nome do projeto escrito como texto no código que o projeto não tem, onde a função diz que confere. Como escrever, anexar e testar scripts está em [Agentes de IA (MCP)](agentes-mcp.md#scripts-com-o-agente).
 
 Cada exemplo usa um módulo chamado `M` e roda num teste da engine. **0.8** diz onde a função vai rodar com vários jogadores.
 
@@ -49,6 +49,7 @@ Chega a todos os objetos cujos scripts definem a função.
 
 - `action` (`string`): o nome da ação, como em Lógica > Ações de entrada
 - `phase` (`"pressed" | "released"`): "pressed" ao apertar, "released" ao soltar
+- A conferência avisa de uma ação de entrada que o projeto não tem.
 - Nós: Ação de entrada (event.input).
 - 0.8: J (do jogador). Desde a 0.7.0.
 
@@ -117,6 +118,8 @@ Os nomes são os do Estúdio do modelo.
 
 - `marker` (`string`): o nome do marcador
 - `clip` (`string`): o nome da animação
+- A conferência avisa de um marcador que nenhum clipe tem.
+- A conferência avisa de um clipe que nenhum objeto tem.
 - Nós: Marcador de animação (event.animation).
 - 0.8: do objeto dono. Desde a 0.7.0.
 
@@ -247,6 +250,7 @@ Para quando a ausência é esperada; um filho fixo de um modelo se pega com `get
 - `name` (`string`): o nome do filho
 - `deep` (`boolean?`): true procura em tudo o que está abaixo do objeto, não só nos filhos
 - Para com erro: o nome não é um texto; o objeto não existe mais.
+- A conferência avisa de um nome que nenhum objeto do projeto tem.
 - 0.8: leitura pura. Desde a 0.7.0.
 
 ```lua
@@ -265,6 +269,7 @@ Como `find_child`, mas o filho é certo: o erro diz o nome mais parecido e os fi
 - `name` (`string`): o nome do filho
 - `deep` (`boolean?`): true procura em tudo o que está abaixo do objeto, não só nos filhos
 - Para com erro: nenhum filho com o nome (o erro lista os filhos); o nome não é um texto; o objeto não existe mais.
+- A conferência avisa de um nome que nenhum objeto do projeto tem.
 - 0.8: leitura pura. Desde a 0.7.0.
 
 ```lua
@@ -407,6 +412,7 @@ O nome é o exato, com maiúsculas e espaços. Para apontar um objeto que pode s
 
 - `name` (`string`): o nome do objeto, como na Hierarquia
 - Para com erro: o nome não é um texto.
+- A conferência avisa de um nome que nenhum objeto do projeto tem.
 - 0.8: leitura pura. Desde a 0.7.0.
 
 ```lua
@@ -424,6 +430,7 @@ Como `scene.find`, para um objeto que tem de existir: o erro diz o nome mais par
 
 - `name` (`string`): o nome do objeto, como na Hierarquia
 - Para com erro: nenhum objeto com o nome (com o nome mais parecido); o nome não é um texto.
+- A conferência avisa de um nome que nenhum objeto do projeto tem.
 - 0.8: leitura pura. Desde a 0.7.0.
 
 ```lua
@@ -438,6 +445,7 @@ Uma lista nova a cada chamada, vazia quando nenhum tem o nome.
 
 - `name` (`string`): o nome dos objetos, como na Hierarquia
 - Para com erro: o nome não é um texto.
+- A conferência avisa de um nome que nenhum objeto do projeto tem.
 - 0.8: leitura pura. Desde a 0.7.0.
 
 ```lua
@@ -454,6 +462,7 @@ Um atributo serve de marca: os inimigos de uma onda, os interruptores de uma por
 
 - `name` (`string`): o nome do atributo
 - Para com erro: o nome não é um texto.
+- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
 - 0.8: leitura pura. Desde a 0.7.0.
 
 ```lua
@@ -471,6 +480,7 @@ O nome do modelo vale sem diferenciar maiúsculas. A cópia, com os nomes que os
 - `model` (`string`): o nome do modelo na Biblioteca
 - `options` (`SpawnOptions?`): `{ position = v }`, e `rotation`, `parent` e `attributes`
 - Para com erro: um modelo que o projeto não tem (o erro lista os modelos); um modelo de formas 2D numa cena 3D, ou o contrário; uma opção desconhecida ou um valor de outro tipo; um atributo em `attributes` que a raiz da cópia não tem (nada é criado).
+- A conferência avisa de um modelo que o projeto não tem.
 - 0.8: M (partida). Desde a 0.7.0.
 
 ```lua
@@ -499,6 +509,7 @@ O nome vale sem diferenciar maiúsculas. O resto da função ainda roda na cena 
 
 - `name` (`string`): o nome da cena, como no projeto
 - Para com erro: uma cena que o projeto não tem (com o nome mais parecido e a lista); duas cenas com o mesmo nome; o nome não é um texto.
+- A conferência avisa de uma cena que o projeto não tem.
 - Nós: Mudar de cena (action.scene), Referência de cena (value.scene).
 - 0.8: A (autoridade). Desde a 0.7.0.
 
@@ -877,6 +888,7 @@ Os atributos do objeto, pelo nome.
 `obj.attr.Vida` lê o atributo, ou nil quando o objeto não o tem; `obj.attr.Vida = 2` escreve um atributo que o objeto tem, com um valor do mesmo tipo. Um Vetor2 lê como vetor com z = 0 e recebe o x e o y de um vetor; um atributo Objeto lê o objeto, e um Superfície, a superfície (com `.name`), ou nil quando vazios, e recebem nil para ficar vazios. Nomes com espaços vão entre colchetes: `obj.attr["Ponto de retorno"]`. Quando a chamada para num erro com nil, o erro diz o último atributo que ela leu como nil.
 
 - Para com erro: escrever num atributo que o objeto não tem (o erro diz como criá-lo); escrever um valor de outro tipo; escrever infinito ou NaN; o objeto não existe mais.
+- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
 - Nós: Ler atributo (attribute.get), Alterar atributo (attribute.set).
 - 0.8: T (do objeto alvo). Desde a 0.7.0.
 
@@ -892,6 +904,7 @@ Confira antes de agir sobre outro objeto, como o que entrou numa área.
 
 - `name` (`string`): o nome do atributo
 - Para com erro: o nome não é um texto; o objeto não existe mais.
+- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
 - 0.8: leitura pura. Desde a 0.7.0.
 
 ```lua
@@ -934,6 +947,7 @@ Em `Modulo.attributes = { Piso = param.surface("Gelo") }`: anexar procura a supe
 
 - `name` (`string?`): o nome de uma superfície do projeto; sem ele, a superfície padrão
 - Para com erro: um nome que não é um texto.
+- A conferência avisa de uma superfície que o projeto não tem.
 - Nós: Referência de superfície (value.surface).
 - 0.8: leitura pura. Desde a 0.7.0.
 
@@ -1259,6 +1273,7 @@ A superfície física do corpo do personagem, ou nil para a padrão. Leitura e e
 Como Ler superfície do colisor e Aplicar superfície ao colisor num Personagem 3D: a do corpo, e não a do chão em que ele pisa (`surface`). Recebe uma superfície (de um atributo Superfície, de um colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Vale só durante a partida.
 
 - Para com erro: uma superfície que o projeto não tem; escrever outra coisa que uma superfície, um nome ou nil; o objeto não existe mais.
+- A conferência avisa de uma superfície que o projeto não tem.
 - Nós: Ler superfície do colisor (surface.get), Aplicar superfície ao colisor (surface.apply).
 - 0.8: T (do objeto alvo). Desde a 0.7.0.
 
@@ -1629,6 +1644,7 @@ A superfície física do colisor 3D, ou nil para a padrão. Leitura e escrita.
 Como Ler superfície do colisor e Aplicar superfície ao colisor: recebe uma superfície (de um atributo Superfície, de outro colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Só um colisor 3D tem superfície; a do corpo de um personagem é `obj.character.body_surface`. Vale só durante a partida.
 
 - Para com erro: um colisor 2D, que não tem superfície; uma superfície que o projeto não tem; escrever outra coisa que uma superfície, um nome ou nil; o objeto não existe mais.
+- A conferência avisa de uma superfície que o projeto não tem.
 - Nós: Ler superfície do colisor (surface.get), Aplicar superfície ao colisor (surface.apply).
 - 0.8: T (do objeto alvo). Desde a 0.7.0.
 
@@ -1799,6 +1815,7 @@ Como Reproduzir animação: o nome vale sem diferenciar maiúsculas. Os marcador
 - `clip` (`string`): o nome do clipe, como no Estúdio
 - `restart` (`boolean?`): false deixa um clipe que já toca seguir de onde está (padrão: recomeça)
 - Para com erro: um clipe que o objeto não tem (o erro lista os clipes); o objeto não existe mais.
+- A conferência avisa de um clipe que nenhum objeto tem.
 - Nós: Reproduzir animação (action.animation).
 - 0.8: T (do objeto alvo). Desde a 0.7.0.
 
@@ -2063,6 +2080,7 @@ O nome vale também sem diferenciar maiúsculas nem os espaços das pontas. `aud
 - `name` (`string`): o nome do som na Biblioteca
 - `options` (`PlayOptions?`): `{ volume = 0.5, audience = obj }`
 - Para com erro: o nome não é um texto; um som que o projeto não tem (o erro lista os sons); dois sons com o mesmo nome; uma opção que não é volume nem audience, ou um volume que não é número; audience que não é um objeto ou não existe mais.
+- A conferência avisa de um som que o projeto não tem.
 - Nós: Reproduzir WAV (action.sound).
 - 0.8: L (local). Desde a 0.7.0.
 
@@ -2079,6 +2097,7 @@ Como Tocar em loop: na música (o padrão), o mesmo som continua ao trocar ou re
 - `name` (`string`): o nome do som na Biblioteca
 - `options` (`LoopOptions?`): `{ channel = "effects", volume = 0.5, fade = 1 }`
 - Para com erro: um som que o projeto não tem (o erro lista os sons); uma opção desconhecida, um canal que não é music nem effects, fade fora de 0 a 60; mais de 32 loops nos efeitos.
+- A conferência avisa de um som que o projeto não tem.
 - Nós: Tocar em loop (action.sound_loop).
 - 0.8: L (local). Desde a 0.7.0.
 
@@ -2233,6 +2252,7 @@ O nome vale sem diferenciar maiúsculas. Com `key`, o valor daquela chave; numa 
 - `name` (`string`): o nome da variável do jogo
 - `key` (`string?`): a chave, numa variável com um valor por chave
 - Para com erro: uma variável que o projeto não tem (com o nome mais próximo e a lista); nome ou chave que não é texto.
+- A conferência avisa de uma variável que o projeto não tem.
 - Nós: Ler variável do jogo (variable.get).
 - 0.8: leitura pura. Desde a 0.7.0.
 
@@ -2250,6 +2270,7 @@ Com `key`, grava o valor daquela chave, até 1.024 chaves por variável. Uma var
 - `value` (`VarValue`): um valor do tipo da variável
 - `key` (`string?`): a chave, numa variável com um valor por chave
 - Para com erro: uma variável que o projeto não tem (com o nome mais próximo e a lista); um valor de outro tipo que o da variável; nome ou chave que não é texto, ou chave de mais de 4.096 bytes; mais de 1.024 chaves na variável.
+- A conferência avisa de uma variável que o projeto não tem.
 - Nós: Alterar variável do jogo (variable.set).
 - 0.8: do escopo da variável. Desde a 0.7.0.
 
@@ -2311,6 +2332,7 @@ Como Ler ação de entrada (Pressionada): verdadeiro só no passo em que a tecla
 
 - `action` (`string`): o nome da ação, como em Lógica > Ações de entrada
 - Para com erro: uma ação que o projeto não tem (o erro lista as ações); um segundo argumento (o jogador chega na 0.8).
+- A conferência avisa de uma ação de entrada que o projeto não tem.
 - Nós: Ler ação de entrada (input.read).
 - 0.8: J (do jogador). Desde a 0.7.0.
 
@@ -2330,6 +2352,7 @@ Como Ler ação de entrada (Mantida), com as regras de `input.pressed`.
 
 - `action` (`string`): o nome da ação, como em Lógica > Ações de entrada
 - Para com erro: uma ação que o projeto não tem (o erro lista as ações); um segundo argumento (o jogador chega na 0.8).
+- A conferência avisa de uma ação de entrada que o projeto não tem.
 - Nós: Ler ação de entrada (input.read).
 - 0.8: J (do jogador). Desde a 0.7.0.
 
@@ -2349,6 +2372,7 @@ Como Ler ação de entrada (Solta): verdadeiro só no passo em que a tecla sobe,
 
 - `action` (`string`): o nome da ação, como em Lógica > Ações de entrada
 - Para com erro: uma ação que o projeto não tem (o erro lista as ações); um segundo argumento (o jogador chega na 0.8).
+- A conferência avisa de uma ação de entrada que o projeto não tem.
 - Nós: Ler ação de entrada (input.read).
 - 0.8: J (do jogador). Desde a 0.7.0.
 
@@ -2842,9 +2866,11 @@ export type Object = {
     children: (self: Object) -> { Object },
     --- O primeiro filho com o nome, na ordem da cena, ou nil.
     --- Para quando a ausência é esperada; um filho fixo de um modelo se pega com `get_child`, que dá um erro claro quando ele falta.
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     find_child: (self: Object, name: string, deep: boolean?) -> Object?,
     --- O primeiro filho com o nome, na ordem da cena; um erro se não houver.
     --- Como `find_child`, mas o filho é certo: o erro diz o nome mais parecido e os filhos que existem (um filho renomeado quebra o script na linha, e não depois).
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     get_child: (self: Object, name: string, deep: boolean?) -> Object,
     --- Diz se o objeto ainda está na cena.
     --- Um objeto removido continua sendo um valor no script (num atributo, na memória ou numa mensagem), mas ler ou escrever nele é um erro; confira antes com `exists`.
@@ -2899,9 +2925,11 @@ export type Object = {
     to_local_direction: (self: Object, direction: vector) -> vector,
     --- Os atributos do objeto, pelo nome.
     --- `obj.attr.Vida` lê o atributo, ou nil quando o objeto não o tem; `obj.attr.Vida = 2` escreve um atributo que o objeto tem, com um valor do mesmo tipo. Um Vetor2 lê como vetor com z = 0 e recebe o x e o y de um vetor; um atributo Objeto lê o objeto, e um Superfície, a superfície (com `.name`), ou nil quando vazios, e recebem nil para ficar vazios. Nomes com espaços vão entre colchetes: `obj.attr["Ponto de retorno"]`. Quando a chamada para num erro com nil, o erro diz o último atributo que ela leu como nil.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     attr: { [string]: any },
     --- Diz se o objeto tem o atributo.
     --- Confira antes de agir sobre outro objeto, como o que entrou numa área.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     has_attribute: (self: Object, name: string) -> boolean,
     --- A memória deste script neste objeto, com os campos de `Modulo.state`.
     --- Só em `self`. Um campo simples (número, texto, booleano, vetor, objeto, superfície) é lido e gravado na engine na hora, conferido na linha; um campo de objeto ou de superfície recebe nil para ficar vazio. Uma tabela é montada na primeira leitura da chamada e gravada de volta quando a chamada termina, com ou sem erro. O primeiro nível não se percorre nem se mede (`pairs`, `#`, `table.clone`): guarde listas num campo.
@@ -2957,9 +2985,11 @@ export type ScriptObject<A, S> = {
     children: (self: ScriptObject<A, S>) -> { Object },
     --- O primeiro filho com o nome, na ordem da cena, ou nil.
     --- Para quando a ausência é esperada; um filho fixo de um modelo se pega com `get_child`, que dá um erro claro quando ele falta.
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     find_child: (self: ScriptObject<A, S>, name: string, deep: boolean?) -> Object?,
     --- O primeiro filho com o nome, na ordem da cena; um erro se não houver.
     --- Como `find_child`, mas o filho é certo: o erro diz o nome mais parecido e os filhos que existem (um filho renomeado quebra o script na linha, e não depois).
+    --- A conferência avisa de um nome que nenhum objeto do projeto tem.
     get_child: (self: ScriptObject<A, S>, name: string, deep: boolean?) -> Object,
     --- Diz se o objeto ainda está na cena.
     --- Um objeto removido continua sendo um valor no script (num atributo, na memória ou numa mensagem), mas ler ou escrever nele é um erro; confira antes com `exists`.
@@ -3014,9 +3044,11 @@ export type ScriptObject<A, S> = {
     to_local_direction: (self: ScriptObject<A, S>, direction: vector) -> vector,
     --- Os atributos do objeto, pelo nome.
     --- `obj.attr.Vida` lê o atributo, ou nil quando o objeto não o tem; `obj.attr.Vida = 2` escreve um atributo que o objeto tem, com um valor do mesmo tipo. Um Vetor2 lê como vetor com z = 0 e recebe o x e o y de um vetor; um atributo Objeto lê o objeto, e um Superfície, a superfície (com `.name`), ou nil quando vazios, e recebem nil para ficar vazios. Nomes com espaços vão entre colchetes: `obj.attr["Ponto de retorno"]`. Quando a chamada para num erro com nil, o erro diz o último atributo que ela leu como nil.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     attr: A & {},
     --- Diz se o objeto tem o atributo.
     --- Confira antes de agir sobre outro objeto, como o que entrou numa área.
+    --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     has_attribute: (self: ScriptObject<A, S>, name: string) -> boolean,
     --- A memória deste script neste objeto, com os campos de `Modulo.state`.
     --- Só em `self`. Um campo simples (número, texto, booleano, vetor, objeto, superfície) é lido e gravado na engine na hora, conferido na linha; um campo de objeto ou de superfície recebe nil para ficar vazio. Uma tabela é montada na primeira leitura da chamada e gravada de volta quando a chamada termina, com ou sem erro. O primeiro nível não se percorre nem se mede (`pairs`, `#`, `table.clone`): guarde listas num campo.
@@ -3118,6 +3150,7 @@ export type Character = {
     surface: Surface?,
     --- A superfície física do corpo do personagem, ou nil para a padrão.
     --- Como Ler superfície do colisor e Aplicar superfície ao colisor num Personagem 3D: a do corpo, e não a do chão em que ele pisa (`surface`). Recebe uma superfície (de um atributo Superfície, de um colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Vale só durante a partida.
+    --- A conferência avisa de uma superfície que o projeto não tem.
     body_surface: Surface?,
     --- O ponto de apoio sob os pés, no mundo, em metros; zero no ar.
     --- Só leitura, como Ponto de apoio de Ler personagem 3D.
@@ -3191,6 +3224,7 @@ export type Collider = {
     is_area: boolean,
     --- A superfície física do colisor 3D, ou nil para a padrão.
     --- Como Ler superfície do colisor e Aplicar superfície ao colisor: recebe uma superfície (de um atributo Superfície, de outro colisor) ou nil; o nome de uma superfície do projeto também serve, mas os tipos do VS Code só conhecem a superfície. Só um colisor 3D tem superfície; a do corpo de um personagem é `obj.character.body_surface`. Vale só durante a partida.
+    --- A conferência avisa de uma superfície que o projeto não tem.
     surface: Surface?,
 }
 
@@ -3212,6 +3246,7 @@ export type Controller = {
 export type Animation = {
     --- Toca um clipe do objeto pelo nome.
     --- Como Reproduzir animação: o nome vale sem diferenciar maiúsculas. Os marcadores do clipe chegam a `on_marker`; um objeto que um clipe tocando posiciona não aceita `position` até ele parar.
+    --- A conferência avisa de um clipe que nenhum objeto tem.
     play: (self: Animation, clip: string, restart: boolean?) -> (),
     --- Se o clipe do objeto está tocando: false pausa onde está, true retoma.
     --- Como Ativar / desativar componente (Animação). Antes de algum clipe tocar, é false e true não faz nada: comece com `play`.

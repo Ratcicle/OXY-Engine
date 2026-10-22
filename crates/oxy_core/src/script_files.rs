@@ -129,9 +129,9 @@ pub fn answer(
     let attached = project.map(script::attached_paths).unwrap_or_default();
     match request {
         Request::Read { path } => read(root, path).map(quiet),
-        Request::Write { path, text } => write(root, path, text, &attached, kept),
+        Request::Write { path, text } => write(root, project, path, text, &attached, kept),
         Request::Check { path, text } => {
-            check(root, path.as_deref(), text.as_deref(), &attached).map(quiet)
+            check(root, project, path.as_deref(), text.as_deref(), &attached).map(quiet)
         }
         Request::Vscode => {
             let setup = setup_vscode(root)?;
@@ -175,9 +175,10 @@ fn missing(root: &Path, path: &str) -> String {
 
 /// Checks a script, a text as that script or every script of the folder as loading checks them
 /// (see [`script::check_loading`]; `attached`, the scripts objects attach), with the scripts of
-/// the folder for `require`.
+/// the folder for `require`, and the names they give against `project` (see [`script::lint`]).
 fn check(
     root: &Path,
+    project: Option<&Project>,
     path: Option<&str>,
     text: Option<&str>,
     attached: &BTreeSet<String>,
@@ -209,11 +210,7 @@ fn check(
         .iter()
         .filter_map(|report| report.error.as_ref().map(ToString::to_string))
         .collect();
-    let warnings: Vec<String> = reports
-        .iter()
-        .flat_map(|report| &report.warnings)
-        .map(ToString::to_string)
-        .collect();
+    let warnings = warnings(&sources, &reports, project);
     let mut answer = json!({
         "ok": errors.is_empty(),
         "checked": paths,
@@ -238,6 +235,7 @@ fn check(
 /// keeps none. The first write of a project without this engine's types sets VS Code up too.
 fn write(
     root: &Path,
+    project: Option<&Project>,
     path: &str,
     text: &str,
     attached: &BTreeSet<String>,
@@ -250,8 +248,8 @@ fn write(
     sources
         .files
         .insert(path.to_owned(), ScriptFile::new(text.to_owned()));
-    let report = script::check_loading(&sources, [path], |path| attached.contains(path)).remove(0);
-    if let Some(error) = &report.error {
+    let reports = script::check_loading(&sources, [path], |path| attached.contains(path));
+    if let Some(error) = &reports[0].error {
         return Err(format!("{error}; nada foi gravado"));
     }
     let base =
@@ -295,7 +293,7 @@ fn write(
     if kept.contains(&backup_key) {
         answer["previous_version"] = json!(shown(root, &backup_path));
     }
-    let mut warnings: Vec<String> = report.warnings.iter().map(ToString::to_string).collect();
+    let mut warnings = warnings(&sources, &reports, project);
     match setup_vscode_when_due(root) {
         Ok(Some(setup)) => {
             answer["vscode"] = setup.json();
@@ -311,6 +309,31 @@ fn write(
         json: answer,
         console,
     })
+}
+
+/// What the check warns of in the scripts of `reports`, script by script: what loading found
+/// (see [`script::check_loading`]), then the lint of the names they give, against `project` when
+/// there is one (see [`script::lint`]).
+fn warnings(
+    sources: &script::ScriptSources,
+    reports: &[script::ScriptReport],
+    project: Option<&Project>,
+) -> Vec<String> {
+    let linted = script::lint(
+        sources,
+        reports
+            .iter()
+            .filter(|report| report.error.is_none())
+            .map(|report| report.path.as_str()),
+        project,
+    );
+    reports
+        .iter()
+        .flat_map(|report| {
+            let named = linted.iter().filter(|w| w.path == report.path);
+            report.warnings.iter().chain(named).map(ToString::to_string)
+        })
+        .collect()
 }
 
 /// The file `path` of the project's folder as answers show it, with one kind of slash.

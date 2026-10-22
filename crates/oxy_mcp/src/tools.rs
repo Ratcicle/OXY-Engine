@@ -594,10 +594,11 @@ pub fn definitions() -> Json {
              takes the nearest limit; none when the input port of the same id is wired, which \
              the game reads instead), action.component nodes whose target parameter names an \
              object lacking the part they switch and variable.set nodes whose value parameter \
-             is not of the variable's type (both stop with an error in the game), and scripts \
+             is not of the variable's type (both stop with an error in the game), scripts \
              objects attach that the project's scripts folder lacks (the project opens and \
              saves, but the editor's test and the export refuse it until the file is back or \
-             detach_script).",
+             detach_script) and the lint of names of the folder's scripts, as oxy_scripts \
+             check gives it.",
             json!({"project": project}),
             json!([])
         ),
@@ -988,7 +989,9 @@ e.g. {\"Number\": 3}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>
 that order, after its logic graph), and gives the object, with their defaults, the attributes the \
 script declares in Module.attributes that it lacks (one it has keeps its value). A type that \
 differs from the object's or between its scripts, and a script that does not load or declares \
-no table of defaults (its attributes unread), come back in warnings. Again on an attached script: moves it to index and \
+no table of defaults (its attributes unread), come back in warnings, with the lint of names of \
+oxy_scripts check once per script, on its last attach in the batch. Again on an attached script: \
+moves it to index and \
 creates what is missing. A file the folder lacks is refused (oxy_scripts write creates it). The \
 first attach in a project without this version's VS Code types writes them (vscode in the \
 answer, as oxy_scripts vscode). detach_script {entity, path}: takes it off, keeping the \
@@ -1116,9 +1119,14 @@ answers {path, saved, created, lines, added?, removed?, previous_version? \
 session first changed it; live, the editor's session), warnings?, \
 vscode? (the first write or attach_script sets VS Code up)}. check {path?, text?}: a script, text as that script \
 without saving it, or every script: {ok, checked, errors?, warnings?}, each \"scripts/x.luau:LINE: \
-message\"; warnings are functions named like callbacks that are none (they never run) and a \
-Module.attributes that is no table of defaults, except in a module other scripts require and no \
-object attaches; types are not checked (types_unavailable: VS \
+message\"; warnings are functions named like callbacks that are none (they never run), a \
+Module.attributes that is no table of defaults (except in a module other scripts require and no \
+object attaches) and the lint of names: a name the script writes as a literal text that the \
+project lacks (sound, game variable, attribute no object has and no script declares, scene, \
+model, input action, clip, marker, object or surface: audio.play(\"Checkpointt\"), \
+obj.attr.Vidaa, action == \"pular\" in on_input, compared exactly), a text outside a \
+parameter's choices and an API name scripts lack (audio.paly), each once at its first line with \
+the nearest name (write warns the same and saves); types are not checked (types_unavailable: VS \
 Code checks them). vscode: writes what VS Code with the luau-lsp extension (1.70.1) needs: \
 .oxy/tipos/oxy.d.luau (the API's types), .luaurc when there is none and the luau-lsp keys \
 .vscode/settings.json lacks, never changing a key it has: {written, notes?}. The API of this \
@@ -3345,6 +3353,57 @@ mod tests {
         let error = call("oxy_apply", attach).unwrap_err();
         assert!(error.contains("não existe na pasta do projeto"), "{error}");
         assert!(APPLY_DESCRIPTION.contains("attach_script {entity, path, index?}"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The lint of names on files: a name the script writes that the project lacks comes back
+    /// from oxy_scripts check and write, from attach_script and from oxy_validate, with the
+    /// line and the nearest name.
+    #[test]
+    fn files_tell_the_names_scripts_give_that_the_project_lacks() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-script-names-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Nomes", SceneKind::ThreeD).unwrap();
+        project.scenes[0].entities.push(Entity::new("Porta", None));
+        oxy_core::variables::create(&mut project, "Pontos", Value::Number(0.), false).unwrap();
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Json {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_str(&tools.call(tool, &args).unwrap().text).unwrap()
+        };
+        let text = "local M = {}\nfunction M.on_start(self)\n    vars.set('Pontoz', 1)\n    \
+                    self:get_child('Maçaneta')\nend\nreturn M\n";
+        let told = [
+            "scripts/porta.luau:3: vars.set: a variável do jogo \"Pontoz\" não existe no projeto; \
+             quis dizer Pontos?",
+            "scripts/porta.luau:4: obj:get_child: nenhum objeto do projeto se chama \"Maçaneta\". \
+             Objetos: Porta",
+        ];
+        let written = call(
+            "oxy_scripts",
+            json!({"action": "write", "path": "scripts/porta.luau", "text": text}),
+        );
+        assert_eq!(written["warnings"], json!(told), "{written}");
+        let checked = call("oxy_scripts", json!({"action": "check"}));
+        assert_eq!(checked["warnings"], json!(told), "{checked}");
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "attach_script", "entity": "Porta", "path": "scripts/porta.luau"}
+            ]}),
+        );
+        let attached: Vec<String> = told
+            .iter()
+            .map(|w| format!("Comando 0 (attach_script, o 1º do lote): {w}"))
+            .collect();
+        assert_eq!(applied["warnings"], json!(attached), "{applied}");
+        let validation = call("oxy_validate", json!({}));
+        assert_eq!(validation["warnings"], json!(told), "{validation}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

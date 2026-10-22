@@ -83,8 +83,7 @@ pub(crate) fn create(shared: &Rc<Shared>, extra: Extra) -> mlua::Result<(Lua, Ta
     super::api::install(&lua, &base, shared)?;
     let (handles, touched) = handles::install(&lua, shared)?;
     extra(&lua, &base, shared)?;
-    // The tests read what scripts reach.
-    #[cfg(test)]
+    // The lint of names and the tests read what scripts reach.
     lua.set_named_registry_value("oxy.base", &base)?;
     // Every host function the base reaches may sit in a module; any other (a coroutine.wrap,
     // a string.gmatch iterator) carries state of its own.
@@ -145,18 +144,9 @@ fn install_proxy(lua: &Lua, base: &Table) -> mlua::Result<()> {
                 return Ok(value);
             }
             let name = key.to_string().unwrap_or_default();
-            if ABSENT.contains(&name.as_str()) {
-                return Err(located(lua, format!("{name} não existe nos scripts")));
-            }
-            if registry::reserved(&name).is_some() {
-                return Err(located(lua, registry::later(&name)));
-            }
-            let hint = closest(&name, names.iter().map(String::as_str))
-                .map(|near| format!("; quis dizer {near}?"))
-                .unwrap_or_default();
             Err(located(
                 lua,
-                format!("variável global desconhecida: {name}{hint}"),
+                unknown_global(&name, names.iter().map(String::as_str)),
             ))
         })?
     };
@@ -191,6 +181,22 @@ fn install_proxy(lua: &Lua, base: &Table) -> mlua::Result<()> {
             ffi::lua_settop(l, 0);
         })
     }
+}
+
+/// Why scripts have no global `name`: a name of Lua scripts lack on purpose, a name of 0.8, or
+/// an unknown one, with the nearest of `names` (the globals scripts have). The lint of names
+/// says the same of a global a script imports.
+pub(crate) fn unknown_global<'a>(name: &str, names: impl IntoIterator<Item = &'a str>) -> String {
+    if ABSENT.contains(&name) {
+        return format!("{name} não existe nos scripts");
+    }
+    if registry::reserved(name).is_some() {
+        return registry::later(name);
+    }
+    let hint = closest(name, names)
+        .map(|near| format!("; quis dizer {near}?"))
+        .unwrap_or_default();
+    format!("variável global desconhecida: {name}{hint}")
 }
 
 /// `print(...)`: a line in the log with the object's name and the script line.

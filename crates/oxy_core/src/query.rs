@@ -334,7 +334,9 @@ pub fn validation(project: &Project) -> Json {
 }
 
 /// [`validation`] of the project saved in the folder `root`, whose warnings also name the
-/// scripts its objects attach that the folder lacks (see `persistence::script_warnings`).
+/// scripts its objects attach that the folder lacks (see `persistence::script_warnings`) and
+/// what the lint of names finds in the folder's scripts (see `script::lint`): names of the
+/// project they give that it lacks, names of the API they read that it lacks.
 pub fn validation_in(project: &Project, root: Option<&std::path::Path>) -> Json {
     let mut result = match validate_project(project) {
         Ok(()) => json!({"valid": true}),
@@ -346,6 +348,15 @@ pub fn validation_in(project: &Project, root: Option<&std::path::Path>) -> Json 
         .collect();
     if let Some(root) = root {
         warnings.extend(crate::persistence::script_warnings(project, root));
+        // A folder that cannot be read is told by the check of the scripts.
+        if let Ok(sources) = crate::persistence::load_scripts(root) {
+            let paths = sources.files.keys().map(String::as_str);
+            warnings.extend(
+                crate::script::lint(&sources, paths, Some(project))
+                    .iter()
+                    .map(ToString::to_string),
+            );
+        }
     }
     if !warnings.is_empty() {
         result["warnings"] = json!(warnings);

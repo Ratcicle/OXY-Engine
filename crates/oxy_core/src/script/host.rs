@@ -674,6 +674,32 @@ impl ScriptHost {
         self.shared.step_spent()
     }
 
+    /// The globals scripts have, each with the names its table has (none for a function or a
+    /// value), as the lint of names checks a script's imports against them.
+    pub(crate) fn globals(&self) -> mlua::Result<BTreeMap<String, Option<BTreeSet<String>>>> {
+        let base: Table = self.lua.named_registry_value("oxy.base")?;
+        let mut found = BTreeMap::new();
+        for pair in base.pairs::<LuaValue, LuaValue>() {
+            let (LuaValue::String(name), value) = pair? else {
+                continue;
+            };
+            let members = match value {
+                LuaValue::Table(table) => Some(
+                    table
+                        .pairs::<LuaValue, LuaValue>()
+                        .filter_map(|pair| match pair.ok()?.0 {
+                            LuaValue::String(key) => Some(key.to_str().ok()?.to_owned()),
+                            _ => None,
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            };
+            found.insert(name.to_str()?.to_owned(), members);
+        }
+        Ok(found)
+    }
+
     /// The module `path`, loading it unless it already was (its error too).
     pub(crate) fn load(&self, path: &str) -> Result<Rc<Module>, ScriptError> {
         load::module(&self.lua, &self.shared, path)

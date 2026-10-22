@@ -31,6 +31,12 @@
 //! - the names of 0.8 (`players`, `game.online`, `on_request`…), kept: using one is an error
 //!   that says it comes in 0.8.
 //!
+//! The tools check the names a script gives with literal texts without running it (`names`,
+//! design §6.4): those of the API against the globals scripts have, and those of the project
+//! (sounds, variables, attributes, scenes…), where the registry marks a parameter with a
+//! [`NameKind`], against the project ([`lint`], warnings only); [`references`] lists the latter
+//! for the tools that look for where a sound or a scene is used.
+//!
 //! A module may declare `Module.attributes = { Velocidade = 90, Alvo = param.object() }`, the
 //! attributes attaching it gives an object that lacks them, with those defaults (decision Q6;
 //! see [`declared_attributes`]), and `Module.state`, its memory, whose fields the same markers
@@ -81,6 +87,7 @@ mod load;
 mod math;
 pub(crate) mod memory;
 pub(crate) mod messages;
+mod names;
 mod objects;
 mod physics;
 pub mod registry;
@@ -100,6 +107,8 @@ pub(crate) use host::{Module, ScriptHost};
 pub(crate) use load::check as load_check;
 pub(crate) use memory::{Memory, ScriptValue};
 pub(crate) use messages::{Message, Unsent};
+pub use names::{Found, ProjectNames, Reference, declared_attribute_names, lint, references};
+pub use registry::NameKind;
 pub(crate) use timers::{Repeat, ScriptTask, Share, Timer, TimerRoom, TimerStep};
 
 /// The fixed names a module's table gives the functions that hear events (design §3.6). The
@@ -216,17 +225,20 @@ pub struct ScriptReload {
 /// What [`check`] reads from a script that compiles.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScriptCheck {
-    /// The global paths the script reads, as `math.floor`, for the lint of names.
+    /// The global paths the script reads, as `math.floor`, which the lint of names checks.
     pub imports: Vec<String>,
+    /// The names of the project it gives with literal texts (see [`references`]).
+    pub references: Vec<Reference>,
 }
 
 /// Compiles `source` as the script `path` (`scripts/porta.luau`) and checks it the way loading
 /// does before running anything: syntax and top-level locals some function writes. Nothing runs,
 /// so it needs no other script; the export refuses a script it refuses. [`check_loading`] goes
-/// on to run the module's top.
+/// on to run the module's top, and [`lint`] checks the names it gives.
 pub fn check(path: &str, source: &str) -> Result<ScriptCheck, ScriptError> {
     let (_, report) = load::check(path, source)?;
     Ok(ScriptCheck {
+        references: names::references_in(&report.literals),
         imports: report.imports.into_iter().collect(),
     })
 }

@@ -475,20 +475,34 @@ fn lock(
 ) -> mlua::Result<()> {
     let index = lua.create_function(move |lua, (_, key): (LuaValue, LuaValue)| {
         let key = key.to_string().unwrap_or_default();
-        let path = format!("{name}.{key}");
-        if registry::reserved(&path).is_some() {
-            return Err::<(), _>(located(lua, registry::later(&path)));
-        }
-        let hint = closest(&key, names.iter().copied())
-            .map(|near| format!("; quis dizer {near}?"))
-            .unwrap_or_default();
-        Err::<(), _>(located(lua, format!("{name} não tem {key}{hint}")))
+        Err::<(), _>(located(
+            lua,
+            unknown_member(name, &key, names.iter().copied()),
+        ))
     })?;
     let meta = lua.create_table()?;
     meta.raw_set("__index", index)?;
     meta.raw_set("__metatable", "travado")?;
     meta.set_readonly(true);
     table.set_metatable(Some(meta))
+}
+
+/// Why the global table `table` has no `key`: a name of 0.8 (`game.online`), or one it lacks,
+/// with the nearest of `names` (its own). The lint of names says the same of a path a script
+/// imports, Luau's tables (`math.flor`) included.
+pub(crate) fn unknown_member<'a>(
+    table: &str,
+    key: &str,
+    names: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let path = format!("{table}.{key}");
+    if registry::reserved(&path).is_some() {
+        return registry::later(&path);
+    }
+    let hint = closest(key, names)
+        .map(|near| format!("; quis dizer {near}?"))
+        .unwrap_or_default();
+    format!("{table} não tem {key}{hint}")
 }
 
 /// The game variable `name` names, by its ID or its name in any case (see `variables::find`); one

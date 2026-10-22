@@ -391,17 +391,126 @@ impl Domain {
     }
 }
 
-/// A parameter: its name, its Luau type (`?` when it may be left out) and what it is, in
-/// Portuguese. `...` is the rest of the arguments; a type ending in `...` is a generic pack.
+/// What a text names in the project where a script gives it: the lint of names (design §6.4)
+/// checks the literal texts of these parameters, and of the attributes' keys (`obj.attr.Vida`),
+/// against the project, and tools find in them where a script uses a sound or a scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NameKind {
+    /// A sound of the Biblioteca.
+    Sound,
+    /// A game variable.
+    Variable,
+    /// An attribute of objects, or one a script declares.
+    Attribute,
+    Scene,
+    /// A model of the Biblioteca.
+    Model,
+    /// An input action.
+    Action,
+    /// An animation clip of an object.
+    Clip,
+    /// A marker of an animation clip.
+    Marker,
+    /// An object, by its name in the Hierarquia.
+    Object,
+    /// A physics surface.
+    Surface,
+}
+
+impl NameKind {
+    pub const ALL: [Self; 10] = [
+        Self::Sound,
+        Self::Variable,
+        Self::Attribute,
+        Self::Scene,
+        Self::Model,
+        Self::Action,
+        Self::Clip,
+        Self::Marker,
+        Self::Object,
+        Self::Surface,
+    ];
+
+    /// What it is, with its article, as messages name it: "o som", "a variável do jogo".
+    pub fn what(self) -> &'static str {
+        match self {
+            Self::Sound => "o som",
+            Self::Variable => "a variável do jogo",
+            Self::Attribute => "o atributo",
+            Self::Scene => "a cena",
+            Self::Model => "o modelo",
+            Self::Action => "a ação de entrada",
+            Self::Clip => "o clipe",
+            Self::Marker => "o marcador",
+            Self::Object => "o objeto",
+            Self::Surface => "a superfície",
+        }
+    }
+
+    /// The help line the types and the reference give a row that takes one.
+    pub fn checked(self) -> &'static str {
+        match self {
+            Self::Sound => "A conferência avisa de um som que o projeto não tem.",
+            Self::Variable => "A conferência avisa de uma variável que o projeto não tem.",
+            Self::Attribute => {
+                "A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara."
+            }
+            Self::Scene => "A conferência avisa de uma cena que o projeto não tem.",
+            Self::Model => "A conferência avisa de um modelo que o projeto não tem.",
+            Self::Action => "A conferência avisa de uma ação de entrada que o projeto não tem.",
+            Self::Clip => "A conferência avisa de um clipe que nenhum objeto tem.",
+            Self::Marker => "A conferência avisa de um marcador que nenhum clipe tem.",
+            Self::Object => "A conferência avisa de um nome que nenhum objeto do projeto tem.",
+            Self::Surface => "A conferência avisa de uma superfície que o projeto não tem.",
+        }
+    }
+}
+
+/// A parameter: its name, its Luau type (`?` when it may be left out), what it is, in
+/// Portuguese, and what its text names in the project, if anything. `...` is the rest of the
+/// arguments; a type ending in `...` is a generic pack.
 #[derive(Clone, Copy, Debug)]
 pub struct ApiParam {
     pub name: &'static str,
     pub ty: &'static str,
     pub doc: &'static str,
+    pub names: Option<NameKind>,
 }
 
 const fn param(name: &'static str, ty: &'static str, doc: &'static str) -> ApiParam {
-    ApiParam { name, ty, doc }
+    ApiParam {
+        name,
+        ty,
+        doc,
+        names: None,
+    }
+}
+
+/// A parameter whose text names something of the project, which the lint of names checks.
+const fn named(
+    name: &'static str,
+    ty: &'static str,
+    names: NameKind,
+    doc: &'static str,
+) -> ApiParam {
+    ApiParam {
+        name,
+        ty,
+        doc,
+        names: Some(names),
+    }
+}
+
+impl ApiParam {
+    /// The texts its type allows, for a union of literal texts (`"music" | "effects"`), in its
+    /// order; none for any other type.
+    pub fn choices(&self) -> Option<Vec<&'static str>> {
+        let ty = self.ty.strip_suffix('?').unwrap_or(self.ty);
+        ty.split(" | ")
+            .map(|choice| choice.strip_prefix('"')?.strip_suffix('"'))
+            .collect()
+    }
 }
 
 /// One row of the API.
@@ -475,6 +584,29 @@ impl ApiFn {
     /// Whether objects themselves have it (a property or a method of `Object`).
     pub fn of_objects(&self) -> bool {
         self.view() == Some(View::Object)
+    }
+
+    /// What the texts it takes name in the project, in the order of its parameters: attributes
+    /// for `obj.attr`, whose keys are their names, and surfaces for the properties a surface's
+    /// name may be written to (`obj.collider.surface = "Gelo"`).
+    pub fn names(&self) -> Vec<NameKind> {
+        match self.imp {
+            Imp::Property(handles::Property::Attr) => return vec![NameKind::Attribute],
+            Imp::Property(handles::Property::Surface) => return vec![NameKind::Surface],
+            _ => {}
+        }
+        let mut kinds: Vec<NameKind> = Vec::new();
+        for kind in self.params.iter().filter_map(|p| p.names) {
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+        kinds
+    }
+
+    /// Whether it is `obj.attr`, the attributes by name.
+    pub fn is_attributes(&self) -> bool {
+        matches!(self.imp, Imp::Property(handles::Property::Attr))
     }
 
     /// Whether the types and the plan-B module declare it: every row but those luau-lsp types
@@ -975,6 +1107,88 @@ mod tests {
             later_callbacks().collect::<Vec<_>>(),
             ["on_request", "on_player_join", "on_player_leave"]
         );
+    }
+
+    /// The parameters that take names of the project are marked, so the lint of names checks
+    /// them and tools find them; they take texts, and the unions of texts parse as choices.
+    #[test]
+    fn the_names_of_the_project_the_rows_take_are_marked() {
+        use NameKind::*;
+        let named: Vec<(&str, &str, NameKind)> = API
+            .iter()
+            .flat_map(|f| {
+                f.params
+                    .iter()
+                    .filter_map(move |p| Some((f.name, p.name, p.names?)))
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("on_input", "action", Action),
+                ("on_marker", "marker", Marker),
+                ("on_marker", "clip", Clip),
+                ("Object:find_child", "name", Object),
+                ("Object:get_child", "name", Object),
+                ("scene.find", "name", Object),
+                ("scene.get", "name", Object),
+                ("scene.find_all", "name", Object),
+                ("scene.with_attribute", "name", Attribute),
+                ("scene.spawn_model", "model", Model),
+                ("scene.change", "name", Scene),
+                ("Object:has_attribute", "name", Attribute),
+                ("param.surface", "name", Surface),
+                ("Animation:play", "clip", Clip),
+                ("audio.play", "name", Sound),
+                ("audio.loop", "name", Sound),
+                ("vars.get", "name", Variable),
+                ("vars.set", "name", Variable),
+                ("input.pressed", "action", Action),
+                ("input.held", "action", Action),
+                ("input.released", "action", Action),
+            ]
+        );
+        // The properties: the keys of obj.attr, and the surfaces a surface's name may be
+        // written to.
+        let properties: Vec<(&str, Vec<NameKind>)> = API
+            .iter()
+            .filter(|f| matches!(f.kind, ApiKind::Property { .. }) && !f.names().is_empty())
+            .map(|f| (f.name, f.names()))
+            .collect();
+        assert_eq!(
+            properties,
+            [
+                ("Object.attr", vec![Attribute]),
+                ("Character.body_surface", vec![Surface]),
+                ("Collider.surface", vec![Surface]),
+            ]
+        );
+        let mut kinds: BTreeSet<NameKind> = named.iter().map(|(_, _, kind)| *kind).collect();
+        kinds.extend(properties.into_iter().flat_map(|(_, kinds)| kinds));
+        assert_eq!(kinds.into_iter().collect::<Vec<_>>(), NameKind::ALL);
+        assert_eq!(find("on_marker").unwrap().names(), [Marker, Clip]);
+        for f in API {
+            for p in f.params {
+                if p.names.is_some() {
+                    assert!(
+                        ["string", "string?"].contains(&p.ty),
+                        "{}: {}",
+                        f.name,
+                        p.name
+                    );
+                }
+                if p.ty.starts_with('"') {
+                    let choices = p.choices().unwrap_or_default();
+                    assert!(choices.len() > 1, "{}: {}", f.name, p.name);
+                }
+            }
+        }
+        let mode = find("camera.set_mode").unwrap().params[1];
+        assert_eq!(
+            mode.choices().unwrap(),
+            ["first_person", "third_person", "fixed", "fixed_object"]
+        );
+        assert_eq!(find("audio.play").unwrap().params[0].choices(), None);
     }
 
     /// Design §5.5: every operation of the node registry, frozen since 0.7.0, has its equivalent
