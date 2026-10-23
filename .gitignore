@@ -6,3 +6,5 @@
 /qa/**/project/
 *.tmp
 *.agente.bak
+# OXY's own folder inside a project (locks, agents' copies, trash, backups).
+.oxy/

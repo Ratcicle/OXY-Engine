@@ -36,6 +36,7 @@ mod parkour_example;
 mod physics3d;
 mod physics_authoring;
 mod portable_copy;
+mod project_files;
 mod queries;
 mod reuse_and_platforms;
 mod runtime_lifetimes;

@@ -1,6 +1,9 @@
 //! Validated documents and staged, recoverable file replacement.
 use crate::{
-    document::{Asset, AssetKind, GameSettings, Id, Project, new_id, validate_project},
+    document::{
+        Asset, AssetKind, GameSettings, Id, Layout, Project, new_id, validate_model,
+        validate_project,
+    },
     fs_ops::{self, Stamp},
     migration::MigrationError,
     painting::PaintImage,
@@ -15,6 +18,10 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+mod files;
+mod open;
+pub use open::{AssetState, KnownFiles, OpenReport, open_project};
 
 /// Why a project, asset or save operation failed. Messages are shown to the user as-is.
 #[derive(Debug, thiserror::Error)]
@@ -114,6 +121,24 @@ pub enum PersistenceError {
     /// The project's folder is past what a project holds (see [`crate::project_tree::walk`]).
     #[error("A pasta do projeto é grande demais: {0}; mova o projeto para uma pasta só dele")]
     TreeTooLarge(String),
+    /// A model's own file, which the strict load reads, is missing or holds no model of the
+    /// project's (see [`crate::model_file`]).
+    #[error("O modelo {name}: o arquivo {path} {reason}")]
+    ModelFile {
+        name: String,
+        path: String,
+        reason: String,
+    },
+    /// A model's file would go where a file that is not the model's is.
+    #[error(
+        "Já existe {path}, e ele não é o arquivo do modelo {name}; a OXY não grava por cima \
+         dele: mova ou renomeie esse arquivo e salve de novo"
+    )]
+    ModelFileTaken { name: String, path: String },
+    /// Sending to the project's trash the files whose assets left the project failed; nothing
+    /// was saved.
+    #[error("Salvamento não concluído: {0}")]
+    Trash(String),
 }
 impl From<PersistenceError> for String {
     fn from(error: PersistenceError) -> Self {
@@ -136,23 +161,36 @@ pub fn load_project_lazy(path: &Path) -> Result<Project, PersistenceError> {
 pub fn load_project_lazy_report(path: &Path) -> Result<(Project, Option<u32>), PersistenceError> {
     load_project_with(path, true)
 }
+/// The strict load: the project file as it is, and in the tree layout each model's pieces from
+/// the file at its path (an exported game's models are inside its project file). Nothing is
+/// looked for elsewhere, and a file missing or unusable fails.
 fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), PersistenceError> {
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
     } else {
         path.to_owned()
     };
-    let meta = fs::metadata(&path).map_err(|source| PersistenceError::Open {
-        path: path.clone(),
-        source,
-    })?;
-    if meta.len() > 64 * 1024 * 1024 {
-        return Err(PersistenceError::DocumentTooLarge);
-    }
-    let bytes = fs::read(&path).map_err(io_context("Falha ao ler projeto"))?;
-    let (project, migrated) = crate::migration::read_report(&bytes)?;
-    validate_project(&project).map_err(PersistenceError::InvalidProject)?;
+    let bytes = read_document(&path)?;
+    let (mut project, migrated) = crate::migration::read_report(&bytes)?;
     let root = path.parent().unwrap_or(Path::new("."));
+    if project.layout == Layout::Tree {
+        for asset in &mut project.assets {
+            if asset.kind != AssetKind::Model || asset.model.is_some() {
+                continue;
+            }
+            let failed = |reason: String| PersistenceError::ModelFile {
+                name: asset.name.clone(),
+                path: asset.path.clone(),
+                reason,
+            };
+            let (id, entities, _) = open::read_model_file(root, &asset.path).map_err(&failed)?;
+            if id != asset.id {
+                return Err(failed("é de outro modelo".into()));
+            }
+            asset.model = Some(entities);
+        }
+    }
+    validate_project(&project).map_err(PersistenceError::InvalidProject)?;
     if lazy {
         for asset in &project.assets {
             if asset.kind != AssetKind::Model {
@@ -163,6 +201,17 @@ fn load_project_with(path: &Path, lazy: bool) -> Result<(Project, Option<u32>), 
         validate_asset_files(&project, root)?;
     }
     Ok((project, migrated))
+}
+/// The bytes of the project file `path`, up to 64 MB.
+fn read_document(path: &Path) -> Result<Vec<u8>, PersistenceError> {
+    let meta = fs::metadata(path).map_err(|source| PersistenceError::Open {
+        path: path.to_owned(),
+        source,
+    })?;
+    if meta.len() > 64 * 1024 * 1024 {
+        return Err(PersistenceError::DocumentTooLarge);
+    }
+    fs::read(path).map_err(io_context("Falha ao ler projeto"))
 }
 /// The game's title (its name, else the project's) and its settings, read from the document at
 /// `path` without loading the project: the player opens its window before that. None when the
@@ -191,6 +240,18 @@ pub fn read_game_settings(path: &Path) -> Option<(String, GameSettings)> {
     (!title.is_empty()).then_some((title, game))
 }
 pub fn save_project(path: &Path, project: &Project) -> Result<(), PersistenceError> {
+    save_project_with(path, project, &mut KnownFiles::default()).map(drop)
+}
+/// Saves `project` at `path` (its folder or its project file): the project file and, in the
+/// tree layout, the models' files that changed, with `known`, what OXY last read or wrote of
+/// them, kept up to date (see [`files`]). A file missing, unreadable or with an invalid path is
+/// no reason to refuse: opening tells it. Answers what the save tells besides (a model's file
+/// changed outside OXY kept before it was replaced, files sent to the project's trash).
+pub fn save_project_with(
+    path: &Path,
+    project: &Project,
+    known: &mut KnownFiles,
+) -> Result<Vec<String>, PersistenceError> {
     validate_project(project).map_err(PersistenceError::InvalidProject)?;
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
@@ -198,13 +259,8 @@ pub fn save_project(path: &Path, project: &Project) -> Result<(), PersistenceErr
         path.to_owned()
     };
     let root = path.parent().unwrap_or(Path::new("."));
-    validate_asset_files(project, root)?;
-    let mut writes = schema_backup(&path)?;
-    writes.push(FileWrite::replace(
-        path,
-        serde_json::to_vec_pretty(project)?,
-    ));
-    transaction_write(writes)
+    let plan = files::plan(&path, project, known, None)?;
+    files::commit(root, Vec::new(), plan, known)
 }
 /// The copy of the project file at `path` a save keeps when it migrates the file (see
 /// [`crate::migration::backup`]), only created.
@@ -236,8 +292,10 @@ pub fn create_project(
         .map(Path::to_owned)
         .collect();
     let file = folder.join(PROJECT_FILE);
+    // A new folder has none of the files the project's assets name.
     let saved = fs::create_dir_all(&folder)
         .map_err(io_context("Não foi possível criar pasta do projeto"))
+        .and_then(|()| validate_asset_files(project, &folder))
         .and_then(|()| save_project(&file, project));
     if let Err(error) = saved {
         // Only empty folders go, the deepest first.
@@ -334,36 +392,39 @@ pub fn save_bundle(
     };
     let root = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(root).map_err(io_context("Não foi possível criar pasta do projeto"))?;
+    let mut known = KnownFiles::default();
+    let plan = files::plan(&path, project, &known, None)?;
     let mut writes = Vec::new();
     for asset in &project.assets {
-        if asset.kind == AssetKind::Model {
-            continue;
-        }
-        let target = resolve_asset_path(root, &asset.path)?;
         if let Some(image) = images.get(&asset.id) {
             if asset.kind != AssetKind::Texture {
                 return Err(PersistenceError::PixelsOnNonTexture(asset.name.clone()));
             }
             let bytes = image.to_png().map_err(PersistenceError::Image)?;
-            writes.push(FileWrite::replace(target, bytes));
-        } else {
-            validate_asset_file(asset, &target)?;
+            writes.push(plan.painted(root, project, asset, bytes, &known)?);
         }
     }
-    let bytes = serde_json::to_vec_pretty(project)?;
-    writes.extend(schema_backup(&path)?);
-    writes.push(FileWrite::replace(path, bytes));
-    transaction_write(writes)
+    files::commit(root, writes, plan, &mut known).map(drop)
 }
 /// Writes dirty texture buffers and the manifest in the same recoverable transaction.
-/// Clean texture files are checked without decoding or copying their pixel buffers.
-/// Dirty cache entries stay pinned if any staging/replacement step fails.
+/// Clean texture files are left as they are: one missing is no reason to refuse (opening tells
+/// it). Dirty cache entries stay pinned if any staging/replacement step fails.
 pub fn save_cached_bundle(
     path: &Path,
     project: &Project,
     images: &mut TextureCache,
 ) -> Result<(), PersistenceError> {
-    save_cached_bundle_from(path, project, images, None)
+    save_cached_bundle_with(path, project, images, &mut KnownFiles::default()).map(drop)
+}
+/// [`save_cached_bundle`] with what OXY last read or wrote of the models' files, kept up to date
+/// (see [`save_project_with`]); answers what the save tells besides.
+pub fn save_cached_bundle_with(
+    path: &Path,
+    project: &Project,
+    images: &mut TextureCache,
+    known: &mut KnownFiles,
+) -> Result<Vec<String>, PersistenceError> {
+    save_cached_bundle_from(path, project, images, None, known)
 }
 
 /// Save an independent copy, including lazily loaded PNG/WAV resources and every script of the
@@ -374,7 +435,25 @@ pub fn save_cached_copy(
     images: &mut TextureCache,
     source_root: &Path,
 ) -> Result<(), PersistenceError> {
-    save_cached_bundle_from(path, project, images, Some(source_root))
+    save_cached_copy_with(
+        path,
+        project,
+        images,
+        source_root,
+        &mut KnownFiles::default(),
+    )
+    .map(drop)
+}
+/// [`save_cached_copy`], leaving in `known` what it wrote of the models' files; answers what the
+/// copy tells besides (a file the source lacks, left out).
+pub fn save_cached_copy_with(
+    path: &Path,
+    project: &Project,
+    images: &mut TextureCache,
+    source_root: &Path,
+    known: &mut KnownFiles,
+) -> Result<Vec<String>, PersistenceError> {
+    save_cached_bundle_from(path, project, images, Some(source_root), known)
 }
 
 fn save_cached_bundle_from(
@@ -382,7 +461,8 @@ fn save_cached_bundle_from(
     project: &Project,
     images: &mut TextureCache,
     source_root: Option<&Path>,
-) -> Result<(), PersistenceError> {
+    known: &mut KnownFiles,
+) -> Result<Vec<String>, PersistenceError> {
     validate_project(project).map_err(PersistenceError::InvalidProject)?;
     for (id, _) in images.dirty_images() {
         if !project
@@ -399,12 +479,12 @@ fn save_cached_bundle_from(
     };
     let root = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(root).map_err(io_context("Não foi possível criar pasta do projeto"))?;
+    let mut plan = files::plan(&path, project, known, source_root)?;
     let mut writes = Vec::new();
     for asset in &project.assets {
         if asset.kind == AssetKind::Model {
             continue;
         }
-        let target = resolve_asset_path(root, &asset.path)?;
         if images.is_dirty(&asset.id) {
             if asset.kind != AssetKind::Texture {
                 return Err(PersistenceError::PixelsOnNonTexture(asset.name.clone()));
@@ -414,24 +494,36 @@ fn save_cached_bundle_from(
                 .ok_or(PersistenceError::DirtyTextureNotResident)?;
             let bytes = image.to_png().map_err(PersistenceError::Image)?;
             if source_root.is_none() {
-                writes.push(FileWrite::replace(target, bytes));
+                writes.push(plan.painted(root, project, asset, bytes, known)?);
             } else {
+                let target = resolve_asset_path(root, &asset.path)?;
                 writes.extend(copy_write(target, bytes, || {
                     PersistenceError::DestinationConflict(asset.path.clone())
                 })?);
             }
         } else if let Some(source_root) = source_root {
             let source = resolve_asset_path(source_root, &asset.path)?;
-            validate_asset_header(asset, &source)?;
-            let bytes = fs::read(&source).map_err(|source| PersistenceError::CopySource {
-                name: asset.name.clone(),
-                source,
-            })?;
+            let bytes = match fs::read(&source) {
+                Ok(bytes) => bytes,
+                // Opening told it missing; the copy goes without it, as the project does.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    plan.warnings.push(format!(
+                        "{}: o arquivo {} não existe na pasta de origem e ficou fora da cópia",
+                        asset.name, asset.path
+                    ));
+                    continue;
+                }
+                Err(source) => {
+                    return Err(PersistenceError::CopySource {
+                        name: asset.name.clone(),
+                        source,
+                    });
+                }
+            };
+            let target = resolve_asset_path(root, &asset.path)?;
             writes.extend(copy_write(target, bytes, || {
                 PersistenceError::DestinationConflict(asset.path.clone())
             })?);
-        } else {
-            validate_asset_header(asset, &target)?;
         }
     }
     if let Some(source_root) = source_root {
@@ -455,15 +547,10 @@ fn save_cached_bundle_from(
             })?);
         }
     }
-    writes.extend(schema_backup(&path)?);
-    writes.push(FileWrite::replace(
-        path.clone(),
-        serde_json::to_vec_pretty(project)?,
-    ));
-    transaction_write(writes)?;
+    let warnings = files::commit(root, writes, plan, known)?;
     images.configure(root, project);
     images.mark_saved();
-    Ok(())
+    Ok(warnings)
 }
 /// The write a copy makes of `bytes` at `target`: only created, nothing when the file there
 /// already holds them, and `conflict` when it holds anything else.
@@ -544,13 +631,8 @@ fn store_asset_as(
     name: String,
     kind: AssetKind,
 ) -> Result<Id, PersistenceError> {
-    let extension = if kind == AssetKind::Texture {
-        "png"
-    } else {
-        "wav"
-    };
-    let relative = format!("assets/{id}.{extension}");
     fs::create_dir_all(root)?;
+    let (name, relative) = new_asset_file(project, Some(root), &id, &name, kind);
     let target = resolve_asset_path(root, &relative)?;
     transaction_write(vec![FileWrite::create(target, bytes.to_vec())])?;
     project.assets.push(Asset {
@@ -561,6 +643,59 @@ fn store_asset_as(
         model: None,
     });
     Ok(id)
+}
+/// The name and path a new image or sound called `name`, of ID `id`, gets in `project`: `name`
+/// and `assets/<id>.<ext>` in the old layout; in the tree layout `<name>.<ext>` at the project's
+/// root, the name made one Windows keeps and numbered ("Pulo 2") while an asset of its kind has
+/// it, or an asset's path or a file in the project's folder `root` has its file's name. The file
+/// is still only created: one that appears meanwhile stays.
+pub fn new_asset_file(
+    project: &Project,
+    root: Option<&Path>,
+    id: &str,
+    name: &str,
+    kind: AssetKind,
+) -> (String, String) {
+    let extension = if kind == AssetKind::Texture {
+        "png"
+    } else {
+        "wav"
+    };
+    if project.layout == Layout::Legacy {
+        return (name.to_owned(), format!("assets/{id}.{extension}"));
+    }
+    let fallback = if kind == AssetKind::Texture {
+        "Imagem"
+    } else {
+        "Som"
+    };
+    let base = crate::names::fitted_name(name, fallback);
+    let taken = |name: &str, path: &str| {
+        project.assets.iter().any(|asset| {
+            (asset.kind == kind && asset.name.trim().to_lowercase() == name.to_lowercase())
+                || crate::names::same_name(&asset.path, path)
+        }) || root.is_some_and(|root| {
+            resolve_asset_path(root, path).is_ok_and(|file| fs::symlink_metadata(file).is_ok())
+        })
+    };
+    (1..)
+        .map(|n: usize| {
+            let name = if n == 1 {
+                base.clone()
+            } else {
+                // The number always fits: the name is cut before it.
+                let number = format!(" {n}");
+                let kept: String = base
+                    .chars()
+                    .take(crate::names::MAX_NAME_CHARS - number.chars().count())
+                    .collect();
+                format!("{}{number}", kept.trim_end_matches(['.', ' ']))
+            };
+            let path = format!("{name}.{extension}");
+            (name, path)
+        })
+        .find(|(name, path)| !taken(name, path))
+        .expect("a free name")
 }
 /// Creates an independent texture; neither the original pixels nor its reference changes.
 pub fn copy_texture(
@@ -591,14 +726,20 @@ fn copy_texture_as(
     } else {
         fs::read(resolve_asset_path(root, &asset.path)?)?
     };
-    let path = format!("assets/{id}.png");
+    let (name, path) = new_asset_file(
+        project,
+        Some(root),
+        &id,
+        &format!("{} (cópia)", asset.name),
+        AssetKind::Texture,
+    );
     transaction_write(vec![FileWrite::create(
         resolve_asset_path(root, &path)?,
         bytes,
     )])?;
     project.assets.push(Asset {
         id: id.clone(),
-        name: format!("{} (cópia)", asset.name),
+        name,
         path,
         kind: AssetKind::Texture,
         model: None,
@@ -930,6 +1071,88 @@ pub fn load_scripts_to_run(project: &Project, root: &Path) -> Result<ScriptSourc
         Some((line, objects)) => Err(format!("{line}; {}", missing_fix(objects))),
         None => Ok(sources),
     }
+}
+/// Whether a run or an export of `project` needs the asset `asset`: something uses it (see
+/// [`crate::editing::asset_uses`]), or it is a sound or a model and an object attaches a script,
+/// which may play or place it by name (`audio.play`, `scene.spawn_model`).
+pub fn asset_used(project: &Project, asset: &Asset) -> bool {
+    !crate::editing::asset_uses(project, &asset.id).is_empty()
+        || (matches!(asset.kind, AssetKind::Audio | AssetKind::Model)
+            && script::any_attached(project))
+}
+/// What keeps the asset `asset` of `project`, saved in the folder `root`, from being played or
+/// exported now, said after its name: its path is invalid, its file is missing, cannot be read
+/// or holds nothing usable, or it is a model without pieces whose file cannot be read, is
+/// another model's or does not fit the project (see [`validate_model`]). None when it is fine.
+pub fn asset_problem(project: &Project, root: &Path, asset: &Asset) -> Option<String> {
+    if asset.kind == AssetKind::Model {
+        if asset.model.is_some() {
+            return None;
+        }
+        let path = &asset.path;
+        return Some(match open::read_model_file(root, path) {
+            Err(why) => format!("o arquivo {path} {why}"),
+            Ok((id, _, _)) if id != asset.id => format!("o arquivo {path} é de outro modelo"),
+            Ok((_, entities, _)) => {
+                let read = Asset {
+                    model: Some(entities),
+                    ..asset.clone()
+                };
+                match validate_model(project, &read) {
+                    Err(error) => format!("o arquivo {path} não serve neste projeto: {error}"),
+                    Ok(()) => format!(
+                        "o modelo está indisponível; reabra o projeto para ler {path} de novo"
+                    ),
+                }
+            }
+        });
+    }
+    let file = match resolve_asset_path(root, &asset.path) {
+        Ok(file) => file,
+        Err(error) => return Some(format!("o caminho {} é inválido ({error})", asset.path)),
+    };
+    match validate_asset_header(asset, &file) {
+        Ok(()) => None,
+        Err(PersistenceError::AssetMissing { source, .. })
+            if source.kind() == io::ErrorKind::NotFound =>
+        {
+            Some(format!(
+                "o arquivo {} não existe na pasta do projeto",
+                asset.path
+            ))
+        }
+        Err(PersistenceError::AssetMissing { source, .. }) => Some(format!(
+            "o arquivo {} {}",
+            asset.path,
+            project_tree::now_unreadable(&source)
+        )),
+        Err(PersistenceError::AssetContent { reason, .. }) => Some(format!(
+            "o arquivo {} não pode ser usado ({reason})",
+            asset.path
+        )),
+        Err(error) => Some(format!("o arquivo {}: {error}", asset.path)),
+    }
+}
+/// Checks that every asset a run of `project`, saved in the folder `root`, needs (see
+/// [`asset_used`]) can be read: the first one that cannot (see [`asset_problem`]) refuses the
+/// run, with what to do. An asset `in_memory` has (pixels painted, not saved yet) needs no file.
+pub fn assets_to_run(
+    project: &Project,
+    root: &Path,
+    in_memory: impl Fn(&str) -> bool,
+) -> Result<(), String> {
+    for asset in &project.assets {
+        if in_memory(&asset.id) || !asset_used(project, asset) {
+            continue;
+        }
+        if let Some(problem) = asset_problem(project, root, asset) {
+            return Err(format!(
+                "{}: {problem}; restaure o arquivo ou deixe de usar o recurso",
+                asset.name
+            ));
+        }
+    }
+    Ok(())
 }
 pub(crate) fn validate_asset_header(asset: &Asset, path: &Path) -> Result<(), PersistenceError> {
     let meta = fs::metadata(path).map_err(|source| PersistenceError::AssetMissing {
@@ -1367,19 +1590,24 @@ mod tests {
             .get_mut(&painted)
             .unwrap()
             .brush([50., 50.], 4., [255, 0, 0, 255]);
+        // A missing file is no reason to refuse a save; one that cannot be written is.
+        fs::create_dir(dir.join("bloqueada.png")).unwrap();
+        let blocked = new_id();
         project.assets.push(Asset {
-            id: new_id(),
-            name: "Ausente".into(),
-            path: "absent.png".into(),
+            id: blocked.clone(),
+            name: "Bloqueada".into(),
+            path: "bloqueada.png".into(),
             kind: AssetKind::Texture,
             model: None,
         });
+        cache.insert(blocked.clone(), PaintImage::new(4, 4, [0; 4]).unwrap());
         assert!(save_cached_bundle(&path, &project, &mut cache).is_err());
         assert!(cache.has_dirty());
         assert_eq!(cache.evict_clean(), 0);
         assert_eq!(fs::read(&path).unwrap(), before_manifest);
         assert_eq!(fs::read(dir.join("paint.png")).unwrap(), before_png);
         project.assets.pop();
+        cache.remove(&blocked);
         save_cached_bundle(&path, &project, &mut cache).unwrap();
         assert!(!cache.has_dirty());
         assert!(cache.is_empty());
@@ -1803,6 +2031,78 @@ mod tests {
         );
         assert_eq!(fs::read(&taken).unwrap(), b"de outra pessoa");
         assert_eq!(project, before);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn new_files_of_the_tree_layout_take_the_names_the_library_shows() {
+        let dir = temp();
+        let origin = dir.join("origem").join("Pulo.png");
+        fs::create_dir_all(origin.parent().unwrap()).unwrap();
+        PaintImage::new(4, 4, [255; 4])
+            .unwrap()
+            .save(&origin)
+            .unwrap();
+        let root = dir.join("Projeto");
+        let mut project = Project::new("Árvore");
+        project.layout = Layout::Tree;
+        let first = import_asset(&mut project, &root, &origin, AssetKind::Texture).unwrap();
+        let second = import_asset(&mut project, &root, &origin, AssetKind::Texture).unwrap();
+        let copy = copy_texture(&mut project, &root, &first, None).unwrap();
+        let shown: Vec<(&str, &str)> = [&first, &second, &copy]
+            .iter()
+            .map(|id| {
+                let asset = project.asset(id).unwrap();
+                (asset.name.as_str(), asset.path.as_str())
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("Pulo", "Pulo.png"),
+                ("Pulo 2", "Pulo 2.png"),
+                ("Pulo (cópia)", "Pulo (cópia).png")
+            ]
+        );
+        for path in ["Pulo.png", "Pulo 2.png", "Pulo (cópia).png"] {
+            assert_eq!(
+                fs::read(root.join(path)).unwrap(),
+                fs::read(&origin).unwrap()
+            );
+        }
+        // A file anyone put at the name is passed over; a sound may share an image's name.
+        fs::write(root.join("Pulo 3.png"), b"de outra pessoa").unwrap();
+        assert_eq!(
+            new_asset_file(&project, Some(&root), "x", "Pulo", AssetKind::Texture),
+            ("Pulo 4".into(), "Pulo 4.png".into())
+        );
+        assert_eq!(
+            new_asset_file(&project, Some(&root), "x", "Pulo", AssetKind::Audio),
+            ("Pulo".into(), "Pulo.wav".into())
+        );
+        // Names Windows would not keep are made fit, and the number always fits.
+        assert_eq!(
+            new_asset_file(&project, None, "x", "Clique: menu?", AssetKind::Audio),
+            ("Clique menu".into(), "Clique menu.wav".into())
+        );
+        let long = "a".repeat(crate::names::MAX_NAME_CHARS);
+        project.assets.push(Asset {
+            id: new_id(),
+            name: long.clone(),
+            path: format!("{long}.wav"),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        let (name, _) = new_asset_file(&project, None, "x", &long, AssetKind::Audio);
+        assert_eq!(
+            name,
+            format!("{} 2", "a".repeat(crate::names::MAX_NAME_CHARS - 2))
+        );
+        // The old layout keeps assets/<id>.
+        project.layout = Layout::Legacy;
+        assert_eq!(
+            new_asset_file(&project, Some(&root), "x", "Pulo", AssetKind::Texture),
+            ("Pulo".into(), "assets/x.png".into())
+        );
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

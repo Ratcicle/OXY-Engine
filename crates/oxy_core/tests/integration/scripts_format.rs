@@ -372,6 +372,13 @@ fn graph_only_projects_keep_their_document_and_state_through_format_6() {
         serde_json::from_slice(&std::fs::read(&copy).unwrap()).unwrap();
     assert_eq!(saved["schema_version"], 6);
     saved["schema_version"] = 5.into();
+    // Format 6 leaves out the empty pieces of images and sounds, and nothing else changes.
+    let mut original = original;
+    for asset in original["assets"].as_array_mut().unwrap() {
+        if asset["model"].is_null() {
+            asset.as_object_mut().unwrap().remove("model");
+        }
+    }
     assert_eq!(saved, original);
     assert!(!output.join("scripts").exists());
     // The copy, opened in format 6, plays the course as 0.6.0 did.

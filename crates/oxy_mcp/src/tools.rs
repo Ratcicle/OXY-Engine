@@ -10,7 +10,10 @@ use oxy_core::{
     editing, encoding,
     export::{self, ExportRequest},
     fs_ops::utc,
-    headless, persistence, query, random,
+    headless,
+    persistence::{self, OpenReport},
+    project_lock::AgentLock,
+    query, random,
     runtime::Runtime,
     script::{self, ScriptSources},
     script_files,
@@ -50,6 +53,21 @@ fn run_scripts(
         persistence::load_scripts(root).map_err(|error| error.to_string())?
     };
     Ok(Arc::new(sources))
+}
+
+/// Opens the project file `file` as the editor opens it (see `persistence::open_project`): a
+/// file renamed or deleted outside OXY is told, not refused.
+fn open_file(file: &Path) -> Result<(Project, OpenReport), String> {
+    persistence::open_project(file).map_err(|e| e.to_string())
+}
+
+/// Adds to `answer`, as `open_warnings`, the `lines` opening the project on files told (see
+/// [`OpenReport::lines`]), when there are any.
+fn add_open_lines<'a>(answer: &mut Json, lines: impl IntoIterator<Item = &'a String>) {
+    let lines: Vec<&String> = lines.into_iter().collect();
+    if let (false, Some(map)) = (lines.is_empty(), answer.as_object_mut()) {
+        map.insert("open_warnings".into(), json!(lines));
+    }
 }
 
 /// What a tool call returns: JSON text and, optionally, a PNG image.
@@ -958,7 +976,9 @@ ID, which nodes and objects use, and the file; a name \
 another asset of its kind has is refused. delete_asset is refused while anything uses the asset \
 (oxy_project used_by: objects showing an image, nodes playing a sound, a model's placements by \
 their roots), naming the uses; its file stays in the assets folder, as the editor's Excluir \
-leaves it
+leaves it. In a project in folders (\"layout\": \"Tree\" in project.oxy.json) an asset's name is \
+its file's: rename_asset is refused until OXY renames files, and the save sends a deleted \
+asset's file to .oxy/lixeira
 - Scene changes without a fixed scene: action.scene's scene input (text) replaces its scene \
 parameter. Restart: connect scene.current.scene -> action.scene.scene, and the logic reopens \
 whatever scene it is in, copied or placed anywhere. Next scene: value.scene gives the ID of the \
@@ -1786,8 +1806,12 @@ impl Tools {
         }
     }
 
-    /// The project document: from the editor (unsaved state included) or from disk.
-    fn document(&mut self, target: &Target) -> Result<(Project, Option<PathBuf>), String> {
+    /// The project document: from the editor (unsaved state included) or from disk, with what
+    /// opening the files told.
+    fn document(
+        &mut self,
+        target: &Target,
+    ) -> Result<(Project, Option<PathBuf>, Vec<String>), String> {
         match target {
             Target::Live(port) => {
                 let status = self.live(*port, "status", json!({}))?;
@@ -1796,11 +1820,12 @@ impl Tools {
                 let root = status["project"]["path"]
                     .as_str()
                     .and_then(|p| Path::new(p).parent().map(Path::to_owned));
-                Ok((project, root))
+                Ok((project, root, Vec::new()))
             }
             Target::File(file) => {
-                let project = persistence::load_project(file).map_err(|e| e.to_string())?;
-                Ok((project, file.parent().map(Path::to_owned)))
+                let (project, report) = open_file(file)?;
+                let lines = report.lines().cloned().collect();
+                Ok((project, file.parent().map(Path::to_owned), lines))
             }
         }
     }
@@ -1820,10 +1845,12 @@ impl Tools {
                 self.live(port, method, params).map(Output::json)
             }
             Target::File(file) => {
-                let project = persistence::load_project(&file).map_err(|e| e.to_string())?;
+                let (project, report) = open_file(&file)?;
                 let scene = text_arg(args, "scene").unwrap_or_else(|| project.start_scene.clone());
                 let root = file.parent().unwrap_or(Path::new("."));
-                local(&project, &scene, root).map(Output::json)
+                let mut answer = local(&project, &scene, root)?;
+                add_open_lines(&mut answer, report.lines());
+                Ok(Output::json(answer))
             }
         }
     }
@@ -1840,8 +1867,19 @@ impl Tools {
                 self.live(port, "validate", params).map(Output::json)
             }
             Target::File(file) => {
-                let project = persistence::load_project(&file).map_err(|e| e.to_string())?;
-                Ok(Output::json(query::validation_in(&project, file.parent())))
+                let (project, report) = open_file(&file)?;
+                let mut answer = query::validation_in(&project, file.parent());
+                // The scripts' lines are among the validation's own.
+                let told: Vec<&String> = report
+                    .lines()
+                    .filter(|line| {
+                        !answer["warnings"]
+                            .as_array()
+                            .is_some_and(|warnings| warnings.iter().any(|w| w == *line))
+                    })
+                    .collect();
+                add_open_lines(&mut answer, told);
+                Ok(Output::json(answer))
             }
         }
     }
@@ -1868,10 +1906,12 @@ impl Tools {
                 .map(Output::json),
             Target::File(file) => {
                 let parsed = command::parse(&Json::Array(commands))?;
-                let mut project = persistence::load_project(&file).map_err(|e| e.to_string())?;
                 let root = file
                     .parent()
                     .map_or_else(|| PathBuf::from("."), Path::to_owned);
+                // Nobody else writes the project meanwhile; refused while the editor has it.
+                let _lock = AgentLock::hold(&root)?;
+                let (mut project, mut opened) = open_file(&file)?;
                 // attach_script reads the scripts of the project's tree.
                 let scripts = if command::needs_scripts(&parsed) {
                     persistence::load_scripts(&root).map_err(|e| e.to_string())?
@@ -1888,7 +1928,10 @@ impl Tools {
                     persistence::added_script_warnings(&known, &project, &root),
                 );
                 let backup = self.keep_previous_version(&file)?;
-                persistence::save_project(&file, &project).map_err(|e| e.to_string())?;
+                let told = persistence::save_project_with(&file, &project, &mut opened.known)
+                    .map_err(|e| e.to_string())?;
+                command::add_warnings(&mut report, told);
+                add_open_lines(&mut report, opened.lines());
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
                 // Whoever writes the scripts in VS Code gets the API's types.
@@ -1918,10 +1961,23 @@ impl Tools {
             }
             Target::File(file) => {
                 let root = file.parent().unwrap_or(Path::new("."));
+                // Writing waits for nobody else to write the project; refused while the editor
+                // has it.
+                let _lock = match request {
+                    script_files::Request::Write { .. } | script_files::Request::Vscode => {
+                        Some(AgentLock::hold(root)?)
+                    }
+                    _ => None,
+                };
                 // Which scripts objects attach; the files are answered all the same without it.
-                let project = persistence::load_project_lazy(&file).ok();
-                script_files::answer(root, project.as_ref(), &request, &mut self.kept)
-                    .map(|answer| Output::json(answer.json))
+                let opened = open_file(&file).ok();
+                let project = opened.as_ref().map(|(project, _)| project);
+                let mut answer =
+                    script_files::answer(root, project, &request, &mut self.kept)?.json;
+                if let Some((_, report)) = &opened {
+                    add_open_lines(&mut answer, report.lines());
+                }
+                Ok(Output::json(answer))
             }
         }
     }
@@ -1956,20 +2012,22 @@ impl Tools {
             Target::Live(port) => self.live(port, "import", params).map(Output::json),
             Target::File(file) => {
                 let sources = batch.read()?;
-                let mut project = persistence::load_project(&file).map_err(|e| e.to_string())?;
                 let root = file
                     .parent()
                     .map_or_else(|| PathBuf::from("."), Path::to_owned);
+                // Nobody else writes the project meanwhile; refused while the editor has it.
+                let _lock = AgentLock::hold(&root)?;
+                let (mut project, mut opened) = open_file(&file)?;
                 let start = project.start_scene.clone();
                 let imported =
                     asset_import::import_batch(&mut project, &root, &start, &batch, &sources)?;
                 let saved = self.keep_previous_version(&file).and_then(|backup| {
-                    persistence::save_project(&file, &project)
-                        .map(|()| backup)
+                    persistence::save_project_with(&file, &project, &mut opened.known)
+                        .map(|told| (backup, told))
                         .map_err(|e| e.to_string())
                 });
-                let backup = match saved {
-                    Ok(backup) => backup,
+                let (backup, told) = match saved {
+                    Ok(saved) => saved,
                     Err(error) => {
                         // The project file does not name the copies: they go too.
                         asset_import::remove_copies(&root, &imported);
@@ -1977,6 +2035,8 @@ impl Tools {
                     }
                 };
                 let mut report = batch.answer(&imported)?;
+                command::add_warnings(&mut report, told);
+                add_open_lines(&mut report, opened.lines());
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
                 Ok(Output::json(report))
@@ -2004,7 +2064,7 @@ impl Tools {
                 )
                 .map(Output::json),
             Target::File(file) => {
-                let project = persistence::load_project(&file).map_err(|e| e.to_string())?;
+                let (project, _) = open_file(&file)?;
                 let player = self.player();
                 let protected = self.engine_folders();
                 let report = export::export(&ExportRequest {
@@ -2180,7 +2240,7 @@ impl Tools {
         let seconds = args["seconds"].as_f64().ok_or("Informe seconds")?;
         let request = Self::simulation_request(args, seconds)?;
         let target = self.target(args)?;
-        let (project, root) = self.document(&target)?;
+        let (project, root, opened) = self.document(&target)?;
         let scripts = run_scripts(&project, root.as_deref(), &request.setup)?;
         let (report, mut runtime) = headless::run_with_scripts(&project, scripts, &request)?;
         let image = if args["screenshot"].as_bool() == Some(true) {
@@ -2195,7 +2255,9 @@ impl Tools {
         } else {
             None
         };
-        let mut output = Output::json(serde_json::to_value(report).map_err(|e| e.to_string())?);
+        let mut answer = serde_json::to_value(report).map_err(|e| e.to_string())?;
+        add_open_lines(&mut answer, &opened);
+        let mut output = Output::json(answer);
         output.image = image;
         Ok(output)
     }
@@ -2238,7 +2300,7 @@ impl Tools {
         let mut request = Self::simulation_request(args, seconds)?;
         // Only the game camera shows the interface.
         request.ui &= shot == Shot::Game;
-        let (project, root) = self.document(&target)?;
+        let (project, root, opened) = self.document(&target)?;
         let scripts = run_scripts(&project, root.as_deref(), &request.setup)?;
         let (report, mut runtime) = headless::run_with_scripts(&project, scripts, &request)?;
         let shot = shot.resolve(&runtime, &report.setup)?;
@@ -2272,6 +2334,7 @@ impl Tools {
         if let Some(bot) = &report.bot {
             text["bot"] = serde_json::to_value(bot).map_err(|e| e.to_string())?;
         }
+        add_open_lines(&mut text, &opened);
         let mut output = Output::json(text);
         output.image = Some(image);
         Ok(output)
@@ -6602,5 +6665,210 @@ mod tests {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
         }
         assert!(ENTITY_DESCRIPTION.contains("add category_groups and mask_groups"));
+    }
+
+    /// A project of the tree layout in `dir`: the image `Imagens/Pedra.png` on a box and the
+    /// model `Torre`, saved and placed; then the image is renamed and the model moved outside
+    /// OXY.
+    fn moved_outside(dir: &Path) {
+        let image = oxy_core::painting::PaintImage::new(2, 2, [200, 40, 40, 255])
+            .unwrap()
+            .to_png()
+            .unwrap();
+        std::fs::create_dir_all(dir.join("Imagens")).unwrap();
+        std::fs::write(dir.join("Imagens/Pedra.png"), image).unwrap();
+        let mut project = editing::blank_project("Pastas", SceneKind::ThreeD).unwrap();
+        project.layout = Layout::Tree;
+        let scene = project.start_scene.clone();
+        let stone = new_id();
+        project.assets.push(Asset {
+            id: stone.clone(),
+            name: "Pedra".into(),
+            path: "Imagens/Pedra.png".into(),
+            kind: AssetKind::Texture,
+            model: None,
+        });
+        let mut cube = Entity::new("Caixa", Some(Primitive::Cube));
+        cube.material.texture = Some(stone);
+        let tower = Entity::new("Torre", Some(Primitive::Cube));
+        let tower_id = tower.id.clone();
+        project.scenes[0].entities.extend([cube, tower]);
+        let model = project.save_model(&scene, &tower_id, "Torre").unwrap();
+        project.instantiate_model(&model, &scene).unwrap();
+        persistence::save_project(&dir.join(persistence::PROJECT_FILE), &project).unwrap();
+        oxy_core::fs_ops::move_no_replace(
+            &dir.join("Imagens/Pedra.png"),
+            &dir.join("Imagens/Rocha.png"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("Pista")).unwrap();
+        oxy_core::fs_ops::move_no_replace(
+            &dir.join("Torre.modelo.json"),
+            &dir.join("Pista/Torre.modelo.json"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn files_open_a_project_with_files_moved_outside_through_every_tool() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-open-{}", new_id()));
+        moved_outside(&dir);
+        let engine = dir.join("OXY Engine");
+        std::fs::create_dir_all(&engine).unwrap();
+        let player = engine.join(export::PLAYER_EXE);
+        std::fs::write(&player, b"player de teste").unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools {
+            player: Some(player),
+            ..Default::default()
+        };
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let missing = "Pedra (imagem): o arquivo Imagens/Pedra.png não existe na pasta do projeto; \
+                       jogar e exportar ficam recusados enquanto o recurso for usado";
+        let found = "Torre (modelo): o arquivo foi encontrado em Pista/Torre.modelo.json pelo ID \
+                     que tem dentro (o projeto o tinha em Torre.modelo.json)";
+        let told = |answer: &Json| -> Vec<String> {
+            answer["open_warnings"]
+                .as_array()
+                .map(|lines| {
+                    lines
+                        .iter()
+                        .map(|l| l.as_str().unwrap().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        // Reads: the summary, the validation, a simulation and the scripts.
+        let summary = call("oxy_project", json!({})).unwrap();
+        let lines = told(&summary);
+        assert!(lines.contains(&found.to_owned()), "{lines:?}");
+        assert!(lines.contains(&missing.to_owned()), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("arquivo novo na pasta do projeto, Imagens/Rocha.png")),
+            "{lines:?}"
+        );
+        let model = summary["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["kind"] == "Model")
+            .unwrap()
+            .clone();
+        assert_eq!(model["path"], "Pista/Torre.modelo.json");
+        let validation = call("oxy_validate", json!({})).unwrap();
+        assert_eq!(validation["valid"], true);
+        assert!(
+            told(&validation).contains(&missing.to_owned()),
+            "{validation}"
+        );
+        let simulated = call("oxy_simulate", json!({"seconds": 0.1})).unwrap();
+        assert!(told(&simulated).contains(&found.to_owned()), "{simulated}");
+        let checked = call("oxy_scripts", json!({"action": "check"})).unwrap();
+        assert!(told(&checked).contains(&found.to_owned()), "{checked}");
+        // The export refuses the image the box uses, after opening the project.
+        let games = dir.join("Jogos");
+        let error = call(
+            "oxy_export",
+            json!({"destination": games.display().to_string()}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Pedra: o arquivo Imagens/Pedra.png não existe na pasta do projeto"),
+            "{error}"
+        );
+        // Writes: what opening fixed goes to the files with the change.
+        let applied = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "create_entity", "kind": {"type": "group"}, "name": "Grupo"}]}),
+        )
+        .unwrap();
+        assert!(told(&applied).contains(&found.to_owned()), "{applied}");
+        let saved: Json =
+            serde_json::from_slice(&std::fs::read(dir.join(persistence::PROJECT_FILE)).unwrap())
+                .unwrap();
+        let paths: Vec<&str> = saved["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["path"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "Imagens/Pedra.png",
+                "Pista/Torre.modelo.json",
+                "Imagens/Rocha.png"
+            ]
+        );
+        // Outside the project: a file in its folder is the project's already.
+        let elsewhere = std::env::temp_dir().join(format!("oxy-mcp-origem-{}", new_id()));
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let source = elsewhere.join("origem.png");
+        std::fs::write(
+            &source,
+            std::fs::read(dir.join("Imagens/Rocha.png")).unwrap(),
+        )
+        .unwrap();
+        let imported = call("oxy_import", json!({"path": source.display().to_string()})).unwrap();
+        assert_eq!(imported["path"], "origem.png");
+        assert!(told(&imported).contains(&missing.to_owned()), "{imported}");
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(elsewhere).unwrap();
+    }
+
+    #[test]
+    fn files_do_not_write_a_project_the_editor_has_open() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-lock-{}", new_id()));
+        moved_outside(&dir);
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let create =
+            json!({"commands": [{"op": "create_entity", "kind": {"type": "group"}, "name": "G"}]});
+        let manifest = std::fs::read(dir.join(persistence::PROJECT_FILE)).unwrap();
+        let editor = oxy_core::project_lock::EditorLock::hold(&dir, false).unwrap();
+        if cfg!(windows) {
+            let error = call("oxy_apply", create.clone()).unwrap_err();
+            assert_eq!(error, oxy_core::project_lock::EDITOR_OPEN);
+            assert_eq!(
+                std::fs::read(dir.join(persistence::PROJECT_FILE)).unwrap(),
+                manifest
+            );
+            let script =
+                json!({"action": "write", "path": "Pista/porta.luau", "text": "return {}"});
+            let error = call("oxy_scripts", script).unwrap_err();
+            assert_eq!(error, oxy_core::project_lock::EDITOR_OPEN);
+            assert!(!dir.join("Pista/porta.luau").exists());
+            let error = call("oxy_scripts", json!({"action": "vscode"})).unwrap_err();
+            assert_eq!(error, oxy_core::project_lock::EDITOR_OPEN);
+            // Reading is still allowed.
+            call("oxy_project", json!({})).unwrap();
+            call("oxy_scripts", json!({"action": "check"})).unwrap();
+        }
+        drop(editor);
+        call("oxy_apply", create).unwrap();
+        assert!(
+            !dir.join(".oxy").exists(),
+            "the agent's lock goes after the write"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

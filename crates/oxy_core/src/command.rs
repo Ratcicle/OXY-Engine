@@ -387,7 +387,8 @@ pub enum Command {
         name: Option<String>,
     },
     /// Renames an asset of any kind (its ID or name; `kind` tells apart assets of different
-    /// kinds that share a name). Its ID, and its file, stay.
+    /// kinds that share a name). Its ID, and its file, stay; in the tree layout the name is the
+    /// file's, and renaming is refused until OXY renames files.
     RenameAsset {
         asset: Id,
         name: String,
@@ -395,7 +396,8 @@ pub enum Command {
         kind: Option<AssetKind>,
     },
     /// Removes an asset from the project, refused while anything uses it (see
-    /// [`editing::asset_uses`]); its file stays in the project folder, as the editor leaves it.
+    /// [`editing::asset_uses`]); its file stays in the project folder, as the editor leaves it,
+    /// but in the tree layout, where the next save sends it to the project's trash.
     DeleteAsset {
         asset: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2879,6 +2881,9 @@ fn apply_one(
                 return Err("Informe um nome para o recurso".into());
             }
             let renamed = project.asset(&id).unwrap();
+            if project.layout == Layout::Tree && renamed.name != name {
+                return Err(crate::document::renaming_files(&renamed.name));
+            }
             // Assets are found by name, which two of a kind would share.
             if let Some(other) = project.assets.iter().find(|a| {
                 a.id != id

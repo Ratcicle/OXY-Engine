@@ -568,7 +568,11 @@ pub fn import(
         source.kind.asset(),
     )
     .map_err(|e| e.to_string())?;
-    let path = copy.asset(&id).map(|a| a.path.clone()).unwrap_or_default();
+    // In the tree layout the file takes the name, numbered when taken ("Pulo 2").
+    let (name, path) = copy
+        .asset(&id)
+        .map(|a| (a.name.clone(), a.path.clone()))
+        .unwrap_or_default();
     let size = source.image.as_ref().map(|i| [i.width, i.height]);
     if let Some(target) = &request.apply_to
         && let Some(entity) = copy.scene_mut(&scene).and_then(|s| s.entity_mut(target))
@@ -584,7 +588,7 @@ pub fn import(
     *project = copy;
     Ok(Imported {
         asset: id,
-        name: source.name.clone(),
+        name,
         kind: source.kind,
         path,
         width: size.map(|s| s[0]),

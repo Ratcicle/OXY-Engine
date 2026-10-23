@@ -232,7 +232,8 @@ pub fn project_summary(project: &Project) -> Json {
                 "name": a.name,
                 "kind": format!("{:?}", a.kind),
             });
-            // Models live in the project file; images and sounds in the project folder.
+            // Each file's path from the project's folder; a model of the old layout lives in
+            // the project file and has none.
             if !a.path.is_empty() {
                 asset["path"] = json!(a.path);
             }

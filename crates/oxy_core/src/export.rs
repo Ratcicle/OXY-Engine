@@ -114,10 +114,11 @@ pub struct ExportCheck {
 /// those of [`command::warnings`].
 pub fn check(project: &Project, source_root: Option<&Path>, unsaved: &HashSet<Id>) -> ExportCheck {
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     if let Err(error) = validate_project(project) {
         errors.push(error);
     }
-    for asset in project.assets.iter().filter(|a| a.kind != AssetKind::Model) {
+    for asset in &project.assets {
         if unsaved.contains(&asset.id) {
             if asset.kind != AssetKind::Texture {
                 errors.push(format!(
@@ -127,6 +128,9 @@ pub fn check(project: &Project, source_root: Option<&Path>, unsaved: &HashSet<Id
             }
             continue;
         }
+        if asset.kind == AssetKind::Model && asset.model.is_some() {
+            continue;
+        }
         let Some(root) = source_root else {
             errors.push(format!(
                 "{}: o projeto ainda não foi salvo numa pasta; salve antes de exportar",
@@ -134,10 +138,18 @@ pub fn check(project: &Project, source_root: Option<&Path>, unsaved: &HashSet<Id
             ));
             continue;
         };
-        if let Err(error) = persistence::resolve_asset_path(root, &asset.path)
-            .and_then(|path| persistence::validate_asset_header(asset, &path))
-        {
-            errors.push(error.to_string());
+        if let Some(problem) = persistence::asset_problem(project, root, asset) {
+            if persistence::asset_used(project, asset) {
+                errors.push(format!(
+                    "{}: {problem}; restaure o arquivo ou deixe de usar o recurso",
+                    asset.name
+                ));
+            } else {
+                warnings.push(format!(
+                    "{}: {problem}; nada usa o recurso, e ele fica fora do jogo",
+                    asset.name
+                ));
+            }
         }
     }
     if unsaved.iter().any(|id| project.asset(id).is_none()) {
@@ -145,12 +157,35 @@ pub fn check(project: &Project, source_root: Option<&Path>, unsaved: &HashSet<Id
     }
     let (script_errors, script_warnings) = script_errors(project, source_root);
     errors.extend(script_errors);
-    let mut warnings: Vec<String> = command::warnings(project)
+    let mut all: Vec<String> = command::warnings(project)
         .into_iter()
         .map(|warning| warning.message)
         .collect();
-    warnings.extend(script_warnings);
-    ExportCheck { errors, warnings }
+    all.extend(warnings);
+    all.extend(script_warnings);
+    ExportCheck {
+        errors,
+        warnings: all,
+    }
+}
+
+/// The project as the game gets it: without the images and sounds nothing uses whose files
+/// cannot be read and without the models whose files could not be read and that nothing places
+/// (the check warned of both), every model's pieces inside the project file.
+fn exported(
+    project: &Project,
+    source_root: Option<&Path>,
+    unsaved: &HashMap<Id, Vec<u8>>,
+) -> Project {
+    let mut exported = project.clone();
+    exported.assets.retain(|asset| {
+        unsaved.contains_key(&asset.id)
+            || (asset.kind == AssetKind::Model && asset.model.is_some())
+            || source_root
+                .is_none_or(|root| persistence::asset_problem(project, root, asset).is_none())
+            || persistence::asset_used(project, asset)
+    });
+    exported
 }
 
 /// What stops exporting the scripts of `project`, whose folder is `root`, and what is only
@@ -699,7 +734,8 @@ impl Drop for Staging {
     reason = "the staging folder is new and the export's own: nothing there is anyone's"
 )]
 fn stage(request: &ExportRequest, staging: &Path, executable: &str) -> Result<(), ExportError> {
-    let project = request.project;
+    let exported = exported(request.project, request.source_root, request.unsaved_png);
+    let project = &exported;
     fs::copy(request.player, staging.join(executable))
         .map_err(io_context("Não foi possível copiar o player do jogo"))?;
     if let Some(folder) = request.player.parent() {
@@ -1175,6 +1211,68 @@ mod tests {
     }
 
     #[test]
+    fn a_game_of_the_tree_layout_takes_its_models_inside_its_project_file() {
+        let mut fixture = Fixture::new("arvore");
+        fixture.project.layout = crate::document::Layout::Tree;
+        let model = fixture
+            .project
+            .assets
+            .iter_mut()
+            .find(|a| a.kind == AssetKind::Model)
+            .unwrap();
+        model.path = "Peça.modelo.json".into();
+        let (model, pieces) = (model.id.clone(), model.model.clone().unwrap());
+        let scene = fixture.project.start_scene.clone();
+        fixture.project.instantiate_model(&model, &scene).unwrap();
+        persistence::save_project(&fixture.folder.join(PROJECT_FILE), &fixture.project).unwrap();
+        assert!(fixture.folder.join("Peça.modelo.json").is_file());
+        let destination = fixture.base.join("Jogos");
+        let report = export_with(&fixture.request(&destination, false), checked).unwrap();
+        assert!(report.verify.ok, "{:?}", report.verify);
+        let data = destination.join("Corrida Noturna").join("data");
+        // The model's file stays out; its pieces are in the project file the player reads.
+        assert!(!data.join("Peça.modelo.json").exists());
+        let document: serde_json::Value =
+            serde_json::from_slice(&fs::read(data.join(PROJECT_FILE)).unwrap()).unwrap();
+        assert_eq!(document["layout"], "Tree");
+        let loaded = persistence::load_project(&data).unwrap();
+        assert_eq!(loaded.asset(&model).unwrap().model.as_ref(), Some(&pieces));
+        assert_eq!(loaded, fixture.project);
+        // A model whose file cannot be read stops the export while it is placed.
+        let mut unavailable = fixture.project.clone();
+        unavailable
+            .assets
+            .iter_mut()
+            .find(|a| a.id == model)
+            .unwrap()
+            .model = None;
+        fs::remove_file(fixture.folder.join("Peça.modelo.json")).unwrap();
+        let found = check(&unavailable, Some(&fixture.folder), &HashSet::new());
+        assert_eq!(
+            found.errors,
+            [
+                "Peça: o arquivo Peça.modelo.json não existe na pasta do projeto; restaure o \
+              arquivo ou deixe de usar o recurso"
+            ]
+        );
+        // Without placements it only warns, and stays out of the game.
+        unavailable.scenes[0]
+            .entities
+            .retain(|e| e.model_source.as_deref() != Some(model.as_str()));
+        let found = check(&unavailable, Some(&fixture.folder), &HashSet::new());
+        assert!(found.errors.is_empty(), "{found:?}");
+        assert!(
+            found
+                .warnings
+                .iter()
+                .any(|w| w.contains("Peça.modelo.json") && w.contains("fica fora do jogo")),
+            "{found:?}"
+        );
+        let game = exported(&unavailable, Some(&fixture.folder), &HashMap::new());
+        assert!(game.asset(&model).is_none());
+    }
+
+    #[test]
     fn file_names_are_what_windows_accepts() {
         for (title, expected) in [
             ("Corrida", "Corrida"),
@@ -1506,7 +1604,13 @@ mod tests {
 
     #[test]
     fn the_check_blocks_what_would_not_load_and_lists_warnings() {
-        let fixture = Fixture::new("checagem");
+        let mut fixture = Fixture::new("checagem");
+        // The images are used: a file that cannot be read blocks only then.
+        let mut sign = Entity::new("Placa", Some(crate::document::Primitive::Cube));
+        sign.material.texture = Some(fixture.project.assets[0].id.clone());
+        let mut painting = Entity::new("Quadro", Some(crate::document::Primitive::Cube));
+        painting.material.texture = Some(fixture.painted.clone());
+        fixture.project.scenes[0].entities.extend([sign, painting]);
         let none = HashSet::new();
         let ok = check(&fixture.project, Some(&fixture.folder), &none);
         assert!(ok.errors.is_empty() && ok.warnings.is_empty(), "{ok:?}");
@@ -1552,6 +1656,21 @@ mod tests {
         assert!(found.errors.is_empty(), "{found:?}");
         assert_eq!(found.warnings.len(), 1, "{found:?}");
         assert!(found.warnings[0].contains("pausar"), "{found:?}");
+        // An image nothing uses whose file is missing only warns, and stays out of the game.
+        let mut unused = fixture.project.clone();
+        unused.scenes[0].entities.retain(|e| e.name != "Quadro");
+        let found = check(&unused, Some(&fixture.folder), &none);
+        assert!(found.errors.is_empty(), "{found:?}");
+        assert_eq!(
+            found.warnings,
+            [
+                "Pintura: o arquivo assets/pintura.png não existe na pasta do projeto; nada usa o \
+              recurso, e ele fica fora do jogo"
+            ]
+        );
+        let game = exported(&unused, Some(&fixture.folder), &HashMap::new());
+        assert!(game.assets.iter().all(|a| a.name != "Pintura"));
+        assert_eq!(game.assets.len(), unused.assets.len() - 1);
     }
 
     /// Gives the fixture a door that runs a script, which requires another one of the folder;

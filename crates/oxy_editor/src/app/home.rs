@@ -148,7 +148,7 @@ impl Editor {
         // Work in an independent temporary bundle from the beginning, so even
         // asset imports cannot write into the distributed or repository example.
         let result = (|| {
-            let project = persistence::load_project_lazy(&source)?;
+            let (project, _) = persistence::open_project(&source)?;
             let root = source.parent().ok_or("Exemplo sem pasta de origem")?;
             let mut images = TextureCache::default();
             images.configure(root, &project);

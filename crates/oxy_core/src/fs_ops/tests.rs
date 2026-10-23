@@ -53,6 +53,16 @@ fn the_tree_modules_never_write_over_files() {
         ("fs_ops.rs", include_str!("../fs_ops.rs")),
         ("names.rs", include_str!("../names.rs")),
         ("project_tree.rs", include_str!("../project_tree.rs")),
+        ("model_file.rs", include_str!("../model_file.rs")),
+        ("project_lock.rs", include_str!("../project_lock.rs")),
+        (
+            "persistence/open.rs",
+            include_str!("../persistence/open.rs"),
+        ),
+        (
+            "persistence/files.rs",
+            include_str!("../persistence/files.rs"),
+        ),
     ] {
         for forbidden in ["fs::write", "File::create", ".create(true)"] {
             assert!(!source.contains(forbidden), "{module} uses {forbidden}");

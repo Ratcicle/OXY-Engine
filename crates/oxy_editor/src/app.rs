@@ -297,6 +297,12 @@ pub struct Editor {
     pub state: Snapshot,
     history: CommandHistory,
     pub path: Option<PathBuf>,
+    /// What OXY last read or wrote of the open project's model and image files, which saving
+    /// compares the disk with.
+    known_files: persistence::KnownFiles,
+    /// The open project's `.oxy/editor.lock`, held while it is open so that agents on files do
+    /// not write it.
+    pub(crate) lock: Option<oxy_core::project_lock::EditorLock>,
     pub scene_id: Id,
     pub selected: Option<Id>,
     pub selection: Selection,
@@ -433,6 +439,8 @@ impl Editor {
             history: CommandHistory::new(),
             state,
             path: None,
+            known_files: Default::default(),
+            lock: None,
             scene_id,
             selected: None,
             selection: Selection::default(),
@@ -547,13 +555,15 @@ impl Editor {
         } else {
             path
         };
-        match persistence::load_project_lazy_report(&path) {
-            Ok((project, migrated)) => {
-                let root = path.parent().unwrap_or(Path::new("."));
+        let root = path.parent().unwrap_or(Path::new(".")).to_owned();
+        let agent_writing = oxy_core::project_lock::wait_for_agents(&root);
+        match persistence::open_project(&path) {
+            Ok((project, report)) => {
                 let mut images = TextureCache::default();
-                images.configure(root, &project);
+                images.configure(&root, &project);
                 self.state = Snapshot { project, images };
                 self.path = Some(path);
+                self.known_files = report.known.clone();
                 self.reset_context();
                 self.home.visible = false;
                 self.home.example_copy = false;
@@ -561,13 +571,22 @@ impl Editor {
                     self.remember_project();
                 }
                 self.log("Projeto aberto e validado.");
-                if let Some(version) = migrated {
+                self.hold_lock(&root);
+                if agent_writing {
+                    self.log(AGENT_WAS_WRITING);
+                    self.notice_last(true);
+                }
+                if let Some(version) = report.migrated {
                     self.log(format!("Projeto convertido em memória do formato {version}. O original continua intacto. Ao salvar, será criado um backup identificado; versões antigas da engine não abrirão o novo formato."));
                     self.notice_last(true);
                 }
-                // A script renamed or deleted outside OXY: the project opens, the test and the
+                // What opening fixed in memory, which the next save writes.
+                for fix in &report.fixes {
+                    self.log(fix.clone());
+                }
+                // A file renamed or deleted outside OXY: the project opens, the test and the
                 // export wait for it.
-                for warning in persistence::script_warnings(&self.state.project, &self.root()) {
+                for warning in report.warnings {
                     self.log(warning);
                     self.notice_last(true);
                 }
@@ -575,6 +594,28 @@ impl Editor {
             Err(e) => {
                 self.log(format!("Não foi possível abrir: {e}"));
                 self.notice_last(false);
+            }
+        }
+    }
+    /// Holds the lock of the project in `root` (see [`oxy_core::project_lock`]), letting go of
+    /// the last one first.
+    fn hold_lock(&mut self, root: &Path) {
+        self.lock = None;
+        match oxy_core::project_lock::EditorLock::hold(root, self.preferences.allow_agents) {
+            Ok(lock) => self.lock = Some(lock),
+            Err(error) if oxy_core::fs_ops::busy(&error) => {
+                self.log(
+                    "O projeto já está aberto em outro editor da OXY; salvar nos dois faz um \
+                     apagar o que o outro gravou.",
+                );
+                self.notice_last(true);
+            }
+            Err(error) => {
+                self.log(format!(
+                    "Não foi possível reservar o projeto para este editor ({error}); agentes nos \
+                     arquivos poderão gravá-lo enquanto ele estiver aberto aqui."
+                ));
+                self.notice_last(true);
             }
         }
     }
@@ -687,8 +728,10 @@ impl Editor {
             }
         }
         let path = self.path.as_ref().unwrap().clone();
+        let root = path.parent().unwrap_or(Path::new(".")).to_owned();
+        let agent_writing = oxy_core::project_lock::wait_for_agents(&root);
         let result = if self.home.example_copy {
-            persistence::save_cached_copy(
+            persistence::save_cached_copy_with(
                 &path,
                 &self.state.project,
                 &mut self.state.images,
@@ -696,19 +739,36 @@ impl Editor {
                     .as_deref()
                     .and_then(Path::parent)
                     .expect("Exemplo com pasta de origem"),
+                &mut self.known_files,
             )
         } else {
-            persistence::save_cached_bundle(&path, &self.state.project, &mut self.state.images)
+            persistence::save_cached_bundle_with(
+                &path,
+                &self.state.project,
+                &mut self.state.images,
+                &mut self.known_files,
+            )
         };
         match result {
-            Ok(()) => {
+            Ok(told) => {
                 self.home.example_copy = false;
                 self.history.mark_saved();
                 self.remember_project();
                 self.renderer.release_saved_texture_pixels();
                 self.play.game_ui.release_saved_texture_pixels();
                 self.log(format!("{origin}Salvo: {}", path.display()));
-                for warning in persistence::script_warnings(&self.state.project, &self.root()) {
+                if previous_path.as_ref() != Some(&path) {
+                    self.hold_lock(&root);
+                }
+                if agent_writing {
+                    self.log(AGENT_WAS_WRITING);
+                    self.notice_last(true);
+                }
+                for line in told {
+                    self.log(line);
+                    self.notice_last(true);
+                }
+                for warning in persistence::script_warnings(&self.state.project, &root) {
                     self.log(warning);
                     self.notice_last(false);
                 }
@@ -751,6 +811,8 @@ impl Editor {
                     images: TextureCache::default(),
                 };
                 self.path = None;
+                self.known_files = Default::default();
+                self.lock = None;
                 self.reset_context()
             }
             Transition::Open(path) => self.open(path),
@@ -929,6 +991,12 @@ impl Editor {
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
         let scripts = test_scripts(&self.state.project, self.path.as_deref())
             .map_err(|error| format!("Não é possível jogar: {error}."))?;
+        // An image, sound or model the test uses whose file cannot be read now.
+        if let Some(root) = self.path.as_deref().and_then(Path::parent) {
+            let images = &self.state.images;
+            persistence::assets_to_run(&self.state.project, root, |id| images.is_dirty(id))
+                .map_err(|error| format!("Não é possível jogar: {error}."))?;
+        }
         let scripts = std::sync::Arc::new(scripts);
         let options = RuntimeOptions {
             scripts: scripts.clone(),
@@ -1789,6 +1857,11 @@ fn new_project_file(folder: &Path) -> Result<PathBuf, String> {
     }
     Ok(path)
 }
+
+/// What the Console says when an agent's tool was still writing the project after the editor
+/// waited for it to open or save it.
+const AGENT_WAS_WRITING: &str = "Um agente estava gravando este projeto nos arquivos; se algo \
+    parecer faltar, reabra o projeto.";
 
 /// The scripts a test of `project`, saved at `path`, runs: those of its tree, every one its
 /// objects attach among them (see `persistence::load_scripts_to_run`). A project never saved

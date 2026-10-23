@@ -257,6 +257,10 @@ impl Editor {
             } else {
                 None
             };
+            // The project's lock says whether agents may reach it live.
+            if let Some(lock) = &mut self.lock {
+                let _ = lock.set_agents(self.preferences.allow_agents);
+            }
         }
         let project = (!self.home.visible).then(|| {
             (

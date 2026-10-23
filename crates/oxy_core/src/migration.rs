@@ -90,6 +90,23 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), MigrationErro
         (version < u64::from(SCHEMA_VERSION)).then_some(version as u32),
     ))
 }
+/// Converts the pieces of a model kept in its own file, written in the format `version`, as
+/// [`read_report`] converts the pieces of a model inside a project file of that format.
+pub fn migrate_pieces(version: u64, pieces: &mut serde_json::Value) -> Result<(), MigrationError> {
+    if !(1..=u64::from(SCHEMA_VERSION)).contains(&version) {
+        return Err(MigrationError::UnsupportedVersion { found: version });
+    }
+    if version == 1 {
+        migrate_entities(pieces);
+    }
+    if version < 4 {
+        migrate_movement(pieces)?;
+    }
+    if version < NODE_REGISTRY_SCHEMA {
+        fill_node_params(pieces)?;
+    }
+    Ok(())
+}
 /// Runs `migrate` on the entity list of every scene, then on the pieces of every model.
 fn for_each_entity_list(
     document: &mut serde_json::Value,

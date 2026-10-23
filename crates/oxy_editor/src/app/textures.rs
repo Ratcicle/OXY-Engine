@@ -50,12 +50,19 @@ impl Editor {
         let image = self.state.images.get(id).ok_or("Textura ausente")?.clone();
         let source = self.state.project.asset(id).ok_or("Recurso ausente")?;
         let copy = new_id();
-        let name = format!("{} (cópia)", source.name);
+        let root = self.path.as_deref().and_then(std::path::Path::parent);
+        let (name, path) = persistence::new_asset_file(
+            &self.state.project,
+            root,
+            &copy,
+            &format!("{} (cópia)", source.name),
+            AssetKind::Texture,
+        );
         self.state.project.assets.push(Asset {
             id: copy.clone(),
             name,
             kind: AssetKind::Texture,
-            path: format!("assets/{copy}.png"),
+            path,
             model: None,
         });
         self.state.images.insert(copy.clone(), image);
@@ -124,6 +131,14 @@ impl Editor {
             return;
         };
         let references = editing::asset_references(&self.state.project, &id);
+        // In a project in folders the next save sends the file to the project's trash.
+        let removed = if self.state.project.layout == Layout::Tree {
+            "O recurso será retirado da biblioteca. Ao salvar o projeto, o arquivo vai para a \
+             lixeira do projeto (.oxy/lixeira)."
+        } else {
+            "O recurso será retirado da biblioteca. O arquivo original no disco é preservado \
+             para permitir desfazer com segurança."
+        };
         use crate::widgets;
         let mut close = false;
         let mut delete = false;
@@ -136,11 +151,7 @@ impl Editor {
             };
             close = widgets::dialog_header(ui, &title);
             if references.is_empty() {
-                widgets::hint(
-                    ui,
-                    "O recurso será retirado da biblioteca. O arquivo original no disco é \
-                     preservado para permitir desfazer com segurança.",
-                );
+                widgets::hint(ui, removed);
             } else {
                 widgets::hint(
                     ui,
