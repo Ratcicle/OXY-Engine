@@ -37,6 +37,7 @@ if (!$GraphicsOnly) {
         @('oxy_editor','native_scripts_card'),
         @('oxy_editor','native_scripts_viewer'),
         @('oxy_editor','native_guide_scripts'),
+        @('oxy_editor','native_test_unfocused'),
         @('oxy_editor','native_library_tree'),
         @('oxy_editor','native_library_dialogs'),
         @('oxy_editor','native_library_organize'),

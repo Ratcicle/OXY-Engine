@@ -325,6 +325,7 @@ impl Editor {
                 Driver::Agent => "agent",
             },
             "mouse_captured": self.play.capture
+                && !self.play.unfocused
                 && self.showing_game()
                 && runtime.wants_relative_mouse(),
             // What the game asks, whoever plays: a person's cursor would be free.

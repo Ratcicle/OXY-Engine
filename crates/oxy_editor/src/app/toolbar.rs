@@ -5,6 +5,10 @@ use crate::theme;
 use crate::widgets;
 use egui::{Align, Layout, RichText, UiBuilder};
 
+/// The Pausado chip's tooltip when the test paused because the window lost the focus.
+const FOCUS_PAUSE: &str = "Pausado porque a OXY perdeu o foco. Para seguir jogando enquanto usa \
+    outra janela, ligue em Preferências do editor › Teste.";
+
 const MODES: [(Tab, &str); 3] = [
     (Tab::Scene, "Cena"),
     (Tab::Studio, "Estúdio"),
@@ -206,7 +210,7 @@ impl Editor {
         if !compact {
             // Painted at the buttons' exact height; a Frame would stretch to the bar. The test's
             // pause wins over the game's: Retomar returns to the game's menu. A test an agent
-            // plays says so while it runs.
+            // plays says so while it runs, and so does one going on without the focus.
             let (text, fill, border, color) = if paused {
                 (
                     "Pausado",
@@ -230,7 +234,11 @@ impl Editor {
                 )
             } else {
                 (
-                    "Jogando",
+                    if self.play.unfocused {
+                        "Jogando · fora de foco"
+                    } else {
+                        "Jogando"
+                    },
                     Color32::from_rgb(58, 46, 26),
                     Color32::from_rgb(87, 70, 31),
                     theme::WARNING,
@@ -251,6 +259,10 @@ impl Editor {
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text)
             });
+            // Its advice, while it still applies.
+            if paused && self.play.focus_paused && !self.preferences.play_unfocused {
+                response.on_hover_text(FOCUS_PAUSE);
+            }
             ui.painter().rect(
                 rect,
                 6.,

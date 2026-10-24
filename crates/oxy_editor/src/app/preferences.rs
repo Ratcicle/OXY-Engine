@@ -1,11 +1,17 @@
 use super::*;
 
+/// The switch of Teste › Fora de foco, and the text beside it.
+const PLAY_UNFOCUSED: &str = "Continuar o teste quando a OXY perde o foco";
+
 #[derive(Clone)]
 pub(super) struct Preferences {
     pub scale_percent: u16,
     pub tool_names: bool,
     pub navigation_speed: f32,
     pub navigation_sensitivity: f32,
+    /// Keeps the person's test going while the editor's window is in the background, without
+    /// their input (Teste › Fora de foco). Off by default: losing the focus pauses it.
+    pub play_unfocused: bool,
     /// Lets AI agents connect to this editor through the local channel. Off by default.
     pub allow_agents: bool,
     /// Lets connected agents save the project, the person's unsaved changes included. Off by
@@ -21,6 +27,7 @@ impl Default for Preferences {
             tool_names: false,
             navigation_speed: 8.,
             navigation_sensitivity: 0.003,
+            play_unfocused: false,
             allow_agents: false,
             allow_agent_save: false,
             export_folder: None,
@@ -62,6 +69,14 @@ impl Preferences {
                 navigation::MIN_SENSITIVITY,
                 navigation::MAX_SENSITIVITY,
             )?,
+            play_unfocused: json
+                .get("play_unfocused")
+                .map(|v| {
+                    v.as_bool()
+                        .ok_or("Preferência de teste fora de foco inválida")
+                })
+                .transpose()?
+                .unwrap_or(false),
             allow_agents: json
                 .get("allow_agents")
                 .map(|v| v.as_bool().ok_or("Preferência de agentes inválida"))
@@ -116,6 +131,7 @@ impl Preferences {
         let mut json = serde_json::json!({"scale_percent":self.scale_percent,
             "tool_names":self.tool_names,"navigation_speed":self.navigation_speed,
             "navigation_sensitivity":self.navigation_sensitivity,
+            "play_unfocused":self.play_unfocused,
             "allow_agents":self.allow_agents,"allow_agent_save":self.allow_agent_save});
         if let Some(folder) = &self.export_folder {
             json["export_folder"] = folder.to_string_lossy().into();
@@ -259,6 +275,20 @@ impl Editor {
                 );
                 ui.add_space(6.);
                 ui.separator();
+                section(ui, "TESTE");
+                widgets::property_row_with(ui, column, "Fora de foco", "", |ui| {
+                    widgets::toggle(ui, &mut pending.play_unfocused, PLAY_UNFOCUSED);
+                    ui.add(egui::Label::new(PLAY_UNFOCUSED).wrap());
+                });
+                widgets::hint(
+                    ui,
+                    "O jogo segue rodando enquanto você usa outra janela, como o VS Code ou a \
+                     conversa com o agente de IA, e você vê a recarga dos scripts na hora. \
+                     Teclado e mouse só chegam ao jogo com a OXY em foco: o que estava apertado \
+                     é solto ao sair. Desligado, o teste pausa ao perder o foco, como hoje.",
+                );
+                ui.add_space(6.);
+                ui.separator();
                 section(ui, "AGENTES DE IA");
                 widgets::property_row_with(ui, column, "Permitir agentes", "", |ui| {
                     widgets::toggle(ui, &mut pending.allow_agents, "Permitir agentes de IA");
@@ -338,6 +368,13 @@ impl Editor {
     }
 }
 #[cfg(test)]
+impl Editor {
+    /// Teste › Continuar o teste quando a OXY perde o foco, as applied.
+    pub(crate) fn qa_play_unfocused(&self) -> bool {
+        self.preferences.play_unfocused
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -350,8 +387,13 @@ mod tests {
             "agents stay off unless the person turns them on"
         );
         assert!(!old.allow_agent_save, "and so does their saving");
+        assert!(
+            !old.play_unfocused,
+            "an older file pauses the test on losing the focus"
+        );
         assert_eq!(old.export_folder, None);
         let mut changed = old;
+        changed.play_unfocused = true;
         changed.allow_agents = true;
         changed.allow_agent_save = true;
         changed.export_folder = Some(PathBuf::from("D:\\Jogos\\Exportados"));
@@ -378,9 +420,11 @@ mod tests {
         assert_eq!(loaded.navigation_sensitivity, 0.006);
         assert_eq!(loaded.scale_percent, 120);
         assert!(loaded.tool_names);
+        assert!(loaded.play_unfocused);
         assert!(loaded.allow_agents);
         assert!(loaded.allow_agent_save);
         assert!(Preferences::decode(br#"{"scale_percent":100,"allow_agent_save":"sim"}"#).is_err());
+        assert!(Preferences::decode(br#"{"scale_percent":100,"play_unfocused":1}"#).is_err());
         assert!(Preferences::decode(br#"{"scale_percent":100,"export_folder":3}"#).is_err());
         let bounded = Preferences::decode(
             br#"{"scale_percent":100,"navigation_speed":100000,"navigation_sensitivity":-9}"#,

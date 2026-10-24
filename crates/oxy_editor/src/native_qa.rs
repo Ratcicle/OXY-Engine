@@ -9,6 +9,7 @@ mod cuts;
 mod direct;
 mod export;
 mod final_flow;
+mod focus;
 mod guide_scripts;
 mod input_guide;
 mod inspector;
@@ -188,6 +189,10 @@ struct NativeQa {
     cursor_captured: bool,
     /// The editor sees its window without focus, as when the person works in another window.
     unfocused: bool,
+    /// Whether the editor was last told its window has the focus (egui's WindowFocused).
+    told_focused: bool,
+    /// The game time when the flow took the focus away.
+    focus_time: Option<f64>,
     /// The folder of the project the flow checks, kept once the editor leaves it.
     qa_root: Option<PathBuf>,
 }
@@ -507,6 +512,8 @@ impl NativeQa {
             click_candidate: None,
             cursor_captured: false,
             unfocused: false,
+            told_focused: true,
+            focus_time: None,
             qa_root: None,
         }
     }
@@ -711,6 +718,9 @@ impl NativeQa {
         }
         if label.starts_with("gs7_") {
             return self.check_guide_scripts(label);
+        }
+        if label.starts_with("fc7_") {
+            return self.check_focus(label);
         }
         let ensure = |condition: bool, message: &str| {
             if condition {
@@ -2305,6 +2315,11 @@ impl eframe::App for NativeQa {
             })
             .unwrap_or_default();
         input.events.extend(scripted);
+        // As winit tells a change of focus: egui lets go of the keys it held.
+        if self.told_focused == self.unfocused {
+            self.told_focused = !self.unfocused;
+            input.events.push(Event::WindowFocused(self.told_focused));
+        }
         input.focused = !self.unfocused;
         input.hovered_files.clear();
         input.dropped_files.clear();

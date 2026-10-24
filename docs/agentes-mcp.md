@@ -615,7 +615,7 @@ O agente exporta o jogo como o **Projeto → Exportar jogo…** do editor (veja 
 
 ## Teste ao vivo pelo agente
 
-O `oxy_play` deixa o agente testar o jogo no editor enquanto você assiste, por exemplo para mostrar um defeito ou uma fase funcionando. O teste é o mesmo do **Jogar**, com uma diferença: o agente nunca prende o seu mouse nem lê o seu teclado, e o jogo continua quando a janela do editor fica em segundo plano (o seu teste pausa quando o editor perde o foco).
+O `oxy_play` deixa o agente testar o jogo no editor enquanto você assiste, por exemplo para mostrar um defeito ou uma fase funcionando. O teste é o mesmo do **Jogar**, com uma diferença: o agente nunca prende o seu mouse nem lê o seu teclado, e o jogo continua quando a janela do editor fica em segundo plano (o seu teste pausa quando o editor perde o foco, a menos que **Continuar o teste quando a OXY perde o foco** esteja ligada em **Preferências do editor › Teste**; aí ele segue sem o seu teclado e mouse).
 - `action` diz o que fazer:
   - `start` inicia um teste na cena de `scene` (pelo ID ou pelo nome) ou, sem ela, na cena aberta no editor, como o **Jogar**. O editor mostra a Cena com o jogo.
   - `pause` pausa o teste, seja o do agente ou o seu.

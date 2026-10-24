@@ -45,7 +45,7 @@ use oxy_core::{
     editing::{self, Selection},
     painting::PaintImage,
     persistence, random,
-    runtime::{Runtime, RuntimeOptions},
+    runtime::{InputFrame, Runtime, RuntimeOptions},
     script::ScriptSources,
     texture_cache::TextureCache,
 };
@@ -163,6 +163,16 @@ pub(crate) struct PlaySession {
     pub(crate) mixer: oxy_audio::Mixer,
     /// The watcher of the tree's scripts while a test runs scripts (see `script_watch`).
     pub(crate) script_watch: Option<script_watch::ScriptWatch>,
+    /// The person's test goes on while the window is in the background, as Preferências do
+    /// editor › Teste allow: no input of theirs reaches it until the focus comes back.
+    pub(crate) unfocused: bool,
+    /// The person's test paused because the window lost the focus: the Pausado chip says why.
+    pub(crate) focus_paused: bool,
+    /// The focus came back to a test going on without it: the press that brought it is the
+    /// window's, and its click reaches neither the game's buttons nor its objects.
+    pub(crate) refocus_click: bool,
+    /// The actions held in the input the game took in the last frame.
+    held: std::collections::BTreeSet<String>,
 }
 impl Default for PlaySession {
     fn default() -> Self {
@@ -179,6 +189,10 @@ impl Default for PlaySession {
             test_save: Default::default(),
             mixer: Default::default(),
             script_watch: None,
+            unfocused: false,
+            focus_paused: false,
+            refocus_click: false,
+            held: Default::default(),
         }
     }
 }
@@ -198,7 +212,53 @@ impl PlaySession {
         self.driver = Driver::Person;
         self.agent_clicks.clear();
         self.last_runtime_scene = None;
+        self.unfocused = false;
+        self.focus_paused = false;
+        self.refocus_click = false;
+        self.held.clear();
         self.mixer.stop_all();
+    }
+    /// Follows the window's focus in a frame of the test, before its step (design §6.2): true
+    /// when the test must pause. Losing it pauses the person's test, unless `play_on`
+    /// (Preferências do editor › Teste) keeps it going without their input; an agent's plays
+    /// on, as its inputs need no window.
+    pub(crate) fn follow_focus(&mut self, focused: bool, play_on: bool) -> bool {
+        let running = self.runtime.as_ref().is_some_and(|rt| !rt.paused);
+        let person = self.driver == Driver::Person;
+        // A test seen running forgets why it paused before.
+        if running {
+            self.focus_paused = false;
+        }
+        if self.unfocused && focused {
+            self.refocus_click = true;
+        }
+        self.unfocused = !focused && person && play_on && running;
+        let pause = !focused && person && !play_on;
+        if pause && running {
+            self.focus_paused = true;
+        }
+        pause
+    }
+    /// Follows the mouse in a frame of the test, before `follow_focus`: `pressing` when a button
+    /// is down or let go in it. The press that brought the focus back is over in the first
+    /// frame after that one without either, as it can come a frame after the focus.
+    pub(crate) fn follow_pointer(&mut self, pressing: bool) {
+        self.refocus_click &= pressing;
+    }
+    /// The input the game takes in this frame: what the person's keyboard and mouse gave or,
+    /// while the test goes on without the focus, none; in the frame the focus leaves, what was
+    /// held is let go, so no key or button sticks.
+    pub(crate) fn game_input(&mut self, input: InputFrame) -> InputFrame {
+        let input = if self.unfocused {
+            InputFrame {
+                released: std::mem::take(&mut self.held),
+                ..Default::default()
+            }
+        } else {
+            input
+        };
+        self.held.clone_from(&input.held);
+        input
     }
     /// Plays what the test asked for and follows its pauses; what went wrong, for the Console.
     /// Also called when the test pauses, since the Logic tab does not draw the game.
@@ -1596,16 +1656,25 @@ impl Editor {
         if self.play.runtime.is_none() {
             return;
         }
-        let (focused, escape) = ui.input(|i| (i.focused, i.key_pressed(egui::Key::Escape)));
-        // Losing focus pauses the person's test; an agent's plays on, as its inputs need no
-        // window. Esc opens and closes the game's pause menu when the scene has one, as in the
-        // exported game: capture stays on so the menu takes clicks, and the cursor goes free
+        let (focused, escape, pressing) = ui.input(|i| {
+            (
+                i.focused,
+                i.key_pressed(egui::Key::Escape),
+                i.pointer.any_down() || i.pointer.any_released(),
+            )
+        });
+        // Losing focus pauses the person's test, unless Preferências do editor › Teste keep it
+        // going without their input; an agent's plays on, as its inputs need no window. Esc
+        // opens and closes the game's pause menu when the scene has one, as in the exported
+        // game: capture stays on so the menu takes clicks, and the cursor goes free
         // (wants_relative_mouse), so Pausar and Parar stay at hand.
-        if !focused {
-            if self.play.driver == Driver::Person {
-                self.pause();
-            }
-        } else if escape {
+        self.play.follow_pointer(pressing);
+        if self
+            .play
+            .follow_focus(focused, self.preferences.play_unfocused)
+        {
+            self.pause();
+        } else if focused && escape {
             let menu = self.play.capture
                 && self
                     .play
@@ -1643,6 +1712,7 @@ impl Editor {
                     })
             },
         );
+        let input = self.play.game_input(input);
         let resized = self.play.game_size != Some(available);
         self.play.game_size = Some(available);
         let play = &mut self.play;
@@ -1699,7 +1769,11 @@ impl Editor {
             self.view.show_disabled_colliders,
             self.play.runtime.as_ref().and_then(Runtime::physics_world),
         );
-        if self.play.capture && oxy_render::input::accepts_game_click(ui.ctx()) {
+        // The click that brought the focus back is the window's, not the game's.
+        if self.play.capture
+            && !self.play.refocus_click
+            && oxy_render::input::accepts_game_click(ui.ctx())
+        {
             let mut targets = clicks;
             if targets.is_empty()
                 && response.clicked()
@@ -2307,6 +2381,185 @@ mod play_tests {
                 .is_empty()
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A person's test of a scene whose Contador counts the presses and releases of its input
+    /// actions, and its steps, through a script.
+    fn counting() -> (PlaySession, Id) {
+        const PATH: &str = "scripts/contador.luau";
+        let mut project = Project::new("Foco");
+        let mut counter = Entity::new("Contador", None);
+        for name in ["Apertou", "Soltou", "Passos"] {
+            counter.attributes.insert(name.into(), Value::Number(0.));
+        }
+        counter.scripts = vec![oxy_core::script::ScriptRef::new(PATH)];
+        let id = counter.id.clone();
+        project.scenes[0].entities.push(counter);
+        let scripts = ScriptSources::from_texts([(
+            PATH,
+            "local M = {}\nfunction M.on_input(self, action, phase)\n    if phase == \
+             \"pressed\" then\n        self.attr.Apertou += 1\n    else\n        \
+             self.attr.Soltou += 1\n    end\nend\nfunction M.on_step(self)\n    \
+             self.attr.Passos += 1\nend\nreturn M\n",
+        )]);
+        let mut play = PlaySession {
+            mixer: oxy_audio::Mixer::silent(),
+            ..Default::default()
+        };
+        let options = RuntimeOptions {
+            scripts: std::sync::Arc::new(scripts),
+            ..play.options(7)
+        };
+        play.runtime =
+            Some(Runtime::with_options(&project, &project.start_scene, options).unwrap());
+        (play, id)
+    }
+
+    /// One frame of the test with what the person's keyboard and mouse `gave`; the counts of
+    /// Contador after it: presses, releases and steps.
+    fn frame(play: &mut PlaySession, id: &str, gave: InputFrame) -> [f64; 3] {
+        let input = play.game_input(gave);
+        let runtime = play.runtime.as_mut().unwrap();
+        runtime.advance(oxy_core::runtime::FIXED_DT, &input);
+        let entity = runtime.scene().entity(id).unwrap();
+        ["Apertou", "Soltou", "Passos"].map(|name| match entity.attributes[name] {
+            Value::Number(n) => n,
+            ref other => panic!("{other:?}"),
+        })
+    }
+
+    fn holding(actions: &[&str], pressed: &[&str]) -> InputFrame {
+        InputFrame {
+            held: actions.iter().map(|a| (*a).to_owned()).collect(),
+            pressed: pressed.iter().map(|a| (*a).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn losing_the_focus_pauses_the_persons_test_unless_the_preference_keeps_it_going() {
+        let (mut play, _) = counting();
+        // With the focus, nothing changes.
+        assert!(!play.follow_focus(true, false));
+        assert!(!play.unfocused && !play.focus_paused);
+        // Off (the default): the person's test pauses, and the Pausado chip can say why.
+        assert!(play.follow_focus(false, false));
+        assert!(play.focus_paused && !play.unfocused);
+        play.runtime.as_mut().unwrap().set_paused(true);
+        assert!(play.follow_focus(false, false), "it stays paused");
+        assert!(play.focus_paused);
+        // The focus back keeps the pause and why, until Retomar runs the test again.
+        assert!(!play.follow_focus(true, false) && play.focus_paused);
+        play.runtime.as_mut().unwrap().set_paused(false);
+        assert!(!play.follow_focus(true, false) && !play.focus_paused);
+        // A test paused for another reason, Esc or Pausar, keeps today's chip.
+        play.runtime.as_mut().unwrap().set_paused(true);
+        assert!(play.follow_focus(false, false) && !play.focus_paused);
+        play.runtime.as_mut().unwrap().set_paused(false);
+        // On: the person's test goes on, without their input, until the focus comes back.
+        assert!(!play.follow_focus(false, true));
+        assert!(play.unfocused && !play.focus_paused);
+        assert!(!play.follow_focus(true, true) && !play.unfocused);
+        // A paused test stays paused, as it is, with the preference on too.
+        play.runtime.as_mut().unwrap().set_paused(true);
+        assert!(!play.follow_focus(false, true) && !play.unfocused);
+        play.runtime.as_mut().unwrap().set_paused(false);
+        // An agent's test plays on, either way.
+        play.driver = Driver::Agent;
+        for play_on in [false, true] {
+            assert!(!play.follow_focus(false, play_on));
+            assert!(!play.unfocused && !play.focus_paused);
+        }
+        // Parar forgets it all.
+        play.driver = Driver::Person;
+        play.follow_focus(false, true);
+        play.end();
+        assert!(!play.unfocused && !play.focus_paused && play.held.is_empty());
+    }
+
+    #[test]
+    fn the_press_that_brings_the_focus_back_is_the_windows_not_a_click_of_the_game() {
+        let (mut play, _) = counting();
+        // The test goes on without the focus; the person clicks the window to come back.
+        assert!(!play.follow_focus(false, true));
+        play.follow_pointer(false);
+        assert!(!play.follow_focus(true, true));
+        assert!(play.refocus_click && !play.unfocused);
+        // The press comes in the next frame, is held and let go: still the window's.
+        for _ in 0..3 {
+            play.follow_pointer(true);
+            assert!(!play.follow_focus(true, true) && play.refocus_click);
+        }
+        // The first frame without a button ends it: the next clicks are the game's.
+        play.follow_pointer(false);
+        assert!(!play.follow_focus(true, true) && !play.refocus_click);
+        // Back with the keyboard instead, the frame after the focus ends it.
+        play.follow_focus(false, true);
+        play.follow_pointer(false);
+        play.follow_focus(true, true);
+        assert!(play.refocus_click);
+        play.follow_pointer(false);
+        assert!(!play.refocus_click);
+        // A test that was not going on without the focus takes the clicks as before: one that
+        // paused (the preference off, or Pausar before leaving), and an agent's.
+        assert!(play.follow_focus(false, false));
+        play.runtime.as_mut().unwrap().set_paused(true);
+        play.follow_focus(true, false);
+        assert!(!play.refocus_click);
+        play.follow_focus(false, true);
+        play.follow_focus(true, true);
+        assert!(!play.refocus_click);
+        play.runtime.as_mut().unwrap().set_paused(false);
+        play.driver = Driver::Agent;
+        play.follow_focus(false, true);
+        play.follow_focus(true, true);
+        assert!(!play.refocus_click);
+        // Parar forgets it.
+        play.driver = Driver::Person;
+        play.follow_focus(false, true);
+        play.follow_focus(true, true);
+        play.end();
+        assert!(!play.refocus_click);
+    }
+
+    #[test]
+    fn a_test_going_on_without_the_focus_lets_go_of_what_was_held_and_takes_no_input() {
+        let (mut play, id) = counting();
+        // The person holds Andar and the mouse's Atirar.
+        assert_eq!(
+            frame(
+                &mut play,
+                &id,
+                holding(&["Andar", "Atirar"], &["Andar", "Atirar"])
+            ),
+            [2., 0., 1.]
+        );
+        assert_eq!(
+            frame(&mut play, &id, holding(&["Andar", "Atirar"], &[])),
+            [2., 0., 2.]
+        );
+        // The focus leaves: both are let go in that frame, and the game goes on.
+        assert!(!play.follow_focus(false, true));
+        assert_eq!(
+            frame(&mut play, &id, holding(&["Andar"], &["Pular"])),
+            [2., 2., 3.]
+        );
+        // Without the focus no key or button reaches the game, and nothing is let go twice.
+        assert!(!play.follow_focus(false, true));
+        assert_eq!(
+            frame(&mut play, &id, holding(&["Andar"], &["Pular"])),
+            [2., 2., 4.]
+        );
+        // The focus back: the person's input reaches the game again.
+        assert!(!play.follow_focus(true, true));
+        assert_eq!(
+            frame(&mut play, &id, holding(&["Pular"], &["Pular"])),
+            [3., 2., 5.]
+        );
+        // Off, the test pauses instead: no step, and no input.
+        assert!(play.follow_focus(false, false));
+        play.runtime.as_mut().unwrap().set_paused(true);
+        assert_eq!(frame(&mut play, &id, InputFrame::default()), [3., 2., 5.]);
     }
 
     #[test]
