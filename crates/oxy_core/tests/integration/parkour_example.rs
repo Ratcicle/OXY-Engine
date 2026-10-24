@@ -1,6 +1,7 @@
-//! The parkour that ships with OXY (examples/parkour), played from the menu to the finish line
-//! by the bot of the agents' guide (docs/agentes-mcp.md). Its graphs use most of the runtime's
-//! operations, so the state at the end pins down what they do, step by step.
+//! The parkour of 0.6, in nodes, as it shipped (tests/fixtures/parkour-0.6), played from the
+//! menu to the finish line by the bot of the agents' guide (docs/agentes-mcp.md). Its graphs
+//! use most of the runtime's operations, so the state at the end pins down what they do, step
+//! by step. The parkour that ships now is in Luau, and parkour_ab.rs plays it against this one.
 use oxy_core::{
     document::Project,
     headless::{self, SimulationRequest},
@@ -20,7 +21,7 @@ fn point(at: [f64; 3], sprint: bool, jump: bool) -> serde_json::Value {
 
 /// The course from the start line to the finish, as docs/agentes-mcp.md drives it: sprinting
 /// and jumping over the gaps, crouching under the bars, riding the raft and the lift.
-fn bot_path() -> serde_json::Value {
+pub(crate) fn bot_path() -> serde_json::Value {
     let mut path: Vec<serde_json::Value> = [
         [0., 0., -5.4],
         [0., 0., -15.4],
@@ -110,10 +111,14 @@ pub(crate) fn assert_reaches_the_finish(project: &Project) {
     assert_eq!(report.state_hash, FINISH_STATE);
 }
 
+/// The fixture's project file.
+pub(crate) fn fixture() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/parkour-0.6")
+        .join(persistence::PROJECT_FILE)
+}
+
 #[test]
-fn shipped_parkour_reaches_the_finish_in_the_same_state_and_replays_identically() {
-    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/parkour")
-        .join(persistence::PROJECT_FILE);
-    assert_reaches_the_finish(&persistence::load_project(&file).unwrap());
+fn parkour_of_0_6_reaches_the_finish_in_the_same_state_and_replays_identically() {
+    assert_reaches_the_finish(&persistence::load_project(&fixture()).unwrap());
 }

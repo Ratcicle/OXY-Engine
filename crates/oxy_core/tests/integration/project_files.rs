@@ -1051,11 +1051,15 @@ fn the_trash_takes_each_file_once_and_only_a_file_of_the_entrys_kind() {
 
 #[test]
 fn format_5_projects_still_open_as_they_were() {
-    for example in ["parkour", "validacao"] {
-        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples")
-            .join(example)
-            .join(persistence::PROJECT_FILE);
+    for (example, file) in [
+        ("parkour-0.6", crate::parkour_example::fixture()),
+        (
+            "validacao",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/validacao")
+                .join(persistence::PROJECT_FILE),
+        ),
+    ] {
         let saved: Json = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         let (opened, report) = persistence::open_project(&file).unwrap();
         assert_eq!(report.layout, Layout::Legacy, "{example}");

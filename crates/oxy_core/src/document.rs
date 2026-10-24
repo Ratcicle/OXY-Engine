@@ -1826,23 +1826,38 @@ mod tests {
             loaded.scenes[1].shown_background(),
             Background::Color(Background::DARK)
         );
-        // A checkout may turn the file's line endings into CRLF; the rest is compared as is.
-        let example = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../examples/parkour/project.oxy.json"),
-        )
-        .unwrap()
-        .replace("\r\n", "\n");
-        let parkour: Project = serde_json::from_str(&example).unwrap();
-        // Format 6 leaves out the empty pieces of images and sounds.
-        let example = example.replace(",\n      \"model\": null", "");
-        assert!(
-            parkour
-                .scenes
-                .iter()
-                .all(|s| s.background == Some(Background::Sky))
-        );
-        assert_eq!(serde_json::to_string_pretty(&parkour).unwrap(), example);
+        // A checkout may turn the file's line endings into CRLF; the rest is compared as is. The
+        // parkour of 0.6 is format 5, and format 6 leaves out the empty pieces of its images
+        // and sounds; the one that ships is format 6, in folders.
+        for (path, empty) in [
+            (
+                "tests/fixtures/parkour-0.6/project.oxy.json",
+                Some(",\n      \"model\": null"),
+            ),
+            ("../../examples/parkour/project.oxy.json", None),
+        ] {
+            let mut example = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path),
+            )
+            .unwrap()
+            .replace("\r\n", "\n");
+            let parkour: Project = serde_json::from_str(&example).unwrap();
+            assert!(
+                parkour
+                    .scenes
+                    .iter()
+                    .all(|s| s.background == Some(Background::Sky)),
+                "{path}"
+            );
+            if let Some(empty) = empty {
+                example = example.replace(empty, "");
+            }
+            assert_eq!(
+                serde_json::to_string_pretty(&parkour).unwrap(),
+                example,
+                "{path}"
+            );
+        }
 
         p.scenes[0].background = Some(Background::Color([0.25, 0.5, 0.75, 1.]));
         p.scenes[1].background = Some(Background::Sky);

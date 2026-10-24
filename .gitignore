@@ -8,3 +8,6 @@
 *.agente.bak
 # OXY's own folder inside a project (locks, agents' copies, trash, backups).
 .oxy/
+# The VS Code files OXY writes in an example when a script is written; they name the types in .oxy.
+/examples/**/.luaurc
+/examples/**/.vscode/

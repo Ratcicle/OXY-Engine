@@ -10,7 +10,6 @@ use oxy_core::{
     script::{ScriptCall, ScriptError, ScriptErrorKind, ScriptRef, ScriptSources},
 };
 use serde_json::json;
-use std::path::Path;
 use std::sync::Arc;
 
 const PATH: &str = "scripts/teste.luau";
@@ -1073,10 +1072,7 @@ return M
 
 #[test]
 fn graph_projects_stay_as_they_were_under_the_check_of_a_vm_made_anew() {
-    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/parkour")
-        .join(persistence::PROJECT_FILE);
-    let project = persistence::load_project(&file).unwrap();
+    let project = persistence::load_project(&crate::parkour_example::fixture()).unwrap();
     let request = |vm: bool| -> SimulationRequest {
         serde_json::from_value(json!({
             "seconds": 8,

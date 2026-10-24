@@ -1,0 +1,185 @@
+{
+  "oxy": "modelo",
+  "schema_version": 6,
+  "id": "375acea9-b8ed-40e3-905c-620929d3f7ac",
+  "entities": [
+    {
+      "id": "33fd5f23-b53a-4781-b83d-7ac129a2af88",
+      "name": "Ladrilho que cai",
+      "parent": null,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "primitive": "Cube",
+      "primitive_parameters": {
+        "latitude": 8,
+        "height_divisions": 1,
+        "plane_divisions": [
+          1,
+          1
+        ],
+        "wall_fraction": 0.25
+      },
+      "dimensions": [
+        3.0,
+        0.4,
+        2.5
+      ],
+      "segments": 8,
+      "material": {
+        "color": [
+          0.55,
+          0.8,
+          1.0,
+          1.0
+        ],
+        "texture": null,
+        "nearest": true
+      },
+      "visible": true,
+      "layer": 0,
+      "attributes": {},
+      "collider": null,
+      "physics3d": {
+        "shape": {
+          "Box": {
+            "size": [
+              3.0,
+              0.4,
+              2.5
+            ]
+          }
+        },
+        "center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "enabled": true,
+        "sensor": false,
+        "filter": {
+          "category": 1,
+          "mask": 4294967295,
+          "blocks_character": true,
+          "blocks_camera": true
+        },
+        "surface": null
+      },
+      "controller": null,
+      "camera": null,
+      "ui": null,
+      "graph": {
+        "nodes": [],
+        "edges": []
+      },
+      "clips": [],
+      "model_source": null
+    },
+    {
+      "id": "34030bce-5e4f-4bbf-b7cb-374bf4a64c0c",
+      "name": "Gatilho",
+      "parent": "33fd5f23-b53a-4781-b83d-7ac129a2af88",
+      "transform": {
+        "position": [
+          0.0,
+          0.5,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "primitive": null,
+      "dimensions": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "segments": 24,
+      "material": {
+        "color": [
+          0.45,
+          0.7,
+          0.8,
+          1.0
+        ],
+        "texture": null,
+        "nearest": true
+      },
+      "visible": true,
+      "layer": 0,
+      "attributes": {},
+      "collider": null,
+      "physics3d": {
+        "shape": {
+          "Box": {
+            "size": [
+              3.0,
+              0.6,
+              2.5
+            ]
+          }
+        },
+        "center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "enabled": true,
+        "sensor": true,
+        "filter": {
+          "category": 4,
+          "mask": 2,
+          "blocks_character": true,
+          "blocks_camera": true
+        },
+        "surface": null
+      },
+      "controller": null,
+      "camera": null,
+      "ui": null,
+      "graph": {
+        "nodes": [],
+        "edges": []
+      },
+      "scripts": [
+        {
+          "path": "Pista/gatilho.luau"
+        }
+      ],
+      "clips": [],
+      "model_source": null
+    }
+  ]
+}

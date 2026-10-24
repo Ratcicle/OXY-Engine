@@ -34,14 +34,34 @@ if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).Pr
     foreach ($file in @('licenses/cpal-0.18.2.txt','licenses/kenney-skyboxes-cc0.txt','parkour/project.oxy.json')) {
         if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo da 0.6.0 ausente: $file" }
     }
-    # OXY Parkour, opened from the home screen as a copy, needs every file its assets name.
+    # OXY Parkour, opened from the home screen as a copy, needs every file its project names: in
+    # 0.6 (schema 5) the sounds its assets name; from 0.7 (schema 6, in folders) every file of its
+    # register, each model in its own file, and the scripts its objects attach.
     $parkour = [IO.Path]::GetFullPath((Join-Path $package 'parkour'))
     $parkourManifest = Get-Content -LiteralPath (Join-Path $parkour 'project.oxy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($parkourManifest.schema_version -ne 5 -or $parkourManifest.scenes.Count -lt 2) { throw 'O parkour deve ter o menu e a pista, no schema 5.' }
-    foreach ($asset in $parkourManifest.assets) {
-        if ($asset.kind -eq 'Model') { continue }
-        $assetPath = [IO.Path]::GetFullPath((Join-Path $parkour $asset.path))
-        if (!$assetPath.StartsWith($parkour + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Asset do parkour inválido/ausente: $($asset.path)" }
+    if ($parkourManifest.scenes.Count -lt 2) { throw 'O parkour deve ter o menu e a pista.' }
+    function Get-ParkourFile([string]$Relative) {
+        $path = [IO.Path]::GetFullPath((Join-Path $parkour $Relative))
+        if (!$path.StartsWith($parkour + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Arquivo do parkour inválido/ausente: $Relative" }
+        $path
+    }
+    if ($parkourManifest.schema_version -eq 6) {
+        if ($parkourManifest.layout -ne 'Tree') { throw 'O parkour da 0.7 deve estar em pastas.' }
+        foreach ($asset in $parkourManifest.assets) {
+            $file = Get-ParkourFile $asset.path
+            if ($asset.kind -eq 'Model' -and (Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json).oxy -ne 'modelo') { throw "Modelo do parkour inválido: $($asset.path)" }
+        }
+        $scripts = @($parkourManifest.scenes.entities | ForEach-Object { $_.scripts } | Where-Object { $_ } | ForEach-Object { $_.path } | Sort-Object -Unique)
+        if (!$scripts.Count) { throw 'O parkour da 0.7 roda em scripts, e o pacote não tem nenhum.' }
+        foreach ($script in $scripts) { Get-ParkourFile $script | Out-Null }
+        $outside = @(Get-ChildItem -LiteralPath $parkour -Recurse -Force | Where-Object { $_.Name.StartsWith('.') })
+        if ($outside.Count) { throw "Pastas e arquivos que ficam fora do projeto no pacote: $($outside.Name -join ', ')" }
+    } elseif ($parkourManifest.schema_version -eq 5) {
+        foreach ($asset in $parkourManifest.assets) {
+            if ($asset.kind -ne 'Model') { Get-ParkourFile $asset.path | Out-Null }
+        }
+    } else {
+        throw 'O parkour deve estar no schema 5 (0.6) ou 6 (0.7).'
     }
     # Backups an agent or a schema conversion leaves next to a project never ship.
     $backups = @(Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object { $_.Name -like '*.agente.bak' -or $_.Name -like '*.backup.json' })

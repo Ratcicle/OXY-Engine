@@ -917,3 +917,30 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn luau_lsp_reads_the_scripts_of_the_parkour_without_errors_in_both_solvers() {
+    // Optional, as the test above: the parkour that ships is written in Luau (design §10).
+    let Some(lsp) = std::env::var_os("OXY_LUAU_LSP").map(PathBuf::from) else {
+        return;
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/parkour");
+    let scripts = persistence::load_scripts(&source).unwrap();
+    let files: Vec<(&str, &str)> = scripts
+        .files
+        .iter()
+        .map(|(path, file)| (path.as_str(), file.text.as_str()))
+        .collect();
+    assert!(files.len() > 10, "{files:?}");
+    let root = folder(&files);
+    script_files::setup_vscode(&root).unwrap();
+    let paths: Vec<&str> = files.iter().map(|(path, _)| *path).collect();
+    for new_solver in [false, true] {
+        let (clean, said) = analyze(&lsp, &root, &paths, new_solver);
+        assert!(
+            clean && diagnostics(&said).is_empty(),
+            "solver novo {new_solver}: {said}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

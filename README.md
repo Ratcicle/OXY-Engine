@@ -16,7 +16,7 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 - **Som** com mixador próprio: música e efeitos em canais, loops com transição e volumes pela lógica.
 - **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa, plataformas móveis que levam o personagem também quando giram e um laboratório de movimento editável.
 - **Jogos exportados** pelo editor: uma pasta com o executável do jogo (o player, `oxy_player.exe`, com o nome do jogo), os dados e as licenças, para distribuir só o jogo, sem o editor.
-- **OXY Parkour**, um jogo completo em primeira pessoa feito só com os nós e componentes da engine (menu, pista, cronômetro, pausa, recorde salvo e música), que abre como exemplo na tela inicial.
+- **OXY Parkour**, um jogo completo em primeira pessoa (menu, pista, cronômetro, pausa, recorde salvo e música) feito com os componentes da engine e scripts em Luau, com os sons, modelos e scripts em pastas da pista, do menu e comuns, que abre como exemplo na tela inicial.
 - **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam (com um bot que percorre a fase) e capturam o projeto, ao vivo no editor e com as edições desfazíveis, e criam projetos e exportam o jogo quando você pede. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
 
 ## Baixar e abrir

@@ -16,7 +16,6 @@ use oxy_core::{
     variables,
 };
 use serde_json::json;
-use std::path::Path;
 use std::sync::Arc;
 
 const PATH: &str = "scripts/teste.luau";
@@ -1172,10 +1171,7 @@ return Contagem
 
 #[test]
 fn the_parkour_countdown_hides_its_panel_by_itself_step_for_step_with_the_graph() {
-    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/parkour")
-        .join(persistence::PROJECT_FILE);
-    let graph = persistence::load_project(&file).unwrap();
+    let graph = persistence::load_project(&crate::parkour_example::fixture()).unwrap();
     let pista = graph
         .scenes
         .iter()

@@ -34,6 +34,7 @@ mod movement_replay;
 mod node_pipeline;
 mod operations;
 mod parkour;
+mod parkour_ab;
 mod parkour_example;
 mod physics3d;
 mod physics_authoring;

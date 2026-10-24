@@ -355,8 +355,8 @@ fn placed_models_keep_the_scripts_of_their_pieces() {
 
 #[test]
 fn graph_only_projects_keep_their_document_and_state_through_format_6() {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/parkour");
-    let file = source.join(persistence::PROJECT_FILE);
+    let file = crate::parkour_example::fixture();
+    let source = file.parent().unwrap().to_path_buf();
     let original: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(original["schema_version"], 5);

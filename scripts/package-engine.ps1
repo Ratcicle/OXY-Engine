@@ -27,21 +27,28 @@ Copy-Item -LiteralPath $mcp -Destination (Join-Path $destinationPath 'oxy-mcp.ex
 $lab = Join-Path $destinationPath 'laboratorio-3d'
 New-Item -ItemType Directory -Path $lab -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $workspace 'examples/laboratorio-3d/project.oxy.json') -Destination $lab
-# OXY Parkour, which the home screen opens as a copy: the project and the files its assets name,
-# never the backups left next to it (agent and schema backups).
+# OXY Parkour, which the home screen opens as a copy: the project's folder as the Library sees
+# it (sounds, models and scripts in their folders), never what stays out of a project: entries
+# starting with a dot (OXY's own .oxy, with the agent's copies and the backups, .vscode,
+# .luaurc), backups next to the project file, links, another project inside it and the files
+# Windows and text editors leave.
 $parkourSource = Join-Path $workspace 'examples/parkour'
 $parkour = Join-Path $destinationPath 'parkour'
-New-Item -ItemType Directory -Path $parkour -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $parkourSource 'project.oxy.json') -Destination $parkour
-$parkourManifest = Get-Content -LiteralPath (Join-Path $parkourSource 'project.oxy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-foreach ($asset in $parkourManifest.assets) {
-    if ($asset.kind -eq 'Model') { continue }
-    $relative = [string]$asset.path
-    if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative) -or $relative.Contains(':') -or ($relative -split '[/\\]' -contains '..')) { throw "Caminho de asset inseguro no parkour: $relative" }
-    $target = Join-Path $parkour $relative
-    New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $parkourSource $relative) -Destination $target
+function Copy-ProjectTree([string]$From, [string]$To, [bool]$Root) {
+    New-Item -ItemType Directory -Path $To -Force | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $From -Force) {
+        $name = $item.Name
+        if ($name.StartsWith('.') -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+        if ($item.PSIsContainer) {
+            if (!(Test-Path -LiteralPath (Join-Path $item.FullName 'project.oxy.json'))) { Copy-ProjectTree $item.FullName (Join-Path $To $name) $false }
+            continue
+        }
+        if ($Root -and ($name -like 'project.oxy.json.*' -or $name -eq 'export.oxy.json')) { continue }
+        if ($name -in @('Thumbs.db', 'desktop.ini') -or $name.StartsWith('~$') -or $name.EndsWith('~') -or $name -match '\.(tmp|swp|bak)$') { continue }
+        Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $To $name)
+    }
 }
+Copy-ProjectTree $parkourSource $parkour $true
 $instructions = @"
 OXY Engine $version — Windows x64 portátil
 
