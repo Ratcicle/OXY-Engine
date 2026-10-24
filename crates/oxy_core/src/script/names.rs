@@ -98,8 +98,9 @@ impl<'a> ProjectNames<'a> {
     }
 
     /// What `reference` names in the project: a sound, a model or a surface by its name, else
-    /// in any case and without the spaces at its ends; a scene, a variable or an action also by
-    /// its ID; an attribute, an object or a marker by the exact name (an object made by
+    /// in any case and without the spaces at its ends, a model then by its file
+    /// (`Pista/Torre.modelo.json`); a scene, a variable or an action also by its ID; an
+    /// attribute, an object or a marker by the exact name (an object made by
     /// `obj:clone` adds " (cópia)" to it); a clip by its name in any case. A compared name
     /// matches only the name as it is (`on_input` gives an action's name, never its ID). None
     /// when the project has nothing of the name.
@@ -109,7 +110,8 @@ impl<'a> ProjectNames<'a> {
         let id = |found: Option<&Id>| found.cloned().map(Found::Id);
         match reference.kind {
             NameKind::Sound => id(by_name(assets(p, AssetKind::Audio), name, exact)),
-            NameKind::Model => id(by_name(assets(p, AssetKind::Model), name, exact)),
+            NameKind::Model => id(by_name(assets(p, AssetKind::Model), name, exact)
+                .or_else(|| p.model_at(name).map(|model| &model.id))),
             NameKind::Scene => {
                 let scenes = p.scenes.iter().map(|s| (s.name.as_str(), &s.id));
                 id(by_id(scenes.clone(), name).or_else(|| by_name(scenes, name, exact)))
@@ -591,6 +593,237 @@ pub fn lint<'a>(
             told(path, found)
         })
         .collect()
+}
+
+/// Where a script names something of the project with a literal text (see [`citations`]).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Citation {
+    /// The script, by its path.
+    #[serde(rename = "script")]
+    pub path: String,
+    /// Its line, from 1; 0 when the bytecode carries none.
+    pub line: u32,
+    /// Where the name goes, as scripts write it (`audio.play`, `vars.set`).
+    #[serde(rename = "role")]
+    pub function: String,
+}
+
+/// The names of the project each script of `sources` that compiles gives with literal texts,
+/// by path.
+fn every_reference(sources: &ScriptSources) -> Vec<(&str, Vec<Reference>)> {
+    sources
+        .files
+        .iter()
+        .filter_map(|(path, file)| Some((path.as_str(), references(path, &file.text).ok()?)))
+        .collect()
+}
+
+/// What the scripts of `sources` name in `project` with literal texts that has an ID (a sound,
+/// a model, a scene, a game variable, an input action or a surface), by that ID, as the
+/// runtime would find it: each script, line and function once. A script that does not compile
+/// names nothing.
+pub fn citations(project: &Project, sources: &ScriptSources) -> BTreeMap<Id, Vec<Citation>> {
+    let mut found: BTreeMap<Id, Vec<Citation>> = BTreeMap::new();
+    if sources.files.is_empty() {
+        return found;
+    }
+    let names = ProjectNames::new(project, []);
+    for (path, references) in every_reference(sources) {
+        for reference in references {
+            let Some(Found::Id(id)) = names.find(&reference) else {
+                continue;
+            };
+            let citation = Citation {
+                path: path.to_owned(),
+                line: reference.line,
+                function: reference.function,
+            };
+            let listed = found.entry(id).or_default();
+            if !listed.contains(&citation) {
+                listed.push(citation);
+            }
+        }
+    }
+    found
+}
+
+/// The name the item of `kind` whose ID is `id` has in `project`; none when it has no such item.
+fn name_of(project: &Project, kind: NameKind, id: &str) -> Option<String> {
+    match kind {
+        NameKind::Sound | NameKind::Model => project.asset(id).map(|a| a.name.clone()),
+        NameKind::Scene => project.scene(id).map(|s| s.name.clone()),
+        NameKind::Variable => project
+            .variables
+            .iter()
+            .find(|v| v.id == id)
+            .map(|v| v.name.clone()),
+        NameKind::Action => project
+            .input_bindings
+            .contains_key(id)
+            .then(|| input_actions::label(project, id).into_owned()),
+        NameKind::Surface => project
+            .surfaces
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.name.clone()),
+        _ => None,
+    }
+}
+
+/// What each item of the kinds `kinds` that has an ID (a sound, a model, a scene, a game
+/// variable, an input action or a surface) is called in `project`, by kind and ID: its name,
+/// and an asset's file after it, which `scene.spawn_model` finds a model by too. Two of them,
+/// before and after an edit, tell what it renamed, moved or deleted.
+pub fn names_by_id(project: &Project, kinds: &[NameKind]) -> BTreeMap<(NameKind, Id), String> {
+    let mut names = BTreeMap::new();
+    for &kind in kinds {
+        let mut add = |id: &Id, name: String| {
+            names.insert((kind, id.clone()), name);
+        };
+        match kind {
+            NameKind::Sound | NameKind::Model => {
+                let of = if kind == NameKind::Sound {
+                    AssetKind::Audio
+                } else {
+                    AssetKind::Model
+                };
+                for asset in project.assets.iter().filter(|a| a.kind == of) {
+                    add(&asset.id, format!("{}\n{}", asset.name, asset.path));
+                }
+            }
+            NameKind::Scene => {
+                for scene in &project.scenes {
+                    add(&scene.id, scene.name.clone());
+                }
+            }
+            NameKind::Variable => {
+                for variable in &project.variables {
+                    add(&variable.id, variable.name.clone());
+                }
+            }
+            NameKind::Action => {
+                for id in project.input_bindings.keys() {
+                    add(id, input_actions::label(project, id).into_owned());
+                }
+            }
+            NameKind::Surface => {
+                for surface in &project.surfaces {
+                    add(&surface.id, surface.name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// A name a script gives with a literal text that an edit took away (see [`broken_citations`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrokenCitation {
+    pub kind: NameKind,
+    /// What the name found before the edit, when it has an ID.
+    pub id: Option<Id>,
+    /// At the script's first line that gives the name, with the others.
+    pub warning: ScriptError,
+}
+
+/// What the scripts of `sources` name with literal texts, of the kinds `kinds`, that `before`
+/// had and `after` no longer has by that name (renamed, moved or deleted), as warnings at the
+/// scripts' lines with the kind and the ID each is about: each name once per script, at its
+/// first line with the others, the new name of a renamed item told (the new file of a model a
+/// script gives by its file). The game stops those calls with an error.
+pub fn broken_citations(
+    before: &Project,
+    after: &Project,
+    sources: &ScriptSources,
+    kinds: &[NameKind],
+) -> Vec<BrokenCitation> {
+    if sources.files.is_empty() || kinds.is_empty() {
+        return Vec::new();
+    }
+    let (old, new) = (ProjectNames::new(before, []), ProjectNames::new(after, []));
+    let mut told = Vec::new();
+    for (path, references) in every_reference(sources) {
+        let mut found: Vec<(NameKind, Option<Id>, Finding)> = Vec::new();
+        for reference in references.iter().filter(|r| kinds.contains(&r.kind)) {
+            let Some(was) = old.find(reference) else {
+                continue;
+            };
+            let now = new.find(reference);
+            if now.as_ref() == Some(&was) {
+                continue;
+            }
+            let (function, what, name) =
+                (&reference.function, reference.kind.what(), &reference.name);
+            let id = match was {
+                Found::Id(id) => Some(id),
+                Found::Name => None,
+            };
+            // A model the script gives by its file, which moved.
+            let moved = id
+                .as_deref()
+                .filter(|_| reference.kind == NameKind::Model)
+                .filter(|id| before.model_at(name).is_some_and(|model| model.id == *id))
+                .and_then(|id| after.asset(id))
+                .map(|model| model.path.clone());
+            let renamed = id
+                .as_deref()
+                .and_then(|id| name_of(after, reference.kind, id));
+            // The name may now find another item of its kind, with a name alike.
+            let then = if now.is_some() {
+                "o texto passou a achar outro com nome parecido; atualize o script"
+            } else {
+                "atualize o script, que no jogo para com erro nessa linha"
+            };
+            let message = match (moved, renamed) {
+                (Some(file), _) => {
+                    format!("{function}: {what} \"{name}\" agora está em {file}; {then}")
+                }
+                (None, Some(renamed)) => {
+                    format!("{function}: {what} \"{name}\" agora se chama {renamed}; {then}")
+                }
+                (None, None) => {
+                    format!("{function}: {what} \"{name}\" não existe mais no projeto; {then}")
+                }
+            };
+            found.push((
+                reference.kind,
+                id,
+                Finding {
+                    line: reference.line,
+                    key: format!("{:?}={name}", reference.kind),
+                    message,
+                },
+            ));
+        }
+        // Each name once, kind by kind, in the order of its first line.
+        found.sort_by_key(|(_, _, finding)| finding.line);
+        for kind in NameKind::ALL {
+            let mut keys: Vec<String> = Vec::new();
+            for (_, _, finding) in found.iter().filter(|(k, _, _)| *k == kind) {
+                if !keys.contains(&finding.key) {
+                    keys.push(finding.key.clone());
+                }
+            }
+            for key in keys {
+                let (same, rest): (Vec<_>, Vec<_>) =
+                    found.into_iter().partition(|(_, _, f)| f.key == key);
+                found = rest;
+                let id = same.first().and_then(|(_, id, _)| id.clone());
+                let findings = same.into_iter().map(|(_, _, finding)| finding).collect();
+                told.extend(
+                    self::told(path, findings)
+                        .into_iter()
+                        .map(|warning| BrokenCitation {
+                            kind,
+                            id: id.clone(),
+                            warning,
+                        }),
+                );
+            }
+        }
+    }
+    told
 }
 
 #[cfg(test)]

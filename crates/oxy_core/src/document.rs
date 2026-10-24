@@ -1011,6 +1011,16 @@ impl Project {
             .iter()
             .find(|a| a.kind == AssetKind::Model && a.name.trim().to_lowercase() == wanted)
     }
+    /// The model whose file is `path` (`Pista/Torre.modelo.json`), in any case and with either
+    /// slash, as `scene.spawn_model` finds a model its name does not.
+    pub fn model_at(&self, path: &str) -> Option<&Asset> {
+        let path = path.trim().replace('\\', "/");
+        self.assets.iter().find(|a| {
+            a.kind == AssetKind::Model
+                && !a.path.is_empty()
+                && crate::names::same_name(&a.path, &path)
+        })
+    }
     /// `name` or, when a model has it, the first of "name 2", "name 3"… no model has.
     pub fn free_model_name(&self, name: &str) -> String {
         let name = name.trim();
@@ -1041,6 +1051,17 @@ impl Project {
         entity_id: &str,
         name: impl Into<String>,
     ) -> Result<(Id, CopyMap), String> {
+        self.save_model_mapped_in(scene_id, entity_id, name, None)
+    }
+    /// [`Self::save_model_mapped`] with the model's file in the folder `folder` of the tree
+    /// layout (a path from the project's folder in the disk's case; the root when none).
+    pub fn save_model_mapped_in(
+        &mut self,
+        scene_id: &str,
+        entity_id: &str,
+        name: impl Into<String>,
+        folder: Option<&str>,
+    ) -> Result<(Id, CopyMap), String> {
         let name = name.into();
         if let Some(other) = self.model_named(&name) {
             return Err(format!(
@@ -1048,7 +1069,7 @@ impl Project {
                 other.name, other.id
             ));
         }
-        let path = self.new_model_path(&name)?;
+        let path = self.new_model_path(&name, folder.unwrap_or_default())?;
         let (pieces, map) = self.model_pieces(scene_id, entity_id)?;
         let id = new_id();
         self.assets.push(Asset {
@@ -1106,16 +1127,16 @@ impl Project {
         Ok(map)
     }
     /// Where a new model called `name` keeps its pieces: inside the project file in the old
-    /// layout, in the file `<name>.modelo.json` at the project's root in the tree layout (written
-    /// by the next save, only created), refusing a name Windows would not keep and a file another
-    /// asset has.
-    fn new_model_path(&self, name: &str) -> Result<String, String> {
+    /// layout, in the file `<folder>/<name>.modelo.json` in the tree layout (at the project's
+    /// root when `folder` is empty; written by the next save, only created), refusing a name
+    /// Windows would not keep and a file another asset has.
+    fn new_model_path(&self, name: &str, folder: &str) -> Result<String, String> {
         if self.layout == Layout::Legacy {
             return Ok(String::new());
         }
         let name = crate::names::check_name(name)
             .map_err(|reason| format!("Nome de modelo inválido: {reason}"))?;
-        let path = format!("{name}{}", crate::model_file::EXTENSION);
+        let path = crate::journal::join(folder, &format!("{name}{}", crate::model_file::EXTENSION));
         crate::names::check_path(&path)
             .map_err(|reason| format!("Nome de modelo inválido: {reason}"))?;
         if let Some(other) = self

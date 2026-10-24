@@ -80,7 +80,12 @@ impl ScriptStatus {
     /// Where the scripts of the test `runtime` runs failed so far.
     pub(crate) fn take_test(&mut self, runtime: &Runtime) {
         let mut test = Vec::new();
-        for (object, path, line, text) in runtime.script_error_lines() {
+        // Those of no script (the VM did not start, two objects' handles collide) are left out.
+        for error in runtime.script_error_counts() {
+            let Some(path) = error.path.as_deref() else {
+                continue;
+            };
+            let (object, line, text) = (error.object.as_str(), error.line, error.text.as_str());
             let script = match runtime.scene().entity(object) {
                 Some(e) => self.shown_under(&e.scripts, path),
                 // Gone from the test since (removed, or in another scene): where it showed.

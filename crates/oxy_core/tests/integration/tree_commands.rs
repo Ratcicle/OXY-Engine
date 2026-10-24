@@ -4,6 +4,7 @@
 //! outside OXY or a file is held, the trash emptied cutting the undo of the steps that need it,
 //! "Descartar alterações" bringing everything back, and the scan telling what changed outside.
 use oxy_core::{
+    asset_import::Making,
     command::{self, Command},
     document::*,
     edit_history::CommandHistory,
@@ -428,7 +429,7 @@ fn a_batch_finds_a_file_where_an_earlier_command_put_it_and_a_refused_one_touche
             {"op": "rename_asset", "asset": "Bip", "name": "Pedra", "kind": "Audio"},
             {"op": "rename_asset", "asset": "Clique", "name": "pedra"},
         ]),
-        json!([{"op": "move", "items": ["Sons/Pulo.wav"], "to": "Nenhuma"}]),
+        json!([{"op": "move", "items": ["Sons/Pulo.wav"], "to": "Sons/Pulo.wav"}]),
         json!([{"op": "rename_folder", "folder": "Pista", "name": "Sons"}]),
         json!([{"op": "move", "items": ["Pista"], "to": "Pista"}]),
         json!([{"op": "create_folder", "path": "Sons"}]),
@@ -637,7 +638,12 @@ fn emptying_the_trash_cuts_the_undo_and_redo_of_the_steps_that_need_it() {
         .history
         .begin("Importar recurso", &session.project, &session.images);
     let id = new_id();
-    creating.before("Sons/Novo.wav", &id).unwrap();
+    creating
+        .before(Making::File {
+            path: "Sons/Novo.wav",
+            id: &id,
+        })
+        .unwrap();
     put(root, "Sons/Novo.wav", &wav(9));
     let made = creating.finish(true);
     session.project.assets.push(Asset {
@@ -722,7 +728,12 @@ fn discarding_returns_files_and_folders_to_the_last_save() {
         session.run(commands).unwrap();
     }
     let mut creating = journal::Creating::new(root, &mut session.known, "Importar recurso");
-    creating.before("Imagens/Nova.png", &new_id()).unwrap();
+    creating
+        .before(Making::File {
+            path: "Imagens/Nova.png",
+            id: &new_id(),
+        })
+        .unwrap();
     put(root, "Imagens/Nova.png", &png(10));
     creating.finish(true);
     assert_ne!(files(root), saved);

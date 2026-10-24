@@ -140,17 +140,18 @@ pub(crate) type ScriptErrors = HashMap<String, (u64, Option<(String, u32)>)>;
 /// Keeps in `seen` the script errors the test `runtime` told so far. The runtime forgets an
 /// error when its script reloads or its object goes, and the Console still tells it as it was.
 pub(crate) fn remember_script_errors(seen: &mut ScriptErrors, runtime: &Runtime) {
-    for (_, text, count) in runtime.script_errors() {
-        match seen.get_mut(text) {
-            Some((most, _)) => *most = (*most).max(count),
-            None => {
-                seen.insert(text.to_owned(), (count, None));
+    for error in runtime.script_error_counts() {
+        let at = error.path.map(|path| (path, error.line));
+        match seen.get_mut(&error.text) {
+            Some((most, place)) => {
+                *most = (*most).max(error.count);
+                if place.is_none() {
+                    *place = at;
+                }
             }
-        }
-    }
-    for (_, path, line, text) in runtime.script_error_lines() {
-        if let Some((_, place)) = seen.get_mut(text) {
-            place.get_or_insert_with(|| (path.to_owned(), line));
+            None => {
+                seen.insert(error.text, (error.count, at));
+            }
         }
     }
 }

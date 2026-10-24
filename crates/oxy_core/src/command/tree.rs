@@ -28,7 +28,7 @@ use std::{
 mod requires;
 
 /// Why the tree's commands wait for a project of the old layout to be organized in folders.
-const LEGACY: &str = "Este projeto ainda está no formato antigo, sem pastas: o próximo \
+pub(super) const LEGACY: &str = "Este projeto ainda está no formato antigo, sem pastas: o próximo \
     salvamento no editor (ou a próxima gravação de um agente) o organiza em pastas, com uma cópia \
     completa antes; depois disso, pastas e arquivos mudam pela OXY";
 
@@ -279,6 +279,10 @@ pub(super) fn needs_folder(command: &Command) -> bool {
             | Command::RenameFolder { .. }
             | Command::Move { .. }
             | Command::DeleteFolder { .. }
+            | Command::SaveModel {
+                folder: Some(_),
+                ..
+            }
     )
 }
 
@@ -378,6 +382,72 @@ fn folder(view: &TreeView, text: &str) -> Result<String, String> {
         Some((path, _)) => Err(format!("{path} não é uma pasta do projeto")),
         None => Err(format!("A pasta {wanted} não existe no projeto")),
     }
+}
+
+/// The folder `text` names in `view`, in the disk's case, made with the folders above it when
+/// it is missing (planned as the batch's operations); "" (or nothing) is the root.
+fn ensure_folder(view: &mut TreeView, text: &str) -> Result<String, String> {
+    let wanted = text.trim().replace('\\', "/");
+    if view.find(wanted.trim_matches('/')).is_none() && !wanted.trim_matches('/').is_empty() {
+        create_folder(view, &wanted)?;
+    }
+    folder(view, &wanted)
+}
+
+/// save_model with a folder, in `project` on `view`: the folder in the disk's case, made when
+/// missing, and a name its folder has refused with a free one suggested. Answers the command
+/// with the folder found, which [`super::apply_one`] saves the model's path in.
+pub(super) fn save_model_in(
+    project: &Project,
+    command: &Command,
+    default_scene: &str,
+    view: &mut TreeView,
+) -> Result<Command, String> {
+    let Command::SaveModel {
+        scene,
+        entity,
+        name,
+        replace,
+        folder: Some(text),
+    } = command
+    else {
+        return Ok(command.clone());
+    };
+    if project.layout == Layout::Legacy {
+        return Err(LEGACY.into());
+    }
+    if replace.is_some() {
+        return Err(
+            "folder não vale com replace: o modelo continua no arquivo dele; para \
+            levá-lo a outra pasta, use move"
+                .into(),
+        );
+    }
+    let path = ensure_folder(view, text)?;
+    let scene = super::scene_id(project, scene, default_scene)?;
+    let named = name.clone().or_else(|| {
+        project
+            .scene(&scene)
+            .and_then(|s| s.entity(entity))
+            .map(|e| e.name.clone())
+    });
+    if let Some(named) = named.filter(|n| !n.trim().is_empty()) {
+        let file = format!("{}{}", named.trim(), crate::model_file::EXTENSION);
+        if view.taken(&path, &file) {
+            let free = free_name(project, view, &path, &file, &[]);
+            return Err(format!(
+                "Já existe {file} {}; a OXY não grava por cima: escolha outro nome com name ({} \
+                 está livre lá)",
+                place(&path),
+                split_extension(&free).0
+            ));
+        }
+    }
+    let mut resolved = command.clone();
+    if let Command::SaveModel { folder, .. } = &mut resolved {
+        *folder = Some(path);
+    }
+    Ok(resolved)
 }
 
 /// Refuses moving what is at `from` to `to` when a path inside would pass what Windows and Luau
@@ -583,10 +653,10 @@ fn move_items(
     to: &str,
     kind: Option<ItemKind>,
 ) -> Result<(), String> {
-    let destination = folder(view, to)?;
     if items.is_empty() {
         return Err("Informe items: os arquivos e pastas a mover".into());
     }
+    let destination = ensure_folder(view, to)?;
     for text in items {
         match item(project, view, text, kind, true)? {
             Item::Registered(id) => {

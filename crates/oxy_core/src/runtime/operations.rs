@@ -292,9 +292,10 @@ impl Runtime {
         Ok(root)
     }
 
-    /// Places a copy of the model named `model` (in any case) at the root of the running scene,
-    /// as the script `script` that `owner` attaches asks (`scene.spawn_model`), and gives the
-    /// copy's root. Its IDs come from (owner, script) and the copies it made before, as
+    /// Places a copy of the model named `model` (in any case), else of the model whose file is
+    /// `model` (`Pista/Torre.modelo.json`, see `Project::model_at`), at the root of the running
+    /// scene, as the script `script` that `owner` attaches asks (`scene.spawn_model`), and gives
+    /// the copy's root. Its IDs come from (owner, script) and the copies it made before, as
     /// `script_spawn_copy`'s, so a run that makes the same copies gives them the same IDs. A
     /// model of several roots comes under a group, as placing it in the editor does; a model of
     /// shapes of the other kind (2D or 3D) than the scene is refused. The copy's objects that
@@ -305,7 +306,8 @@ impl Runtime {
         owner: &str,
         script: &str,
     ) -> Result<Id, String> {
-        let Some(asset) = self.project.model_named(model) else {
+        let found = self.project.model_named(model);
+        let Some(asset) = found.or_else(|| self.project.model_at(model)) else {
             let names: Vec<&str> = self
                 .project
                 .assets

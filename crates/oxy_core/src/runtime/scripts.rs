@@ -14,6 +14,24 @@ use std::collections::btree_map::Entry;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
+/// A script error a run told (see [`Runtime::script_error_counts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptErrorCount {
+    /// The object whose script it was; empty for a script that did not load.
+    pub object: Id,
+    /// The script file it points at; none for what the engine tells of the scripts as a whole
+    /// (the step's work spent, a VM that does not start, two objects with one key).
+    pub path: Option<String>,
+    /// Its line, from 1; 0 when only the file is known.
+    pub line: u32,
+    /// The log line of the first one: the object, the file and line and the message.
+    pub text: String,
+    /// How many times it happened at that place.
+    pub count: u64,
+    /// Whether it stopped the script on the object (a limit went past).
+    pub stopped: bool,
+}
+
 /// What tells a repeat of a script error on an object: the script line it happened at, and
 /// whether it stopped the script, whatever values its message carries; the whole text for one
 /// without a line (a script that did not load, a function the module lacks).
@@ -33,22 +51,6 @@ impl ErrorPlace {
         match self {
             Self::Line { path: p, .. } => p == path,
             Self::Text(text) => text.starts_with(&format!("{path}:")),
-        }
-    }
-
-    /// The script and line the place is in, the line 0 when the error names none; none for an
-    /// error of no script (the VM did not start, two objects' handles collide).
-    fn script_line(&self) -> Option<(&str, u32)> {
-        match self {
-            Self::Line { path, line, .. } => Some((path, *line)),
-            Self::Text(text) => {
-                let end = text.find(".luau:")? + ".luau".len();
-                let digits = text[end + 1..]
-                    .split(|c: char| !c.is_ascii_digit())
-                    .next()
-                    .unwrap_or_default();
-                Some((&text[..end], digits.parse().unwrap_or(0)))
-            }
         }
     }
 
@@ -604,17 +606,33 @@ impl Runtime {
             .map(|((owner, _), (text, count))| (owner.as_str(), text.as_str(), *count))
     }
 
-    /// [`Self::script_errors`] by where they happened: the object (empty for a script that did
-    /// not load), the script, its line (0 when the error names none) and the line the log has.
-    /// The errors of a script whose new text reloaded are gone; those of no script are left out.
-    pub fn script_error_lines(&self) -> impl Iterator<Item = (&str, &str, u32, &str)> {
+    /// The script errors told in the run, as reports list them: each place an object got one,
+    /// in the order of the object and the place, with the file and line, the log line of the
+    /// first one and how many times it happened. The errors of a copy made during the run go
+    /// with it, and those of a script whose new text reloaded are gone. The editor's Console
+    /// and Scripts card read where each error happened here too.
+    pub fn script_error_counts(&self) -> Vec<ScriptErrorCount> {
         self.run
             .script_errors
             .iter()
-            .filter_map(|((owner, place), (text, _))| {
-                let (path, line) = place.script_line()?;
-                Some((owner.as_str(), path, line, text.as_str()))
+            .map(|((owner, place), (text, count))| {
+                let (path, line, stopped) = match place {
+                    ErrorPlace::Line { path, line, stops } => (Some(path.clone()), *line, *stops),
+                    ErrorPlace::Text(told) => match crate::script::place_at_start(told) {
+                        Some((path, line)) => (Some(path), line, false),
+                        None => (None, 0, false),
+                    },
+                };
+                ScriptErrorCount {
+                    object: owner.clone(),
+                    path,
+                    line,
+                    text: text.clone(),
+                    count: *count,
+                    stopped,
+                }
             })
+            .collect()
     }
 
     /// Whether the run has a Luau VM: only once a scene attached a script.

@@ -737,9 +737,9 @@ pub(crate) fn run_with(
     })
 }
 
-/// The files an import makes in the project, journaled before each one is written
+/// The folders and files an import makes in the project, journaled before each one is made
 /// ([`Self::before`]) and noted as made once the import ends ([`Self::finish`]): a crash in
-/// between leaves the journal saying which files may be there, which the next opening checks.
+/// between leaves the journal saying which may be there, which the next opening checks.
 pub struct Creating<'a> {
     root: &'a Path,
     known: &'a mut KnownFiles,
@@ -758,16 +758,24 @@ impl<'a> Creating<'a> {
             ops: Vec::new(),
         }
     }
-    /// Notes in the journal that the file `path` of the asset `id` is about to be made; the file
-    /// is not to be made when this fails.
-    pub fn before(&mut self, path: &str, id: &str) -> Result<(), String> {
-        // Made from nothing: undoing sends it to this slot, and redoing brings it back.
-        let slot = fs_ops::trash_slot(&self.step, self.ops.len() + 1, path);
-        self.ops.push(Op::Untrash {
-            slot,
-            to: path.to_owned(),
-            id: Some(id.to_owned()),
-        });
+    /// Notes in the journal that the folder, or the file of an asset, `making` says is about to
+    /// be made; it is not to be made when this fails.
+    pub fn before(&mut self, making: crate::asset_import::Making) -> Result<(), String> {
+        use crate::asset_import::Making;
+        match making {
+            Making::Folder(path) => self.ops.push(Op::CreateDir {
+                path: path.to_owned(),
+            }),
+            Making::File { path, id } => {
+                // Made from nothing: undoing sends it to this slot, and redoing brings it back.
+                let slot = fs_ops::trash_slot(&self.step, self.ops.len() + 1, path);
+                self.ops.push(Op::Untrash {
+                    slot,
+                    to: path.to_owned(),
+                    id: Some(id.to_owned()),
+                });
+            }
+        }
         let mut intent = self.known.journal().clone();
         intent.pending = Some(Pending {
             label: self.label.clone(),
@@ -777,8 +785,8 @@ impl<'a> Creating<'a> {
         write(self.root, &intent)
             .map_err(|error| format!("Não foi possível registrar a importação: {error}"))
     }
-    /// The import ended: when `made`, its files are noted as made and answered as the undo
-    /// history's operations; else they went with it, and the journal forgets them.
+    /// The import ended: when `made`, its folders and files are noted as made and answered as
+    /// the undo history's operations; else they went with it, and the journal forgets them.
     pub fn finish(self, made: bool) -> Vec<crate::edit_history::FileOp> {
         use crate::edit_history::FileOp;
         if made {
@@ -794,6 +802,7 @@ impl<'a> Creating<'a> {
             .into_iter()
             .filter_map(|op| match op {
                 Op::Untrash { slot, to, id } => Some(FileOp::Created { path: to, slot, id }),
+                Op::CreateDir { path } => Some(FileOp::CreateDir { path }),
                 _ => None,
             })
             .collect()

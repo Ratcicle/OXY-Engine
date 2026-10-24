@@ -190,9 +190,10 @@ fn the_errors_of_a_run_say_their_object_script_and_line() {
             ("scripts/quebrado.luau", "local M = {\nreturn M\n"),
         ],
     );
-    let lines: Vec<(&str, &str, u32)> = rt
-        .script_error_lines()
-        .map(|(object, path, line, _)| (object, path, line))
+    let errors = rt.script_error_counts();
+    let lines: Vec<(&str, &str, u32)> = errors
+        .iter()
+        .filter_map(|e| Some((e.object.as_str(), e.path.as_deref()?, e.line)))
         .collect();
     assert!(
         lines.contains(&(id.as_str(), "scripts/porta.luau", 3)),
@@ -205,10 +206,11 @@ fn the_errors_of_a_run_say_their_object_script_and_line() {
             && *line > 0),
         "{lines:?}"
     );
-    let (_, _, _, text) = rt
-        .script_error_lines()
-        .find(|(_, path, _, _)| *path == "scripts/porta.luau")
-        .unwrap();
+    let text = &errors
+        .iter()
+        .find(|e| e.path.as_deref() == Some("scripts/porta.luau"))
+        .unwrap()
+        .text;
     assert!(text.contains("quebrou"), "{text}");
     assert_eq!(script::attached_by(&project, "scripts/porta.luau"), 1);
     assert_eq!(script::attached_by(&project, "scripts/nada.luau"), 0);

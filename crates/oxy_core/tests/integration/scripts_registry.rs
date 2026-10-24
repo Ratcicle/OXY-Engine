@@ -158,6 +158,17 @@ fn prepare(f: &registry::ApiFn, project: &mut Project, door: &Id) {
         e.platform = Some(TranslationPlatform::default());
         return;
     }
+    if f.example.contains("function M.on_area_") {
+        // The door is the area: the engine calls them on the object whose sensor is entered.
+        three_d(project);
+        let e = project.scenes[0].entity_mut(door).unwrap();
+        e.physics3d = Some(Collider3d {
+            shape: CollisionShape::Box { size: [1.; 3] },
+            sensor: true,
+            ..Default::default()
+        });
+        return;
+    }
     let e = project.scenes[0].entity_mut(door).unwrap();
     if viewed("Controller", "Object.controller") {
         e.controller = Some(Controller::default());

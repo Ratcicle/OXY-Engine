@@ -24,8 +24,8 @@ mod open;
 pub use files::departed;
 pub(crate) use open::name_of;
 pub use open::{
-    Adopted, AssetState, KnownFiles, OpenReport, adopt, open_project, relink_asset, relink_script,
-    scan,
+    Adopted, AssetState, Checked, KnownFiles, OpenReport, adopt, check_assets, open_project,
+    relink_asset, relink_script, scan, shared_names,
 };
 
 /// Why a project, asset or save operation failed. Messages are shown to the user as-is.
@@ -661,21 +661,24 @@ pub fn import_asset_into(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Asset importado".into());
-    store_asset_as(project, root, new_id(), &bytes, name, kind, folder, before)
+    store_asset_in(project, root, &bytes, name, kind, folder, before)
 }
-/// Writes PNG or WAV bytes, already checked, to the project's assets folder under a new name
-/// (only created: a file there is never written over) and adds the asset as `name`.
-pub(crate) fn store_asset(
+/// Writes PNG or WAV bytes, already checked, to the project's assets folder under a new name in
+/// the old layout, as `<name>.<ext>` in the folder `folder` (which exists; "" is the root) in
+/// the tree layout (only created: a file there is never written over), and adds the asset as
+/// `name`.
+pub(crate) fn store_asset_in(
     project: &mut Project,
     root: &Path,
     bytes: &[u8],
     name: String,
     kind: AssetKind,
+    folder: &str,
     before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<Id, PersistenceError> {
-    store_asset_as(project, root, new_id(), bytes, name, kind, "", before)
+    store_asset_as(project, root, new_id(), bytes, name, kind, folder, before)
 }
-/// [`store_asset`] as the asset `id`, in the folder `folder` of the tree layout.
+/// [`store_asset_in`] as the asset `id`.
 #[expect(
     clippy::too_many_arguments,
     reason = "the folder joins what a store already takes"
@@ -983,12 +986,12 @@ pub fn read_script(root: &Path, path: &str) -> Result<Option<String>, Persistenc
         .map_err(|_| PersistenceError::ScriptNotText(path.to_owned()))
 }
 
-/// Where the agents' copies of script files go, from the project's folder: out of the tree, so
-/// that no copy is ever a script.
+/// Where the agents' copies of the files they change go (scripts, the project file, models'
+/// files), from the project's folder: out of the tree, so that no copy is ever a script.
 pub const SCRIPT_BACKUPS: &str = ".oxy/agente";
 
-/// The copy of a script file an agent keeps, as it was before its session first changed the
-/// file, by the script's path: `Pista/porta.luau` keeps `.oxy/agente/Pista/porta.luau.bak`.
+/// The copy of a file an agent keeps, as it was before its session first changed the file, by
+/// the file's path: `Pista/porta.luau` keeps `.oxy/agente/Pista/porta.luau.bak`.
 pub fn script_backup_path(path: &str) -> String {
     format!("{SCRIPT_BACKUPS}/{path}.bak")
 }
@@ -1048,6 +1051,73 @@ pub fn write_script(
     });
     transaction_write(writes)?;
     Ok(previous.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+/// Keeps under [`SCRIPT_BACKUPS`] (see [`script_backup_path`]: `.oxy/agente/<path>.bak`, out of
+/// the tree) the project file `file` and, in the tree layout, the file of every model whose bytes
+/// the save of `project` would change, as they are before an agent's session first changes them:
+/// each once per session (`kept` holds the copies the session made) and again when the copy was
+/// deleted, all in one transaction. Answers every copy that holds the files the save changes,
+/// from the project's folder, the project file's first.
+pub fn keep_agent_copies(
+    file: &Path,
+    project: &Project,
+    kept: &mut HashSet<PathBuf>,
+) -> Result<Vec<String>, PersistenceError> {
+    let root = file.parent().unwrap_or(Path::new("."));
+    let mut originals: Vec<(String, Vec<u8>)> = Vec::new();
+    match fs::read(file) {
+        Ok(bytes) => originals.push((PROJECT_FILE.to_owned(), bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(PersistenceError::Io {
+                context: "Não foi possível ler o arquivo do projeto",
+                source,
+            });
+        }
+    }
+    if project.layout == Layout::Tree {
+        for asset in &project.assets {
+            let (AssetKind::Model, Some(pieces)) = (asset.kind, &asset.model) else {
+                continue;
+            };
+            let Ok(target) = resolve_asset_path(root, &asset.path) else {
+                continue;
+            };
+            let Ok(disk) = fs::read(&target) else {
+                continue;
+            };
+            if crate::model_file::to_bytes(&asset.id, pieces)? != disk {
+                originals.push((asset.path.clone(), disk));
+            }
+        }
+    }
+    let mut writes = Vec::new();
+    let mut taken = Vec::new();
+    let mut copies = Vec::new();
+    for (path, bytes) in originals {
+        let copy = script_backup_path(&path);
+        let target = resolve_asset_path(root, &copy)?;
+        if !kept.contains(&target) || !target.is_file() {
+            taken.push(target.clone());
+            writes.push(FileWrite::replace(target, bytes));
+        }
+        copies.push(copy);
+    }
+    if !writes.is_empty() {
+        transaction_write(writes)?;
+    }
+    kept.extend(taken);
+    Ok(copies)
+}
+
+/// An asset of `kind` as messages name it with its article: "a imagem", "o som", "o modelo".
+pub(crate) fn kind_label(kind: AssetKind) -> &'static str {
+    match kind {
+        AssetKind::Texture => "a imagem",
+        AssetKind::Audio => "o som",
+        AssetKind::Model => "o modelo",
+    }
 }
 
 /// What a missing script asks of the person, to play or export the project again, for a file

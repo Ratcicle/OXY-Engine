@@ -219,17 +219,32 @@ impl Editor {
     /// An agent's oxy_scripts on the project open in the editor, whose folder holds its scripts.
     /// The disk is the truth: a write is no undo step, waits for nothing and reaches a test
     /// running through its watcher; writes and setting VS Code up are told in the Console.
+    /// Renaming and deleting a script are an agent's batch of the project's commands.
     pub(crate) fn agent_script_files(&mut self, params: &Json) -> Result<Json, String> {
         if self.home.visible {
             return Err("Nenhum projeto aberto no editor.".into());
         }
         let request = script_files::Request::parse(params)?;
-        let Some(root) = self
+        let root = self
             .path
             .as_deref()
             .and_then(Path::parent)
-            .map(Path::to_owned)
-        else {
+            .map(Path::to_owned);
+        // Renaming and deleting are the project's commands: one undo step, the objects and the
+        // `require` following.
+        let taken = |folder: &str, name: &str| {
+            root.as_deref()
+                .is_some_and(|root| script_files::taken_in(root, folder, name))
+        };
+        if let Some(commands) = request.commands(&taken) {
+            let commands = command::parse(&Json::Array(commands?))?;
+            let mut report = self
+                .execute_agent(&commands)
+                .map_err(|error| script_files::without_command(&error))?;
+            request.add_to(&mut report);
+            return Ok(report);
+        }
+        let Some(root) = root else {
             return Err(
                 "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; peça \
                  para a pessoa salvá-lo antes."
@@ -295,7 +310,7 @@ impl Editor {
         self.scan_project();
         self.history
             .begin(label.clone(), &self.state.project, &self.state.images);
-        // In a project in folders each file it makes goes with the step (see
+        // In a project in folders each folder and file it makes goes with the step (see
         // `journal::Creating`).
         let mut creating = (self.state.project.layout == Layout::Tree)
             .then(|| oxy_core::journal::Creating::new(&root, &mut self.known_files, &label));
@@ -305,7 +320,7 @@ impl Editor {
             scene,
             batch,
             &sources,
-            &mut |path, id| creating.as_mut().map_or(Ok(()), |c| c.before(path, id)),
+            &mut |making| creating.as_mut().map_or(Ok(()), |c| c.before(making)),
         );
         let files = creating
             .map(|creating| creating.finish(imported.is_ok()))
@@ -329,10 +344,14 @@ impl Editor {
                     self.rebase_scan();
                 }
                 for done in &imported {
-                    self.log(format!(
-                        "{AGENT_PREFIX}Recurso importado como cópia local: {}",
-                        done.name
-                    ));
+                    self.log(if done.in_place {
+                        format!("{AGENT_PREFIX}Recurso registrado onde está: {}", done.path)
+                    } else {
+                        format!(
+                            "{AGENT_PREFIX}Recurso importado como cópia local: {}",
+                            done.name
+                        )
+                    });
                 }
                 self.after_external_edit();
                 for done in &imported {

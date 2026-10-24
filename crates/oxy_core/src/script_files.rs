@@ -1,6 +1,8 @@
 //! The project's script files as the tools reach them (oxy_scripts, on files and, live, through
-//! the editor's channel): read with line numbers, checked as loading checks them, written
-//! all-or-nothing with the copy an agent keeps of a file it changes, and the files VS Code with
+//! the editor's channel): listed with who runs them, read with line numbers, checked as loading
+//! checks them, written all-or-nothing with the copy an agent keeps of a file it changes, renamed,
+//! moved and deleted through the project's commands (see [`Request::commands`]: the objects and
+//! the `require` follow, and live it is an undo step), and the files VS Code with
 //! the luau-lsp extension reads (design §6.2): the API's types in [`TYPES_PATH`], `.luaurc` with
 //! the project's alias for `require("@project/…")`, and the luau-lsp keys of
 //! `.vscode/settings.json`; the person's files only get what they lack. Scripts are the `.luau`
@@ -17,7 +19,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// What oxy_scripts does.
-pub const ACTIONS: [&str; 4] = ["read", "write", "check", "vscode"];
+pub const ACTIONS: [&str; 7] = [
+    "list", "read", "write", "check", "rename", "delete", "vscode",
+];
 
 /// Where the API's types go, from the project's folder.
 pub const TYPES_PATH: &str = ".oxy/tipos/oxy.d.luau";
@@ -65,6 +69,19 @@ pub enum Request {
         path: Option<String>,
         text: Option<String>,
     },
+    /// Every script of the tree, with who runs it (see [`crate::query::scripts_list`]).
+    List,
+    /// The script `path` renamed or moved to `to`, through the project's commands.
+    Rename {
+        path: String,
+        to: String,
+    },
+    /// The script `path` sent to the project's trash, through the project's commands; refused
+    /// while objects attach it unless `detach` takes it off them.
+    Delete {
+        path: String,
+        detach: bool,
+    },
     Vscode,
 }
 
@@ -105,12 +122,169 @@ impl Request {
                 }
                 Ok(Self::Check { path, text })
             }
+            "list" => Ok(Self::List),
+            "rename" => {
+                let path = needed()?;
+                let to = text("to")?
+                    .map(|to| script::normalize_path(&to))
+                    .transpose()?
+                    .ok_or(
+                        "action rename precisa de to, o caminho novo do script a partir da pasta \
+                         do projeto, como Pista/porta.luau",
+                    )?;
+                if to == path {
+                    return Err(format!("to é o caminho que {path} já tem"));
+                }
+                let ((folder, name), (from_folder, from_name)) = (split(&to), split(&path));
+                if name == from_name && crate::names::same_name(folder, from_folder) {
+                    return Err(format!(
+                        "to só muda maiúsculas e minúsculas das pastas de {path}; uma pasta muda \
+                         de nome com rename_folder, no oxy_apply"
+                    ));
+                }
+                Ok(Self::Rename { path, to })
+            }
+            "delete" => {
+                let detach = match &args["detach"] {
+                    Json::Null => false,
+                    Json::Bool(detach) => *detach,
+                    _ => return Err("detach precisa ser true ou false".into()),
+                };
+                Ok(Self::Delete {
+                    path: needed()?,
+                    detach,
+                })
+            }
             "vscode" => Ok(Self::Vscode),
             other => Err(format!(
                 "action inválido: `{other}`; use {}",
                 ACTIONS.join(", ")
             )),
         }
+    }
+
+    /// The project's commands rename and delete go through (oxy_apply's rename_asset, move and
+    /// delete_asset, with kind Script), so the objects attaching the script and the `require`
+    /// naming it follow, and live the change is one undo step; none for the other actions.
+    /// `taken(folder, name)` says whether the project's folder has `name` in `folder`, in any
+    /// case ([`taken_in`] reads it on the disk): a script moved and renamed is renamed where its
+    /// new name is free, before the move or after it.
+    pub fn commands(
+        &self,
+        taken: &dyn Fn(&str, &str) -> bool,
+    ) -> Option<Result<Vec<Json>, String>> {
+        match self {
+            Self::Rename { path, to } => Some(rename_commands(path, to, taken)),
+            Self::Delete { path, detach } => Some(Ok(vec![json!({"op": "delete_asset",
+                "asset": path, "kind": "Script", "detach": detach})])),
+            _ => None,
+        }
+    }
+
+    /// What the answer of rename or delete adds to the commands' report: the script's path now,
+    /// where the batch left it (the last of `moved`), or the one deleted (`trashed`), in the
+    /// disk's case.
+    pub fn add_to(&self, report: &mut Json) {
+        let done = |key: &str, last: bool| {
+            let list = report[key].as_array()?;
+            let item = if last { list.last() } else { list.first() }?;
+            item.get("to").unwrap_or(item).as_str().map(str::to_owned)
+        };
+        let (key, value) = match self {
+            Self::Rename { to, .. } => ("path", done("moved", true).unwrap_or_else(|| to.clone())),
+            Self::Delete { path, .. } => (
+                "deleted",
+                done("trashed", false).unwrap_or_else(|| path.clone()),
+            ),
+            _ => return,
+        };
+        report[key] = json!(value);
+    }
+}
+
+/// The folder and the name of the path `path`.
+fn split(path: &str) -> (&str, &str) {
+    path.rsplit_once('/').unwrap_or(("", path))
+}
+
+/// The commands that take the script `path` to `to` (see [`Request::commands`]): renamed in its
+/// folder when the new name is free there, else in the new folder once moved; refused when the
+/// name each way would take is taken.
+fn rename_commands(
+    path: &str,
+    to: &str,
+    taken: &dyn Fn(&str, &str) -> bool,
+) -> Result<Vec<Json>, String> {
+    let ((folder, name), (from_folder, from_name)) = (split(to), split(path));
+    let rename = |asset: &str| {
+        json!({"op": "rename_asset", "asset": asset,
+               "name": name.strip_suffix(".luau").unwrap_or(name), "kind": "Script"})
+    };
+    let move_to =
+        |item: &str| json!({"op": "move", "items": [item], "to": folder, "kind": "Script"});
+    if crate::names::same_name(folder, from_folder) {
+        return Ok(vec![rename(path)]);
+    }
+    if name == from_name {
+        return Ok(vec![move_to(path)]);
+    }
+    if crate::names::same_name(name, from_name) || !taken(from_folder, name) {
+        return Ok(vec![
+            rename(path),
+            move_to(&crate::journal::join(from_folder, name)),
+        ]);
+    }
+    if !taken(folder, from_name) {
+        return Ok(vec![
+            move_to(path),
+            rename(&crate::journal::join(folder, from_name)),
+        ]);
+    }
+    let place = |folder: &str| match folder {
+        "" => "na raiz do projeto".to_owned(),
+        folder => format!("em {folder}"),
+    };
+    Err(if taken(folder, name) {
+        format!("Já existe {name} {}; escolha outro nome", place(folder))
+    } else {
+        format!(
+            "{path} não vai para {to} de uma vez: já existem {name} {} e {from_name} {}; renomeie \
+             um deles antes",
+            place(from_folder),
+            place(folder)
+        )
+    })
+}
+
+/// Whether the project's folder `root` has `name` in its folder `folder` ("" for the root), in
+/// any case, as [`Request::commands`] asks.
+pub fn taken_in(root: &Path, folder: &str, name: &str) -> bool {
+    let place = match folder {
+        "" => Ok(root.to_owned()),
+        folder => crate::names::resolve(root, folder),
+    };
+    place
+        .ok()
+        .and_then(|place| std::fs::read_dir(place).ok())
+        .is_some_and(|listing| {
+            listing.filter_map(Result::ok).any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|known| crate::names::same_name(known, name))
+            })
+        })
+}
+
+/// `error` of the project's commands without the command it names (`Comando 0 (move, o 1º do
+/// lote): `), for oxy_scripts, whose rename and delete are those commands.
+pub fn without_command(error: &str) -> String {
+    match error
+        .strip_prefix("Comando ")
+        .and_then(|rest| rest.split_once("): "))
+    {
+        Some((_, message)) => message.to_owned(),
+        None => error.to_owned(),
     }
 }
 
@@ -139,6 +313,10 @@ pub fn answer(
     let attached = project.map(script::attached_paths).unwrap_or_default();
     let on_disk = |path: &str| crate::names::disk_case(root, path).unwrap_or_else(|_| path.into());
     match request {
+        Request::List => crate::query::scripts_list(project, root).map(quiet),
+        Request::Rename { .. } | Request::Delete { .. } => {
+            Err("rename e delete vão pelos comandos do projeto (Request::commands)".into())
+        }
         Request::Read { path } => read(root, &on_disk(path)).map(quiet),
         Request::Write { path, text } => {
             write(root, project, &on_disk(path), text, &attached, kept)
@@ -207,6 +385,7 @@ fn check(
     attached: &BTreeSet<String>,
 ) -> Result<Json, String> {
     let mut told = (Vec::new(), Vec::new());
+    let mut unused = Vec::new();
     let (sources, paths) = match (path, text) {
         (Some(path), Some(text)) => {
             // The file it stands for is not read: it may be what the text comes to fix.
@@ -239,6 +418,9 @@ fn check(
                 }
             }
             told.1.extend(tree_warnings(root, &tree));
+            if let Some(project) = project {
+                unused = crate::query::unused_scripts(project, &sources);
+            }
             let paths = sources.files.keys().cloned().collect();
             (sources, paths)
         }
@@ -264,6 +446,10 @@ fn check(
     }
     if !warnings.is_empty() {
         answer["warnings"] = json!(warnings);
+    }
+    // No object runs them: the game never does, though the export takes them when they compile.
+    if !unused.is_empty() {
+        answer["unused"] = json!(unused);
     }
     Ok(answer)
 }
@@ -904,10 +1090,121 @@ mod tests {
             })
         );
         assert_eq!(parse(json!({"action": "vscode"})), Ok(Request::Vscode));
+        assert_eq!(parse(json!({"action": "list"})), Ok(Request::List));
+        // Renaming and deleting go through the project's commands, by path and kind Script.
+        let renamed = parse(json!({"action": "rename", "path": "scripts/porta.luau",
+                                   "to": r"Pista\portao.luau"}))
+        .unwrap();
+        assert_eq!(
+            renamed,
+            Request::Rename {
+                path: "scripts/porta.luau".into(),
+                to: "Pista/portao.luau".into()
+            }
+        );
+        let free = |_: &str, _: &str| false;
+        let rename_there = json!({"op": "rename_asset", "asset": "scripts/porta.luau",
+                                  "name": "portao", "kind": "Script"});
+        let move_there = json!({"op": "move", "items": ["scripts/portao.luau"], "to": "Pista",
+                                "kind": "Script"});
+        assert_eq!(
+            renamed.commands(&free),
+            Some(Ok(vec![rename_there.clone(), move_there.clone()]))
+        );
+        // Renamed where the new name is free: in the new folder, once moved, when the old one
+        // has it.
+        let taken_here = |folder: &str, name: &str| folder == "scripts" && name == "portao.luau";
+        assert_eq!(
+            renamed.commands(&taken_here),
+            Some(Ok(vec![
+                json!({"op": "move", "items": ["scripts/porta.luau"], "to": "Pista",
+                       "kind": "Script"}),
+                json!({"op": "rename_asset", "asset": "Pista/porta.luau", "name": "portao",
+                       "kind": "Script"}),
+            ]))
+        );
+        let both = |folder: &str, name: &str| {
+            (folder, name) == ("scripts", "portao.luau")
+                || (folder, name) == ("Pista", "porta.luau")
+        };
+        let refused = renamed.commands(&both).unwrap().unwrap_err();
+        assert!(
+            refused.contains("já existem portao.luau em scripts e porta.luau em Pista"),
+            "{refused}"
+        );
+        let all = |_: &str, _: &str| true;
+        let refused = renamed.commands(&all).unwrap().unwrap_err();
+        assert_eq!(
+            refused,
+            "Já existe portao.luau em Pista; escolha outro nome"
+        );
+        // A folder only in another case is the same folder: renamed there.
+        let renamed = parse(json!({"action": "rename", "path": "Pista/a.luau",
+                                   "to": "pista/b.luau"}))
+        .unwrap();
+        assert_eq!(
+            renamed.commands(&all),
+            Some(Ok(vec![
+                json!({"op": "rename_asset", "asset": "Pista/a.luau",
+                                "name": "b", "kind": "Script"})
+            ]))
+        );
+        // The answer says where the batch left the file, in the disk's case.
+        let mut report = json!({"moved": [{"from": "Pista/a.luau", "to": "Pista/b.luau"}]});
+        renamed.add_to(&mut report);
+        assert_eq!(report["path"], "Pista/b.luau");
+        let moved = parse(json!({"action": "rename", "path": "Pista/a.luau", "to": "a.luau"}));
+        assert_eq!(
+            moved.unwrap().commands(&all),
+            Some(Ok(vec![
+                json!({"op": "move", "items": ["Pista/a.luau"], "to": "",
+                                "kind": "Script"})
+            ]))
+        );
+        let deleted =
+            parse(json!({"action": "delete", "path": "pista/a.luau", "detach": true})).unwrap();
+        assert_eq!(
+            deleted.commands(&free),
+            Some(Ok(vec![
+                json!({"op": "delete_asset", "asset": "pista/a.luau",
+                                "kind": "Script", "detach": true})
+            ]))
+        );
+        let mut report = json!({});
+        deleted.add_to(&mut report);
+        assert_eq!(report, json!({"deleted": "pista/a.luau"}));
+        let mut report = json!({"trashed": ["Pista/a.luau"]});
+        deleted.add_to(&mut report);
+        assert_eq!(report["deleted"], "Pista/a.luau");
+        assert_eq!(Request::List.commands(&free), None);
+        assert_eq!(
+            without_command("Comando 0 (move, o 1º do lote): Já existe a.luau em Pista"),
+            "Já existe a.luau em Pista"
+        );
         for (args, refused) in [
             (
                 json!({"action": "ler"}),
-                "action inválido: `ler`; use read, write",
+                "action inválido: `ler`; use list, read, write",
+            ),
+            (
+                json!({"action": "rename", "path": "a.luau"}),
+                "action rename precisa de to",
+            ),
+            (
+                json!({"action": "rename", "path": "a.luau", "to": "a.luau"}),
+                "to é o caminho que a.luau já tem",
+            ),
+            (
+                json!({"action": "rename", "path": "Pista/a.luau", "to": "pista/a.luau"}),
+                "to só muda maiúsculas e minúsculas das pastas de Pista/a.luau",
+            ),
+            (
+                json!({"action": "rename", "path": "a.luau", "to": ".rascunho/a.luau"}),
+                "começa com ponto",
+            ),
+            (
+                json!({"action": "delete", "path": "a.luau", "detach": "sim"}),
+                "detach precisa ser true ou false",
             ),
             (json!({"action": "read"}), "action read precisa de path"),
             (

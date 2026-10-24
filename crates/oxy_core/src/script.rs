@@ -68,7 +68,7 @@
 //!   raised after the Rust values are dropped. The VM is created with
 //!   `catch_rust_panics(false)`, so a script's `pcall` never hides a panic, and each door marks
 //!   the host when it catches one (`coroutine.resume` still swallows them).
-use crate::document::{Id, Project, Value};
+use crate::document::{Entity, Id, Project, SceneKind, Value};
 use crate::input_actions::every_entity;
 use crate::surface::SurfaceMaterial;
 use serde::{Deserialize, Serialize};
@@ -110,7 +110,10 @@ pub(crate) use host::{Module, ScriptHost};
 pub(crate) use load::check as load_check;
 pub(crate) use memory::{Memory, ScriptValue};
 pub(crate) use messages::{Message, Unsent};
-pub use names::{Found, ProjectNames, Reference, declared_attribute_names, lint, references};
+pub use names::{
+    BrokenCitation, Citation, Found, ProjectNames, Reference, broken_citations, citations,
+    declared_attribute_names, lint, names_by_id, references,
+};
 pub use registry::NameKind;
 pub(crate) use timers::{Repeat, ScriptTask, Share, Timer, TimerRoom, TimerStep};
 
@@ -860,6 +863,153 @@ pub fn declared_attributes<'a>(
         .collect()
 }
 
+/// What a script defines and declares, read by loading it as the runtime does.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Outline {
+    /// The callbacks it defines, by name, in the order of [`Callback::ALL`].
+    pub callbacks: Vec<&'static str>,
+    /// The attributes `Module.attributes` declares, by name; none when it is no table of
+    /// defaults.
+    pub attributes: Vec<String>,
+    /// The fields `Module.state` declares, each with the type of its value as the tools name
+    /// types (`Number`, `Text`, `Bool`, `Vector3`, `Vector2`, `Object`, `Surface`, `Table`).
+    pub state: Vec<(String, &'static str)>,
+}
+
+/// What each of the scripts `paths` of `sources` defines and declares (see [`Outline`]), or why
+/// it does not load. The scripts load in a VM of their own, nothing of the world reached.
+pub fn outlines<'a>(
+    sources: &ScriptSources,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Vec<(&'a str, Result<Outline, ScriptError>)> {
+    let host = ScriptHost::new(std::sync::Arc::new(sources.clone()));
+    paths
+        .into_iter()
+        .map(|path| {
+            let outline = match &host {
+                Ok(host) => host.load(path).map(|module| Outline {
+                    callbacks: module.callbacks.iter().map(Callback::name).collect(),
+                    attributes: module
+                        .attributes
+                        .as_ref()
+                        .map(|declared| declared.iter().map(|(name, _)| name.clone()).collect())
+                        .unwrap_or_default(),
+                    state: module
+                        .state
+                        .as_ref()
+                        .map(|memory| {
+                            memory
+                                .fields()
+                                .iter()
+                                .map(|(name, value)| (name.to_string(), value.type_name()))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }),
+                Err(error) => Err(ScriptError::new(path, 0, error.clone())),
+            };
+            (path, outline)
+        })
+        .collect()
+}
+
+/// Why callbacks of the script `path` that `callbacks` names never run on `e`, an object of a
+/// scene of `kind`, when some never do: `on_area_enter` and `on_area_exit` on an object without
+/// an area (the engine calls them on the object whose sensor is entered), `on_click` on one that
+/// takes no clicks (neither a shape nor an interface button).
+pub fn unheard_callbacks(
+    e: &Entity,
+    kind: SceneKind,
+    path: &str,
+    callbacks: &[&str],
+) -> Vec<String> {
+    use crate::authoring::ComponentKind;
+    let mut told = Vec::new();
+    let areas: Vec<&str> = callbacks
+        .iter()
+        .copied()
+        .filter(|name| matches!(*name, "on_area_enter" | "on_area_exit"))
+        .collect();
+    if !areas.is_empty()
+        && !ComponentKind::Sensor3d.present(e)
+        && !ComponentKind::Sensor2d.present(e)
+    {
+        let (names, run) = match areas.as_slice() {
+            [one] => ((*one).to_owned(), "nunca roda"),
+            _ => ("on_area_enter e on_area_exit".to_owned(), "nunca rodam"),
+        };
+        let area = match kind {
+            SceneKind::TwoD => "sensor2d",
+            SceneKind::ThreeD => "sensor3d",
+        };
+        told.push(format!(
+            "{} não tem área ({area}): {names} de {path} {run} nele; adicione o componente \
+             {area} (add_component) ou anexe o script à área",
+            e.name
+        ));
+    }
+    let clickable = match &e.ui {
+        Some(ui) => ui.kind == crate::document::UiKind::Button,
+        None => e.has_geometry(),
+    };
+    if callbacks.contains(&"on_click") && !clickable {
+        told.push(format!(
+            "{} não recebe cliques (não tem forma nem é um botão da interface): on_click de \
+             {path} nunca roda nele",
+            e.name
+        ));
+    }
+    told
+}
+
+/// The script line a text names, as `Pista/porta.luau:12` in "Script não recarregado:
+/// Pista/porta.luau:12: …": a `.luau` path after the start of the text or after ": " and
+/// "· ", then a colon and the line. None when the text names no line of a script.
+pub fn location_in(text: &str) -> Option<crate::runtime::ScriptLocation> {
+    let mark = format!(".{EXTENSION}:");
+    let mut from = 0;
+    while let Some(found) = text[from..].find(&mark) {
+        let end = from + found + mark.len() - 1;
+        let digits: String = text[end + 1..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let start = [": ", "· "]
+            .iter()
+            .filter_map(|sep| text[..end].rfind(sep).map(|at| at + sep.len()))
+            .max()
+            .unwrap_or(0);
+        if let (Ok(line), Ok(path)) = (digits.parse::<u32>(), normal_form(text[start..end].trim()))
+            && line > 0
+        {
+            return Some(crate::runtime::ScriptLocation { path, line });
+        }
+        from = end + 1;
+    }
+    None
+}
+
+/// The script a text starts with, as script errors write it: `Pista/porta.luau:12: …` gives the
+/// file and the line, `Pista/porta.luau: …` the file and line 0. None when the text starts with
+/// anything else (what the engine tells of the scripts as a whole).
+pub(crate) fn place_at_start(text: &str) -> Option<(String, u32)> {
+    let (head, rest) = text.split_once(':')?;
+    if !head.ends_with(&format!(".{EXTENSION}")) {
+        return None;
+    }
+    let path = normal_form(head).ok()?;
+    let line = if rest.starts_with(' ') {
+        0
+    } else {
+        rest.split_once(": ")?
+            .0
+            .parse::<u32>()
+            .ok()
+            .filter(|line| *line > 0)?
+    };
+    Some((path, line))
+}
+
 /// The surface of `surfaces` that `name` names (in `what`, as `param.surface("Gelo")`): by its
 /// name, else ignoring case and the spaces at its ends, as the project lists them.
 pub(crate) fn surface_named(
@@ -1373,5 +1523,27 @@ mod tests {
         assert_eq!(file, ScriptFile::new("print(\"oi\")\n".into()));
         assert_ne!(file.hash, ScriptFile::new("print(\"olá\")\n".into()).hash);
         assert_eq!(file.hash, crate::random::hash(&[b"print(\"oi\")\n"]));
+    }
+
+    #[test]
+    fn a_text_starts_with_a_script_place_only_as_script_errors_write_it() {
+        assert_eq!(
+            place_at_start("Pista/porta.luau:12: sem on_message: 1d76"),
+            Some(("Pista/porta.luau".into(), 12))
+        );
+        assert_eq!(
+            place_at_start("Meu jogo/a b.luau: o módulo não devolve uma tabela"),
+            Some(("Meu jogo/a b.luau".into(), 0))
+        );
+        for engine in [
+            "Limite de trabalho dos scripts no passo atingido; demais tarefas retomam no próximo \
+             passo.",
+            "sem on_message: 1d76",
+            "os objetos A e B têm a mesma chave nos scripts; renomeie um deles",
+            "A VM dos scripts não iniciou: memória",
+            "Pista/porta.luau:x: texto",
+        ] {
+            assert_eq!(place_at_start(engine), None, "{engine}");
+        }
     }
 }

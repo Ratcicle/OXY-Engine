@@ -111,11 +111,23 @@ impl ConsoleFeed {
         let written = console.written();
         for message in unseen(&console.messages, written, self.editor_seen) {
             let warning = warnings.contains(message.as_str());
+            // The script line a message names, as a reload that failed names it.
+            let script = oxy_core::script::location_in(message);
             match message.strip_prefix(agent::AGENT_PREFIX) {
-                Some(text) => {
-                    self.push(ConsoleOrigin::Agente, text.to_owned(), warning, None, None)
-                }
-                None => self.push(ConsoleOrigin::Editor, message.clone(), warning, None, None),
+                Some(text) => self.push(
+                    ConsoleOrigin::Agente,
+                    text.to_owned(),
+                    warning,
+                    None,
+                    script,
+                ),
+                None => self.push(
+                    ConsoleOrigin::Editor,
+                    message.clone(),
+                    warning,
+                    None,
+                    script,
+                ),
             }
         }
         self.editor_seen = written;
@@ -424,6 +436,38 @@ mod tests {
                 {"seq": 1002, "origin": "editor", "text": "Depois"},
             ])
         );
+    }
+
+    #[test]
+    fn editor_and_agent_lines_name_the_script_line_they_point_at() {
+        let mut feed = ConsoleFeed::default();
+        let mut console = ConsoleLog {
+            messages: Vec::new(),
+            dropped: 0,
+        };
+        console.push(
+            "Script não recarregado: Pista/porta.luau:12: erro de sintaxe. O teste segue com a \
+             versão anterior."
+                .into(),
+        );
+        console.push(format!(
+            "{}Comando 0 (attach_script, o 1º do lote): Pista/porta.luau:3: audio.play: …",
+            agent::AGENT_PREFIX
+        ));
+        console.push("Script recarregado: Pista/porta.luau (1 objeto)".into());
+        feed.copy_console(&console, &HashSet::new());
+        let read = feed.answer(&ConsoleQuery::parse(&json!({})).unwrap());
+        let lines = read["lines"].as_array().unwrap();
+        assert_eq!(
+            lines[0]["script"],
+            json!({"path": "Pista/porta.luau", "line": 12})
+        );
+        assert_eq!(lines[1]["origin"], "agente");
+        assert_eq!(
+            lines[1]["script"],
+            json!({"path": "Pista/porta.luau", "line": 3})
+        );
+        assert!(lines[2].get("script").is_none(), "no line to open");
     }
 
     #[test]

@@ -162,17 +162,12 @@ pub(crate) fn reload_place(line: &str) -> Option<Option<(String, u32)>> {
     let Some(end) = rest.find(".luau").map(|at| at + ".luau".len()) else {
         return Some(None);
     };
-    let line = rest[end..]
-        .strip_prefix(':')
-        .map(|after| {
-            after
-                .split(|c: char| !c.is_ascii_digit())
-                .next()
-                .unwrap_or("")
-        })
-        .and_then(|digits| digits.parse().ok())
-        .unwrap_or(0);
-    Some(Some((rest[..end].to_owned(), line)))
+    let file = &rest[..end];
+    // Its line as the agents' Console reads it (oxy_console's script), 0 when it names none.
+    let line = oxy_core::script::location_in(rest)
+        .filter(|at| at.path == file)
+        .map_or(0, |at| at.line);
+    Some(Some((file.to_owned(), line)))
 }
 
 /// The Console's lines about a reload, each with whether it is an error: the scripts that

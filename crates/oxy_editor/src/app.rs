@@ -1485,7 +1485,11 @@ impl Editor {
                 source,
                 *kind,
                 folder,
-                &mut |path, id| creating.as_mut().map_or(Ok(()), |c| c.before(path, id)),
+                &mut |path, id| {
+                    creating.as_mut().map_or(Ok(()), |c| {
+                        c.before(oxy_core::asset_import::Making::File { path, id })
+                    })
+                },
             );
             files.extend(
                 creating

@@ -297,13 +297,19 @@ impl Editor {
                         self.set_scene(id);
                     }
                     SceneDialog::Rename { id, name } => {
+                        let names = self.script_names_before();
                         if let Some(scene) = self.state.project.scene_mut(&id) {
                             scene.name = name.trim().into();
                         }
+                        self.warn_script_names(names, &[oxy_core::script::NameKind::Scene]);
                     }
                     SceneDialog::Delete(id) => {
+                        let names = self.script_names_before();
                         match editing::delete_scene(&mut self.state.project, &id) {
-                            Ok(()) => self.set_scene(self.state.project.start_scene.clone()),
+                            Ok(()) => {
+                                self.set_scene(self.state.project.start_scene.clone());
+                                self.warn_script_names(names, &[oxy_core::script::NameKind::Scene]);
+                            }
                             Err(e) => self.warn(e),
                         }
                     }

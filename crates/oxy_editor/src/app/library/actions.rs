@@ -108,8 +108,10 @@ impl Editor {
                     .images
                     .configure(&self.root(), &self.state.project);
                 self.asset_ui.thumbnail = None;
+                // A sound or model a script names goes all the same: the Console says where,
+                // with a notice.
                 for line in &told {
-                    self.log(line.clone());
+                    self.warn(line.clone());
                 }
                 Ok(told)
             }

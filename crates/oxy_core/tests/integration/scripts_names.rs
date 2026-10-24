@@ -263,7 +263,19 @@ fn oxy_validate_names_the_misspelled_names_of_the_folders_scripts() {
     let root = folder(&[(PATH, DOOR), ORDER]);
     let validation = query::validation_in(&project, Some(&root));
     assert_eq!(validation["valid"], true);
-    assert_eq!(validation["warnings"], json!(door_warnings()));
+    // The sounds whose files the folder lacks come first, as opening tells them.
+    let mut warnings: Vec<String> = ["Checkpoint", "Bipe"]
+        .iter()
+        .map(|name| {
+            format!(
+                "{name} (som): o arquivo assets/{}.wav não existe na pasta do projeto; jogar e \
+                 exportar ficam recusados enquanto o recurso for usado",
+                name.to_lowercase()
+            )
+        })
+        .collect();
+    warnings.extend(door_warnings());
+    assert_eq!(validation["warnings"], json!(warnings));
     // A project of nodes only, without the folder, validates as before.
     let (plain, _) = project_without_scripts();
     let nowhere = folder(&[]);

@@ -484,8 +484,15 @@ impl Editor {
                             )
                             .clicked()
                         {
+                            let names = self.script_names_before();
                             match input_actions::remove(&mut self.state.project, id) {
-                                Ok(()) => self.logic_ui.remove = None,
+                                Ok(()) => {
+                                    self.logic_ui.remove = None;
+                                    self.warn_script_names(
+                                        names,
+                                        &[oxy_core::script::NameKind::Action],
+                                    );
+                                }
                                 Err(e) => self.warn(e),
                             }
                         }
