@@ -6,6 +6,7 @@ use glam::Vec3;
 use oxy_core::{
     asset_import::{self, ImportBatch},
     command::{self, Applied},
+    conversion,
     document::*,
     editing, encoding,
     export::{self, ExportRequest},
@@ -59,6 +60,41 @@ fn run_scripts(
 /// file renamed or deleted outside OXY is told, not refused.
 fn open_file(file: &Path) -> Result<(Project, OpenReport), String> {
     persistence::open_project(file).map_err(|e| e.to_string())
+}
+
+/// Saves `project` at its project file `file` on files, with `known`, what was read of its
+/// models' files: a project of the old layout is organized in folders on the way (an agent may
+/// do it by itself; see `conversion::convert`), and `project` becomes the one saved. Answers what
+/// the save tells and, when it organized the project, what changed; one that cannot be organized
+/// now is saved in the old layout, the reason first among the lines.
+fn save_on_files(
+    file: &Path,
+    project: &mut Project,
+    known: &mut persistence::KnownFiles,
+) -> Result<(Vec<String>, Option<Json>), String> {
+    use conversion::ConversionError::{Busy, Failed, Kept, Refused};
+    if project.layout == Layout::Legacy && file.is_file() {
+        let why = match conversion::convert(file, project, None, known, conversion::Who::Agent) {
+            Ok(done) => {
+                let converted = done.json();
+                let told = done.warnings;
+                *project = done.project;
+                return Ok((told, Some(converted)));
+            }
+            Err(Kept(why) | Busy(why)) => return Err(why),
+            Err(Refused(why) | Failed(why)) => why,
+        };
+        let mut told =
+            persistence::save_project_with(file, project, known).map_err(|e| e.to_string())?;
+        told.insert(
+            0,
+            format!("O projeto continua no formato antigo, sem organizar em pastas: {why}."),
+        );
+        return Ok((told, None));
+    }
+    persistence::save_project_with(file, project, known)
+        .map(|told| (told, None))
+        .map_err(|e| e.to_string())
 }
 
 /// Adds to `answer`, as `open_warnings`, the `lines` opening the project on files told (see
@@ -891,7 +927,8 @@ labelled 'Agente: …' in the editor and the person saves (or oxy_save, if they 
 files, the project file is saved (project.oxy.json.agente.bak keeps it as it was before this \
 server session first changed it: taken once per session, not on every call, and answered as \
 previous_version; a project from an older OXY is saved in the current format and its original \
-is kept once as project.oxy.json.schema-N.….backup.json). The answer is {created, \
+is kept once: in the full copy in .oxy/backup when the write organizes it in folders, answered \
+as converted, else as project.oxy.json.schema-N.….backup.json). The answer is {created, \
 warnings?}: created maps the index of each command that created something to [{id, name}] \
 (keys in command order, \"2\" before \"10\"; every piece of a preset, its root first; a node's \
 name is its operation; what a later command removed keeps the name it was created with), and \
@@ -1125,11 +1162,12 @@ files) and the person saves (or oxy_save, if they allow it; the project needs a 
 refused before its first save); on files, the project file is saved once \
 (project.oxy.json.agente.bak keeps it as it was before this server session first changed it, \
 as oxy_apply does; an older project is saved in the current format and its original is kept \
-once as project.oxy.json.schema-N.….backup.json). Answers {asset, name, kind, path (relative \
-to the project folder), width and height (images), seconds (sounds), applied_to?}; with paths, \
-{imported: [one such entry per file, in the order of paths]}. Use the asset ID in set_material \
-texture, an interface element's ui.texture (update_entity) or the asset parameter of an \
-action.sound (once), action.sound_loop or action.sound_stop node.";
+once, as oxy_apply says: .oxy/backup or project.oxy.json.schema-N.….backup.json). Answers \
+{asset, name, kind, path (relative to the project folder), width and height (images), seconds \
+(sounds), applied_to?}; with paths, {imported: [one such entry per file, in the order of \
+paths]}. Use the asset ID in set_material texture, an interface element's ui.texture \
+(update_entity) or the asset parameter of an action.sound (once), action.sound_loop or \
+action.sound_stop node.";
 
 const SCRIPTS_DESCRIPTION: &str = "Luau scripts: the .luau files in any folder of the project \
 folder, by their path from it (Pista/porta.luau; folders starting with '.' are outside), which \
@@ -1244,12 +1282,12 @@ another game's export.";
 const NEW_PROJECT_DESCRIPTION: &str = "Creates a new project as the editor's Projeto > Novo \
 projeto and its first Salvar do: the project `name` with one empty scene of scene.kind, which \
 the game starts in, written to <folder>\\project.oxy.json in the current format (only that \
-file: the assets folder comes with the first oxy_import). Create one only when the person asks, \
-in the folder they name. It always writes the files and never reaches an editor, one open with \
-agents allowed included: nothing changes there, and the project opens in the editor only when \
-the person opens it (Projeto > Abrir projeto…). Then pass folder as `project` to the other \
-tools, which edit its files (oxy_apply, oxy_import…). Answers the summary of oxy_project plus \
-folder, saved (the project file) and note, which says this.";
+file, in folders: oxy_import puts each file in the folder by its name). Create one only when \
+the person asks, in the folder they name. It always writes the files and never reaches an \
+editor, one open with agents allowed included: nothing changes there, and the project opens in \
+the editor only when the person opens it (Projeto > Abrir projeto…). Then pass folder as \
+`project` to the other tools, which edit its files (oxy_apply, oxy_import…). Answers the summary \
+of oxy_project plus folder, saved (the project file) and note, which says this.";
 
 const NEW_PROJECT_FOLDER: &str = "Absolute path of the folder on a drive of this computer \
 (C:\\...) that the person asked you to create the project in: a new folder (made with the \
@@ -1928,9 +1966,11 @@ impl Tools {
                     persistence::added_script_warnings(&known, &project, &root),
                 );
                 let backup = self.keep_previous_version(&file)?;
-                let told = persistence::save_project_with(&file, &project, &mut opened.known)
-                    .map_err(|e| e.to_string())?;
+                let (told, converted) = save_on_files(&file, &mut project, &mut opened.known)?;
                 command::add_warnings(&mut report, told);
+                if let Some(converted) = converted {
+                    report["converted"] = converted;
+                }
                 add_open_lines(&mut report, opened.lines());
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
@@ -2019,14 +2059,13 @@ impl Tools {
                 let _lock = AgentLock::hold(&root)?;
                 let (mut project, mut opened) = open_file(&file)?;
                 let start = project.start_scene.clone();
-                let imported =
+                let mut imported =
                     asset_import::import_batch(&mut project, &root, &start, &batch, &sources)?;
                 let saved = self.keep_previous_version(&file).and_then(|backup| {
-                    persistence::save_project_with(&file, &project, &mut opened.known)
-                        .map(|told| (backup, told))
-                        .map_err(|e| e.to_string())
+                    save_on_files(&file, &mut project, &mut opened.known)
+                        .map(|(told, converted)| (backup, told, converted))
                 });
-                let (backup, told) = match saved {
+                let (backup, told, converted) = match saved {
                     Ok(saved) => saved,
                     Err(error) => {
                         // The project file does not name the copies: they go too.
@@ -2034,8 +2073,18 @@ impl Tools {
                         return Err(error);
                     }
                 };
+                // Organizing the project in folders named the copies anew.
+                for item in &mut imported {
+                    if let Some(asset) = project.asset(&item.asset) {
+                        item.name.clone_from(&asset.name);
+                        item.path.clone_from(&asset.path);
+                    }
+                }
                 let mut report = batch.answer(&imported)?;
                 command::add_warnings(&mut report, told);
+                if let Some(converted) = converted {
+                    report["converted"] = converted;
+                }
                 add_open_lines(&mut report, opened.lines());
                 report["saved"] = json!(file.display().to_string());
                 report["previous_version"] = json!(backup.display().to_string());
@@ -2129,6 +2178,8 @@ impl Tools {
             _ => return Err("scene.kind inválido: use \"2d\" ou \"3d\".".into()),
         };
         let mut project = editing::blank_project(&name, kind)?;
+        // A new project is in folders from the start, as the editor's first save writes it.
+        project.layout = Layout::Tree;
         match scene.get("name") {
             None | Some(Json::Null) => {}
             Some(Json::String(scene_name)) if !scene_name.trim().is_empty() => {
@@ -4542,6 +4593,12 @@ mod tests {
         .unwrap();
         // The placed root keeps the name it was saved with, which the summary shows.
         assert_eq!(applied["created"]["3"][0]["name"], "Ladrilho 1");
+        // The first write organized the project of the old layout in folders.
+        assert_eq!(
+            applied["converted"]["models"],
+            json!(["Modelos/Ladrilho que cai.modelo.json"])
+        );
+        assert!(dir.join("Modelos/Ladrilho que cai.modelo.json").is_file());
         let model_entry = |summary: &Json| {
             summary["assets"]
                 .as_array()
@@ -4573,18 +4630,25 @@ mod tests {
         assert_eq!(placed["created"]["0"][0]["name"], "Ladrilho 2");
         assert_eq!(placed["created"]["0"][1]["name"], "Tampa 2");
 
-        // Replaced in place and renamed; deleted once nothing uses it. The tool's scene stays
-        // out of the asset commands.
+        // Replaced in place; deleted once nothing uses it. The tool's scene stays out of the
+        // asset commands. In folders its name is its file's, which OXY does not rename yet.
         let replaced = call(
             "oxy_apply",
             json!({"scene": start, "commands": [
                 {"op": "create_entity", "kind": {"type": "group"}, "name": "Ladrilho"},
                 {"op": "save_model", "entity": "$0", "replace": "Ladrilho que cai"},
-                {"op": "rename_asset", "asset": "Ladrilho que cai", "name": "Ladrilho frágil"},
             ]}),
         )
         .unwrap();
         assert_eq!(replaced["created"]["1"][0]["id"], model["id"]);
+        let error = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "rename_asset", "asset": "Ladrilho que cai", "name": "Ladrilho frágil"},
+            ]}),
+        )
+        .unwrap_err();
+        assert!(error.contains("renomear arquivos pela OXY"), "{error}");
         let renamed = model_entry(&call("oxy_project", json!({})).unwrap()).unwrap();
         assert_eq!(
             (
@@ -4592,16 +4656,16 @@ mod tests {
                 &renamed["root"]["name"],
                 &renamed["part_count"]
             ),
-            (&json!("Ladrilho frágil"), &json!("Ladrilho"), &json!(1))
+            (&json!("Ladrilho que cai"), &json!("Ladrilho"), &json!(1))
         );
         assert_eq!(renamed["used_by"].as_array().unwrap().len(), 2);
         let error = call(
             "oxy_apply",
-            json!({"commands": [{"op": "delete_asset", "asset": "ladrilho frágil"}]}),
+            json!({"commands": [{"op": "delete_asset", "asset": "ladrilho que cai"}]}),
         )
         .unwrap_err();
         assert!(
-            error.contains("Não é possível excluir o modelo Ladrilho frágil")
+            error.contains("Não é possível excluir o modelo Ladrilho que cai")
                 && error.contains("Ladrilho 2: modelo"),
             "{error}"
         );
@@ -4613,7 +4677,7 @@ mod tests {
             "oxy_apply",
             json!({"scene": start, "commands": [
                 {"op": "delete_entities", "ids": roots},
-                {"op": "delete_asset", "asset": "Ladrilho frágil", "kind": "Model"},
+                {"op": "delete_asset", "asset": "Ladrilho que cai", "kind": "Model"},
             ]}),
         )
         .unwrap();
@@ -5119,6 +5183,110 @@ mod tests {
     }
 
     #[test]
+    fn files_first_write_organizes_an_old_project_in_folders_and_says_what_changed() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-pastas-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Antigo", SceneKind::ThreeD).unwrap();
+        let sound = new_id();
+        let old = format!("assets/{sound}.wav");
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join(&old), wav(800, 8000)).unwrap();
+        project.assets.push(Asset {
+            id: sound.clone(),
+            name: "Clique: menu".into(),
+            path: old.clone(),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        persistence::save_project(&file, &project).unwrap();
+        let original = std::fs::read(&file).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        // Reading leaves it as it is.
+        on_files(&mut tools, &project_arg, "oxy_project", json!({})).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+
+        let applied = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Organizado"}]}),
+        )
+        .unwrap();
+        let converted = &applied["converted"];
+        assert_eq!(
+            converted["moved"],
+            json!([{"from": old, "to": "Sons/Clique menu.wav"}])
+        );
+        let summary = converted["summary"].as_str().unwrap();
+        assert!(
+            summary.starts_with("O agente organizou o projeto em pastas"),
+            "{summary}"
+        );
+        assert!(
+            converted["notes"][0]
+                .as_str()
+                .unwrap()
+                .contains("\"Clique menu\""),
+            "{converted}"
+        );
+        let backup = converted["backup"].as_str().unwrap();
+        assert!(
+            backup.starts_with(".oxy/backup/antes-das-pastas-"),
+            "{backup}"
+        );
+        assert_eq!(
+            std::fs::read(dir.join(backup).join(persistence::PROJECT_FILE)).unwrap(),
+            original
+        );
+        let saved = persistence::load_project(&file).unwrap();
+        assert_eq!(saved.layout, Layout::Tree);
+        assert_eq!(saved.name, "Organizado");
+        assert_eq!(saved.asset(&sound).unwrap().path, "Sons/Clique menu.wav");
+        assert!(!dir.join("assets").exists());
+        // The editor tells the person when it next opens the project.
+        assert_eq!(conversion::agent_note(&dir)[0], summary);
+        // The next write has nothing to organize.
+        let next = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "De novo"}]}),
+        )
+        .unwrap();
+        assert!(next.get("converted").is_none(), "{next}");
+
+        // A project saved in a folder with other files stays in the old layout, told.
+        let shared = dir.join("Documentos");
+        let file = shared.join(persistence::PROJECT_FILE);
+        persistence::save_project(&file, &project).unwrap();
+        std::fs::create_dir_all(shared.join("assets")).unwrap();
+        std::fs::write(shared.join(&old), wav(800, 8000)).unwrap();
+        std::fs::write(shared.join("foto.png"), b"de outra pessoa").unwrap();
+        let applied = on_files(
+            &mut tools,
+            &shared.display().to_string(),
+            "oxy_apply",
+            json!({"commands": [{"op": "rename_project", "name": "Ainda antigo"}]}),
+        )
+        .unwrap();
+        assert!(applied.get("converted").is_none(), "{applied}");
+        let warning = applied["warnings"][0].as_str().unwrap();
+        assert!(
+            warning.starts_with("O projeto continua no formato antigo")
+                && warning.contains("foto.png"),
+            "{warning}"
+        );
+        let saved = persistence::load_project(&file).unwrap();
+        assert_eq!(
+            (saved.layout, saved.name.as_str()),
+            (Layout::Legacy, "Ainda antigo")
+        );
+        assert!(shared.join(&old).is_file());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn files_import_several_files_at_once_and_keep_the_session_start_as_the_backup() {
         let dir = std::env::temp_dir().join(format!("oxy-mcp-batch-{}", new_id()));
         let sources = dir.join("origem");
@@ -5149,7 +5317,8 @@ mod tests {
             [&music, &jump, &image, &broken].map(|path| path.display().to_string());
         let root = file.parent().unwrap().to_owned();
         let project_arg = root.display().to_string();
-        let assets = || std::fs::read_dir(root.join("assets")).unwrap().count();
+        // The files of the project's tree: the copies, in whatever folder.
+        let assets = || oxy_core::project_tree::walk(&root).unwrap().files.len();
         let mut tools = Tools::default();
 
         let imported = on_files(
@@ -5169,6 +5338,15 @@ mod tests {
         );
         assert_eq!(list[2]["applied_to"], json!(sign_id));
         assert_eq!(assets(), 3);
+        // The first write organized the project of the old layout in folders: the answer
+        // gives each copy where it ended.
+        let paths: Vec<_> = list.iter().map(|i| i["path"].as_str().unwrap()).collect();
+        assert_eq!(
+            paths,
+            ["Sons/Música.wav", "Sons/pulo.wav", "Imagens/placa.png"]
+        );
+        assert_eq!(imported["converted"]["moved"].as_array().unwrap().len(), 3);
+        assert!(paths.iter().all(|path| root.join(path).is_file()));
         let saved = persistence::load_project(&file).unwrap();
         assert_eq!(saved.assets.len(), 3);
         assert_eq!(
@@ -5660,9 +5838,16 @@ mod tests {
             (imported["width"].clone(), imported["height"].clone()),
             (json!(16), json!(8))
         );
-        assert_eq!(imported["path"], format!("assets/{asset}.png"));
+        // The first write organized the project of the old layout in folders.
+        assert_eq!(imported["path"], "Imagens/placa.png");
+        assert_eq!(
+            imported["converted"]["moved"],
+            json!([{"from": format!("assets/{asset}.png"), "to": "Imagens/placa.png"}])
+        );
         assert!(imported["saved"].is_string() && imported["previous_version"].is_string());
         let root = file.parent().unwrap();
+        // The files of the project's tree: the copies, in whatever folder.
+        let copies = || oxy_core::project_tree::walk(root).unwrap().files.len();
         assert_eq!(
             std::fs::read(root.join(imported["path"].as_str().unwrap())).unwrap(),
             std::fs::read(&image).unwrap()
@@ -5701,9 +5886,9 @@ mod tests {
             json!([{"entity": sign_id, "name": "Placa", "role": "material"}])
         );
 
-        // A refused import leaves the project file and the assets folder as they were.
+        // A refused import leaves the project file and its files as they were.
         let before = std::fs::read(&file).unwrap();
-        let copies = std::fs::read_dir(root.join("assets")).unwrap().count();
+        let count = copies();
         let error = call(
             "oxy_import",
             json!({"path": image.display().to_string(), "apply_to": "fantasma"}),
@@ -5711,10 +5896,7 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("fantasma"), "{error}");
         assert_eq!(std::fs::read(&file).unwrap(), before);
-        assert_eq!(
-            std::fs::read_dir(root.join("assets")).unwrap().count(),
-            copies
-        );
+        assert_eq!(copies(), count);
         // So does one whose save fails after the file was copied (here the previous version
         // cannot be kept, a folder holding its name): the copy is taken away again.
         let backup = file.with_extension("json.agente.bak");
@@ -5723,10 +5905,7 @@ mod tests {
         let error = call("oxy_import", json!({"path": image.display().to_string()})).unwrap_err();
         assert!(error.contains("versão anterior"), "{error}");
         assert_eq!(std::fs::read(&file).unwrap(), before);
-        assert_eq!(
-            std::fs::read_dir(root.join("assets")).unwrap().count(),
-            copies
-        );
+        assert_eq!(copies(), count);
         std::fs::remove_dir(&backup).unwrap();
 
         // The console exists only live.
@@ -6026,16 +6205,20 @@ mod tests {
             assert_eq!(opened.scenes.len(), 1);
             assert_eq!(opened.scenes[0].kind, scene_kind);
             assert_eq!(opened.start_scene, opened.scenes[0].id);
-            // The editor's Novo projeto, as its first Salvar writes it, is the same file, and
-            // neither writes anything else (the assets folder comes with the first import).
+            // The editor's Novo projeto, as its first Salvar writes it (in folders, see
+            // conversion::convert), is the same file, and neither writes anything else.
             let editor = dir.join(format!("Editor {kind}"));
             let created = editing::blank_project(" Corrida ", scene_kind).unwrap();
-            persistence::save_cached_bundle(
+            let first = conversion::convert(
                 &editor.join(persistence::PROJECT_FILE),
                 &created,
-                &mut TextureCache::default(),
+                Some(&mut TextureCache::default()),
+                &mut persistence::KnownFiles::default(),
+                conversion::Who::Person,
             )
             .unwrap();
+            assert!(first.summary.is_none() && first.backup.is_none());
+            assert_eq!(document(&file)["layout"], "Tree");
             assert_eq!(
                 document(&file),
                 document(&editor.join(persistence::PROJECT_FILE))

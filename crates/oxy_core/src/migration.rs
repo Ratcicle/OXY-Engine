@@ -235,6 +235,9 @@ fn migrate_entities(value: &mut serde_json::Value) {
 
 /// Prepare a permanent source-manifest backup in the same transaction as the save.
 /// IDs, relative paths and source bytes are kept verbatim. Never overwrites a backup.
+/// A change of layout keeps a full copy of the project instead (see `crate::conversion`), and a
+/// future migration's backup covers every file its first save rewrites because of it: a 6 to 7
+/// that changed the models' pieces would keep each `.modelo.json` too.
 pub fn backup(path: &Path) -> Result<Option<(PathBuf, Vec<u8>)>, MigrationError> {
     if !path.is_file() {
         return Ok(None);

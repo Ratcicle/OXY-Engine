@@ -4,7 +4,8 @@
 //! model moved or renamed outside OXY is found again by the ID inside it, a path the disk has in
 //! another case is taken as the disk has it, and a file of a known kind the project file does not
 //! list yet is registered, with an ID made from its path, so it is the same at the next opening.
-//! Nothing is written: the next save writes what opening fixed.
+//! Nothing is written, but to finish or undo an organization in folders that stopped (see
+//! [`crate::conversion::resume`]): the next save writes what opening fixed.
 use super::{PROJECT_FILE, PersistenceError, read_document, resolve_asset_path, script_warnings};
 use crate::{
     document::{Asset, AssetKind, Entity, Id, Layout, Project, validate_model, validate_project},
@@ -112,19 +113,23 @@ impl OpenReport {
 /// path is invalid, one whose content is not usable and a model that cannot be read or does not
 /// fit the project stay, told in the report (see [`AssetState`]); one missing that nothing uses
 /// leaves the project. Only a project file that cannot be read or whose structure is invalid
-/// fails. Nothing is written.
+/// fails. Nothing is written, but first an organization of the project in folders that stopped
+/// is finished or undone, told in the report.
 pub fn open_project(path: &Path) -> Result<(Project, OpenReport), PersistenceError> {
     let path = if path.is_dir() {
         path.join(PROJECT_FILE)
     } else {
         path.to_owned()
     };
+    let root = path.parent().unwrap_or(Path::new("."));
+    let resumed = crate::conversion::resume(root);
     let bytes = read_document(&path)?;
     let (mut project, migrated) = crate::migration::read_report(&bytes)?;
-    let root = path.parent().unwrap_or(Path::new("."));
     let mut report = OpenReport {
         layout: project.layout,
         migrated,
+        fixes: resumed.fixes,
+        warnings: resumed.warnings,
         ..OpenReport::default()
     };
     let tree = if project.layout == Layout::Tree {
@@ -609,7 +614,8 @@ impl Opening<'_, '_> {
     /// Registers every image, sound and model of the tree no entry has, in the order of the
     /// bytes of their paths, at the end of the project's assets: each one's ID made from its
     /// path (a model keeps the one in its file while no other asset or object has it), its name
-    /// its file's.
+    /// its file's. The files the old layout named after an asset's ID (`assets/<id>.wav`) are
+    /// never registered: no asset is named like an ID.
     fn register(&mut self, project: &mut Project, models: &[(String, ModelRead)]) {
         let Some(tree) = self.disk.tree else {
             return;
@@ -617,7 +623,11 @@ impl Opening<'_, '_> {
         let mut new: Vec<&TreeFile> = tree
             .files
             .iter()
-            .filter(|file| asset_kind(file.kind).is_some() && !self.claimed.contains(&file.path))
+            .filter(|file| {
+                asset_kind(file.kind).is_some()
+                    && !self.claimed.contains(&file.path)
+                    && !crate::conversion::old_asset_file(&file.path)
+            })
             .collect();
         new.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
         let mut taken = identifiers(project);

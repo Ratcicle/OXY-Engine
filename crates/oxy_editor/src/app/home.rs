@@ -155,7 +155,14 @@ impl Editor {
             let copy = std::env::temp_dir()
                 .join(format!("oxy-example-{}", new_id()))
                 .join(persistence::PROJECT_FILE);
-            persistence::save_cached_copy(&copy, &project, &mut images, root)?;
+            // In folders, as a copy of a project of the old layout is written.
+            oxy_core::conversion::save_copy(
+                &copy,
+                &project,
+                &mut images,
+                root,
+                &mut persistence::KnownFiles::default(),
+            )?;
             Ok::<_, String>(copy)
         })();
         let copy = match result {

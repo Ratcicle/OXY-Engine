@@ -6,6 +6,7 @@ mod camera_authoring;
 mod cameras3d;
 mod character3d;
 mod commands;
+mod conversion;
 mod determinism;
 mod geometry;
 mod guide_recipes;

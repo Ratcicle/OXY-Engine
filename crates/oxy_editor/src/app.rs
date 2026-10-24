@@ -35,6 +35,7 @@ use crate::{
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
 use glam::Vec3;
 use oxy_core::{
+    conversion,
     document::*,
     edit_history::CommandHistory,
     editing::{self, Selection},
@@ -303,6 +304,10 @@ pub struct Editor {
     /// The open project's `.oxy/editor.lock`, held while it is open so that agents on files do
     /// not write it.
     pub(crate) lock: Option<oxy_core::project_lock::EditorLock>,
+    /// What the last save that organized the project in folders did, for an agent's answer.
+    pub(crate) converted: Option<serde_json::Value>,
+    /// Why the last save kept the project in the old layout, for an agent's answer.
+    pub(crate) kept_layout: Option<String>,
     pub scene_id: Id,
     pub selected: Option<Id>,
     pub selection: Selection,
@@ -441,6 +446,8 @@ impl Editor {
             path: None,
             known_files: Default::default(),
             lock: None,
+            converted: None,
+            kept_layout: None,
             scene_id,
             selected: None,
             selection: Selection::default(),
@@ -583,6 +590,17 @@ impl Editor {
                 // What opening fixed in memory, which the next save writes.
                 for fix in &report.fixes {
                     self.log(fix.clone());
+                }
+                // What an agent's write that organized the project in folders did, until the
+                // person saves it; and what the first save of a project of the old layout does.
+                for line in conversion::agent_note(&root) {
+                    self.log(line);
+                    self.notice_last(true);
+                }
+                if add_recent && report.layout == Layout::Legacy {
+                    let path = self.path.clone().expect("Projeto aberto");
+                    self.log(conversion::preview(&path, &self.state.project));
+                    self.notice_last(true);
                 }
                 // A file renamed or deleted outside OXY: the project opens, the test and the
                 // export wait for it.
@@ -730,8 +748,13 @@ impl Editor {
         let path = self.path.as_ref().unwrap().clone();
         let root = path.parent().unwrap_or(Path::new(".")).to_owned();
         let agent_writing = oxy_core::project_lock::wait_for_agents(&root);
+        self.converted = None;
+        self.kept_layout = None;
+        // The project as saved, when the save organized it in folders: what it tells, and
+        // whether its assets' names and paths changed.
+        let mut organized = None;
         let result = if self.home.example_copy {
-            persistence::save_cached_copy_with(
+            conversion::save_copy(
                 &path,
                 &self.state.project,
                 &mut self.state.images,
@@ -741,6 +764,15 @@ impl Editor {
                     .expect("Exemplo com pasta de origem"),
                 &mut self.known_files,
             )
+            .map(|copied| {
+                if copied.project != self.state.project {
+                    organized = Some((copied.project, true));
+                }
+                copied.warnings
+            })
+            .map_err(|error| error.to_string())
+        } else if self.state.project.layout == Layout::Legacy {
+            self.save_organizing(&path, &mut organized, origin.is_empty())
         } else {
             persistence::save_cached_bundle_with(
                 &path,
@@ -748,11 +780,24 @@ impl Editor {
                 &mut self.state.images,
                 &mut self.known_files,
             )
+            .map_err(|error| error.to_string())
         };
         match result {
             Ok(told) => {
                 self.home.example_copy = false;
+                if let Some((project, changed)) = organized {
+                    self.state.project = project;
+                    // The edits before it name the files by their old paths.
+                    if changed && (self.history.can_undo() || self.history.can_redo()) {
+                        self.history.clear();
+                        self.log(
+                            "O desfazer recomeçou: as edições anteriores citavam os arquivos \
+                             pelos nomes antigos.",
+                        );
+                    }
+                }
                 self.history.mark_saved();
+                conversion::forget_agent_note(&root);
                 self.remember_project();
                 self.renderer.release_saved_texture_pixels();
                 self.play.game_ui.release_saved_texture_pixels();
@@ -783,6 +828,51 @@ impl Editor {
                 false
             }
         }
+    }
+    /// Saves the project of the old layout at `path` organizing it in folders (see
+    /// `conversion::convert`), leaving in `organized` the project as saved; one that cannot be
+    /// organized now is saved in the old layout, telling why (also in `kept_layout`). An agent's
+    /// save (`by_person` false) is told as the agent's. Answers the lines to tell.
+    fn save_organizing(
+        &mut self,
+        path: &Path,
+        organized: &mut Option<(Project, bool)>,
+        by_person: bool,
+    ) -> Result<Vec<String>, String> {
+        use conversion::ConversionError::{Busy, Failed, Kept, Refused};
+        let converted = conversion::convert(
+            path,
+            &self.state.project,
+            Some(&mut self.state.images),
+            &mut self.known_files,
+            if by_person {
+                conversion::Who::Person
+            } else {
+                conversion::Who::Agent
+            },
+        );
+        let why = match converted {
+            Ok(done) => {
+                let told = done.lines().cloned().collect();
+                self.converted = Some(done.json());
+                *organized = Some((done.project, done.changed_assets));
+                return Ok(told);
+            }
+            Err(Kept(why) | Busy(why)) => return Err(why),
+            Err(Refused(why) | Failed(why)) => why,
+        };
+        let mut told = persistence::save_cached_bundle_with(
+            path,
+            &self.state.project,
+            &mut self.state.images,
+            &mut self.known_files,
+        )
+        .map_err(|error| error.to_string())?;
+        let kept =
+            format!("O projeto foi salvo no formato antigo, sem organizar em pastas: {why}.");
+        self.kept_layout = Some(kept.clone());
+        told.insert(0, kept);
+        Ok(told)
     }
     fn transition(&mut self, transition: Transition) {
         if self.export.running() {

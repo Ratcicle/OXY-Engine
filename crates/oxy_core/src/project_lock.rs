@@ -3,8 +3,10 @@
 //! editor lives (the system lets go of it if the editor falls). The agents' tools on files remove
 //! a lock an editor left behind before they write, and refuse to write while they cannot (reading
 //! is still allowed); each of their calls that writes holds `.oxy/agente.lock` meanwhile, which
-//! the editor waits for when it opens or saves the project. Outside Windows a file open does not
-//! keep others from removing it, and the locks only note who has the project.
+//! the editor waits for when it opens or saves the project. Organizing a project in folders
+//! holds `.oxy/conversao.lock` while it works, so that opening the project meanwhile (an agent's
+//! read, for one) does not finish or undo it halfway. Outside Windows a file open does not keep
+//! others from removing it, and the locks only note who has the project.
 use crate::fs_ops;
 use std::{
     fs::{self, File, OpenOptions},
@@ -17,6 +19,9 @@ use std::{
 pub const EDITOR_LOCK: &str = ".oxy/editor.lock";
 /// The lock an agent's tool holds while it writes the project, from the project's folder.
 pub const AGENT_LOCK: &str = ".oxy/agente.lock";
+/// The lock held while the project is organized in folders, or such work that stopped is
+/// finished or undone (see `crate::conversion`), from the project's folder.
+pub const CONVERSION_LOCK: &str = ".oxy/conversao.lock";
 /// How long the editor waits for an agent's write to end.
 pub const AGENT_WAIT: Duration = Duration::from_secs(2);
 /// Why the agents' tools do not write a project open in the editor.
@@ -131,6 +136,25 @@ impl AgentLock {
     }
 }
 
+/// The hold of a conversion of the project to folders, let go when dropped.
+#[derive(Debug)]
+pub struct ConversionLock {
+    _held: Held,
+}
+impl ConversionLock {
+    /// Holds the project at `root` for organizing it in folders; fails while another conversion
+    /// holds it.
+    pub fn hold(root: &Path) -> io::Result<Self> {
+        Held::take(root, CONVERSION_LOCK).map(|held| Self { _held: held })
+    }
+}
+
+/// Whether a conversion of the project at `root` to folders is at work now (a lock left behind
+/// is removed).
+pub fn converting(root: &Path) -> bool {
+    held(&root.join(CONVERSION_LOCK))
+}
+
 /// Whether an editor has the project at `root` open: its lock is there and cannot be removed.
 /// A lock an editor that ended left behind is removed.
 pub fn editor_holds(root: &Path) -> bool {
@@ -201,6 +225,23 @@ mod tests {
         drop(agent);
         assert!(!agent_writing(&root));
         assert!(!wait_for_agents(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn one_conversion_at_a_time() {
+        let root = temp();
+        let lock = ConversionLock::hold(&root).unwrap();
+        assert!(converting(&root));
+        assert!(fs_ops::busy(&ConversionLock::hold(&root).unwrap_err()));
+        drop(lock);
+        assert!(!converting(&root));
+        assert!(!root.join(".oxy").exists());
+        fs::create_dir_all(root.join(".oxy")).unwrap();
+        fs_ops::create_new_file(&root.join(CONVERSION_LOCK), b"").unwrap();
+        assert!(!converting(&root), "a lock left behind is no conversion");
+        drop(ConversionLock::hold(&root).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 

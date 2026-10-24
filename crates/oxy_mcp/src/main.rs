@@ -27,7 +27,10 @@ to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long li
 (limit, offset, next_offset), oxy_entity summarizes logic and geometry unless asked in full, and \
 world positions and boxes (oxy_scene fields, oxy_entity) measure distances across parent groups. \
 Edit the project only through oxy_apply (atomic batches, validated with the editor's own rules) \
-and oxy_import (PNG and WAV files the person points you to). When the project is open in the \
+and oxy_import (PNG and WAV files the person points you to). On files, your first write to a \
+project of the old layout (images and sounds as assets/<id>) organizes it in folders (Sons/, \
+Imagens/, Modelos/, scripts where they are, a full copy in .oxy/backup); the answer's converted \
+says what moved: tell the person. When the project is open in the \
 editor your edits appear live and the person can undo them; the person saves there, and you never \
 save unless they enabled it (Permitir que agentes salvem: oxy_status can_save) and ask or agree, \
 then with oxy_save. After changes, check them with oxy_simulate and oxy_screenshot; oxy_play runs \
@@ -483,12 +486,26 @@ mod tests {
             std::fs::read(file.with_extension("json.agente.bak")).unwrap(),
             original
         );
-        let backup = std::fs::read_dir(&dir)
+        // Organized in folders on the way, the project as it was is in the full copy, and no
+        // backup of the format is left beside it.
+        assert_eq!(saved["layout"], "Tree");
+        let copy = std::fs::read_dir(dir.join(".oxy/backup"))
             .unwrap()
             .map(|e| e.unwrap().path())
-            .find(|p| p.to_string_lossy().contains(".schema-4."))
+            .find(|p| p.to_string_lossy().contains("antes-das-pastas-"))
             .unwrap();
-        assert_eq!(std::fs::read(backup).unwrap(), original);
+        assert_eq!(
+            std::fs::read(copy.join(persistence::PROJECT_FILE)).unwrap(),
+            original
+        );
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().all(|name| !name.contains(".schema-")),
+            "{names:?}"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

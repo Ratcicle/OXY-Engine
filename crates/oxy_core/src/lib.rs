@@ -8,6 +8,7 @@ pub mod camera_authoring;
 pub mod character;
 pub mod collision;
 pub mod command;
+pub mod conversion;
 pub mod document;
 pub mod edit_history;
 pub mod editing;

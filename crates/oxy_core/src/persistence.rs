@@ -424,7 +424,7 @@ pub fn save_cached_bundle_with(
     images: &mut TextureCache,
     known: &mut KnownFiles,
 ) -> Result<Vec<String>, PersistenceError> {
-    save_cached_bundle_from(path, project, images, None, known)
+    save_cached_bundle_from(path, project, images, None, &HashMap::new(), known)
 }
 
 /// Save an independent copy, including lazily loaded PNG/WAV resources and every script of the
@@ -453,7 +453,27 @@ pub fn save_cached_copy_with(
     source_root: &Path,
     known: &mut KnownFiles,
 ) -> Result<Vec<String>, PersistenceError> {
-    save_cached_bundle_from(path, project, images, Some(source_root), known)
+    save_cached_bundle_from(
+        path,
+        project,
+        images,
+        Some(source_root),
+        &HashMap::new(),
+        known,
+    )
+}
+/// [`save_cached_copy_with`] of a project whose images and sounds the source folder has at
+/// other paths, `old_paths` by asset ID: a project of the old layout organized in folders on its
+/// way to the copy (see [`crate::conversion::save_copy`]).
+pub(crate) fn save_cached_copy_from(
+    path: &Path,
+    project: &Project,
+    images: &mut TextureCache,
+    source_root: &Path,
+    old_paths: &HashMap<Id, String>,
+    known: &mut KnownFiles,
+) -> Result<Vec<String>, PersistenceError> {
+    save_cached_bundle_from(path, project, images, Some(source_root), old_paths, known)
 }
 
 fn save_cached_bundle_from(
@@ -461,6 +481,7 @@ fn save_cached_bundle_from(
     project: &Project,
     images: &mut TextureCache,
     source_root: Option<&Path>,
+    old_paths: &HashMap<Id, String>,
     known: &mut KnownFiles,
 ) -> Result<Vec<String>, PersistenceError> {
     validate_project(project).map_err(PersistenceError::InvalidProject)?;
@@ -502,7 +523,8 @@ fn save_cached_bundle_from(
                 })?);
             }
         } else if let Some(source_root) = source_root {
-            let source = resolve_asset_path(source_root, &asset.path)?;
+            let from = old_paths.get(&asset.id).unwrap_or(&asset.path);
+            let source = resolve_asset_path(source_root, from)?;
             let bytes = match fs::read(&source) {
                 Ok(bytes) => bytes,
                 // Opening told it missing; the copy goes without it, as the project does.
@@ -1281,6 +1303,19 @@ fn temporary_path(target: &Path, label: &str) -> PathBuf {
 /// the copies stay for recovery ([`PersistenceError::SaveRecoveryKept`]).
 pub fn transaction_write(writes: Vec<FileWrite>) -> Result<(), PersistenceError> {
     transaction_write_with(writes, install)
+}
+/// [`transaction_write`], calling `before` with the index of each file before it is put in
+/// place: where tests stop it as a crash would.
+pub(crate) fn transaction_write_hooked(
+    writes: Vec<FileWrite>,
+    mut before: impl FnMut(usize),
+) -> Result<(), PersistenceError> {
+    let mut index = 0;
+    transaction_write_with(writes, |source, target, mode| {
+        before(index);
+        index += 1;
+        install(source, target, mode)
+    })
 }
 /// Why putting a written file in place failed.
 enum InstallError {

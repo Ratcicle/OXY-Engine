@@ -396,10 +396,18 @@ impl Editor {
                 .cloned()
                 .unwrap_or_else(|| "Não foi possível salvar.".into()));
         }
-        Ok(json!({
+        let mut answer = json!({
             "saved": path.display().to_string(),
             "previous_version": backup.display().to_string(),
-        }))
+        });
+        // The first save of a project of the old layout organized it in folders, or why not.
+        if let Some(converted) = self.converted.take() {
+            answer["converted"] = converted;
+        }
+        if let Some(kept) = self.kept_layout.take() {
+            answer["warnings"] = json!([kept]);
+        }
+        Ok(answer)
     }
     /// Undo or redo on an agent's request, with the same rules as Ctrl+Z.
     pub(crate) fn agent_undo(&mut self, redo: bool) -> Result<Option<String>, String> {
