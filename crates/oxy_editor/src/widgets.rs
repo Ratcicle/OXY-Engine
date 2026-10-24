@@ -671,7 +671,7 @@ pub fn card<R>(
     menu: Option<&mut dyn FnMut(&mut Ui)>,
     body: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
-    card_with(ui, id_salt, title, false, enabled, menu, body)
+    card_with(ui, id_salt, title, false, enabled, menu, None, body)
 }
 
 /// `card` that starts open the first time it is shown.
@@ -681,7 +681,21 @@ pub fn open_card<R>(
     title: &str,
     body: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
-    card_with(ui, id_salt, title, true, None, None, body)
+    card_with(ui, id_salt, title, true, None, None, None, body)
+}
+
+/// `open_card` with `detail` at the right of its title, such as how many items it holds, and
+/// its border in `border` instead of the usual colour, for a problem inside it.
+pub fn open_card_with<R>(
+    ui: &mut Ui,
+    id_salt: impl Hash,
+    title: &str,
+    detail: &str,
+    border: Option<Color32>,
+    body: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let header = Some((detail, border));
+    card_with(ui, id_salt, title, true, None, None, header, body)
 }
 
 /// Opens the card titled `title` when it is next shown, e.g. a component just added.
@@ -695,6 +709,7 @@ fn card_open_request() -> egui::Id {
     egui::Id::new("card_open_request")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn card_with<R>(
     ui: &mut Ui,
     id_salt: impl Hash,
@@ -702,6 +717,7 @@ fn card_with<R>(
     default_open: bool,
     enabled: Option<&mut bool>,
     menu: Option<&mut dyn FnMut(&mut Ui)>,
+    header: Option<(&str, Option<Color32>)>,
     body: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
     let id = ui.make_persistent_id(id_salt);
@@ -724,9 +740,12 @@ fn card_with<R>(
         }
     }
     let mut output = None;
+    let border = header
+        .and_then(|(_, border)| border)
+        .unwrap_or(theme::CARD_BORDER);
     egui::Frame::new()
         .fill(theme::CARD_FILL)
-        .stroke(Stroke::new(1., theme::CARD_BORDER))
+        .stroke(Stroke::new(1., border))
         .corner_radius(theme::CARD_RADIUS)
         .inner_margin(egui::Margin {
             left: 6,
@@ -775,6 +794,9 @@ fn card_with<R>(
                     }
                     if let Some(enabled) = enabled {
                         toggle(ui, enabled, &format!("{title} ativo"));
+                    }
+                    if let Some((detail, _)) = header {
+                        ui.label(RichText::new(detail).size(12.5).color(theme::TEXT_MUTED));
                     }
                 });
             });

@@ -34,6 +34,7 @@ if (!$GraphicsOnly) {
         @('oxy_editor','native_editor_workflow'),
         @('oxy_editor','native_portable_home_workflow'),
         @('oxy_editor','native_agents_live_channel'),
+        @('oxy_editor','native_scripts_card'),
         @('oxy_editor','native_export_workflow'),
         @('oxy_player','native_player_portable_workflow'),
         @('oxy_player','native_player_game_pause_workflow'),

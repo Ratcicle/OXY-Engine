@@ -21,6 +21,7 @@ mod pause;
 mod physics;
 mod portable;
 mod recipes;
+mod scripts;
 mod spatial;
 mod ux;
 mod variables;
@@ -684,6 +685,9 @@ impl NativeQa {
         }
         if label.starts_with("pause_") {
             return self.check_pause(label);
+        }
+        if label.starts_with("sc7_") {
+            return self.check_scripts(label);
         }
         let ensure = |condition: bool, message: &str| {
             if condition {

@@ -351,8 +351,9 @@ set_transform takes it); scale (local); dimensions (of its shape); visual_bounds
 box collider), with sensor: true for areas and enabled: false when off; bounds, both boxes.";
 const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
 radians plus rotation_degrees, material, attributes, components, logic graph, scripts [{path, \
-missing?}] (the Luau files it runs, in order, after its graph; missing: true when the project \
-folder lacks the file), animation clips, \
+enabled?, missing?}] (the Luau files it runs, in order, after its graph; enabled: false \
+when switched off on the object, which the game then runs without it (set_script_enabled); \
+missing: true when the project folder lacks the file), animation clips, \
 each keyframe with rotation_degrees too, as set_clip takes it, which update_entity refuses in \
 keyframes, as they keep radians; empty (null) parts are left out) plus world {position, \
 rotation_degrees, scale}, visual_bounds and collider_bounds as oxy_scene describes them, \
@@ -1088,7 +1089,8 @@ with a warning; a file the project lacks is refused, with the one meant (oxy_scr
 creates it). The \
 first attach in a project without this version's VS Code types writes them (vscode in the \
 answer, as oxy_scripts vscode). detach_script {entity, path}: takes it off, keeping the \
-attributes
+attributes. set_script_enabled {entity, path, enabled}: off, the object keeps the script (oxy_entity \
+scripts shows enabled: false) but the game runs it without it, the editor's Ligado switch
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}. A box collider takes the shape's dimensions \
 when added and follows the object's scale, not later dimension changes
@@ -3510,6 +3512,66 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// The Ligado of the editor's Scripts card on files: set_script_enabled switches a script
+    /// off on an object, oxy_entity shows it, and oxy_simulate runs the object without it.
+    #[test]
+    fn files_switch_a_script_off_on_an_object() {
+        let dir =
+            std::env::temp_dir().join(format!("oxy-mcp-switch-{}", oxy_core::document::new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Ligado", SceneKind::ThreeD).unwrap();
+        let mut door = Entity::new("Porta", None);
+        door.scripts = vec![oxy_core::script::ScriptRef::new("scripts/girar.luau")];
+        let id = door.id.clone();
+        project.scenes[0].entities.push(door);
+        persistence::save_project(&file, &project).unwrap();
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/girar.luau"),
+            "local M = {}\nfunction M.on_start(self) print('giro') end\nreturn M\n",
+        )
+        .unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        let logs = |report: &Json| report["logs"].as_array().unwrap().len();
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        assert_eq!(logs(&report), 1, "{report}");
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "set_script_enabled", "entity": "Porta",
+                                 "path": "scripts/girar.luau", "enabled": false}]}),
+        )
+        .unwrap();
+        let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
+        assert_eq!(
+            entity["scripts"],
+            json!([{"path": "scripts/girar.luau", "enabled": false}])
+        );
+        let saved = persistence::load_project(&file).unwrap();
+        assert!(!saved.scenes[0].entity(&id).unwrap().scripts[0].enabled);
+        let report = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        assert_eq!(logs(&report), 0, "{report}");
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "set_script_enabled", "entity": &id,
+                                 "path": "scripts/girar.luau", "enabled": true}]}),
+        )
+        .unwrap();
+        let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
+        assert_eq!(entity["scripts"], json!([{"path": "scripts/girar.luau"}]));
+        assert!(APPLY_DESCRIPTION.contains("set_script_enabled {entity, path, enabled}"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn files_write_attach_and_run_scripts_in_any_folder_of_the_project() {
         let dir =
@@ -3838,7 +3900,7 @@ mod tests {
         }
         assert!(SIMULATE_DESCRIPTION.contains("script_time [{path, calls"));
         assert!(SIMULATE_DESCRIPTION.contains("most_entries (the most table entries"));
-        assert!(ENTITY_DESCRIPTION.contains("scripts [{path, missing?}]"));
+        assert!(ENTITY_DESCRIPTION.contains("scripts [{path, enabled?, missing?}]"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

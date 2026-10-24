@@ -193,7 +193,11 @@ impl Editor {
             }
             ui.horizontal(|ui| {
                 ui.set_height(theme::PANEL_HEADER_HEIGHT);
-                let items = [
+                let code = self
+                    .code_view
+                    .as_ref()
+                    .map(|view| super::script_status::file_name(&view.path).to_owned());
+                let mut items = vec![
                     (
                         DockTab::Library,
                         "Biblioteca",
@@ -202,12 +206,19 @@ impl Editor {
                     (DockTab::Console, "Console", None),
                     (DockTab::Notices, "Avisos", Some(self.notices.unread())),
                 ];
+                if let Some(name) = &code {
+                    items.push((DockTab::Code, name.as_str(), None));
+                }
                 if let Some(tab) = crate::widgets::tabs(ui, open.then_some(self.dock.tab), &items) {
                     if open && self.dock.tab == tab {
                         self.set_dock_open(false);
                     } else {
                         self.show_dock(tab);
                     }
+                }
+                if code.is_some() && icons::small(ui, Icon::Close, "Fechar código", 20.).clicked()
+                {
+                    self.close_code();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (icon, label) = if open {
@@ -248,7 +259,7 @@ impl Editor {
                                 self.clear_console();
                             }
                         }
-                        DockTab::Notices => {}
+                        DockTab::Notices | DockTab::Code => {}
                     }
                 });
             });
@@ -263,6 +274,7 @@ impl Editor {
                     DockTab::Library => self.library_body(ui),
                     DockTab::Console => self.console_body(ui),
                     DockTab::Notices => self.notices_body(ui),
+                    DockTab::Code => self.code_body(ui),
                 }
             }
         });

@@ -36,6 +36,22 @@ impl ErrorPlace {
         }
     }
 
+    /// The script and line the place is in, the line 0 when the error names none; none for an
+    /// error of no script (the VM did not start, two objects' handles collide).
+    fn script_line(&self) -> Option<(&str, u32)> {
+        match self {
+            Self::Line { path, line, .. } => Some((path, *line)),
+            Self::Text(text) => {
+                let end = text.find(".luau:")? + ".luau".len();
+                let digits = text[end + 1..]
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or_default();
+                Some((&text[..end], digits.parse().unwrap_or(0)))
+            }
+        }
+    }
+
     fn of(error: &ScriptError) -> Self {
         match error.location() {
             Some(at) => Self::Line {
@@ -586,6 +602,19 @@ impl Runtime {
             .script_errors
             .iter()
             .map(|((owner, _), (text, count))| (owner.as_str(), text.as_str(), *count))
+    }
+
+    /// [`Self::script_errors`] by where they happened: the object (empty for a script that did
+    /// not load), the script, its line (0 when the error names none) and the line the log has.
+    /// The errors of a script whose new text reloaded are gone; those of no script are left out.
+    pub fn script_error_lines(&self) -> impl Iterator<Item = (&str, &str, u32, &str)> {
+        self.run
+            .script_errors
+            .iter()
+            .filter_map(|((owner, place), (text, _))| {
+                let (path, line) = place.script_line()?;
+                Some((owner.as_str(), path, line, text.as_str()))
+            })
     }
 
     /// Whether the run has a Luau VM: only once a scene attached a script.

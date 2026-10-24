@@ -159,6 +159,7 @@ impl Editor {
                 }
                 if moved {
                     self.rebase_scan();
+                    self.script_status.look_again();
                 }
                 for command in commands {
                     self.log(format!("{AGENT_PREFIX}{}", command.label()));
@@ -227,11 +228,13 @@ impl Editor {
         let project = Some(&self.state.project);
         match script_files::answer(&root, project, &request, &mut self.agent_scripts_kept) {
             Ok(answer) => {
-                // Written through OXY: undoing a move of the file takes its new stamp.
-                if let script_files::Request::Write { path, .. } = &request
-                    && self.known_files.stamp(path).is_some()
-                {
-                    self.known_files.note_stamp(&root, path);
+                if let script_files::Request::Write { path, .. } = &request {
+                    // The Scripts card, the Hierarchy and the code tab see what it wrote.
+                    self.script_status.look_again();
+                    // Written through OXY: undoing a move of the file takes its new stamp.
+                    if self.known_files.stamp(path).is_some() {
+                        self.known_files.note_stamp(&root, path);
+                    }
                 }
                 for line in answer.console {
                     self.log(format!("{AGENT_PREFIX}{line}"));

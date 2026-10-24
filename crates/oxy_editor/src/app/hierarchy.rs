@@ -27,6 +27,18 @@ pub(crate) fn entity_icon(e: &Entity) -> Icon {
     }
 }
 
+/// The { } mark of an object with `count` scripts: its text and colour, red with ! when one of
+/// them is missing or fails in the current or last test or when the scripts were checked.
+fn script_badge(count: usize, failing: bool, selected: bool) -> (String, Color32) {
+    if failing {
+        (format!("{{ }} {count} !"), theme::ERROR)
+    } else if selected {
+        (format!("{{ }} {count}"), Color32::from_rgb(185, 211, 243))
+    } else {
+        (format!("{{ }} {count}"), theme::ACCENT_BRIGHT)
+    }
+}
+
 impl Editor {
     pub(super) fn reveal_selection(&mut self, id: Option<&str>) {
         let mut parent = id
@@ -390,14 +402,29 @@ impl Editor {
                         theme::TEXT_MUTED
                     },
                 );
+                // Objects with scripts show how many, in red with ! when one fails.
+                let mut badge = 0.;
+                if !e.scripts.is_empty() {
+                    let failing = self.script_status.failing(e);
+                    let (text, color) = script_badge(e.scripts.len(), failing, selected);
+                    let galley =
+                        ui.painter()
+                            .layout_no_wrap(text, egui::FontId::monospace(11.), color);
+                    badge = galley.size().x + 8.;
+                    let at = egui::pos2(
+                        rect.right() - badge + 2.,
+                        rect.center().y - galley.size().y / 2.,
+                    );
+                    ui.painter().galley(at, galley, color);
+                }
                 // In Lógica, objects with a graph show how many nodes it has.
                 let nodes = if self.tab == Tab::Logic {
                     e.graph.nodes.len()
                 } else {
                     0
                 };
-                let badge = if nodes > 0 { 34. } else { 0. };
                 if nodes > 0 {
+                    badge += 34.;
                     let color = if selected {
                         theme::ACCENT_BRIGHT
                     } else {
@@ -575,5 +602,22 @@ impl Editor {
             self.log(error);
             self.notice_last(false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_script_mark_counts_and_turns_red_on_a_failure() {
+        use crate::theme;
+        assert_eq!(
+            super::script_badge(1, false, false),
+            ("{ } 1".into(), theme::ACCENT_BRIGHT)
+        );
+        assert_eq!(
+            super::script_badge(2, true, true),
+            ("{ } 2 !".into(), theme::ERROR)
+        );
+        assert_eq!(super::script_badge(3, false, true).0, "{ } 3");
     }
 }

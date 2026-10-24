@@ -604,6 +604,15 @@ pub enum Command {
         entity: Id,
         path: String,
     },
+    /// Switches the script `path` of the object on or off: off, the object keeps it in its list
+    /// but the game runs the object without it.
+    SetScriptEnabled {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        path: String,
+        enabled: bool,
+    },
     /// Writes a movement profile's values into a 3D character (see
     /// [`crate::character::PROFILE_FIELDS`]); they stay editable.
     ApplyMovementProfile {
@@ -822,6 +831,8 @@ impl Command {
             Self::FitCollider { .. } => "Ajustar colisor",
             Self::AttachScript { .. } => "Anexar script",
             Self::DetachScript { .. } => "Remover script",
+            Self::SetScriptEnabled { enabled: true, .. } => "Ligar script",
+            Self::SetScriptEnabled { .. } => "Desligar script",
             Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
             Self::AddNode { .. } => "Adicionar nó",
@@ -3450,6 +3461,24 @@ fn apply_one(
                 return Err(format!("{} não tem o script {path}", e.name));
             };
             e.scripts.remove(at);
+            Ok(vec![])
+        }
+        C::SetScriptEnabled {
+            scene,
+            entity,
+            path,
+            enabled,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let path = script::normal_form(path)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let name = e.name.clone();
+            let script = e
+                .scripts
+                .iter_mut()
+                .find(|s| s.path == path)
+                .ok_or_else(|| format!("{name} não tem o script {path}"))?;
+            script.enabled = *enabled;
             Ok(vec![])
         }
         C::FitCollider {

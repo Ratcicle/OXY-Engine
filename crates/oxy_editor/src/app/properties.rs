@@ -1,5 +1,6 @@
 use super::*;
 mod components;
+mod scripts;
 
 impl Editor {
     /// Header with an icon tile, a title and a muted line under it.
@@ -831,6 +832,8 @@ impl Editor {
                 },
             );
         }
+        let script_action = self.scripts_card(ui, &entity);
+        let requested = self.requested_attributes(&entity);
         card(ui, ("attributes", &id), "Atributos", None, None, |ui| {
             crate::widgets::hint(
                 ui,
@@ -850,6 +853,13 @@ impl Editor {
                         }
                     });
                     value_editor(ui, value, &objects, &self.state.project.surfaces, name);
+                    if let Some(note) = requested.get(name) {
+                        ui.label(
+                            egui::RichText::new(note)
+                                .size(11.5)
+                                .color(crate::theme::TEXT_MUTED),
+                        );
+                    }
                 });
             }
             if let Some(name) = delete {
@@ -932,6 +942,9 @@ impl Editor {
         }
         if let Some(children) = requested_fit {
             self.start_fit(children);
+        }
+        if let Some(action) = script_action {
+            self.run_script_action(&id, action);
         }
     }
 }

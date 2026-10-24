@@ -2,6 +2,7 @@ mod agent;
 mod agent_channel;
 mod body_tools;
 mod camera_tools;
+mod code_view;
 mod console_feed;
 mod diagnostics;
 mod export;
@@ -17,6 +18,7 @@ mod physics;
 mod preferences;
 mod properties;
 mod scenes;
+mod script_status;
 mod script_watch;
 mod spatial_tools;
 mod test_progress;
@@ -69,6 +71,8 @@ pub(crate) enum DockTab {
     Library,
     Console,
     Notices,
+    /// The script "Ver código" opened, read only.
+    Code,
 }
 /// Bottom dock shared by the Library, the Console and the notice history.
 pub(crate) struct Dock {
@@ -349,6 +353,12 @@ pub struct Editor {
     scan_forced: bool,
     /// Whether the window had the focus in the last frame.
     was_focused: bool,
+    /// What the Scripts card and the Hierarchy show of the attached scripts.
+    script_status: script_status::ScriptStatus,
+    /// The search of "+ Anexar script".
+    script_search: String,
+    /// The script open in the dock's code tab.
+    code_view: Option<code_view::CodeView>,
 }
 
 impl Editor {
@@ -382,7 +392,7 @@ impl Editor {
     }
     pub(crate) fn show_dock(&mut self, tab: DockTab) {
         // In the Animation the timeline's own tabs hold the Console and the notices.
-        if self.animating() && tab != DockTab::Library {
+        if self.animating() && !matches!(tab, DockTab::Library | DockTab::Code) {
             self.studio.animation.bottom = Some(tab);
             return;
         }
@@ -501,6 +511,9 @@ impl Editor {
             scan_requested: false,
             scan_forced: false,
             was_focused: true,
+            script_status: Default::default(),
+            script_search: String::new(),
+            code_view: None,
         };
         if let Some(error) = preference_error {
             this.warn(error);
@@ -568,6 +581,9 @@ impl Editor {
         self.history.clear();
         self.history.mark_saved();
         self.asset_ui.thumbnail = None;
+        self.script_status = Default::default();
+        self.script_search.clear();
+        self.close_code();
         self.sync_textures();
     }
     pub(crate) fn open(&mut self, path: PathBuf) {
@@ -1175,6 +1191,7 @@ impl Editor {
         };
         let runtime = Runtime::with_options(&self.state.project, scene, options)?;
         self.watch_test_scripts(scripts);
+        self.script_status.start_test();
         self.play.seed = Some(seed);
         self.play.previous_tab = self.tab;
         // The new test's logs count from zero.
@@ -1194,6 +1211,11 @@ impl Editor {
         // What the last frame saved, and its logs, reach the Console and agents after the test.
         self.take_test_saves();
         self.sync_console_feed();
+        if let Some(runtime) = &self.play.runtime {
+            let root = self.project_root();
+            self.script_status
+                .end_test(runtime, &self.state.project, root.as_deref());
+        }
         self.play.end();
         // Files changed outside OXY during the test reach the project now.
         self.scan_requested = true;
@@ -1735,11 +1757,13 @@ impl eframe::App for Editor {
         let focused = ctx.input(|i| i.focused);
         if focused && !self.was_focused {
             self.scan_requested = true;
+            self.script_status.look_again();
         }
         self.was_focused = focused;
         if self.scan_requested && !self.history.is_pending() && !self.playing() {
             self.scan_project();
         }
+        self.refresh_scripts();
         let edit_event = ctx.input(|i| {
             i.events.iter().any(|e| match e {
                 egui::Event::PointerButton {
@@ -1828,6 +1852,7 @@ impl eframe::App for Editor {
             if ctx.input(|i| i.key_pressed(egui::Key::F5)) && !self.playing() {
                 self.scan_requested = true;
                 self.scan_forced = true;
+                self.script_status.look_again();
             }
             if ctx.input_mut(|i| {
                 i.consume_key(
