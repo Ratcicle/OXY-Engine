@@ -10,6 +10,7 @@ mod conversion;
 mod determinism;
 mod geometry;
 mod guide_recipes;
+mod guide_recipes_scripts;
 mod history_amendment;
 mod input_actions;
 mod library;
