@@ -3781,10 +3781,11 @@ mod tests {
                                  "path": "scripts/girar.luau", "enabled": false}]}),
         )
         .unwrap();
+        // oxy_entity describes the script switched off as any other (its callbacks).
         let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
         assert_eq!(
             entity["scripts"],
-            json!([{"path": "scripts/girar.luau", "enabled": false}])
+            json!([{"path": "scripts/girar.luau", "enabled": false, "callbacks": ["on_start"]}])
         );
         let saved = persistence::load_project(&file).unwrap();
         assert!(!saved.scenes[0].entity(&id).unwrap().scripts[0].enabled);
@@ -3797,7 +3798,10 @@ mod tests {
         )
         .unwrap();
         let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
-        assert_eq!(entity["scripts"], json!([{"path": "scripts/girar.luau"}]));
+        assert_eq!(
+            entity["scripts"],
+            json!([{"path": "scripts/girar.luau", "callbacks": ["on_start"]}])
+        );
         assert!(APPLY_DESCRIPTION.contains("set_script_enabled {entity, path, enabled}"));
         std::fs::remove_dir_all(dir).unwrap();
     }
