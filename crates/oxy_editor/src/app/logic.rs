@@ -274,6 +274,11 @@ impl Editor {
                             .truncate(),
                         );
                     });
+                // A graph of nodes is the old way: it goes on working, and new logic goes in
+                // scripts.
+                if !graph.nodes.is_empty() && left.available_width() > 120. {
+                    legacy_seal(&mut left);
+                }
                 if left.available_width() > 110. {
                     left.label(
                         egui::RichText::new(graph_meta(graph))
@@ -862,6 +867,27 @@ impl Editor {
         open
     }
 }
+/// The yellow seal "Nós (legado)" next to the name of an object whose logic is a graph of nodes.
+fn legacy_seal(ui: &mut egui::Ui) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(58, 51, 34))
+        .stroke(egui::Stroke::new(1., Color32::from_rgb(107, 90, 47)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(9, 1))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Nós (legado)")
+                    .size(11.5)
+                    .color(crate::theme::WARNING),
+            );
+        })
+        .response
+        .on_hover_text(
+            "A lógica deste objeto está em nós, o jeito antigo. Ela continua funcionando; a \
+             lógica nova é escrita em scripts.",
+        );
+}
+
 fn dialog_header(ui: &mut egui::Ui, title: &str, subtitle: &str, close: &mut bool) {
     use crate::theme;
     ui.horizontal(|ui| {

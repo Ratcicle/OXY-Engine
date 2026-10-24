@@ -24,8 +24,8 @@ mod open;
 pub use files::departed;
 pub(crate) use open::name_of;
 pub use open::{
-    Adopted, AssetState, Checked, KnownFiles, OpenReport, adopt, check_assets, open_project, scan,
-    shared_names,
+    Adopted, AssetState, Checked, KnownFiles, OpenReport, adopt, check_assets, open_project,
+    relink_asset, relink_script, scan, shared_names,
 };
 
 /// Why a project, asset or save operation failed. Messages are shown to the user as-is.
@@ -630,6 +630,19 @@ pub fn import_asset_with(
     kind: AssetKind,
     before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<Id, PersistenceError> {
+    import_asset_into(project, root, source, kind, "", before)
+}
+/// [`import_asset_with`] into the folder `folder` of the project's tree ("" is the root), which
+/// exists, as the Library imports into the folder it shows; the old layout has no folders, and
+/// the copy goes where it always went.
+pub fn import_asset_into(
+    project: &mut Project,
+    root: &Path,
+    source: &Path,
+    kind: AssetKind,
+    folder: &str,
+    before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
+) -> Result<Id, PersistenceError> {
     if kind == AssetKind::Model {
         return Err(PersistenceError::ModelImport);
     }
@@ -648,7 +661,7 @@ pub fn import_asset_with(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Asset importado".into());
-    store_asset_as(project, root, new_id(), &bytes, name, kind, "", before)
+    store_asset_in(project, root, &bytes, name, kind, folder, before)
 }
 /// Writes PNG or WAV bytes, already checked, to the project's assets folder under a new name in
 /// the old layout, as `<name>.<ext>` in the folder `folder` (which exists; "" is the root) in

@@ -293,6 +293,7 @@ fn native_body_offset_v0331() {
                 Action::Check("patch_restored"),
                 Action::Key(Key::Escape, false),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::Click("Visualização"),
                 Action::Click("Colisores"),

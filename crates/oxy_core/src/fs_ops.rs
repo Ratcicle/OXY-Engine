@@ -320,6 +320,26 @@ pub struct Emptied {
     pub files: usize,
     pub bytes: u64,
 }
+/// What the trash of the project at `root` holds now, as [`empty_trash`] would count it: its
+/// files but the index, and their bytes. An empty count when there is no trash.
+pub fn trash_contents(root: &Path) -> io::Result<Emptied> {
+    let folder = names::resolve(root, TRASH).map_err(io::Error::other)?;
+    let listing = match fs::read_dir(&folder) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Emptied::default()),
+        listing => listing?,
+    };
+    let mut held = Emptied::default();
+    for entry in listing {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_file() && entry.file_name() != "indice.json" {
+            held.files += 1;
+            held.bytes += meta.len();
+        }
+    }
+    Ok(held)
+}
+
 /// Removes for good every file in the trash of the project at `root`, its index included (a
 /// folder someone put there stays), holding [`tree_lock`]. A file another program holds stays,
 /// and fails it after the others went.

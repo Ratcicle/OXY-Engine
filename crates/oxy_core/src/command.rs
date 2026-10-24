@@ -612,6 +612,15 @@ pub enum Command {
         entity: Id,
         path: String,
     },
+    /// Switches the script `path` of the object on or off: off, the object keeps it in its list
+    /// but the game runs the object without it.
+    SetScriptEnabled {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        path: String,
+        enabled: bool,
+    },
     /// Takes the object's whole logic graph off (its nodes and their links), as converting an
     /// object from nodes to scripts needs: a command apart from the legacy node commands, whose
     /// contract is frozen since 0.7. The object's scripts, attributes and components stay.
@@ -838,6 +847,8 @@ impl Command {
             Self::FitCollider { .. } => "Ajustar colisor",
             Self::AttachScript { .. } => "Anexar script",
             Self::DetachScript { .. } => "Remover script",
+            Self::SetScriptEnabled { enabled: true, .. } => "Ligar script",
+            Self::SetScriptEnabled { .. } => "Desligar script",
             Self::ClearLogic { .. } => "Tirar a lógica de nós",
             Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
@@ -3800,6 +3811,24 @@ fn apply_one(
                 return Err(format!("{} não tem o script {path}", e.name));
             };
             e.scripts.remove(at);
+            Ok(vec![])
+        }
+        C::SetScriptEnabled {
+            scene,
+            entity,
+            path,
+            enabled,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let path = script::normal_form(path)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let name = e.name.clone();
+            let script = e
+                .scripts
+                .iter_mut()
+                .find(|s| s.path == path)
+                .ok_or_else(|| format!("{name} não tem o script {path}"))?;
+            script.enabled = *enabled;
             Ok(vec![])
         }
         C::FitCollider {

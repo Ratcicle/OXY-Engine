@@ -12,6 +12,8 @@ mod final_flow;
 mod input_guide;
 mod inspector;
 mod layout;
+mod library;
+mod library_dialogs;
 mod mesh;
 mod modeling;
 mod movement;
@@ -21,6 +23,7 @@ mod pause;
 mod physics;
 mod portable;
 mod recipes;
+mod scripts;
 mod spatial;
 mod ux;
 mod variables;
@@ -96,6 +99,11 @@ enum Action {
     PanZoom,
     WheelZoom(f32),
     CollapseEntity(&'static str),
+    /// Presses on the control registered for QA as the first label and moves to the second,
+    /// holding the button: the next actions see the drag over its target.
+    DragHold(&'static str, &'static str),
+    /// Releases the button held by DragHold where the pointer is.
+    Release,
     ReopenProject,
     Idle,
 }
@@ -179,6 +187,8 @@ struct NativeQa {
     cursor_captured: bool,
     /// The editor sees its window without focus, as when the person works in another window.
     unfocused: bool,
+    /// The folder of the project the flow checks, kept once the editor leaves it.
+    qa_root: Option<PathBuf>,
 }
 
 impl NativeQa {
@@ -262,6 +272,8 @@ impl NativeQa {
             Action::Key(Key::Y, true),
             Action::Check("paint_redo"),
             Action::Key(Key::S, true),
+            // The first save of the old example organizes it in folders, as the person chooses.
+            Action::Click("Organizar e salvar"),
             Action::Check("saved_roundtrip"),
             Action::Check("texture_controls_baseline"),
             Action::OptionalClick("Pintar"),
@@ -269,6 +281,7 @@ impl NativeQa {
             Action::Click("Localizar na biblioteca"),
             Action::Key(Key::Escape, false),
             Action::DeleteTextureAsset,
+            Action::Click("Excluir…"),
             // A new egui window is measured invisibly on its first frame.
             Action::Wait(4),
             Action::Check("texture_reference_blocked"),
@@ -493,6 +506,7 @@ impl NativeQa {
             click_candidate: None,
             cursor_captured: false,
             unfocused: false,
+            qa_root: None,
         }
     }
 
@@ -685,6 +699,15 @@ impl NativeQa {
         if label.starts_with("pause_") {
             return self.check_pause(label);
         }
+        if label.starts_with("lib8") {
+            return self.check_library_dialogs(label);
+        }
+        if label.starts_with("lib7_") {
+            return self.check_library(label);
+        }
+        if label.starts_with("sc7_") {
+            return self.check_scripts(label);
+        }
         let ensure = |condition: bool, message: &str| {
             if condition {
                 Ok(())
@@ -767,6 +790,36 @@ impl NativeQa {
                         .filter(|a| a.kind == oxy_core::document::AssetKind::Audio)
                         .all(|a| root.join(&a.path).is_file()),
                     "A cópia do parkour ficou sem os sons",
+                )?;
+                // The parkour is in folders and runs on scripts: the copy takes every file of
+                // the folders (sounds and models in their files) and every script of the tree,
+                // each at its path, and nothing that stays out of a project.
+                ensure(
+                    project.layout == oxy_core::document::Layout::Tree
+                        && project.assets.iter().all(|a| root.join(&a.path).is_file()),
+                    "A cópia do parkour não está nas pastas do exemplo",
+                )?;
+                let scripts =
+                    oxy_core::persistence::load_scripts(&root).map_err(|e| e.to_string())?;
+                let attached = oxy_core::script::attached_paths(project);
+                ensure(
+                    !attached.is_empty()
+                        && scripts.unreadable.is_empty()
+                        && attached.iter().all(|path| scripts.files.contains_key(path)),
+                    "A cópia do parkour ficou sem os scripts",
+                )?;
+                let outside = portable::outside_project(&root).map_err(|e| e.to_string())?;
+                if !outside.is_empty() {
+                    return Err(format!(
+                        "{label}: a cópia do parkour levou o que fica fora do projeto: {}",
+                        outside.join(", ")
+                    ));
+                }
+                // Already in folders: an example's copy saves in a new folder as it is, and
+                // "Organizar o projeto em pastas" never opens for it.
+                ensure(
+                    !self.editor.organize_first(),
+                    "Salvar a cópia do parkour pediria para organizá-la em pastas",
                 )
             }
             "home_recent" => ensure(
@@ -1627,6 +1680,44 @@ impl NativeQa {
                 }]);
                 description = "Pan e zoom reais no viewport".into();
             }
+            Action::DragHold(from, to) => {
+                let source = self
+                    .editor
+                    .qa_icon_rect(from)
+                    .ok_or_else(|| format!("Origem do arrasto ausente: {from}"))?
+                    .center();
+                let target = self
+                    .editor
+                    .qa_icon_rect(to)
+                    .map(|rect| rect.center())
+                    .or_else(|| self.find(to, false))
+                    .ok_or_else(|| format!("Destino do arrasto ausente: {to}"))?;
+                self.events.push_back(vec![Event::PointerMoved(source)]);
+                self.events.push_back(vec![Event::PointerButton {
+                    pos: source,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                }]);
+                for index in 1..=8 {
+                    self.events.push_back(vec![Event::PointerMoved(
+                        source.lerp(target, index as f32 / 8.),
+                    )]);
+                }
+                description = format!("Arrastar e segurar: {from} → {to}");
+            }
+            Action::Release => {
+                let at = ctx
+                    .input(|i| i.pointer.latest_pos())
+                    .ok_or("Nenhum arrasto segurado")?;
+                self.events.push_back(vec![Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                }]);
+                description = "Soltar o arrasto".into();
+            }
             Action::CollapseEntity(label) => {
                 self.entity_position(label)
                     .ok_or("Grupo fora da hierarquia")?;
@@ -1813,12 +1904,13 @@ impl NativeQa {
                     .ok_or("Recurso selecionado ausente")?;
                 self.find("Biblioteca", false)
                     .ok_or("Biblioteca não visível")?;
-                let delete = self
+                let row = self
                     .editor
-                    .qa_icon_rect(&format!("Excluir {}", asset.name))
+                    .qa_icon_rect(&format!("Recurso: {}", asset.name))
                     .ok_or("Localizar na biblioteca não revelou o recurso")?;
-                self.click(delete.center());
-                description = "Excluir recurso pelo cartão de sua própria textura".into();
+                // The row's menu; the next action clicks its Excluir….
+                self.click_with(row.center(), PointerButton::Secondary, Modifiers::NONE);
+                description = "Abrir o menu da linha da própria textura na Biblioteca".into();
             }
             Action::Click(label) | Action::OptionalClick(label) => {
                 let Some(position) = self.find(label, false) else {

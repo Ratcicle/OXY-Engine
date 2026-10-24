@@ -2,7 +2,9 @@ mod agent;
 mod agent_channel;
 mod body_tools;
 mod camera_tools;
+mod code_view;
 mod console_feed;
+mod console_panel;
 mod diagnostics;
 mod export;
 mod hierarchy;
@@ -17,6 +19,7 @@ mod physics;
 mod preferences;
 mod properties;
 mod scenes;
+mod script_status;
 mod script_watch;
 mod spatial_tools;
 mod test_progress;
@@ -69,6 +72,8 @@ pub(crate) enum DockTab {
     Library,
     Console,
     Notices,
+    /// The script "Ver código" opened, read only.
+    Code,
 }
 /// Bottom dock shared by the Library, the Console and the notice history.
 pub(crate) struct Dock {
@@ -216,10 +221,8 @@ pub(crate) struct HierarchyUi {
 }
 #[derive(Default)]
 pub(crate) struct AssetUi {
-    pub(crate) search: String,
     pub(crate) thumbnail: Option<(Id, egui::TextureHandle)>,
     pub(crate) locate: Option<Id>,
-    pub(crate) delete: Option<Id>,
 }
 /// Active gizmo and the multi-selection rotation/scale fields.
 pub(crate) struct TransformUi {
@@ -336,6 +339,8 @@ pub struct Editor {
     attribute_name: String,
     attribute_type: u8,
     pub(crate) asset_ui: AssetUi,
+    /// The Library's folders, filters, selection and dialogs.
+    pub(crate) library: library::LibraryUi,
     save_requested: bool,
     /// What agents' writes kept of the scripts they changed in this editor session (see
     /// `script_files`).
@@ -349,6 +354,16 @@ pub struct Editor {
     scan_forced: bool,
     /// Whether the window had the focus in the last frame.
     was_focused: bool,
+    /// What the Scripts card and the Hierarchy show of the attached scripts.
+    script_status: script_status::ScriptStatus,
+    /// The search of "+ Anexar script".
+    script_search: String,
+    /// The script open in the dock's code tab.
+    code_view: Option<code_view::CodeView>,
+    /// Which lines the Console shows.
+    console_show: console_panel::Show,
+    /// The script errors the test told, which the Console keeps after the runtime forgets them.
+    console_errors: console_panel::ScriptErrors,
 }
 
 impl Editor {
@@ -382,7 +397,7 @@ impl Editor {
     }
     pub(crate) fn show_dock(&mut self, tab: DockTab) {
         // In the Animation the timeline's own tabs hold the Console and the notices.
-        if self.animating() && tab != DockTab::Library {
+        if self.animating() && !matches!(tab, DockTab::Library | DockTab::Code) {
             self.studio.animation.bottom = Some(tab);
             return;
         }
@@ -495,12 +510,18 @@ impl Editor {
             attribute_name: String::new(),
             attribute_type: 0,
             asset_ui: Default::default(),
+            library: Default::default(),
             save_requested: false,
             agent_scripts_kept: Default::default(),
             tree_scan: None,
             scan_requested: false,
             scan_forced: false,
             was_focused: true,
+            script_status: Default::default(),
+            script_search: String::new(),
+            code_view: None,
+            console_show: Default::default(),
+            console_errors: Default::default(),
         };
         if let Some(error) = preference_error {
             this.warn(error);
@@ -568,6 +589,10 @@ impl Editor {
         self.history.clear();
         self.history.mark_saved();
         self.asset_ui.thumbnail = None;
+        self.library = Default::default();
+        self.script_status = Default::default();
+        self.script_search.clear();
+        self.close_code();
         self.sync_textures();
     }
     pub(crate) fn open(&mut self, path: PathBuf) {
@@ -591,6 +616,7 @@ impl Editor {
                 self.known_files = report.known.clone();
                 self.reset_context();
                 self.rebase_scan();
+                self.library.report = report.assets.clone();
                 self.home.visible = false;
                 self.home.example_copy = false;
                 if add_recent {
@@ -614,10 +640,11 @@ impl Editor {
                 for fix in &report.fixes {
                     self.log(fix.clone());
                 }
-                // What an agent's write that organized the project in folders did, until the
-                // person saves it; and what the first save of a project of the old layout does.
+                // What an agent's write that organized the project in folders did, under the
+                // Agente mark until the person saves it; and what the first save of a project of
+                // the old layout does.
                 for line in conversion::agent_note(&root) {
-                    self.log(line);
+                    self.log(library::agent_note_line(&line));
                     self.notice_last(true);
                 }
                 if add_recent && report.layout == Layout::Legacy {
@@ -698,23 +725,18 @@ impl Editor {
                         && let Some(t) = self.pending.take()
                     {
                         // The files go back to the last save too (decision 2 of the tree).
-                        let current = self.path.clone();
-                        let files = self.discard_files();
-                        if !self.apply_transition(t)
-                            && files
-                            && let Some(current) = current
-                        {
-                            // The other project did not open: this one is read again as the
-                            // files are now, so its paths and undo steps match them.
-                            self.open_with_recent(current, false);
-                        }
+                        self.discard_before(t);
                     }
                 });
             });
         });
         match choice {
             Some(true) => {
-                if self.save()
+                if self.organize_first() {
+                    // The first save of an old project asks how to organize it first.
+                    let then = self.pending.take();
+                    self.organize_then(then);
+                } else if self.save()
                     && let Some(t) = self.pending.take()
                 {
                     self.apply_transition(t);
@@ -725,11 +747,32 @@ impl Editor {
             None => {}
         }
     }
+    /// Discards the changes, the files' included, then does `t`; when `t` leaves this project
+    /// open (another one did not open), it is read again as the files are now.
+    fn discard_and_go(&mut self, t: Transition) {
+        let current = self.path.clone();
+        let files = self.discard_files();
+        if !self.apply_transition(t)
+            && files
+            && let Some(current) = current
+        {
+            // Its paths and undo steps then match the files.
+            self.open_with_recent(current, false);
+        }
+    }
+    /// The person's save; the first one of a project of the old layout asks how to organize it
+    /// in folders first, and answers false while it asks.
     pub fn save(&mut self) -> bool {
+        if self.organize_first() {
+            return false;
+        }
         self.save_from("")
     }
     /// Saves, writing the Console line "Salvo: …" with `origin` before it (an agent's prefix).
     pub(crate) fn save_from(&mut self, origin: &str) -> bool {
+        // What the person chose in "Organizar o projeto em pastas", for this save only.
+        let elsewhere = std::mem::take(&mut self.library.save_elsewhere);
+        let including = std::mem::take(&mut self.library.save_including);
         if self.mesh_operation_active() {
             self.warn("Termine o gesto de modelagem ou pressione Esc antes de salvar.");
             return false;
@@ -766,11 +809,16 @@ impl Editor {
         // What changed outside OXY reaches the project first, as the save writes it.
         self.scan_project();
         let previous_path = self.path.clone();
-        if self.path.is_none() || self.home.example_copy {
-            let Some(folder) = rfd::FileDialog::new()
-                .set_title("Escolha a pasta do novo projeto OXY")
-                .pick_folder()
-            else {
+        // A copy in a new folder: an example's, or an old project organized there.
+        let elsewhere = elsewhere && self.path.is_some();
+        let copy = self.home.example_copy || elsewhere;
+        if self.path.is_none() || copy {
+            let title = if elsewhere {
+                "Escolha a pasta nova do projeto organizado em pastas"
+            } else {
+                "Escolha a pasta do novo projeto OXY"
+            };
+            let Some(folder) = rfd::FileDialog::new().set_title(title).pick_folder() else {
                 return false;
             };
             match new_project_file(&folder) {
@@ -790,7 +838,7 @@ impl Editor {
         // The project as saved, when the save organized it in folders: what it tells, and
         // whether its assets' names and paths changed.
         let mut organized = None;
-        let result = if self.home.example_copy {
+        let result = if copy {
             conversion::save_copy(
                 &path,
                 &self.state.project,
@@ -798,7 +846,7 @@ impl Editor {
                 previous_path
                     .as_deref()
                     .and_then(Path::parent)
-                    .expect("Exemplo com pasta de origem"),
+                    .expect("Cópia com pasta de origem"),
                 &mut self.known_files,
             )
             .map(|copied| {
@@ -809,7 +857,7 @@ impl Editor {
             })
             .map_err(|error| error.to_string())
         } else if self.state.project.layout == Layout::Legacy {
-            self.save_organizing(&path, &mut organized, origin.is_empty())
+            self.save_organizing(&path, &mut organized, origin.is_empty(), &including)
         } else {
             persistence::save_cached_bundle_with(
                 &path,
@@ -834,6 +882,8 @@ impl Editor {
                     }
                 }
                 self.history.mark_saved();
+                // What was new in the folder is the project's now.
+                self.library.new.clear();
                 conversion::forget_agent_note(&root);
                 self.rebase_scan();
                 self.remember_project();
@@ -870,15 +920,17 @@ impl Editor {
     /// Saves the project of the old layout at `path` organizing it in folders (see
     /// `conversion::convert`), leaving in `organized` the project as saved; one that cannot be
     /// organized now is saved in the old layout, telling why (also in `kept_layout`). An agent's
-    /// save (`by_person` false) is told as the agent's. Answers the lines to tell.
+    /// save (`by_person` false) is told as the agent's. `including` are the other images,
+    /// sounds and models of the folder the person chose to take in. Answers the lines to tell.
     fn save_organizing(
         &mut self,
         path: &Path,
         organized: &mut Option<(Project, bool)>,
         by_person: bool,
+        including: &[String],
     ) -> Result<Vec<String>, String> {
         use conversion::ConversionError::{Busy, Failed, Kept, Refused};
-        let converted = conversion::convert(
+        let converted = conversion::convert_including(
             path,
             &self.state.project,
             Some(&mut self.state.images),
@@ -888,6 +940,7 @@ impl Editor {
             } else {
                 conversion::Who::Agent
             },
+            including,
         );
         let why = match converted {
             Ok(done) => {
@@ -1087,6 +1140,8 @@ impl Editor {
         if files {
             self.scan_project();
         }
+        // What the step moves, which the Library and the code tab follow once it is done.
+        let moved = self.history.next_files(redo).to_vec();
         let root = self.project_root();
         let disk = root.as_deref().map(|root| (root, &mut self.known_files));
         let result = if redo {
@@ -1098,6 +1153,9 @@ impl Editor {
         };
         if files {
             self.rebase_scan();
+            // The files moved back, and the texts whose `require` the step rewrote went back
+            // too: the Scripts card, the Hierarchy and the code tab see them.
+            self.script_status.look_again();
         }
         if let Err(error) = result {
             // Files that stayed moved halfway are a step of their own, which the document
@@ -1112,6 +1170,9 @@ impl Editor {
             self.notice_last(false);
             return Err(error);
         } else {
+            if !moved.is_empty() {
+                self.follow_moves(&moved, !redo);
+            }
             if self.state.project.scene(&self.scene_id).is_none() {
                 self.scene_id = self.state.project.start_scene.clone()
             };
@@ -1175,6 +1236,8 @@ impl Editor {
         };
         let runtime = Runtime::with_options(&self.state.project, scene, options)?;
         self.watch_test_scripts(scripts);
+        self.script_status.start_test();
+        self.console_errors.clear();
         self.play.seed = Some(seed);
         self.play.previous_tab = self.tab;
         // The new test's logs count from zero.
@@ -1194,6 +1257,11 @@ impl Editor {
         // What the last frame saved, and its logs, reach the Console and agents after the test.
         self.take_test_saves();
         self.sync_console_feed();
+        if let Some(runtime) = &self.play.runtime {
+            let root = self.project_root();
+            self.script_status
+                .end_test(runtime, &self.state.project, root.as_deref());
+        }
         self.play.end();
         // Files changed outside OXY during the test reach the project now.
         self.scan_requested = true;
@@ -1370,98 +1438,141 @@ impl Editor {
         } else {
             dialog.add_filter("Áudio WAV", &["wav"]).pick_file()
         };
-        if let Some(source) = file {
-            // In a project in folders, its own step: the file it makes goes with it (undoing
-            // sends it to the project's trash, redoing brings it back). In the old layout it
-            // joins the edit in progress, as before.
-            let tree = self.state.project.layout == Layout::Tree;
-            if tree {
-                self.finish_history(true);
-                // What changed outside OXY is told before the walk takes the import's file.
-                self.scan_project();
-            }
-            if !self.history.is_pending() {
-                self.history
-                    .begin("Importar recurso", &self.state.project, &self.state.images);
-            }
-            let root = self.root();
-            let mut creating = tree.then(|| {
-                oxy_core::journal::Creating::new(&root, &mut self.known_files, "Importar recurso")
-            });
-            let imported = persistence::import_asset_with(
+        let source = file?;
+        // Into the folder the Library shows, as its Importar para <pasta>… does.
+        let folder = self.open_folder();
+        self.import_files(&[(source, kind)], &folder, true)
+            .into_iter()
+            .next()
+    }
+    /// Imports `sources` (each file with its kind) into the folder `folder` of the project's
+    /// tree ("" is the root); with `apply`, an image goes on the selected object. In a project in
+    /// folders it is its own step: the files it makes go with it (undoing sends them to the
+    /// project's trash, redoing brings them back), and a file that fails leaves the others. In
+    /// the old layout it joins the edit in progress, as before. Answers the assets made.
+    pub(crate) fn import_files(
+        &mut self,
+        sources: &[(PathBuf, AssetKind)],
+        folder: &str,
+        apply: bool,
+    ) -> Vec<Id> {
+        if sources.is_empty() {
+            return Vec::new();
+        }
+        let tree = self.state.project.layout == Layout::Tree;
+        let label = match sources.len() {
+            1 => "Importar recurso".to_owned(),
+            count => format!("Importar {count} recursos"),
+        };
+        if tree {
+            self.finish_history(true);
+            // What changed outside OXY is told before the walk takes the import's files.
+            self.scan_project();
+        }
+        if !self.history.is_pending() {
+            self.history
+                .begin(label.clone(), &self.state.project, &self.state.images);
+        }
+        let root = self.root();
+        let mut files = Vec::new();
+        let mut imported = Vec::new();
+        for (source, kind) in sources {
+            let mut creating = tree
+                .then(|| oxy_core::journal::Creating::new(&root, &mut self.known_files, &label));
+            let result = persistence::import_asset_into(
                 &mut self.state.project,
                 &root,
-                &source,
-                kind,
+                source,
+                *kind,
+                folder,
                 &mut |path, id| {
                     creating.as_mut().map_or(Ok(()), |c| {
                         c.before(oxy_core::asset_import::Making::File { path, id })
                     })
                 },
             );
-            let files = creating
-                .map(|creating| creating.finish(imported.is_ok()))
-                .unwrap_or_default();
-            match imported {
+            files.extend(
+                creating
+                    .map(|creating| creating.finish(result.is_ok()))
+                    .unwrap_or_default(),
+            );
+            match result {
                 Ok(id) => {
-                    if kind == AssetKind::Texture {
+                    if *kind == AssetKind::Texture {
                         if let Some(asset) = self.state.project.asset(&id)
                             && let Ok(file) = persistence::resolve_asset_path(&root, &asset.path)
                             && let Ok(image) = PaintImage::load(&file)
                         {
                             self.state.images.insert(id.clone(), image);
                         }
-                        let ratio = self
-                            .state
-                            .images
-                            .get(&id)
-                            .map(|p| p.width as f32 / p.height as f32);
-                        if let Some(entity) = self
-                            .selected
-                            .clone()
-                            .and_then(|id| self.scene_mut().entity_mut(&id))
-                        {
-                            entity.material.texture = Some(id.clone());
-                            if entity.primitive == Some(Primitive::Sprite)
-                                && let Some(ratio) = ratio
-                            {
-                                entity.dimensions[0] = entity.dimensions[1] * ratio;
-                            }
-                        }
                         self.refresh_texture(&id);
                     }
-                    if tree {
-                        if let Err(error) = self.history.commit_with_files(
-                            &self.state.project,
-                            &mut self.state.images,
-                            files,
-                        ) {
-                            self.log(error);
-                        }
-                        self.rebase_scan();
-                        // What the panel that asked for it changes next is another edit.
-                        self.history.begin(
-                            "Editar projeto",
-                            &self.state.project,
-                            &self.state.images,
-                        );
-                    }
-                    self.log("Recurso importado como cópia local.");
-                    Some(id)
+                    imported.push(id);
                 }
                 Err(e) => {
-                    if tree {
-                        self.history
-                            .cancel(&mut self.state.project, &mut self.state.images);
-                    }
-                    self.log(e);
+                    let name = source
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.log(if sources.len() > 1 {
+                        format!("{name}: {e}")
+                    } else {
+                        e.to_string()
+                    });
                     self.notice_last(false);
-                    None
                 }
             }
-        } else {
-            None
         }
+        if apply
+            && let Some(id) = imported.first().cloned()
+            && self
+                .state
+                .project
+                .asset(&id)
+                .is_some_and(|a| a.kind == AssetKind::Texture)
+        {
+            let ratio = self
+                .state
+                .images
+                .get(&id)
+                .map(|p| p.width as f32 / p.height as f32);
+            if let Some(entity) = self
+                .selected
+                .clone()
+                .and_then(|selected| self.scene_mut().entity_mut(&selected))
+            {
+                entity.material.texture = Some(id.clone());
+                if entity.primitive == Some(Primitive::Sprite)
+                    && let Some(ratio) = ratio
+                {
+                    entity.dimensions[0] = entity.dimensions[1] * ratio;
+                }
+            }
+        }
+        if tree {
+            if imported.is_empty() {
+                self.history
+                    .cancel(&mut self.state.project, &mut self.state.images);
+            } else {
+                if let Err(error) = self.history.commit_with_files(
+                    &self.state.project,
+                    &mut self.state.images,
+                    files,
+                ) {
+                    self.log(error);
+                }
+                self.rebase_scan();
+                // What the panel that asked for it changes next is another edit.
+                self.history
+                    .begin("Editar projeto", &self.state.project, &self.state.images);
+            }
+        }
+        match imported.len() {
+            0 => {}
+            1 => self.log("Recurso importado como cópia local."),
+            count => self.log(format!("{count} recursos importados como cópias locais.")),
+        }
+        imported
     }
     fn game(&mut self, ui: &mut egui::Ui, dt: f32) {
         if self.play.runtime.is_none() {
@@ -1617,85 +1728,6 @@ impl Editor {
         }
         self.console_feed.clear();
     }
-    /// Editor messages, game logs and the last logic actions, each marked by its source.
-    /// Messages that also became notices are shown as warnings.
-    pub(crate) fn console_body(&mut self, ui: &mut egui::Ui) {
-        use crate::theme;
-        let warnings: std::collections::HashSet<&str> = self.notices.texts().collect();
-        let mut lines: Vec<(&str, String, bool)> = self
-            .console
-            .messages
-            .iter()
-            .map(|line| match line.strip_prefix(agent::AGENT_PREFIX) {
-                Some(text) => ("Agente", text.to_owned(), warnings.contains(line.as_str())),
-                None => ("Editor", line.clone(), warnings.contains(line.as_str())),
-            })
-            .collect();
-        if let Some(rt) = &self.play.runtime {
-            lines.extend(
-                rt.logs
-                    .iter()
-                    .map(|line| ("Jogo", line.text.clone(), false)),
-            );
-            let operations = oxy_core::graph::registry();
-            for trace in rt.traces.iter().rev().take(5).rev() {
-                let operation = operations
-                    .iter()
-                    .find(|op| op.id == trace.operation)
-                    .map_or("Ação não reconhecida", |op| op.label);
-                let object = rt
-                    .scene()
-                    .entity(&trace.object)
-                    .map_or(trace.object.as_str(), |e| e.name.as_str());
-                lines.push((
-                    "Lógica",
-                    format!("{:.3} s · {object} · {operation}", trace.time),
-                    false,
-                ));
-            }
-        }
-        if lines.is_empty() {
-            crate::widgets::hint(
-                ui,
-                "Nada no console. Mensagens do editor e do jogo aparecem aqui.",
-            );
-            return;
-        }
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.;
-                for (source, text, warning) in &lines {
-                    ui.horizontal_top(|ui| {
-                        let (tag, color) = match (*source, *warning) {
-                            (_, true) => ("Aviso", theme::WARNING),
-                            ("Jogo", _) => ("Jogo", theme::SUCCESS),
-                            ("Lógica", _) => ("Lógica", theme::ACCENT_BRIGHT),
-                            ("Agente", _) => ("Agente", Color32::from_rgb(190, 160, 240)),
-                            _ => ("Editor", theme::TEXT_MUTED),
-                        };
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(52., 18.), Sense::hover());
-                        ui.painter().text(
-                            rect.left_center(),
-                            egui::Align2::LEFT_CENTER,
-                            tag,
-                            theme::medium(11.),
-                            color,
-                        );
-                        let text = egui::RichText::new(text).monospace().size(12.);
-                        ui.add(
-                            egui::Label::new(if *warning {
-                                text.color(Color32::from_rgb(232, 210, 160))
-                            } else {
-                                text
-                            })
-                            .wrap(),
-                        );
-                    });
-                }
-            });
-    }
 }
 
 impl eframe::App for Editor {
@@ -1739,11 +1771,13 @@ impl eframe::App for Editor {
         let focused = ctx.input(|i| i.focused);
         if focused && !self.was_focused {
             self.scan_requested = true;
+            self.script_status.look_again();
         }
         self.was_focused = focused;
         if self.scan_requested && !self.history.is_pending() && !self.playing() {
             self.scan_project();
         }
+        self.refresh_scripts();
         let edit_event = ctx.input(|i| {
             i.events.iter().any(|e| match e {
                 egui::Event::PointerButton {
@@ -1806,7 +1840,8 @@ impl eframe::App for Editor {
             || self.pending.is_some()
             || self.logic_ui.inputs
             || self.logic_ui.variables_open()
-            || self.logic_ui.guide;
+            || self.logic_ui.guide
+            || self.library.dialog_open();
         if dialog_open && self.play.capture {
             self.pause();
             oxy_render::input::release_cursor(ctx);
@@ -1819,6 +1854,7 @@ impl eframe::App for Editor {
         {
             self.save_requested = true;
         }
+        self.follow_library_focus(ctx);
         if !dialog_open
             && !self.navigation.active
             && !self.play.capture
@@ -1832,6 +1868,7 @@ impl eframe::App for Editor {
             if ctx.input(|i| i.key_pressed(egui::Key::F5)) && !self.playing() {
                 self.scan_requested = true;
                 self.scan_forced = true;
+                self.script_status.look_again();
             }
             if ctx.input_mut(|i| {
                 i.consume_key(
@@ -1847,7 +1884,12 @@ impl eframe::App for Editor {
                 self.undo(true);
             }
             let animation = self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation;
-            if self.tab != Tab::Logic && !self.playing() && (!animation || self.hierarchy_ui.focus)
+            if self.library_focused() {
+                // The last click was in the Library: its items take the keys.
+                self.library_keys(ctx);
+            } else if self.tab != Tab::Logic
+                && !self.playing()
+                && (!animation || self.hierarchy_ui.focus)
             {
                 if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
                     self.delete();
@@ -1956,7 +1998,7 @@ impl eframe::App for Editor {
             }
         }
         self.camera_preview_window(ctx);
-        self.asset_delete_dialog(ctx);
+        self.library_dialogs(ctx);
         self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);
         self.project_dialogs(ctx);

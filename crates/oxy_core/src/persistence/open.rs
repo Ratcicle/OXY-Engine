@@ -456,6 +456,148 @@ pub fn adopt(
     adopted
 }
 
+/// Points the image or sound `asset` of `project`, saved in the folder `root`, at the file `path`
+/// of its tree, as the person picks it in the Library's "Localizar arquivo…" for an asset whose
+/// file went (moved or renamed outside OXY): its path and name become the file's, and the entry
+/// the walk registered for that file, which nothing uses, leaves the project. An image notes in
+/// `known` the file as it is now, as opening notes one it finds: pixels painted on it replace the
+/// file while it stays so. Refused when the file is not one of the asset's kind in the tree, or
+/// is the file of an asset something uses; a model is found by the ID inside its file instead.
+/// Answers what the Console tells.
+pub fn relink_asset(
+    project: &mut Project,
+    root: &Path,
+    asset: &str,
+    path: &str,
+    known: &mut KnownFiles,
+) -> Result<String, String> {
+    let found = project
+        .asset(asset)
+        .ok_or("O recurso não está mais no projeto")?
+        .clone();
+    let wanted = match found.kind {
+        AssetKind::Texture => FileKind::Image,
+        AssetKind::Audio => FileKind::Sound,
+        AssetKind::Model => {
+            return Err(format!(
+                "{}: um modelo é achado pelo ID que tem dentro do arquivo; abra o projeto de novo \
+                 para a OXY procurá-lo",
+                label(&found)
+            ));
+        }
+    };
+    let path = path.trim().replace('\\', "/");
+    let path = path.trim_matches('/');
+    let file = path.rsplit('/').next().unwrap_or(path);
+    if FileKind::of(file) != wanted {
+        return Err(format!(
+            "{path} não é {}",
+            if wanted == FileKind::Image {
+                "uma imagem PNG"
+            } else {
+                "um som WAV"
+            }
+        ));
+    }
+    let path = names::disk_case(root, path).unwrap_or_else(|_| path.to_owned());
+    match project_tree::presence(root, &path) {
+        Presence::Present => {}
+        Presence::Missing => return Err(format!("{path} não está na pasta do projeto")),
+        Presence::Unreadable(why) => return Err(format!("{path} {why}")),
+    }
+    let taken = project
+        .assets
+        .iter()
+        .find(|a| a.id != found.id && !a.path.is_empty() && names::same_name(&a.path, &path))
+        .cloned();
+    if let Some(taken) = &taken
+        && !asset_uses(project, &taken.id).is_empty()
+    {
+        return Err(format!(
+            "{path} já é o arquivo de {}, que está em uso",
+            label(taken)
+        ));
+    }
+    let name = name_of(&path, found.kind).ok_or_else(|| format!("{path} não tem nome"))?;
+    if let Some(other) = project.assets.iter().find(|a| {
+        a.id != found.id
+            && taken.as_ref().is_none_or(|taken| taken.id != a.id)
+            && a.kind == found.kind
+            && a.name.trim().to_lowercase() == name.to_lowercase()
+    }) {
+        return Err(format!(
+            "Já existe {} com o nome \"{}\"; renomeie um dos dois antes",
+            label(other),
+            other.name
+        ));
+    }
+    if let Some(taken) = &taken {
+        project.assets.retain(|a| a.id != taken.id);
+    }
+    let relinked = project
+        .assets
+        .iter_mut()
+        .find(|a| a.id == found.id)
+        .expect("found");
+    relinked.path = path.clone();
+    relinked.name = name;
+    if found.kind == AssetKind::Texture
+        && let Some(stamp) = names::resolve(root, &path)
+            .ok()
+            .and_then(|file| Stamp::read(&file).ok())
+    {
+        known.note_image(found.id.clone(), path.clone(), stamp);
+    }
+    Ok(format!(
+        "{}: o arquivo agora é {path} (era {})",
+        label(relinked),
+        found.path
+    ))
+}
+
+/// Points every object of `project`, in scenes and models, that attaches the script `from`, whose
+/// file went, at the script `path` of the tree of the project saved in the folder `root`, as the
+/// person picks it in the Library's "Localizar arquivo…"; an object that attaches both keeps one.
+/// Refused when `path` is no script of the tree or no object attaches `from`. Answers what the
+/// Console tells.
+pub fn relink_script(
+    project: &mut Project,
+    root: &Path,
+    from: &str,
+    path: &str,
+) -> Result<String, String> {
+    let path = crate::script::normalize_path(path)?;
+    let path = names::disk_case(root, &path).unwrap_or(path);
+    match project_tree::presence(root, &path) {
+        Presence::Present => {}
+        Presence::Missing => return Err(format!("{path} não está na pasta do projeto")),
+        Presence::Unreadable(why) => return Err(format!("{path} {why}")),
+    }
+    let mut objects = 0;
+    for entity in journal::entities_mut(project) {
+        let Some(at) = entity.scripts.iter().position(|s| s.path == from) else {
+            continue;
+        };
+        if entity
+            .scripts
+            .iter()
+            .any(|s| names::same_name(&s.path, &path))
+        {
+            entity.scripts.remove(at);
+        } else {
+            entity.scripts[at].path = path.clone();
+        }
+        objects += 1;
+    }
+    if objects == 0 {
+        return Err(format!("Nenhum objeto anexa o script {from}"));
+    }
+    Ok(format!(
+        "Script {from}: o arquivo agora é {path} ({objects} {})",
+        if objects == 1 { "objeto" } else { "objetos" }
+    ))
+}
+
 /// `asset` as messages name it: `Pulo (som)`.
 fn label(asset: &Asset) -> String {
     let kind = match asset.kind {

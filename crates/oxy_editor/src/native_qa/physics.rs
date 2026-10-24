@@ -105,6 +105,7 @@ fn native_physics_v030_authoring() {
                 Action::Check("phys_convex"),
                 Action::Screenshot("convex-closes-opening.png"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::SelectEntity("Tubo com abertura"),
                 Action::Check("phys_convex"),

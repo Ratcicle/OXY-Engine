@@ -381,11 +381,24 @@ pub const PROJECT_ALIAS: &str = "project";
 #[serde(deny_unknown_fields)]
 pub struct ScriptRef {
     pub path: String,
+    /// Off, the object keeps the script but runs without it (the Ligado of the editor's Scripts
+    /// card); written only when off.
+    #[serde(default = "switched_on_default", skip_serializing_if = "is_on")]
+    pub enabled: bool,
 }
 impl ScriptRef {
     pub fn new(path: impl Into<String>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            enabled: true,
+        }
     }
+}
+fn switched_on_default() -> bool {
+    true
+}
+fn is_on(enabled: &bool) -> bool {
+    *enabled
 }
 
 /// The project's scripts as its tree holds them: each file's text by path, and the `.luau`
@@ -618,6 +631,36 @@ pub fn validate(scripts: &[ScriptRef]) -> Result<(), String> {
 /// Whether an object of `project`, in a scene or a model, attaches a script.
 pub fn any_attached(project: &Project) -> bool {
     every_entity(project).any(|(_, e)| !e.scripts.is_empty())
+}
+
+/// How many objects of `project`, in scenes and models, attach the script `path`, switched on
+/// or off.
+pub fn attached_by(project: &Project, path: &str) -> usize {
+    every_entity(project)
+        .filter(|(_, e)| e.scripts.iter().any(|s| s.path == path))
+        .count()
+}
+
+/// `project` as a run plays it: each object without the scripts switched off in it, so a script
+/// switched off on every object never loads. A project with none switched off is itself.
+pub(crate) fn switched_on(project: &Project) -> std::borrow::Cow<'_, Project> {
+    if !every_entity(project).any(|(_, e)| e.scripts.iter().any(|s| !s.enabled)) {
+        return std::borrow::Cow::Borrowed(project);
+    }
+    let mut project = project.clone();
+    let models = project
+        .assets
+        .iter_mut()
+        .filter_map(|asset| asset.model.as_mut());
+    for e in project
+        .scenes
+        .iter_mut()
+        .flat_map(|scene| scene.entities.iter_mut())
+        .chain(models.flatten())
+    {
+        e.scripts.retain(|s| s.enabled);
+    }
+    std::borrow::Cow::Owned(project)
 }
 
 /// A script an object attaches that the project's tree lacks.
@@ -1102,8 +1145,16 @@ mod tests {
             serde_json::json!([{"path": "scripts/porta.luau"}, {"path": "scripts/comum/som.luau"}])
         );
         assert_eq!(serde_json::from_value::<Entity>(json.clone()).unwrap(), e);
+        // Switched off, the reference says so; any other field is refused.
+        e.scripts[1].enabled = false;
+        let off = serde_json::to_value(&e).unwrap();
+        assert_eq!(
+            off["scripts"][1],
+            serde_json::json!({"path": "scripts/comum/som.luau", "enabled": false})
+        );
+        assert_eq!(serde_json::from_value::<Entity>(off).unwrap(), e);
         let mut unknown = json;
-        unknown["scripts"][0]["enabled"] = true.into();
+        unknown["scripts"][0]["ligado"] = true.into();
         assert!(serde_json::from_value::<Entity>(unknown).is_err());
     }
 

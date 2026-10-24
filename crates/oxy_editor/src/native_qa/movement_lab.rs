@@ -148,6 +148,7 @@ fn native_movement_scale_v030() {
                 Action::Click("Parar"),
                 Action::Idle,
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
             ]);
             Ok(Box::new(qa))
@@ -207,6 +208,7 @@ fn native_movement_lab_v030() {
                 Action::Key(Key::Z, true),
                 Action::Check("lab3d_base"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::Scroll("HIERARQUIA", 10000.),
                 Action::SelectEntity("Jogador"),

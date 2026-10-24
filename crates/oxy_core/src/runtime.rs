@@ -421,6 +421,9 @@ impl Runtime {
         if project.scene(scene_id).is_none() {
             return Err("Cena solicitada não existe.".into());
         }
+        // A script switched off on an object is not there for the run.
+        let project = crate::script::switched_on(project);
+        let project = &*project;
         let mut runtime = Self {
             index: OnceLock::new(),
             graphs: HashMap::new(),

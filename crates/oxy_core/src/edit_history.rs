@@ -316,6 +316,12 @@ impl CommandHistory {
             .last()
             .is_some_and(|command| !command.files.is_empty())
     }
+    /// The changes to the project's files the next undo (or redo, when `redo`) takes back (or
+    /// does again), as the step keeps them: in the order the step did them.
+    pub fn next_files(&self, redo: bool) -> &[FileOp] {
+        let stack = if redo { &self.future } else { &self.past };
+        stack.last().map_or(&[], |command| command.files.as_slice())
+    }
     pub fn undo_label(&self) -> Option<&str> {
         self.past.last().map(|c| c.label.as_str())
     }

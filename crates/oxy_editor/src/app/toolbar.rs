@@ -93,6 +93,7 @@ impl Editor {
                 self.import(AssetKind::Audio);
                 ui.close();
             }
+            self.trash_menu_item(ui);
             ui.separator();
             if ui.button("Tela inicial").clicked() {
                 self.pause();
@@ -364,6 +365,10 @@ impl Editor {
                     {
                         ui.add_space(8.);
                         ui.add(egui::Label::new(muted(format!("Selecionado: {name}"))).truncate());
+                    }
+                    if let Some(place) = self.library_status() {
+                        ui.add_space(8.);
+                        ui.add(egui::Label::new(muted(place)).truncate());
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(muted(

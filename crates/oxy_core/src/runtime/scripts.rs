@@ -609,7 +609,8 @@ impl Runtime {
     /// The script errors told in the run, as reports list them: each place an object got one,
     /// in the order of the object and the place, with the file and line, the log line of the
     /// first one and how many times it happened. The errors of a copy made during the run go
-    /// with it.
+    /// with it, and those of a script whose new text reloaded are gone. The editor's Console
+    /// and Scripts card read where each error happened here too.
     pub fn script_error_counts(&self) -> Vec<ScriptErrorCount> {
         self.run
             .script_errors

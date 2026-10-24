@@ -196,6 +196,7 @@ fn native_cut_bevel_workflow() {
                 Action::Key(Key::Enter, false),
                 Action::Check("m5_committed"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::Screenshot("reopened-model.png"),
             ]);
