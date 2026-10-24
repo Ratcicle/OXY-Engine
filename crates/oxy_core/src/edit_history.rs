@@ -1,17 +1,101 @@
 //! Command history containing field/collection patches and changed RGBA ranges.
 //! A single transient gesture baseline shares image buffers; committed commands
 //! never retain a project snapshot or a map of all project textures.
+//!
+//! A step may also have moved, made or sent to the project's trash files and folders of the
+//! project's tree ([`FileOp`]): undoing and redoing it first prepares the document, then checks
+//! and does the operations on the disk (journaled, see [`crate::journal`]), and only then swaps
+//! the document, so a failure leaves both as they were.
 use crate::{
     document::{AssetKind, Id, Project},
+    fs_ops::Op,
+    journal::{self, Blocked},
     painting::PaintImage,
+    persistence::KnownFiles,
     texture_cache::TextureCache,
 };
 use serde_json::Value;
 mod meshes;
 use std::{
     collections::{BTreeSet, HashSet},
+    path::Path,
     sync::Arc,
 };
+
+/// A change an edit made to the project's files, with paths from the project's folder, undone
+/// and redone with the edit. Trash slots are fixed when the edit is planned, so undoing and
+/// redoing find the file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileOp {
+    /// A file or folder moved or renamed, never over anything.
+    Move {
+        from: String,
+        to: String,
+    },
+    CreateDir {
+        path: String,
+    },
+    /// An empty folder removed.
+    RemoveDir {
+        path: String,
+    },
+    /// A file sent to the project's trash, at `slot`.
+    Trash {
+        from: String,
+        slot: String,
+        id: Option<Id>,
+    },
+    /// A file made by the edit (an import): undoing sends it to `slot`, redoing brings it back.
+    Created {
+        path: String,
+        slot: String,
+        id: Option<Id>,
+    },
+}
+impl FileOp {
+    /// The change `op` makes, as a step keeps it.
+    pub fn of(op: &Op) -> Self {
+        match op.clone() {
+            Op::Move { from, to } => Self::Move { from, to },
+            Op::CreateDir { path } => Self::CreateDir { path },
+            Op::RemoveDir { path } => Self::RemoveDir { path },
+            Op::Trash { from, slot, id } => Self::Trash { from, slot, id },
+            Op::Untrash { slot, to, id } => Self::Created { path: to, slot, id },
+        }
+    }
+    /// The operation that redoes it.
+    pub fn forward(&self) -> Op {
+        match self.clone() {
+            Self::Move { from, to } => Op::Move { from, to },
+            Self::CreateDir { path } => Op::CreateDir { path },
+            Self::RemoveDir { path } => Op::RemoveDir { path },
+            Self::Trash { from, slot, id } => Op::Trash { from, slot, id },
+            Self::Created { path, slot, id } => Op::Untrash { slot, to: path, id },
+        }
+    }
+    /// The operation that undoes it.
+    pub fn backward(&self) -> Op {
+        self.forward().inverse()
+    }
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + match self {
+                Self::Move { from, to } => from.capacity() + to.capacity(),
+                Self::CreateDir { path } | Self::RemoveDir { path } => path.capacity(),
+                Self::Trash {
+                    from: path,
+                    slot,
+                    id,
+                }
+                | Self::Created { path, slot, id } => {
+                    path.capacity() + slot.capacity() + id.as_ref().map_or(0, String::capacity)
+                }
+            }
+    }
+}
+
+/// Why a step with files cannot be undone or redone without the project's folder.
+const NO_FOLDER: &str = "este passo mexe nos arquivos do projeto, e o projeto não tem pasta";
 
 #[derive(Clone, Debug)]
 enum Part {
@@ -68,6 +152,22 @@ struct Command {
     document: Vec<DocumentDelta>,
     images: Vec<ImageDelta>,
     meshes: Vec<meshes::Delta>,
+    /// Done while the command is in the past, undone while it is in the future.
+    files: Vec<FileOp>,
+}
+impl Command {
+    /// Whether undoing it brings a file back from the project's trash.
+    fn undo_needs_trash(&self) -> bool {
+        self.files
+            .iter()
+            .any(|file| matches!(file, FileOp::Trash { .. }))
+    }
+    /// Whether redoing it brings a file back from the project's trash.
+    fn redo_needs_trash(&self) -> bool {
+        self.files
+            .iter()
+            .any(|file| matches!(file, FileOp::Created { .. }))
+    }
 }
 #[derive(Debug)]
 struct Baseline {
@@ -136,16 +236,21 @@ impl CommandHistory {
         if self.amendment_restore.is_some() {
             return Ok(self.last_command_id() == Some(command_id));
         }
-        if self.last_command_id() != Some(command_id) || !self.future.is_empty() {
+        // A step that moved files is never adjusted live.
+        if self.last_command_id() != Some(command_id)
+            || !self.future.is_empty()
+            || self
+                .past
+                .last()
+                .is_some_and(|command| !command.files.is_empty())
+        {
             return Ok(false);
         }
         if self.pending_changed(project, images) {
             return Err("Conclua a edição atual antes de ajustar a última operação.".into());
         }
         let command = self.past.last().unwrap();
-        let mut origin = project.clone();
-        let mut original_images = images.clone();
-        apply_command(command, false, &mut origin, &mut original_images)?;
+        let (origin, original_images) = prepare(command, false, project, images)?;
         self.pending = Some(Baseline {
             label: command.label.clone(),
             project: origin,
@@ -173,6 +278,13 @@ impl CommandHistory {
     }
     pub fn can_redo(&self) -> bool {
         !self.future.is_empty()
+    }
+    /// Whether the next undo (or redo, when `redo`) moves files of the project's tree.
+    pub fn next_has_files(&self, redo: bool) -> bool {
+        let stack = if redo { &self.future } else { &self.past };
+        stack
+            .last()
+            .is_some_and(|command| !command.files.is_empty())
     }
     pub fn undo_label(&self) -> Option<&str> {
         self.past.last().map(|c| c.label.as_str())
@@ -226,9 +338,23 @@ impl CommandHistory {
         }
     }
     pub fn commit(&mut self, project: &Project, images: &mut TextureCache) -> Result<bool, String> {
+        self.commit_with_files(project, images, Vec::new())
+    }
+    /// [`Self::commit`] of a step that also did `files` on the disk (see [`FileOp`]): kept even
+    /// when the document did not change (a folder made, a script nobody attaches moved), and it
+    /// leaves the project unsaved as any step does. The step began with [`Self::begin`].
+    pub fn commit_with_files(
+        &mut self,
+        project: &Project,
+        images: &mut TextureCache,
+        files: Vec<FileOp>,
+    ) -> Result<bool, String> {
         self.last_texture_changes.clear();
         let Some(mut before) = self.pending.take() else {
-            return Ok(false);
+            if files.is_empty() {
+                return Ok(false);
+            }
+            return Err("Operação de arquivos sem passo de desfazer aberto".into());
         };
         let result = (|| {
             let (a, before_meshes) = meshes::detach(&before.project);
@@ -272,7 +398,7 @@ impl CommandHistory {
         } else {
             self.revision
         };
-        if document.is_empty() && deltas.is_empty() && mesh_deltas.is_empty() {
+        if document.is_empty() && deltas.is_empty() && mesh_deltas.is_empty() && files.is_empty() {
             self.revision = before_revision;
             return Ok(false);
         }
@@ -285,6 +411,7 @@ impl CommandHistory {
             document,
             images: deltas,
             meshes: mesh_deltas,
+            files,
         });
         self.revision = next;
         self.future.clear();
@@ -296,48 +423,147 @@ impl CommandHistory {
         project: &mut Project,
         images: &mut TextureCache,
     ) -> Result<Option<String>, String> {
-        self.commit(project, images)?;
-        let Some(command) = self.past.last() else {
-            return Ok(None);
-        };
-        apply_command(command, false, project, images)?;
-        self.last_texture_changes = command
-            .images
-            .iter()
-            .map(|delta| delta.id().to_owned())
-            .collect();
-        let command = self.past.pop().unwrap();
-        self.revision = command.before_revision;
-        let label = command.label.clone();
-        self.future.push(command);
-        if !self.is_dirty() {
-            images.mark_saved();
-        }
-        Ok(Some(label))
+        self.undo_with(project, images, None)
     }
     pub fn redo(
         &mut self,
         project: &mut Project,
         images: &mut TextureCache,
     ) -> Result<Option<String>, String> {
+        self.redo_with(project, images, None)
+    }
+    /// [`Self::undo`] of the project saved in the folder of `files` (its root, and what OXY knows
+    /// of its files), which a step that moved files needs: the document is prepared first, then
+    /// the files go back (checked first: a file changed outside OXY or a name taken refuses it),
+    /// and only then the document changes. When the project's trash lost a file the step brings
+    /// back, that step and the older ones go (see [`Self::forget_trash`]), and the error says
+    /// how many.
+    pub fn undo_with(
+        &mut self,
+        project: &mut Project,
+        images: &mut TextureCache,
+        files: Option<(&Path, &mut KnownFiles)>,
+    ) -> Result<Option<String>, String> {
+        self.step(project, images, files, false)
+    }
+    /// [`Self::undo_with`] for redo.
+    pub fn redo_with(
+        &mut self,
+        project: &mut Project,
+        images: &mut TextureCache,
+        files: Option<(&Path, &mut KnownFiles)>,
+    ) -> Result<Option<String>, String> {
+        self.step(project, images, files, true)
+    }
+    fn step(
+        &mut self,
+        project: &mut Project,
+        images: &mut TextureCache,
+        files: Option<(&Path, &mut KnownFiles)>,
+        forward: bool,
+    ) -> Result<Option<String>, String> {
         self.commit(project, images)?;
-        let Some(command) = self.future.last() else {
+        let stack = if forward { &self.future } else { &self.past };
+        let Some(command) = stack.last() else {
             return Ok(None);
         };
-        apply_command(command, true, project, images)?;
+        let (next_project, next_images) = prepare(command, forward, project, images)?;
+        let label = command.label.clone();
+        let ops: Vec<Op> = if forward {
+            command.files.iter().map(FileOp::forward).collect()
+        } else {
+            command.files.iter().rev().map(FileOp::backward).collect()
+        };
+        let what = if forward { "refazer" } else { "desfazer" };
+        if !ops.is_empty() {
+            let Some((root, known)) = files else {
+                return Err(format!("Não foi possível {what} \"{label}\": {NO_FOLDER}."));
+            };
+            match journal::check(root, known, &ops) {
+                Ok(()) => {}
+                Err(Blocked::Changed(why)) => {
+                    return Err(format!("Não foi possível {what} \"{label}\": {why}."));
+                }
+                Err(Blocked::TrashEmptied(why)) => {
+                    let gone = self.forget_trash();
+                    return Err(format!(
+                        "Não foi possível {what} \"{label}\": {why}, que foi esvaziada; {gone} {} \
+                         de desfazer e refazer deixaram de valer.",
+                        if gone == 1 { "passo" } else { "passos" }
+                    ));
+                }
+            }
+            let step = if forward { "Refazer" } else { "Desfazer" };
+            if let Err(error) = journal::run(root, known, &format!("{step} {label}"), &ops) {
+                let message = format!("Não foi possível {what} \"{label}\": {error}");
+                if error.kept == 0 {
+                    return Err(message);
+                }
+                // Undoing the operations failed too: the files that stayed moved are a step of
+                // their own, which the document follows, and undoing it puts them back.
+                let kept: Vec<FileOp> = ops[..error.kept].iter().map(FileOp::of).collect();
+                let partial = format!("{step} incompleto: {label}");
+                self.begin(partial.clone(), project, images);
+                crate::command::follow_files(project, &kept);
+                self.commit_with_files(project, images, kept)?;
+                return Err(format!(
+                    "{message}. {}; desfazer o passo \"{partial}\" os devolve.",
+                    crate::command::KEPT
+                ));
+            }
+        }
+        *project = next_project;
+        *images = next_images;
+        let command = if forward {
+            self.future.pop()
+        } else {
+            self.past.pop()
+        }
+        .expect("the command just prepared");
         self.last_texture_changes = command
             .images
             .iter()
             .map(|delta| delta.id().to_owned())
             .collect();
-        let command = self.future.pop().unwrap();
-        self.revision = command.after_revision;
-        let label = command.label.clone();
-        self.past.push(command);
+        if forward {
+            self.revision = command.after_revision;
+            self.past.push(command);
+        } else {
+            self.revision = command.before_revision;
+            self.future.push(command);
+        }
         if !self.is_dirty() {
             images.mark_saved();
         }
         Ok(Some(label))
+    }
+    /// How many steps of undo and redo need a file of the project's trash: those emptying it
+    /// takes away (see [`Self::forget_trash`]).
+    pub fn trash_steps(&self) -> usize {
+        let past = self
+            .past
+            .iter()
+            .rposition(Command::undo_needs_trash)
+            .map_or(0, |newest| newest + 1);
+        let future = self
+            .future
+            .iter()
+            .rposition(Command::redo_needs_trash)
+            .map_or(0, |nearest| nearest + 1);
+        past + future
+    }
+    /// After the project's trash was emptied: undo stops at the newest step that brings a file
+    /// back from it, which goes with every older one (out of reach now), and redo at the nearest
+    /// such step, which goes with every one after it. Answers how many went.
+    pub fn forget_trash(&mut self) -> usize {
+        let gone = self.trash_steps();
+        if let Some(newest) = self.past.iter().rposition(Command::undo_needs_trash) {
+            self.past.drain(..=newest);
+        }
+        if let Some(nearest) = self.future.iter().rposition(Command::redo_needs_trash) {
+            self.future.drain(..=nearest);
+        }
+        gone
     }
     /// Conservative estimate of heap payload retained by commands, including vector capacities and
     /// unique full-image allocations for texture creation/deletion/replacement.
@@ -356,6 +582,7 @@ impl CommandHistory {
                         .map(|m| m.bytes(&mut meshes))
                         .sum::<usize>()
                     + command.label.capacity()
+                    + command.files.iter().map(FileOp::bytes).sum::<usize>()
                     + command
                         .document
                         .iter()
@@ -762,12 +989,14 @@ fn apply_document(delta: &DocumentDelta, forward: bool, value: &mut Value) -> Re
     }
     Ok(())
 }
-fn apply_command(
+/// The document and images `command` leaves (redone when `forward`, else undone), made from
+/// `project` and `images`, which stay as they are: nothing changes when this fails.
+fn prepare(
     command: &Command,
     forward: bool,
-    project: &mut Project,
-    images: &mut TextureCache,
-) -> Result<(), String> {
+    project: &Project,
+    images: &TextureCache,
+) -> Result<(Project, TextureCache), String> {
     let (skeleton, meshes) = meshes::detach(project);
     let mut json = serde_json::to_value(skeleton.as_ref()).map_err(|e| e.to_string())?;
     if forward {
@@ -820,9 +1049,7 @@ fn apply_command(
     }
     next_images.prune_removed(&next_project);
     next_images.finish_gesture();
-    *project = next_project;
-    *images = next_images;
-    Ok(())
+    Ok((next_project, next_images))
 }
 
 #[cfg(test)]
@@ -1128,6 +1355,78 @@ mod tests {
         assert_eq!(cache[&id].pixel(50, 50), [255; 4]);
         assert!(!cache.has_dirty());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_step_whose_document_cannot_be_prepared_touches_no_file() {
+        let (mut project, mut cache, _) = setup();
+        let dir = std::env::temp_dir().join(format!("oxy-history-files-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = new_id();
+        project.assets.push(Asset {
+            id: id.clone(),
+            name: "T".into(),
+            path: "unavailable.png".into(),
+            kind: AssetKind::Texture,
+            model: None,
+        });
+        cache.insert(id.clone(), PaintImage::new(16, 16, [255; 4]).unwrap());
+        let mut history = CommandHistory::new();
+        history.begin("Mover e pintar", &project, &cache);
+        project.name = "Depois".into();
+        cache
+            .get_mut(&id)
+            .unwrap()
+            .set_pixel(0, 0, [255, 0, 0, 255]);
+        // The step moved a file: done when committed.
+        std::fs::write(dir.join("b.txt"), b"nota").unwrap();
+        let moved = vec![FileOp::Move {
+            from: "a.txt".into(),
+            to: "b.txt".into(),
+        }];
+        history
+            .commit_with_files(&project, &mut cache, moved)
+            .unwrap();
+        assert!(history.next_has_files(false));
+        // The pixels to put back are gone: preparing the document fails before the disk.
+        cache.clear();
+        let before = project.clone();
+        let mut known = KnownFiles::default();
+        let error = history
+            .undo_with(&mut project, &mut cache, Some((&dir, &mut known)))
+            .unwrap_err();
+        assert!(!error.contains("a.txt"), "{error}");
+        assert_eq!(project, before);
+        assert_eq!(history.undo_len(), 1);
+        assert!(dir.join("b.txt").exists() && !dir.join("a.txt").exists());
+        assert!(!dir.join(crate::journal::JOURNAL).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_step_of_files_alone_is_kept_leaves_the_project_unsaved_and_needs_its_folder() {
+        let (mut project, mut cache, _) = setup();
+        let mut history = CommandHistory::new();
+        let made = || {
+            vec![FileOp::CreateDir {
+                path: "Pista".into(),
+            }]
+        };
+        // Files need a step begun for them.
+        assert!(
+            history
+                .commit_with_files(&project, &mut cache, made())
+                .is_err()
+        );
+        history.begin("Criar pasta", &project, &cache);
+        assert!(
+            history
+                .commit_with_files(&project, &mut cache, made())
+                .unwrap()
+        );
+        assert!(history.is_dirty());
+        assert!(history.estimated_bytes() > std::mem::size_of::<FileOp>());
+        let error = history.undo(&mut project, &mut cache).unwrap_err();
+        assert!(error.contains("não tem pasta"), "{error}");
+        assert_eq!(history.undo_len(), 1);
     }
     #[test]
     fn failed_undo_leaves_document_pixels_and_stacks_unchanged() {

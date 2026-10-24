@@ -8,6 +8,7 @@
 //! now (another program holds it, no permission) stays, with why, and so does a folder that
 //! cannot be listed now.
 use crate::{
+    document::{AssetKind, Id, Layout, Project},
     export::MARKER_FILE,
     fs_ops::{self, Stamp},
     names,
@@ -434,6 +435,151 @@ pub fn outside_reason(root: &Path, path: &str) -> Option<String> {
     None
 }
 
+/// What changed in the project's tree between two walks, as the project sees it (see
+/// [`reconcile`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Change {
+    /// A file of a known kind no asset has, new in the folder: registered (tree layout).
+    New { path: String, kind: FileKind },
+    /// The file of the asset `asset` went: it is missing, and `near` are the new files that may
+    /// be it (the same name in another folder first, then the same size), for the person to
+    /// pick. Nothing is relinked on a hunch.
+    Missing { asset: Id, near: Vec<String> },
+    /// The file of the asset `asset` is there in another case only: its path takes the disk's.
+    Case { asset: Id, path: String },
+    /// The file of the model `asset` moved or was renamed outside OXY, found by the ID inside
+    /// it at `path`.
+    Found { asset: Id, path: String },
+    /// The file of the image or model `asset` changed outside OXY.
+    Changed { asset: Id },
+}
+
+/// Most files [`Change::Missing`] suggests.
+const NEAR: usize = 5;
+
+/// What changed between the walk `before` (the last one, taken again after OXY's own operations
+/// and saves) and the walk `after`, for the assets of `project`: files new, gone, in another case
+/// or changed. A file OXY moved is none of these, since `project` has it where it went. Only
+/// proof relinks (the case, a model's ID: `models` holds
+/// the ID inside each new model file, read by the caller); a file the saved project file lists
+/// whose asset left the project (`departed`, on its way to the trash at the next save) is never
+/// taken again. Pure: the caller applies the changes between two steps of the undo history.
+pub fn reconcile(
+    before: &Tree,
+    after: &Tree,
+    project: &Project,
+    departed: &[String],
+    models: &BTreeMap<String, Id>,
+) -> Vec<Change> {
+    let find = |tree: &'_ Tree, path: &str| -> Option<TreeFile> {
+        if let Some(file) = tree.files.iter().find(|file| file.path == path) {
+            return Some(file.clone());
+        }
+        let mut alike = tree
+            .files
+            .iter()
+            .filter(|file| names::same_name(&file.path, path));
+        match (alike.next(), alike.next()) {
+            (Some(file), None) => Some(file.clone()),
+            _ => None,
+        }
+    };
+    let new = |path: &str| find(before, path).is_none();
+    let mut changes = Vec::new();
+    let mut claimed: Vec<String> = Vec::new();
+    for asset in &project.assets {
+        if asset.path.is_empty() {
+            continue;
+        }
+        if let Some(file) = find(after, &asset.path) {
+            claimed.push(file.path.clone());
+            if file.path != asset.path {
+                changes.push(Change::Case {
+                    asset: asset.id.clone(),
+                    path: file.path,
+                });
+                continue;
+            }
+            let was = find(before, &asset.path).and_then(|file| file.stamp.ok());
+            if matches!(asset.kind, AssetKind::Texture | AssetKind::Model)
+                && let (Some(was), Ok(now)) = (was, file.stamp)
+                && was != now
+            {
+                changes.push(Change::Changed {
+                    asset: asset.id.clone(),
+                });
+            }
+            continue;
+        }
+        let Some(was) = find(before, &asset.path) else {
+            // Missing already, and told then.
+            continue;
+        };
+        if asset.kind == AssetKind::Model
+            && let Some((path, _)) = models.iter().find(|(path, id)| {
+                **id == asset.id
+                    && new(path)
+                    && !claimed.iter().any(|other| names::same_name(other, path))
+            })
+        {
+            claimed.push(path.clone());
+            changes.push(Change::Found {
+                asset: asset.id.clone(),
+                path: path.clone(),
+            });
+            continue;
+        }
+        let name = asset.path.rsplit('/').next().unwrap_or(&asset.path);
+        let size = was.stamp.as_ref().ok().map(|stamp| stamp.len);
+        let mut near: Vec<(bool, &str)> = after
+            .files
+            .iter()
+            .filter(|file| file.kind == was.kind && new(&file.path))
+            .filter_map(|file| {
+                let same_name =
+                    names::same_name(file.path.rsplit('/').next().unwrap_or(&file.path), name);
+                let same_size =
+                    size.is_some() && file.stamp.as_ref().ok().map(|stamp| stamp.len) == size;
+                (same_name || same_size).then_some((!same_name, file.path.as_str()))
+            })
+            .collect();
+        near.sort();
+        changes.push(Change::Missing {
+            asset: asset.id.clone(),
+            near: near
+                .into_iter()
+                .take(NEAR)
+                .map(|(_, path)| path.to_owned())
+                .collect(),
+        });
+    }
+    if project.layout == Layout::Tree {
+        let mut found: Vec<&TreeFile> = after
+            .files
+            .iter()
+            .filter(|file| {
+                matches!(
+                    file.kind,
+                    FileKind::Image | FileKind::Sound | FileKind::Model
+                ) && new(&file.path)
+                    && !claimed
+                        .iter()
+                        .any(|other| names::same_name(other, &file.path))
+                    && !departed
+                        .iter()
+                        .any(|gone| names::same_name(gone, &file.path))
+                    && !crate::conversion::old_asset_file(&file.path)
+            })
+            .collect();
+        found.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+        changes.extend(found.into_iter().map(|file| Change::New {
+            path: file.path.clone(),
+            kind: file.kind,
+        }));
+    }
+    changes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,5 +666,94 @@ mod tests {
         // A folder that is not there is no project.
         assert!(walk(&root.join("nenhuma")).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reconcile_reads_two_walks_and_the_project_alone() {
+        use crate::document::{Asset, Project};
+        let stamp = |len: u64| {
+            Ok(Stamp {
+                len,
+                modified: None,
+            })
+        };
+        let file = |path: &str, len: u64| TreeFile {
+            path: path.into(),
+            kind: FileKind::of(path.rsplit('/').next().unwrap()),
+            stamp: stamp(len),
+        };
+        let mut project = Project::new("Pura");
+        project.layout = Layout::Tree;
+        for (id, path, kind) in [
+            ("pedra", "Imagens/Pedra.png", AssetKind::Texture),
+            ("pulo", "Sons/Pulo.wav", AssetKind::Audio),
+            ("bip", "Sons/Bip.wav", AssetKind::Audio),
+            ("sumido", "Sons/Sumido.wav", AssetKind::Audio),
+        ] {
+            project.assets.push(Asset {
+                id: id.into(),
+                name: id.into(),
+                path: path.into(),
+                kind,
+                model: None,
+            });
+        }
+        let before = Tree {
+            files: vec![
+                file("Imagens/Pedra.png", 10),
+                file("Sons/Pulo.wav", 20),
+                file("Sons/Bip.wav", 30),
+            ],
+            ..Tree::default()
+        };
+        let after = Tree {
+            files: vec![
+                file("Imagens/Pedra.png", 11),
+                file("sons/bip.wav", 30),
+                file("Pista/Pulo.wav", 20),
+                file("Pista/Outro.wav", 20),
+                file("Velho.png", 5),
+                file("Pista/porta.luau", 5),
+            ],
+            ..Tree::default()
+        };
+        let departed = ["Velho.png".to_owned()];
+        let changes = reconcile(&before, &after, &project, &departed, &BTreeMap::new());
+        assert_eq!(
+            changes,
+            [
+                Change::Changed {
+                    asset: "pedra".into()
+                },
+                Change::Missing {
+                    asset: "pulo".into(),
+                    near: vec!["Pista/Pulo.wav".into(), "Pista/Outro.wav".into()],
+                },
+                Change::Case {
+                    asset: "bip".into(),
+                    path: "sons/bip.wav".into(),
+                },
+                Change::New {
+                    path: "Pista/Outro.wav".into(),
+                    kind: FileKind::Sound,
+                },
+                Change::New {
+                    path: "Pista/Pulo.wav".into(),
+                    kind: FileKind::Sound,
+                },
+            ]
+        );
+        // In the old layout no file is registered; the same walk twice tells only the path the
+        // project still has in another case than the disk.
+        project.layout = Layout::Legacy;
+        let changes = reconcile(&before, &after, &project, &departed, &BTreeMap::new());
+        assert!(changes.iter().all(|c| !matches!(c, Change::New { .. })));
+        assert_eq!(
+            reconcile(&after, &after, &project, &[], &BTreeMap::new()),
+            [Change::Case {
+                asset: "bip".into(),
+                path: "sons/bip.wav".into(),
+            }]
+        );
     }
 }

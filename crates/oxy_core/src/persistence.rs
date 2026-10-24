@@ -21,7 +21,9 @@ use std::{
 
 mod files;
 mod open;
-pub use open::{AssetState, KnownFiles, OpenReport, open_project};
+pub use files::departed;
+pub(crate) use open::name_of;
+pub use open::{Adopted, AssetState, KnownFiles, OpenReport, adopt, open_project, scan};
 
 /// Why a project, asset or save operation failed. Messages are shown to the user as-is.
 #[derive(Debug, thiserror::Error)]
@@ -393,7 +395,7 @@ pub fn save_bundle(
     let root = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(root).map_err(io_context("Não foi possível criar pasta do projeto"))?;
     let mut known = KnownFiles::default();
-    let plan = files::plan(&path, project, &known, None)?;
+    let mut plan = files::plan(&path, project, &known, None)?;
     let mut writes = Vec::new();
     for asset in &project.assets {
         if let Some(image) = images.get(&asset.id) {
@@ -613,6 +615,18 @@ pub fn import_asset(
     source: &Path,
     kind: AssetKind,
 ) -> Result<Id, PersistenceError> {
+    import_asset_with(project, root, source, kind, &mut |_, _| Ok(()))
+}
+/// [`import_asset`], calling `before` with the path the copy gets and the asset's ID right
+/// before the file is written (see [`crate::journal::Creating`]); the file is not written when
+/// it fails.
+pub fn import_asset_with(
+    project: &mut Project,
+    root: &Path,
+    source: &Path,
+    kind: AssetKind,
+    before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
+) -> Result<Id, PersistenceError> {
     if kind == AssetKind::Model {
         return Err(PersistenceError::ModelImport);
     }
@@ -631,7 +645,7 @@ pub fn import_asset(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Asset importado".into());
-    store_asset(project, root, &bytes, name, kind)
+    store_asset_as(project, root, new_id(), &bytes, name, kind, before)
 }
 /// Writes PNG or WAV bytes, already checked, to the project's assets folder under a new name
 /// (only created: a file there is never written over) and adds the asset as `name`.
@@ -641,8 +655,9 @@ pub(crate) fn store_asset(
     bytes: &[u8],
     name: String,
     kind: AssetKind,
+    before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<Id, PersistenceError> {
-    store_asset_as(project, root, new_id(), bytes, name, kind)
+    store_asset_as(project, root, new_id(), bytes, name, kind, before)
 }
 /// [`store_asset`] as the asset `id`.
 fn store_asset_as(
@@ -652,10 +667,12 @@ fn store_asset_as(
     bytes: &[u8],
     name: String,
     kind: AssetKind,
+    before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<Id, PersistenceError> {
     fs::create_dir_all(root)?;
     let (name, relative) = new_asset_file(project, Some(root), &id, &name, kind);
     let target = resolve_asset_path(root, &relative)?;
+    before(&relative, &id).map_err(PersistenceError::InvalidProject)?;
     transaction_write(vec![FileWrite::create(target, bytes.to_vec())])?;
     project.assets.push(Asset {
         id: id.clone(),
@@ -677,6 +694,18 @@ pub fn new_asset_file(
     id: &str,
     name: &str,
     kind: AssetKind,
+) -> (String, String) {
+    new_asset_file_in(project, root, id, name, kind, "")
+}
+/// [`new_asset_file`] in the folder `folder` of the tree layout ("" is the root), as a copy of a
+/// texture gets beside its original.
+pub fn new_asset_file_in(
+    project: &Project,
+    root: Option<&Path>,
+    id: &str,
+    name: &str,
+    kind: AssetKind,
+    folder: &str,
 ) -> (String, String) {
     let extension = if kind == AssetKind::Texture {
         "png"
@@ -713,7 +742,7 @@ pub fn new_asset_file(
                     .collect();
                 format!("{}{number}", kept.trim_end_matches(['.', ' ']))
             };
-            let path = format!("{name}.{extension}");
+            let path = crate::journal::join(folder, &format!("{name}.{extension}"));
             (name, path)
         })
         .find(|(name, path)| !taken(name, path))
@@ -2049,6 +2078,7 @@ mod tests {
             b"RIFF",
             "Pulo".into(),
             AssetKind::Audio,
+            &mut |_, _| Ok(()),
         )
         .unwrap_err();
         assert!(

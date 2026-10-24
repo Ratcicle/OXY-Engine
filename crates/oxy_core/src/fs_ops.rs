@@ -313,8 +313,51 @@ pub fn trash_index(root: &Path) -> BTreeMap<String, TrashEntry> {
         .unwrap_or_default()
 }
 
+/// What emptying the project's trash took away for good.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Emptied {
+    /// The files that were in it, its index left out.
+    pub files: usize,
+    pub bytes: u64,
+}
+/// Removes for good every file in the trash of the project at `root`, its index included (a
+/// folder someone put there stays), holding [`tree_lock`]. A file another program holds stays,
+/// and fails it after the others went.
+pub fn empty_trash(root: &Path) -> io::Result<Emptied> {
+    let _tree = tree_lock();
+    let folder = names::resolve(root, TRASH).map_err(io::Error::other)?;
+    let listing = match fs::read_dir(&folder) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Emptied::default()),
+        listing => listing?,
+    };
+    let mut emptied = Emptied::default();
+    let mut failed = None;
+    for entry in listing {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if !meta.is_file() {
+            continue;
+        }
+        match retrying(|| fs::remove_file(entry.path())) {
+            Ok(()) if entry.file_name() == "indice.json" => {}
+            Ok(()) => {
+                emptied.files += 1;
+                emptied.bytes += meta.len();
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => failed = Some(error),
+        }
+    }
+    let _ = remove_empty_dir(&folder);
+    match failed {
+        Some(error) => Err(error),
+        None => Ok(emptied),
+    }
+}
+
 /// One step of a [`batch`], with paths from the project's folder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     /// Moves or renames a file or folder, never over anything ([`move_no_replace`]).
     Move { from: String, to: String },
@@ -327,12 +370,14 @@ pub enum Op {
     Trash {
         from: String,
         slot: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<Id>,
     },
     /// Brings the file in the trash's `slot` back to `to`.
     Untrash {
         slot: String,
         to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<Id>,
     },
 }
@@ -348,7 +393,7 @@ impl Op {
         }
     }
     /// What the step does, as messages say it.
-    fn action(&self) -> String {
+    pub(crate) fn action(&self) -> String {
         match self {
             Self::Move { from, to } => format!("mover {from} para {to}"),
             Self::CreateDir { path } => format!("criar a pasta {path}"),
@@ -384,8 +429,13 @@ pub enum BatchError {
 pub fn batch(root: &Path, ops: &[Op]) -> Result<(), BatchError> {
     run_batch(root, ops, |_| {})
 }
-/// [`batch`], calling `before` with each operation's index before doing it.
-fn run_batch(root: &Path, ops: &[Op], mut before: impl FnMut(usize)) -> Result<(), BatchError> {
+/// [`batch`], calling `before` with each operation's index before doing it: where tests stop it
+/// as a crash would.
+pub(crate) fn run_batch(
+    root: &Path,
+    ops: &[Op],
+    mut before: impl FnMut(usize),
+) -> Result<(), BatchError> {
     let _tree = tree_lock();
     let failed = |op: &Op, reason: String| format!("Não foi possível {}: {reason}", op.action());
     let mut done = 0;

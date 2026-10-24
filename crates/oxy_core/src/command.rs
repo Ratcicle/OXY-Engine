@@ -29,6 +29,46 @@ use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+mod tree;
+pub(crate) use tree::follow_files;
+pub use tree::{Entry as TreeEntry, TreeView};
+
+/// What a batch, an undo or a redo whose file operations failed halfway says of those that
+/// stayed done.
+pub(crate) const KEPT: &str = "Os arquivos que já tinham mudado ficaram onde estão, e o projeto \
+    acompanha onde eles estão";
+
+/// What a command of the project's tree names, telling apart items that share a name: an
+/// asset's kind, or a script (a `.luau` file, by its path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemKind {
+    Texture,
+    Audio,
+    Model,
+    Script,
+}
+impl ItemKind {
+    /// The kind of asset it is; none for a script.
+    pub fn asset(self) -> Option<AssetKind> {
+        match self {
+            Self::Texture => Some(AssetKind::Texture),
+            Self::Audio => Some(AssetKind::Audio),
+            Self::Model => Some(AssetKind::Model),
+            Self::Script => None,
+        }
+    }
+    /// The kind of file it is in the project's tree.
+    pub fn file(self) -> crate::project_tree::FileKind {
+        use crate::project_tree::FileKind;
+        match self {
+            Self::Texture => FileKind::Image,
+            Self::Audio => FileKind::Sound,
+            Self::Model => FileKind::Model,
+            Self::Script => FileKind::Script,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Dimension {
     #[serde(rename = "2d")]
@@ -386,22 +426,51 @@ pub enum Command {
         #[serde(default)]
         name: Option<String>,
     },
-    /// Renames an asset of any kind (its ID or name; `kind` tells apart assets of different
-    /// kinds that share a name). Its ID, and its file, stay; in the tree layout the name is the
-    /// file's, and renaming is refused until OXY renames files.
+    /// Renames an asset of any kind (its ID, name or path; `kind` tells apart items of
+    /// different kinds that share a name). Its ID stays. In the tree layout the name is the
+    /// file's: the file is renamed in its folder, and a script (`kind` Script, by its path) too,
+    /// with the objects that attach it following; in the old layout only the name changes.
     RenameAsset {
         asset: Id,
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        kind: Option<AssetKind>,
+        kind: Option<ItemKind>,
     },
     /// Removes an asset from the project, refused while anything uses it (see
-    /// [`editing::asset_uses`]); its file stays in the project folder, as the editor leaves it,
-    /// but in the tree layout, where the next save sends it to the project's trash.
+    /// [`editing::asset_uses`]). In the tree layout its file goes to the project's trash (undo
+    /// brings it back), and a script (`kind` Script, by its path) too, refused while objects
+    /// attach it unless `detach` takes it off them; in the old layout the file stays.
     DeleteAsset {
         asset: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        kind: Option<AssetKind>,
+        kind: Option<ItemKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detach: Option<bool>,
+    },
+    /// Makes the folder `path` of the project's tree (`Pista/Sons`), with the folders on its way.
+    CreateFolder {
+        path: String,
+    },
+    /// Renames the folder `folder`; what is inside goes with it, and every reference follows.
+    RenameFolder {
+        folder: String,
+        name: String,
+    },
+    /// Moves files and folders (`items`: paths, or assets by ID or name, `kind` telling apart
+    /// those that share a name) into the folder `to` ("" is the project's root); every reference
+    /// follows. A name taken there is refused, never written over.
+    Move {
+        items: Vec<String>,
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<ItemKind>,
+    },
+    /// Deletes the folder `folder`: what it holds (subfolders whole, files of any kind) goes up
+    /// to the project's root, a name taken there numbered ("Pulo 2"), the files Windows makes
+    /// in folders (Thumbs.db, desktop.ini) go to the project's trash, and the empty folder goes.
+    /// No asset is deleted.
+    DeleteFolder {
+        folder: String,
     },
     RenameEntity {
         #[serde(default)]
@@ -736,6 +805,10 @@ impl Command {
             Self::PlaceModel { .. } => "Colocar modelo",
             Self::RenameAsset { .. } => "Renomear recurso",
             Self::DeleteAsset { .. } => "Excluir recurso",
+            Self::CreateFolder { .. } => "Criar pasta",
+            Self::RenameFolder { .. } => "Renomear pasta",
+            Self::Move { .. } => "Mover para pasta",
+            Self::DeleteFolder { .. } => "Excluir pasta",
             Self::RenameEntity { .. } => "Renomear objeto",
             Self::SetParent { .. } => "Mudar pai",
             Self::SetTransform { .. } => "Transformar objeto",
@@ -837,13 +910,57 @@ pub fn apply(
 }
 
 /// [`apply`] with the project's scripts (see `persistence::load_scripts`), which attach_script
-/// attaches, reading what they declare.
+/// attaches, reading what they declare. The commands of the project's tree that move files need
+/// the project's folder: see [`plan_with_files`].
 pub fn apply_with_scripts(
     project: &mut Project,
     default_scene: &str,
     commands: &[Command],
     scripts: &ScriptSources,
 ) -> Result<Vec<Applied>, CommandError> {
+    let (draft, applied) = plan(project, default_scene, commands, scripts, None)?;
+    *project = draft;
+    Ok(applied)
+}
+
+/// Plans `commands` as [`apply`] would apply them, on `view`, the project's tree as read from
+/// its folder: renaming, moving and deleting files and folders change the view, and the file
+/// operations they need are left in it ([`TreeView::files`]), with attach_script reading the
+/// scripts where the batch put them. Answers the project as the batch leaves it, which takes
+/// the place of `project` only once the operations are done on the disk (see
+/// [`crate::journal::run`]); nothing is touched here.
+pub fn plan_with_files(
+    project: &Project,
+    default_scene: &str,
+    commands: &[Command],
+    view: &mut TreeView,
+) -> Result<(Project, Vec<Applied>), CommandError> {
+    plan(
+        project,
+        default_scene,
+        commands,
+        &ScriptSources::default(),
+        Some(view),
+    )
+}
+
+/// Whether `commands` need the folder of `project` read ([`TreeView`]): those of the tree
+/// (renaming and deleting an asset only in the tree layout, where its file changes), and
+/// attach_script, which reads the scripts.
+pub fn needs_files(project: &Project, commands: &[Command]) -> bool {
+    needs_scripts(commands)
+        || commands
+            .iter()
+            .any(|command| tree::needs_folder(command) || tree::handles(command, project))
+}
+
+fn plan(
+    project: &Project,
+    default_scene: &str,
+    commands: &[Command],
+    scripts: &ScriptSources,
+    mut view: Option<&mut TreeView>,
+) -> Result<(Project, Vec<Applied>), CommandError> {
     let mut draft = project.clone();
     let mut applied: Vec<Applied> = Vec::with_capacity(commands.len());
     let mut checks: Vec<(usize, Check)> = Vec::new();
@@ -869,14 +986,23 @@ pub fn apply_with_scripts(
         }
         let mut raised = Vec::new();
         let mut copies = Vec::new();
-        let created = apply_one(
-            &mut draft,
-            default_scene,
-            &command,
-            &mut raised,
-            &mut copies,
-            scripts,
-        )
+        let mut told = Vec::new();
+        let created = match view.as_deref_mut() {
+            Some(view) if tree::handles(&command, &draft) => {
+                tree::apply(&mut draft, &command, view).map(|lines| {
+                    told = lines;
+                    Vec::new()
+                })
+            }
+            view => apply_one(
+                &mut draft,
+                default_scene,
+                &command,
+                &mut raised,
+                &mut copies,
+                view.map_or(scripts, |view| &view.scripts),
+            ),
+        }
         .map_err(|message| fail(placed(&draft, &command, default_scene, message)))?;
         match &command {
             Command::AddNode {
@@ -932,11 +1058,16 @@ pub fn apply_with_scripts(
                 .map(|id| found.get(id.as_str()).cloned())
                 .collect()
         };
+        let op = command.op();
+        let warnings = told
+            .into_iter()
+            .map(|line| format!("{}: {line}", which(index, &op)))
+            .collect();
         applied.push(Applied {
-            op: command.op(),
+            op,
             created,
             names,
-            warnings: Vec::new(),
+            warnings,
             copies,
         });
     }
@@ -950,9 +1081,9 @@ pub fn apply_with_scripts(
                 .push(format!("{}: {message}", which(index, &command.op)));
         }
     }
+    let scripts = view.as_deref().map_or(scripts, |view| &view.scripts);
     lint_attached(&draft, commands, scripts, &mut applied);
-    *project = draft;
-    Ok(applied)
+    Ok((draft, applied))
 }
 
 /// Adds to the last attach_script of `commands` that attached each script the lint of the
@@ -1418,6 +1549,112 @@ pub fn apply_and_report_with_scripts(
     let before = batch_warnings(project);
     let applied = apply_with_scripts(project, default_scene, commands, scripts)?;
     Ok(report(project, &applied, &before))
+}
+
+/// What [`apply_on_files`] did: the batch's answer ([`report`], with `moved` and `trashed` when
+/// files moved) and the file operations, for the undo history.
+#[derive(Clone, Debug)]
+pub struct OnFiles {
+    pub report: Json,
+    pub files: Vec<crate::edit_history::FileOp>,
+}
+
+/// Why [`apply_on_files`] failed.
+#[derive(Clone, Debug)]
+pub struct FilesError {
+    pub message: String,
+    /// The file operations that stayed done (undoing them failed too, see
+    /// [`crate::journal::RunError`]), which the project now follows: a step of the undo history
+    /// of their own. None, mostly: then nothing changed.
+    pub kept: Vec<crate::edit_history::FileOp>,
+}
+impl std::fmt::Display for FilesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl From<FilesError> for String {
+    fn from(error: FilesError) -> Self {
+        error.message
+    }
+}
+
+/// Applies `commands` to `project`, saved in the folder `root`, as the editor live and the
+/// agents' tools on files do: the batch is planned on the project's tree read from the disk
+/// (see [`plan_with_files`]), its file operations are done as the step `label` (journaled in
+/// `known`, see [`crate::journal::run`], and undone when one fails), and only then the project
+/// changes. Nothing changes when anything fails, but when undoing the operations failed too:
+/// then the project follows the files that stayed moved ([`FilesError::kept`]). A batch that
+/// needs no file ([`needs_files`]) reads none.
+pub fn apply_on_files(
+    project: &mut Project,
+    default_scene: &str,
+    commands: &[Command],
+    root: &std::path::Path,
+    known: &mut crate::persistence::KnownFiles,
+    label: &str,
+) -> Result<OnFiles, FilesError> {
+    let failed = |message: String| FilesError {
+        message,
+        kept: Vec::new(),
+    };
+    let before = batch_warnings(project);
+    if !needs_files(project, commands) {
+        let applied = apply(project, default_scene, commands).map_err(|e| failed(e.to_string()))?;
+        return Ok(OnFiles {
+            report: report(project, &applied, &before),
+            files: Vec::new(),
+        });
+    }
+    let mut view = TreeView::read(root).map_err(|e| failed(e.to_string()))?;
+    let (draft, applied) = plan_with_files(project, default_scene, commands, &mut view)
+        .map_err(|e| failed(e.to_string()))?;
+    let files = view.files().to_vec();
+    let ops: Vec<crate::fs_ops::Op> = files.iter().map(|file| file.forward()).collect();
+    if let Err(error) = crate::journal::run(root, known, label, &ops) {
+        if error.kept == 0 {
+            return Err(failed(format!("{error}. Nada foi alterado.")));
+        }
+        let kept = files[..error.kept].to_vec();
+        follow_files(project, &kept);
+        return Err(FilesError {
+            message: format!("{error}. {KEPT}."),
+            kept,
+        });
+    }
+    *project = draft;
+    let mut answer = report(project, &applied, &before);
+    add_files(&mut answer, &files);
+    Ok(OnFiles {
+        report: answer,
+        files,
+    })
+}
+
+/// Adds to a [`report`] what `files` did on the disk: `moved` ([{from, to}], folders and files
+/// moved or renamed) and `trashed` (the files sent to the project's trash).
+pub fn add_files(report: &mut Json, files: &[crate::edit_history::FileOp]) {
+    use crate::edit_history::FileOp;
+    let moved: Vec<Json> = files
+        .iter()
+        .filter_map(|file| match file {
+            FileOp::Move { from, to } => Some(json!({"from": from, "to": to})),
+            _ => None,
+        })
+        .collect();
+    let trashed: Vec<&str> = files
+        .iter()
+        .filter_map(|file| match file {
+            FileOp::Trash { from, .. } => Some(from.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !moved.is_empty() {
+        report["moved"] = json!(moved);
+    }
+    if !trashed.is_empty() {
+        report["trashed"] = json!(trashed);
+    }
 }
 
 /// Adds `warnings` to those of a [`report`], which gets the list when it had none.
@@ -2497,6 +2734,28 @@ fn find_asset(project: &Project, asset: &str, kind: Option<AssetKind>) -> Result
     }
 }
 
+/// Refuses deleting the asset `id` while anything uses it, naming the uses.
+fn refuse_used(project: &Project, id: &str) -> Result<(), String> {
+    let mut uses = editing::asset_references(project, id);
+    if uses.is_empty() {
+        return Ok(());
+    }
+    let removed = project.asset(id).unwrap();
+    first_ten(&mut uses);
+    // A placement keeps its pieces as they are; deleting its root takes them away.
+    let placements = if removed.kind == AssetKind::Model {
+        " (as colocações do modelo saem com delete_entities das raízes listadas)"
+    } else {
+        ""
+    };
+    Err(format!(
+        "Não é possível excluir {} {}, que ainda está em uso; tire estes usos antes{placements}:\n{}",
+        asset_kind(removed.kind).2,
+        removed.name,
+        uses.join("\n")
+    ))
+}
+
 /// Links `edges` in the logic of `entity` in `scene`, in order; the first one refused fails
 /// them all, by its place in `links` when `numbered`.
 fn link_all(
@@ -2875,7 +3134,10 @@ fn apply_one(
             Ok(pieces)
         }
         C::RenameAsset { asset, name, kind } => {
-            let id = find_asset(project, asset, *kind)?;
+            if *kind == Some(ItemKind::Script) {
+                return Err(tree::NO_FOLDER.into());
+            }
+            let id = find_asset(project, asset, kind.and_then(ItemKind::asset))?;
             let name = name.trim();
             if name.is_empty() {
                 return Err("Informe um nome para o recurso".into());
@@ -2900,29 +3162,19 @@ fn apply_one(
             renamed.name = name.to_owned();
             Ok(vec![])
         }
-        C::DeleteAsset { asset, kind } => {
-            let id = find_asset(project, asset, *kind)?;
-            let mut uses = editing::asset_references(project, &id);
-            if !uses.is_empty() {
-                let removed = project.asset(&id).unwrap();
-                first_ten(&mut uses);
-                // A placement keeps its pieces as they are; deleting its root takes them away.
-                let placements = if removed.kind == AssetKind::Model {
-                    " (as colocações do modelo saem com delete_entities das raízes listadas)"
-                } else {
-                    ""
-                };
-                return Err(format!(
-                    "Não é possível excluir {} {}, que ainda está em uso; tire estes usos \
-                     antes{placements}:\n{}",
-                    asset_kind(removed.kind).2,
-                    removed.name,
-                    uses.join("\n")
-                ));
+        C::DeleteAsset { asset, kind, .. } => {
+            if *kind == Some(ItemKind::Script) {
+                return Err(tree::NO_FOLDER.into());
             }
+            let id = find_asset(project, asset, kind.and_then(ItemKind::asset))?;
+            refuse_used(project, &id)?;
             editing::remove_asset(project, &id)?;
             Ok(vec![])
         }
+        C::CreateFolder { .. }
+        | C::RenameFolder { .. }
+        | C::Move { .. }
+        | C::DeleteFolder { .. } => Err(tree::NO_FOLDER.into()),
         C::RenameEntity {
             scene,
             entity,

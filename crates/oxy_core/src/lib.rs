@@ -24,6 +24,7 @@ pub mod headless;
 pub mod history;
 pub mod input_actions;
 pub mod input_timeline;
+pub mod journal;
 pub mod metrics;
 pub mod migration;
 pub mod model_file;

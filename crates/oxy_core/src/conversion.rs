@@ -997,6 +997,8 @@ fn organize(
     for model in &plan.models {
         known.note(model.id.clone(), model.path.clone(), model.bytes.clone());
     }
+    known.saved(&manifest);
+    crate::journal::forget(&root);
     if let Some(images) = images {
         images.configure(&root, &plan.project);
         images.mark_saved();

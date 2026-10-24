@@ -543,6 +543,19 @@ pub fn import(
     request: &ImportRequest,
     source: &ImportSource,
 ) -> Result<Imported, String> {
+    import_with(project, root, scene, request, source, &mut |_, _| Ok(()))
+}
+
+/// [`import`], calling `before` with the path the copy gets and the asset's ID right before the
+/// file is written (see [`crate::journal::Creating`]); nothing is written when it fails.
+pub fn import_with(
+    project: &mut Project,
+    root: &Path,
+    scene: &str,
+    request: &ImportRequest,
+    source: &ImportSource,
+    before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
+) -> Result<Imported, String> {
     let found = project.find_scene(request.scene.as_deref().unwrap_or(scene), "scene")?;
     if let Some(target) = &request.apply_to {
         if source.kind != ImportKind::Texture {
@@ -566,6 +579,7 @@ pub fn import(
         &source.bytes,
         source.name.clone(),
         source.kind.asset(),
+        before,
     )
     .map_err(|e| e.to_string())?;
     // In the tree layout the file takes the name, numbered when taken ("Pulo 2").
@@ -607,10 +621,22 @@ pub fn import_batch(
     batch: &ImportBatch,
     sources: &[ImportSource],
 ) -> Result<Vec<Imported>, String> {
+    import_batch_with(project, root, scene, batch, sources, &mut |_, _| Ok(()))
+}
+
+/// [`import_batch`], calling `before` before each file is written (see [`import_with`]).
+pub fn import_batch_with(
+    project: &mut Project,
+    root: &Path,
+    scene: &str,
+    batch: &ImportBatch,
+    sources: &[ImportSource],
+    before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
+) -> Result<Vec<Imported>, String> {
     let mut copy = project.clone();
     let mut imported = Vec::new();
     for (i, (request, source)) in batch.requests.iter().zip(sources).enumerate() {
-        match import(&mut copy, root, scene, request, source) {
+        match import_with(&mut copy, root, scene, request, source, before) {
             Ok(done) => imported.push(done),
             Err(error) => {
                 remove_copies(root, &imported);

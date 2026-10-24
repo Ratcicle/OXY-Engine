@@ -61,3 +61,4 @@ mod scripts_tree;
 mod scripts_world;
 mod simulation;
 mod step_budget;
+mod tree_commands;

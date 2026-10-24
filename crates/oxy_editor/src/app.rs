@@ -22,6 +22,7 @@ mod spatial_tools;
 mod test_progress;
 mod textures;
 mod toolbar;
+mod tree_files;
 mod viewport;
 mod viewport_controls;
 use spatial_tools::SpatialTools;
@@ -339,6 +340,15 @@ pub struct Editor {
     /// What agents' writes kept of the scripts they changed in this editor session (see
     /// `script_files`).
     agent_scripts_kept: std::collections::HashSet<PathBuf>,
+    /// The project's tree as the last walk found it, followed by OXY's own operations since:
+    /// the next walk tells what changed outside OXY (see `tree_files`).
+    tree_scan: Option<oxy_core::project_tree::Tree>,
+    /// A walk of the tree waits for the step in progress, or the test, to end.
+    scan_requested: bool,
+    /// F5 asked for it: a tree the last walk could not take is walked again too.
+    scan_forced: bool,
+    /// Whether the window had the focus in the last frame.
+    was_focused: bool,
 }
 
 impl Editor {
@@ -487,6 +497,10 @@ impl Editor {
             asset_ui: Default::default(),
             save_requested: false,
             agent_scripts_kept: Default::default(),
+            tree_scan: None,
+            scan_requested: false,
+            scan_forced: false,
+            was_focused: true,
         };
         if let Some(error) = preference_error {
             this.warn(error);
@@ -530,6 +544,9 @@ impl Editor {
                 .history
                 .pending_changed(&self.state.project, &self.state.images)
             || self.state.images.has_dirty()
+            // Files OXY moved since the last save (opened after a crash, say): saving writes
+            // the project as they are, discarding brings them back.
+            || !self.known_files.journal().is_clean()
     }
     fn reset_context(&mut self) {
         self.spatial = SpatialTools::default();
@@ -556,7 +573,8 @@ impl Editor {
     pub(crate) fn open(&mut self, path: PathBuf) {
         self.open_with_recent(path, true);
     }
-    fn open_with_recent(&mut self, path: PathBuf, add_recent: bool) {
+    /// Opens the project at `path`; answers whether it opened.
+    fn open_with_recent(&mut self, path: PathBuf, add_recent: bool) -> bool {
         let path = if path.is_dir() {
             path.join(persistence::PROJECT_FILE)
         } else {
@@ -572,6 +590,7 @@ impl Editor {
                 self.path = Some(path);
                 self.known_files = report.known.clone();
                 self.reset_context();
+                self.rebase_scan();
                 self.home.visible = false;
                 self.home.example_copy = false;
                 if add_recent {
@@ -579,6 +598,10 @@ impl Editor {
                 }
                 self.log("Projeto aberto e validado.");
                 self.hold_lock(&root);
+                if let Some(warning) = tree_files::synced_folder(&root) {
+                    self.log(warning);
+                    self.notice_last(true);
+                }
                 if agent_writing {
                     self.log(AGENT_WAS_WRITING);
                     self.notice_last(true);
@@ -608,10 +631,12 @@ impl Editor {
                     self.log(warning);
                     self.notice_last(true);
                 }
+                true
             }
             Err(e) => {
                 self.log(format!("Não foi possível abrir: {e}"));
                 self.notice_last(false);
+                false
             }
         }
     }
@@ -672,7 +697,17 @@ impl Editor {
                     if widgets::danger_button(ui, "Descartar alterações", false).clicked()
                         && let Some(t) = self.pending.take()
                     {
-                        self.apply_transition(t);
+                        // The files go back to the last save too (decision 2 of the tree).
+                        let current = self.path.clone();
+                        let files = self.discard_files();
+                        if !self.apply_transition(t)
+                            && files
+                            && let Some(current) = current
+                        {
+                            // The other project did not open: this one is read again as the
+                            // files are now, so its paths and undo steps match them.
+                            self.open_with_recent(current, false);
+                        }
                     }
                 });
             });
@@ -728,6 +763,8 @@ impl Editor {
             return false;
         }
         self.finish_history(true);
+        // What changed outside OXY reaches the project first, as the save writes it.
+        self.scan_project();
         let previous_path = self.path.clone();
         if self.path.is_none() || self.home.example_copy {
             let Some(folder) = rfd::FileDialog::new()
@@ -798,6 +835,7 @@ impl Editor {
                 }
                 self.history.mark_saved();
                 conversion::forget_agent_note(&root);
+                self.rebase_scan();
                 self.remember_project();
                 self.renderer.release_saved_texture_pixels();
                 self.play.game_ui.release_saved_texture_pixels();
@@ -881,10 +919,11 @@ impl Editor {
         } else if self.dirty() || !self.studio.animation.drafts.is_empty() {
             self.pending = Some(transition)
         } else {
-            self.apply_transition(transition)
+            self.apply_transition(transition);
         }
     }
-    fn apply_transition(&mut self, t: Transition) {
+    /// Applies `t`; answers whether the open project gave way (to another, or to closing).
+    fn apply_transition(&mut self, t: Transition) -> bool {
         match t {
             Transition::Home => {
                 self.apply_transition(Transition::Create(
@@ -892,6 +931,7 @@ impl Editor {
                     SceneKind::TwoD,
                 ));
                 self.home.visible = true;
+                true
             }
             Transition::Create(name, kind) => {
                 self.home.visible = false;
@@ -903,25 +943,32 @@ impl Editor {
                 self.path = None;
                 self.known_files = Default::default();
                 self.lock = None;
-                self.reset_context()
+                self.tree_scan = None;
+                self.reset_context();
+                true
             }
-            Transition::Open(path) => self.open(path),
+            Transition::Open(path) => self.open_with_recent(path, true),
             Transition::Recipe(path) => {
-                self.open_with_recent(path, false);
+                let opened = self.open_with_recent(path, false);
                 if !self.home.visible {
                     self.home.example_copy = true;
                     self.tab = Tab::Logic;
                     self.select(self.scene().entities.first().map(|e| e.id.clone()));
                 }
+                opened
             }
             Transition::Laboratory(path) => {
-                self.open_with_recent(path, false);
+                let opened = self.open_with_recent(path, false);
                 if !self.home.visible {
                     self.home.example_copy = true;
                     self.tab = Tab::Scene;
                 }
+                opened
             }
-            Transition::Close => self.allow_close = true,
+            Transition::Close => {
+                self.allow_close = true;
+                true
+            }
         }
     }
     fn sync_textures(&mut self) {
@@ -1011,26 +1058,59 @@ impl Editor {
         self.validate_last_mesh_operation();
     }
     fn undo(&mut self, redo: bool) {
+        let _ = self.undo_step(redo);
+    }
+    /// [`Self::undo`], answering why nothing was undone (told in the Console too).
+    pub(crate) fn undo_step(&mut self, redo: bool) -> Result<(), String> {
         if self.cancel_box_selection() {
-            return;
+            return Ok(());
         }
         if self.cancel_mesh_operation() {
-            return;
+            return Ok(());
         }
         self.forget_last_mesh_operation();
         self.cancel_body_drag();
         self.cancel_spatial_drag();
         self.finish_history(true);
+        // A step that moved files: what changed outside OXY is told first, and the walk then
+        // follows the files OXY moves back. The test keeps the paths it started with.
+        let files = self.history.next_has_files(redo);
+        if files && self.playing() {
+            let refused = if redo {
+                "Pare o teste para refazer uma operação nos arquivos do projeto."
+            } else {
+                "Pare o teste para desfazer uma operação nos arquivos do projeto."
+            };
+            self.warn(refused);
+            return Err(refused.into());
+        }
+        if files {
+            self.scan_project();
+        }
+        let root = self.project_root();
+        let disk = root.as_deref().map(|root| (root, &mut self.known_files));
         let result = if redo {
             self.history
-                .redo(&mut self.state.project, &mut self.state.images)
+                .redo_with(&mut self.state.project, &mut self.state.images, disk)
         } else {
             self.history
-                .undo(&mut self.state.project, &mut self.state.images)
+                .undo_with(&mut self.state.project, &mut self.state.images, disk)
         };
+        if files {
+            self.rebase_scan();
+        }
         if let Err(error) = result {
-            self.log(error);
+            // Files that stayed moved halfway are a step of their own, which the document
+            // follows: the images are found at their paths.
+            if files {
+                self.state
+                    .images
+                    .configure(&self.root(), &self.state.project);
+                self.asset_ui.thumbnail = None;
+            }
+            self.log(error.clone());
             self.notice_last(false);
+            return Err(error);
         } else {
             if self.state.project.scene(&self.scene_id).is_none() {
                 self.scene_id = self.state.project.start_scene.clone()
@@ -1057,6 +1137,7 @@ impl Editor {
             }
             self.asset_ui.thumbnail = None;
         }
+        Ok(())
     }
     /// Jogar: the person tests the open scene.
     fn start(&mut self) {
@@ -1114,6 +1195,8 @@ impl Editor {
         self.take_test_saves();
         self.sync_console_feed();
         self.play.end();
+        // Files changed outside OXY during the test reach the project now.
+        self.scan_requested = true;
         self.set_tab(self.play.previous_tab);
     }
     /// Pauses the test. What an agent sent and the game has not reached yet is dropped, as the
@@ -1288,12 +1371,34 @@ impl Editor {
             dialog.add_filter("Áudio WAV", &["wav"]).pick_file()
         };
         if let Some(source) = file {
+            // In a project in folders, its own step: the file it makes goes with it (undoing
+            // sends it to the project's trash, redoing brings it back). In the old layout it
+            // joins the edit in progress, as before.
+            let tree = self.state.project.layout == Layout::Tree;
+            if tree {
+                self.finish_history(true);
+                // What changed outside OXY is told before the walk takes the import's file.
+                self.scan_project();
+            }
             if !self.history.is_pending() {
                 self.history
                     .begin("Importar recurso", &self.state.project, &self.state.images);
             }
             let root = self.root();
-            match persistence::import_asset(&mut self.state.project, &root, &source, kind) {
+            let mut creating = tree.then(|| {
+                oxy_core::journal::Creating::new(&root, &mut self.known_files, "Importar recurso")
+            });
+            let imported = persistence::import_asset_with(
+                &mut self.state.project,
+                &root,
+                &source,
+                kind,
+                &mut |path, id| creating.as_mut().map_or(Ok(()), |c| c.before(path, id)),
+            );
+            let files = creating
+                .map(|creating| creating.finish(imported.is_ok()))
+                .unwrap_or_default();
+            match imported {
                 Ok(id) => {
                     if kind == AssetKind::Texture {
                         if let Some(asset) = self.state.project.asset(&id)
@@ -1321,10 +1426,30 @@ impl Editor {
                         }
                         self.refresh_texture(&id);
                     }
+                    if tree {
+                        if let Err(error) = self.history.commit_with_files(
+                            &self.state.project,
+                            &mut self.state.images,
+                            files,
+                        ) {
+                            self.log(error);
+                        }
+                        self.rebase_scan();
+                        // What the panel that asked for it changes next is another edit.
+                        self.history.begin(
+                            "Editar projeto",
+                            &self.state.project,
+                            &self.state.images,
+                        );
+                    }
                     self.log("Recurso importado como cópia local.");
                     Some(id)
                 }
                 Err(e) => {
+                    if tree {
+                        self.history
+                            .cancel(&mut self.state.project, &mut self.state.images);
+                    }
                     self.log(e);
                     self.notice_last(false);
                     None
@@ -1606,6 +1731,15 @@ impl eframe::App for Editor {
             self.notices_ui(ctx);
             return;
         }
+        // The window got the focus back, or F5: the tree is walked again between two steps.
+        let focused = ctx.input(|i| i.focused);
+        if focused && !self.was_focused {
+            self.scan_requested = true;
+        }
+        self.was_focused = focused;
+        if self.scan_requested && !self.history.is_pending() && !self.playing() {
+            self.scan_project();
+        }
         let edit_event = ctx.input(|i| {
             i.events.iter().any(|e| match e {
                 egui::Event::PointerButton {
@@ -1690,6 +1824,10 @@ impl eframe::App for Editor {
         {
             if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
                 self.open_guide("");
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F5)) && !self.playing() {
+                self.scan_requested = true;
+                self.scan_forced = true;
             }
             if ctx.input_mut(|i| {
                 i.consume_key(

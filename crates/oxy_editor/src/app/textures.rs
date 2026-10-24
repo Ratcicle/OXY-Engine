@@ -51,12 +51,18 @@ impl Editor {
         let source = self.state.project.asset(id).ok_or("Recurso ausente")?;
         let copy = new_id();
         let root = self.path.as_deref().and_then(std::path::Path::parent);
-        let (name, path) = persistence::new_asset_file(
+        // Beside the original; its file is made at the next save.
+        let folder = source
+            .path
+            .rsplit_once('/')
+            .map_or("", |(folder, _)| folder);
+        let (name, path) = persistence::new_asset_file_in(
             &self.state.project,
             root,
             &copy,
             &format!("{} (cópia)", source.name),
             AssetKind::Texture,
+            folder,
         );
         self.state.project.assets.push(Asset {
             id: copy.clone(),
@@ -122,6 +128,46 @@ impl Editor {
             entity.material.texture = next;
         }
     }
+    /// Deletes the asset `id` of the project in folders at `root` as its own step: the file goes
+    /// to the project's trash with it (see `command::apply_on_files`), and undoing brings both
+    /// back.
+    fn delete_asset_file(&mut self, root: &Path, id: &str) -> Result<(), String> {
+        use oxy_core::command::{self, Command};
+        self.finish_history(true);
+        // What changed outside OXY is told before the walk takes the deletion.
+        self.scan_project();
+        self.history
+            .begin("Excluir recurso", &self.state.project, &self.state.images);
+        let delete = [Command::DeleteAsset {
+            asset: id.to_owned(),
+            kind: None,
+            detach: None,
+        }];
+        match command::apply_on_files(
+            &mut self.state.project,
+            &self.scene_id,
+            &delete,
+            root,
+            &mut self.known_files,
+            "Excluir recurso",
+        ) {
+            Ok(done) => {
+                if let Err(error) = self.history.commit_with_files(
+                    &self.state.project,
+                    &mut self.state.images,
+                    done.files,
+                ) {
+                    self.log(error);
+                }
+                self.rebase_scan();
+                Ok(())
+            }
+            Err(command::FilesError { message, kept }) => {
+                self.keep_files_or_cancel(kept);
+                Err(message)
+            }
+        }
+    }
     pub(super) fn asset_delete_dialog(&mut self, ctx: &egui::Context) {
         let Some(id) = self.asset_ui.delete.clone() else {
             return;
@@ -131,10 +177,10 @@ impl Editor {
             return;
         };
         let references = editing::asset_references(&self.state.project, &id);
-        // In a project in folders the next save sends the file to the project's trash.
+        // In a project in folders the file goes to the project's trash at once.
         let removed = if self.state.project.layout == Layout::Tree {
-            "O recurso será retirado da biblioteca. Ao salvar o projeto, o arquivo vai para a \
-             lixeira do projeto (.oxy/lixeira)."
+            "O recurso será retirado da biblioteca, e o arquivo vai para a lixeira do projeto \
+             (.oxy/lixeira). Ctrl+Z traz os dois de volta."
         } else {
             "O recurso será retirado da biblioteca. O arquivo original no disco é preservado \
              para permitir desfazer com segurança."
@@ -184,7 +230,19 @@ impl Editor {
             });
         });
         if delete {
-            match editing::remove_asset(&mut self.state.project, &id) {
+            let deleted = match self.project_root() {
+                // The test keeps the paths it started with.
+                Some(_) if self.state.project.layout == Layout::Tree && self.playing() => Err(
+                    "Pare o teste para excluir: o arquivo do recurso vai para a lixeira do \
+                     projeto."
+                        .into(),
+                ),
+                Some(root) if self.state.project.layout == Layout::Tree => {
+                    self.delete_asset_file(&root, &id)
+                }
+                _ => editing::remove_asset(&mut self.state.project, &id),
+            };
+            match deleted {
                 Ok(()) => {
                     self.state.images.remove(&id);
                     self.renderer.clear_texture_override(&id);

@@ -1235,12 +1235,12 @@ impl Project {
         Ok((root, map))
     }
 }
-/// Why an asset of a project of the tree layout keeps its name: it is its file's, and OXY does
-/// not rename files yet.
+/// Why an asset of a project of the tree layout keeps its name here: it is its file's, which
+/// rename_asset renames with the project's folder at hand.
 pub(crate) fn renaming_files(name: &str) -> String {
     format!(
-        "Num projeto em pastas, o nome de um recurso é o nome do arquivo dele, e renomear \
-         arquivos pela OXY ainda não está disponível; o recurso continua se chamando \"{name}\""
+        "Num projeto em pastas, o nome de um recurso é o nome do arquivo dele, que só \
+         rename_asset renomeia, na pasta do projeto; o recurso continua se chamando \"{name}\""
     )
 }
 /// Checks the structure of `project`: IDs, references, numbers and the pieces of every model it

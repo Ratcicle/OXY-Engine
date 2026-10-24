@@ -39,6 +39,10 @@ pub(super) struct Plan {
     saved: HashMap<Id, (String, Option<AssetKind>)>,
     /// Whether the save is a copy to another folder.
     copy: bool,
+    /// The images whose painted pixels the save writes, by path.
+    painted: Vec<String>,
+    /// The hash of the project file the save writes (see [`crate::journal::hash`]).
+    manifest: String,
 }
 
 impl Plan {
@@ -47,7 +51,7 @@ impl Plan {
     /// there, or while the file is as opening found it (`known`, for an image registered then);
     /// else the file is only created, so a file someone put at its name meanwhile stays.
     pub(super) fn painted(
-        &self,
+        &mut self,
         root: &Path,
         project: &Project,
         asset: &Asset,
@@ -55,6 +59,7 @@ impl Plan {
         known: &KnownFiles,
     ) -> Result<FileWrite, PersistenceError> {
         let target = resolve_asset_path(root, &asset.path)?;
+        self.painted.push(asset.path.clone());
         let saved = project.layout == Layout::Legacy
             || self
                 .saved
@@ -240,6 +245,8 @@ pub(super) fn plan(
         ids: HashSet::new(),
         saved: HashMap::new(),
         copy: source.is_some(),
+        painted: Vec::new(),
+        manifest: String::new(),
     };
     let manifest = if project.layout == Layout::Legacy {
         serde_json::to_vec_pretty(project)?
@@ -263,6 +270,7 @@ pub(super) fn plan(
         serde_json::to_vec_pretty(&manifest)?
     };
     plan.writes.extend(schema_backup(path)?);
+    plan.manifest = crate::journal::hash(&manifest);
     plan.writes
         .push(FileWrite::replace(path.to_owned(), manifest));
     Ok(plan)
@@ -294,6 +302,19 @@ fn saved_assets(path: &Path) -> HashMap<Id, (String, Option<AssetKind>)> {
             ))
         })
         .collect()
+}
+
+/// The files the project file at `path` lists whose assets `project` no longer has, by their
+/// paths now (`journal` says where OXY moved them since): the next save sends them to the
+/// project's trash, so a scan of the tree never takes them again.
+pub fn departed(path: &Path, project: &Project, journal: &crate::journal::Journal) -> Vec<String> {
+    let mut gone: Vec<String> = saved_assets(path)
+        .into_iter()
+        .filter(|(id, _)| project.asset(id).is_none())
+        .filter_map(|(_, (saved, _))| journal.now_of(&saved))
+        .collect();
+    gone.sort();
+    gone
 }
 
 /// Plans sending to the project's trash the file of each asset `plan.saved` lists that
@@ -372,7 +393,8 @@ fn trash(root: &Path, project: &Project, known: &KnownFiles, plan: &mut Plan) {
 /// Does what `plan` planned, after `writes` (the pixels painted), in the project at `root`: the
 /// files to the trash first, then every write in one transaction; when the writes fail, the
 /// files come back from the trash. Notes in `known` the models' files as the save left them
-/// (only those, in a copy). Answers what the save tells besides.
+/// (only those, in a copy) and the stamps of the files it wrote, and the journal of what OXY did
+/// to the files goes: the project file says it all now. Answers what the save tells besides.
 pub(super) fn commit(
     root: &Path,
     mut writes: Vec<FileWrite>,
@@ -400,8 +422,14 @@ pub(super) fn commit(
         *known = KnownFiles::default();
     }
     known.retain(|id| plan.ids.contains(id));
+    for path in &plan.painted {
+        known.note_stamp(root, path);
+    }
     for (id, path, bytes) in plan.models {
+        known.note_stamp(root, &path);
         known.note(id, path, bytes);
     }
+    known.saved_hash(plan.manifest);
+    crate::journal::forget(root);
     Ok(plan.warnings)
 }

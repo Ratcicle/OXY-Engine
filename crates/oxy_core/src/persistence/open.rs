@@ -10,7 +10,8 @@ use super::{PROJECT_FILE, PersistenceError, read_document, resolve_asset_path, s
 use crate::{
     document::{Asset, AssetKind, Entity, Id, Layout, Project, validate_model, validate_project},
     editing::asset_uses,
-    fs_ops::{self, Stamp},
+    fs_ops::{self, Op, Stamp},
+    journal::{self, Journal},
     model_file, names,
     project_tree::{self, FileKind, Presence, Tree, TreeFile},
 };
@@ -44,13 +45,101 @@ pub enum AssetState {
 /// each model's file by model ID (its path and bytes: a model's file is replaced only while it
 /// still holds them, and one changed outside OXY is kept first), and each image's file by asset
 /// ID as opening found it (its path and stamp: pixels painted on an image the project file does
-/// not list yet replace its file only while it is unchanged).
+/// not list yet replace its file only while it is unchanged). Also the stamp of each file OXY
+/// moved, made, brought back or wrote since the project opened, which undoing and redoing check
+/// (a file changed outside OXY is not moved back), and the journal of what OXY did to the files
+/// since the project file was saved (see [`crate::journal`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KnownFiles {
     models: BTreeMap<Id, (String, Arc<[u8]>)>,
     images: BTreeMap<Id, (String, Stamp)>,
+    stamps: BTreeMap<String, Stamp>,
+    journal: Journal,
 }
 impl KnownFiles {
+    /// What OXY did to the files since the project file was saved.
+    pub fn journal(&self) -> &Journal {
+        &self.journal
+    }
+    pub(crate) fn journal_mut(&mut self) -> &mut Journal {
+        &mut self.journal
+    }
+    /// The stamp the file `path` had when OXY last moved, made or wrote it.
+    pub fn stamp(&self, path: &str) -> Option<Stamp> {
+        self.stamps
+            .iter()
+            .find(|(known, _)| names::same_name(known, path))
+            .map(|(_, stamp)| *stamp)
+    }
+    /// Notes the stamp the file `path` of the project at `root` has now, as OXY left it.
+    pub fn note_stamp(&mut self, root: &Path, path: &str) {
+        self.stamps
+            .retain(|known, _| !names::same_name(known, path));
+        if let Some(stamp) = names::resolve(root, path)
+            .ok()
+            .and_then(|file| Stamp::read(&file).ok())
+        {
+            self.stamps.insert(path.to_owned(), stamp);
+        }
+    }
+    /// The project file was saved as `manifest`: the journal starts again from it.
+    pub(crate) fn saved(&mut self, manifest: &[u8]) {
+        self.saved_hash(journal::hash(manifest));
+    }
+    /// [`Self::saved`] by the project file's hash (see [`journal::hash`]).
+    pub(crate) fn saved_hash(&mut self, manifest: String) {
+        self.journal = Journal::new(manifest);
+    }
+    /// Follows `op`, done in the project at `root`: the files read and their stamps take the
+    /// paths it gave them, and the journal notes it.
+    pub(crate) fn follow(&mut self, root: &Path, op: &Op) {
+        let rekey = |path: &mut String, from: &str, to: &str| {
+            if let Some(rest) = journal::under(path, from) {
+                *path = journal::join(to, rest);
+            }
+        };
+        let (from, to) = match op {
+            Op::Move { from, to } => (from, to),
+            Op::Trash { from, slot, .. } => (from, slot),
+            Op::Untrash { slot, to, .. } => (slot, to),
+            Op::CreateDir { .. } | Op::RemoveDir { .. } => {
+                self.journal.apply(op);
+                return;
+            }
+        };
+        for (path, _) in self.models.values_mut() {
+            rekey(path, from, to);
+        }
+        for (path, _) in self.images.values_mut() {
+            rekey(path, from, to);
+        }
+        let mut moved = false;
+        self.stamps = std::mem::take(&mut self.stamps)
+            .into_iter()
+            .map(|(mut path, stamp)| {
+                let before = path.clone();
+                rekey(&mut path, from, to);
+                moved |= before != path;
+                (path, stamp)
+            })
+            .collect();
+        if !moved
+            && names::resolve(root, to)
+                .ok()
+                .and_then(|file| fs::metadata(file).ok())
+                .is_some_and(|meta| meta.is_file())
+        {
+            self.note_stamp(root, to);
+        }
+        // An image made by an import: pixels painted on it replace its file while it is as made.
+        if let (Op::Untrash { id: Some(id), .. }, FileKind::Image, Some(stamp)) =
+            (op, FileKind::of(to), self.stamp(to))
+            && !self.images.contains_key(id)
+        {
+            self.images.insert(id.clone(), (to.clone(), stamp));
+        }
+        self.journal.apply(op);
+    }
     /// The path and bytes of the file of the model `id`, as OXY last read or wrote them.
     pub fn get(&self, id: &str) -> Option<(&str, &[u8])> {
         self.models
@@ -132,6 +221,13 @@ pub fn open_project(path: &Path) -> Result<(Project, OpenReport), PersistenceErr
         warnings: resumed.warnings,
         ..OpenReport::default()
     };
+    // What OXY did to the files since the project file was saved comes first: it is OXY's own
+    // record, the best proof of where a file went.
+    let opened = journal::opening(root, &journal::hash(&bytes));
+    report.fixes.extend(opened.fixes);
+    report.warnings.extend(opened.warnings);
+    let trashed = journal::relink_assets(&mut project, &opened.journal);
+    report.known.journal = opened.journal;
     let tree = if project.layout == Layout::Tree {
         match project_tree::walk(root) {
             Ok(tree) => Some(tree),
@@ -151,12 +247,14 @@ pub fn open_project(path: &Path) -> Result<(Project, OpenReport), PersistenceErr
         report: &mut report,
         claimed: HashSet::new(),
         gone: Vec::new(),
+        trashed: trashed.into_iter().collect(),
     };
     opening.check_paths(&mut project);
     let models = disk.read_models();
     if project.layout == Layout::Tree {
         opening.load_models(&mut project, &models);
     }
+    journal::relink_scripts(&mut project, &opening.report.known.journal);
     opening.check_files(&mut project);
     let gone = std::mem::take(&mut opening.gone);
     project.assets.retain(|asset| !gone.contains(&asset.id));
@@ -168,6 +266,189 @@ pub fn open_project(path: &Path) -> Result<(Project, OpenReport), PersistenceErr
     validate_project(&project).map_err(PersistenceError::InvalidProject)?;
     report.warnings.extend(script_warnings(&project, root));
     Ok((project, report))
+}
+
+/// Walks again the tree of the project whose project file is `file`, and tells what changed for
+/// `project` since the walk `before` (see [`project_tree::reconcile`]): the IDs inside the new
+/// model files are read, and the files on their way to the project's trash (see
+/// [`super::departed`]) are left out. Answers the new walk with the changes.
+pub fn scan(
+    file: &Path,
+    before: &Tree,
+    project: &Project,
+    known: &KnownFiles,
+) -> Result<(Tree, Vec<project_tree::Change>), PersistenceError> {
+    let root = file.parent().unwrap_or(Path::new("."));
+    let after = project_tree::walk(root)?;
+    let departed = super::files::departed(file, project, known.journal());
+    let mut models = BTreeMap::new();
+    for found in &after.files {
+        let new = !before
+            .files
+            .iter()
+            .any(|old| names::same_name(&old.path, &found.path));
+        if found.kind == FileKind::Model
+            && new
+            && let Ok((id, _, _)) = read_model(root, &found.path)
+        {
+            models.insert(found.path.clone(), id);
+        }
+    }
+    let changes = project_tree::reconcile(before, &after, project, &departed, &models);
+    Ok((after, changes))
+}
+
+/// What applying the changes a scan of the project's tree found told.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Adopted {
+    /// What changed in the project, one line each: a new file registered, a path taken in the
+    /// disk's case, a model found by the ID inside its file.
+    pub fixes: Vec<String>,
+    /// What is wrong now, one line each: a file missing, a model changed outside OXY.
+    pub warnings: Vec<String>,
+    /// The images whose files changed outside OXY, whose pixels are read again.
+    pub images: Vec<Id>,
+}
+
+/// Applies to `project`, saved in the folder `root`, the changes a scan of its tree found (see
+/// [`project_tree::reconcile`]), as opening would: a new file is registered (its ID made from its
+/// path, a model keeping the one in its file while free), a path takes the disk's case, a model
+/// moved outside OXY gets its pieces from the file found by its ID; a file gone and a model
+/// changed outside OXY are told. Called between two steps of the undo history, never during
+/// one: the next save writes what changed, and the next opening would make it the same way.
+pub fn adopt(
+    project: &mut Project,
+    root: &Path,
+    changes: &[project_tree::Change],
+    known: &mut KnownFiles,
+) -> Adopted {
+    use project_tree::Change;
+    let mut adopted = Adopted::default();
+    let mut taken = identifiers(project);
+    for change in changes {
+        match change {
+            Change::New { path, kind } => {
+                let Some(kind) = asset_kind(*kind) else {
+                    continue;
+                };
+                let Some(name) = name_of(path, kind) else {
+                    continue;
+                };
+                let mut asset = Asset {
+                    id: String::new(),
+                    name,
+                    path: path.clone(),
+                    kind,
+                    model: None,
+                };
+                let read = (kind == AssetKind::Model).then(|| read_model(root, path));
+                asset.id = match &read {
+                    Some(Ok((id, _, _))) if !taken.contains(id) => id.clone(),
+                    _ => free_id(path, &taken),
+                };
+                taken.insert(asset.id.clone());
+                adopted.fixes.push(format!(
+                    "{}: arquivo novo na pasta do projeto, {path}",
+                    label(&asset)
+                ));
+                let problem = match read {
+                    Some(Ok((_, entities, bytes))) => {
+                        let fits = Asset {
+                            model: Some(entities.clone()),
+                            ..asset.clone()
+                        };
+                        match validate_model(project, &fits) {
+                            Ok(()) => {
+                                known.note(asset.id.clone(), path.clone(), bytes);
+                                asset.model = Some(entities);
+                                None
+                            }
+                            Err(error) => Some(format!("não serve neste projeto: {error}")),
+                        }
+                    }
+                    Some(Err(problem)) => Some(match problem {
+                        FileProblem::Missing => "não existe mais".to_owned(),
+                        FileProblem::Unreadable(why) | FileProblem::Broken(why) => why,
+                    }),
+                    None => header_state(root, &asset).map(|state| match state {
+                        AssetState::Missing => "não existe mais".to_owned(),
+                        AssetState::Unreadable(why)
+                        | AssetState::Broken(why)
+                        | AssetState::InvalidPath(why) => why,
+                    }),
+                };
+                if let Some(why) = problem {
+                    adopted.warnings.push(format!(
+                        "{}: o arquivo {path} não pode ser usado ({why}); {REFUSED}",
+                        label(&asset)
+                    ));
+                }
+                project.assets.push(asset);
+            }
+            Change::Case { asset, path } => {
+                let Some(asset) = project.assets.iter_mut().find(|a| a.id == *asset) else {
+                    continue;
+                };
+                adopted.fixes.push(format!(
+                    "{}: o arquivo se chama {path} no disco, com essas maiúsculas e minúsculas (o \
+                     projeto o tinha como {})",
+                    label(asset),
+                    asset.path
+                ));
+                asset.path = path.clone();
+            }
+            Change::Found { asset, path } => {
+                let Some(index) = project.assets.iter().position(|a| a.id == *asset) else {
+                    continue;
+                };
+                let found = match read_model(root, path) {
+                    Ok((id, entities, bytes)) if id == *asset => (entities, bytes),
+                    _ => continue,
+                };
+                let asset = &mut project.assets[index];
+                adopted.fixes.push(format!(
+                    "{}: o arquivo foi encontrado em {path} pelo ID que tem dentro (o projeto o \
+                     tinha em {})",
+                    label(asset),
+                    asset.path
+                ));
+                asset.path = path.clone();
+                asset.model = Some(found.0);
+                known.note(asset.id.clone(), path.clone(), found.1);
+            }
+            Change::Missing { asset, near } => {
+                let Some(asset) = project.asset(asset) else {
+                    continue;
+                };
+                let near = if near.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (talvez seja {})", near.join(" ou "))
+                };
+                adopted.warnings.push(format!(
+                    "{}: o arquivo {} não está mais na pasta do projeto{near}; {REFUSED}",
+                    label(asset),
+                    asset.path
+                ));
+            }
+            Change::Changed { asset } => {
+                let Some(asset) = project.asset(asset) else {
+                    continue;
+                };
+                if asset.kind == AssetKind::Model {
+                    adopted.warnings.push(format!(
+                        "{}: o arquivo {} mudou fora da OXY; reabra o projeto para carregar a \
+                         versão de fora (salvar antes guarda uma cópia dela em .oxy/backup)",
+                        label(asset),
+                        asset.path
+                    ));
+                } else {
+                    adopted.images.push(asset.id.clone());
+                }
+            }
+        }
+    }
+    adopted
 }
 
 /// `asset` as messages name it: `Pulo (som)`.
@@ -402,6 +683,9 @@ struct Opening<'a, 'b> {
     claimed: HashSet<String>,
     /// The entries whose file went and that nothing uses, which leave the project.
     gone: Vec<Id>,
+    /// The entries whose file OXY sent to the project's trash since the save (see
+    /// [`journal::relink_assets`]): missing, whatever file their saved path has now.
+    trashed: HashSet<Id>,
 }
 impl Opening<'_, '_> {
     fn problem(&mut self, asset: &Asset, state: AssetState) {
@@ -432,8 +716,10 @@ impl Opening<'_, '_> {
         let mut seen: Vec<(String, String)> = Vec::new();
         for index in 0..project.assets.len() {
             let asset = &project.assets[index];
-            if asset.path.is_empty() && asset.kind == AssetKind::Model {
-                // A model inside the project file of the old layout.
+            if asset.path.is_empty() && asset.kind == AssetKind::Model
+                || self.trashed.contains(&asset.id)
+            {
+                // A model inside the project file of the old layout, or a file in the trash.
                 continue;
             }
             let why = path_problem(self.disk, asset).or_else(|| {
@@ -462,6 +748,11 @@ impl Opening<'_, '_> {
         for index in 0..project.assets.len() {
             let asset = &project.assets[index];
             if asset.kind != AssetKind::Model || self.has_problem(asset) {
+                continue;
+            }
+            if self.trashed.contains(&asset.id) {
+                let asset = asset.clone();
+                self.trashed_file(project, &asset);
                 continue;
             }
             // Pieces inside the project file (an exported game's, one written by hand) are the
@@ -561,12 +852,36 @@ impl Opening<'_, '_> {
         }
     }
 
+    /// The entry `asset`, whose file OXY sent to the project's trash since the save: missing
+    /// while something uses it, and out of the project, as when it was deleted, when nothing
+    /// does. Its saved path is not looked at: another file may have it now.
+    fn trashed_file(&mut self, project: &Project, asset: &Asset) {
+        if asset_uses(project, &asset.id).is_empty() {
+            self.gone.push(asset.id.clone());
+        } else {
+            self.report.warnings.push(format!(
+                "{}: o arquivo {} foi para a lixeira do projeto (.oxy/lixeira) depois do último \
+                 salvamento, e o recurso ainda é usado; {REFUSED}",
+                label(asset),
+                asset.path
+            ));
+            self.report
+                .assets
+                .insert(asset.id.clone(), AssetState::Missing);
+        }
+    }
+
     /// Looks for the file of each image and sound and reads its header: a path the tree has in
     /// another case alone is taken as the disk has it.
     fn check_files(&mut self, project: &mut Project) {
         for index in 0..project.assets.len() {
             let asset = &project.assets[index];
             if asset.kind == AssetKind::Model || self.has_problem(asset) {
+                continue;
+            }
+            if self.trashed.contains(&asset.id) {
+                let asset = asset.clone();
+                self.trashed_file(project, &asset);
                 continue;
             }
             let path = match self.disk.find(&asset.path) {

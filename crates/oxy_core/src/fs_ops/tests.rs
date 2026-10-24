@@ -56,6 +56,8 @@ fn the_tree_modules_never_write_over_files() {
         ("model_file.rs", include_str!("../model_file.rs")),
         ("project_lock.rs", include_str!("../project_lock.rs")),
         ("conversion.rs", include_str!("../conversion.rs")),
+        ("journal.rs", include_str!("../journal.rs")),
+        ("command/tree.rs", include_str!("../command/tree.rs")),
         (
             "persistence/open.rs",
             include_str!("../persistence/open.rs"),

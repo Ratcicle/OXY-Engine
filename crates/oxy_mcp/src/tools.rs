@@ -8,10 +8,11 @@ use oxy_core::{
     command::{self, Applied},
     conversion,
     document::*,
+    edit_history::FileOp,
     editing, encoding,
     export::{self, ExportRequest},
     fs_ops::utc,
-    headless,
+    headless, journal,
     persistence::{self, OpenReport},
     project_lock::AgentLock,
     query, random,
@@ -95,6 +96,27 @@ fn save_on_files(
     persistence::save_project_with(file, project, known)
         .map(|told| (told, None))
         .map_err(|e| e.to_string())
+}
+
+/// What a write on files that failed after its batch moved files says, once the files went back
+/// where they were (journaled, see `journal::run`), or why they could not.
+fn put_back(
+    root: &Path,
+    known: &mut persistence::KnownFiles,
+    files: &[FileOp],
+    error: String,
+) -> String {
+    if files.is_empty() {
+        return error;
+    }
+    let back: Vec<_> = files.iter().rev().map(FileOp::backward).collect();
+    match journal::run(root, known, "Desfazer: a gravação falhou", &back) {
+        Ok(()) => format!("{error}; os arquivos voltaram para onde estavam"),
+        Err(restore) => format!(
+            "{error}; também não foi possível voltar os arquivos ({restore}): a próxima abertura \
+             do projeto os encontra onde estão"
+        ),
+    }
 }
 
 /// Adds to `answer`, as `open_warnings`, the `lines` opening the project on files told (see
@@ -1006,16 +1028,25 @@ every piece with its name, its root first; the root keeps the name it was saved 
 Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene and value.scene \
 nodes keep the scene they named when it was saved, with no warning (a restart saved in level 1 \
 reopens level 1): set_node_params them after placing
-- rename_asset {asset, name, kind?}; delete_asset {asset, kind?}: any asset oxy_project lists, by \
-ID or name (any case); kind (Texture|Audio|Model) picks among assets of different kinds that \
-share a name (two of one kind: by ID, the refusal naming their files). rename_asset keeps the \
-ID, which nodes and objects use, and the file; a name \
-another asset of its kind has is refused. delete_asset is refused while anything uses the asset \
-(oxy_project used_by: objects showing an image, nodes playing a sound, a model's placements by \
-their roots), naming the uses; its file stays in the assets folder, as the editor's Excluir \
-leaves it. In a project in folders (\"layout\": \"Tree\" in project.oxy.json) an asset's name is \
-its file's: rename_asset is refused until OXY renames files, and the save sends a deleted \
-asset's file to .oxy/lixeira
+- rename_asset {asset, name, kind?}; delete_asset {asset, kind?, detach?}: any asset oxy_project \
+lists, by ID or name (any case); kind (Texture|Audio|Model|Script) picks among items of \
+different kinds that share a name (two of one kind: by ID, the refusal naming their files). \
+rename_asset keeps the ID, which nodes and objects use; a name another asset of its kind has is \
+refused. delete_asset is refused while anything uses the asset (oxy_project used_by: objects \
+showing an image, nodes playing a sound, a model's placements by their roots), naming the uses. \
+In a project in folders (\"layout\": \"Tree\" in project.oxy.json) an asset's name is its file's: \
+rename_asset renames the file in its folder and delete_asset sends it to .oxy/lixeira, both at \
+once; a script goes by its path with kind Script (objects attaching it follow a rename; \
+delete_asset refuses it while attached, unless detach: true takes it off them). In an old \
+project only the name changes and the file stays
+- create_folder {path}; rename_folder {folder, name}; move {items, to, kind?}; delete_folder \
+{folder}: the project's folders, in a project in folders only (refused in an old one until its \
+first save organizes it). The files move on the disk at once and every reference follows \
+(asset paths, scripts objects attach). move takes paths (files or folders) or assets by ID or \
+name, to a folder (\"\" is the root); a name taken there is refused with a free one suggested, \
+never written over. delete_folder sends what the folder holds up to the root (a taken name \
+numbered, \"Pulo 2\"), Thumbs.db and desktop.ini to .oxy/lixeira, and removes the folder; no \
+asset is deleted. The answer adds moved [{from, to}] and trashed
 - Scene changes without a fixed scene: action.scene's scene input (text) replaces its scene \
 parameter. Restart: connect scene.current.scene -> action.scene.scene, and the logic reopens \
 whatever scene it is in, copied or placed anywhere. Next scene: value.scene gives the ID of the \
@@ -1417,7 +1448,7 @@ const PLAY_ACTIONS: [&str; 5] = ["start", "stop", "pause", "resume", "input"];
 
 /// Project-level commands: they take no `scene`, so the tool's default scene is not added
 /// (commands refuse unknown fields).
-const PROJECT_OPS: [&str; 19] = [
+const PROJECT_OPS: [&str; 23] = [
     "rename_project",
     "set_start_scene",
     "set_game_settings",
@@ -1427,6 +1458,10 @@ const PROJECT_OPS: [&str; 19] = [
     "delete_scene",
     "rename_asset",
     "delete_asset",
+    "create_folder",
+    "rename_folder",
+    "move",
+    "delete_folder",
     "create_input_action",
     "rename_input_action",
     "set_input_key",
@@ -1950,23 +1985,37 @@ impl Tools {
                 // Nobody else writes the project meanwhile; refused while the editor has it.
                 let _lock = AgentLock::hold(&root)?;
                 let (mut project, mut opened) = open_file(&file)?;
-                // attach_script reads the scripts of the project's tree.
-                let scripts = if command::needs_scripts(&parsed) {
-                    persistence::load_scripts(&root).map_err(|e| e.to_string())?
-                } else {
-                    Default::default()
-                };
                 let known = persistence::missing_scripts(&project, &root).unwrap_or_default();
                 let start = project.start_scene.clone();
-                let mut report =
-                    command::apply_and_report_with_scripts(&mut project, &start, &parsed, &scripts)
-                        .map_err(|e| e.to_string())?;
+                // The tree's commands move files at once (journaled), and attach_script reads
+                // the scripts where the batch leaves them.
+                let label = match parsed.as_slice() {
+                    [one] => format!("Agente: {}", one.label()),
+                    many => format!("Agente: {} comandos", many.len()),
+                };
+                let done = command::apply_on_files(
+                    &mut project,
+                    &start,
+                    &parsed,
+                    &root,
+                    &mut opened.known,
+                    &label,
+                )?;
+                let mut report = done.report;
                 command::add_warnings(
                     &mut report,
                     persistence::added_script_warnings(&known, &project, &root),
                 );
-                let backup = self.keep_previous_version(&file)?;
-                let (told, converted) = save_on_files(&file, &mut project, &mut opened.known)?;
+                let saved = self.keep_previous_version(&file).and_then(|backup| {
+                    save_on_files(&file, &mut project, &mut opened.known)
+                        .map(|(told, converted)| (backup, told, converted))
+                });
+                let (backup, told, converted) = match saved {
+                    Ok(saved) => saved,
+                    Err(error) => {
+                        return Err(put_back(&root, &mut opened.known, &done.files, error));
+                    }
+                };
                 command::add_warnings(&mut report, told);
                 if let Some(converted) = converted {
                     report["converted"] = converted;
@@ -3226,6 +3275,10 @@ mod tests {
             json!({"op": "delete_scene", "scene": "s"}),
             json!({"op": "rename_asset", "asset": "a", "name": "B", "kind": "Model"}),
             json!({"op": "delete_asset", "asset": "a"}),
+            json!({"op": "create_folder", "path": "Pista/Sons"}),
+            json!({"op": "rename_folder", "folder": "Pista", "name": "Corrida"}),
+            json!({"op": "move", "items": ["Pulo", "scripts/porta.luau"], "to": "Pista"}),
+            json!({"op": "delete_folder", "folder": "Pista"}),
             json!({"op": "create_input_action", "name": "Pausar", "key": "P"}),
             json!({"op": "rename_input_action", "action": "a", "name": "B"}),
             json!({"op": "set_input_key", "action": "a", "key": "K"}),
@@ -4631,7 +4684,7 @@ mod tests {
         assert_eq!(placed["created"]["0"][1]["name"], "Tampa 2");
 
         // Replaced in place; deleted once nothing uses it. The tool's scene stays out of the
-        // asset commands. In folders its name is its file's, which OXY does not rename yet.
+        // asset commands. In folders its name is its file's: renaming renames the file.
         let replaced = call(
             "oxy_apply",
             json!({"scene": start, "commands": [
@@ -4641,14 +4694,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(replaced["created"]["1"][0]["id"], model["id"]);
-        let error = call(
+        let renamed = call(
             "oxy_apply",
             json!({"commands": [
                 {"op": "rename_asset", "asset": "Ladrilho que cai", "name": "Ladrilho frágil"},
             ]}),
         )
-        .unwrap_err();
-        assert!(error.contains("renomear arquivos pela OXY"), "{error}");
+        .unwrap();
+        assert_eq!(
+            renamed["moved"],
+            json!([{"from": "Modelos/Ladrilho que cai.modelo.json",
+                    "to": "Modelos/Ladrilho frágil.modelo.json"}])
+        );
+        assert!(dir.join("Modelos/Ladrilho frágil.modelo.json").is_file());
+        assert!(!dir.join("Modelos/Ladrilho que cai.modelo.json").exists());
+        assert!(!dir.join(journal::JOURNAL).exists());
         let renamed = model_entry(&call("oxy_project", json!({})).unwrap()).unwrap();
         assert_eq!(
             (
@@ -4656,16 +4716,17 @@ mod tests {
                 &renamed["root"]["name"],
                 &renamed["part_count"]
             ),
-            (&json!("Ladrilho que cai"), &json!("Ladrilho"), &json!(1))
+            (&json!("Ladrilho frágil"), &json!("Ladrilho"), &json!(1))
         );
+        assert_eq!(renamed["id"], model["id"]);
         assert_eq!(renamed["used_by"].as_array().unwrap().len(), 2);
         let error = call(
             "oxy_apply",
-            json!({"commands": [{"op": "delete_asset", "asset": "ladrilho que cai"}]}),
+            json!({"commands": [{"op": "delete_asset", "asset": "ladrilho frágil"}]}),
         )
         .unwrap_err();
         assert!(
-            error.contains("Não é possível excluir o modelo Ladrilho que cai")
+            error.contains("Não é possível excluir o modelo Ladrilho frágil")
                 && error.contains("Ladrilho 2: modelo"),
             "{error}"
         );
@@ -4673,14 +4734,19 @@ mod tests {
             applied["created"]["3"][0]["id"].clone(),
             placed["created"]["0"][0]["id"].clone(),
         ];
-        call(
+        let deleted = call(
             "oxy_apply",
             json!({"scene": start, "commands": [
                 {"op": "delete_entities", "ids": roots},
-                {"op": "delete_asset", "asset": "Ladrilho que cai", "kind": "Model"},
+                {"op": "delete_asset", "asset": "Ladrilho frágil", "kind": "Model"},
             ]}),
         )
         .unwrap();
+        assert_eq!(
+            deleted["trashed"],
+            json!(["Modelos/Ladrilho frágil.modelo.json"])
+        );
+        assert!(!dir.join("Modelos/Ladrilho frágil.modelo.json").exists());
         assert!(model_entry(&call("oxy_project", json!({})).unwrap()).is_none());
 
         // Shared data gets a copy per lane, and disconnect takes links like connect.
@@ -4720,7 +4786,8 @@ mod tests {
         for text in [
             "save_model {entity, name?, replace?}",
             "rename_asset {asset, name, kind?}",
-            "delete_asset {asset, kind?}",
+            "delete_asset {asset, kind?, detach?}",
+            "create_folder {path}; rename_folder {folder, name}; move {items, to, kind?}",
             "disconnect takes the same two forms",
             "split_shared_data: true",
             "names it and suggests split_shared_data",
@@ -5180,6 +5247,81 @@ mod tests {
         tools
             .call(tool, &args)
             .map(|output| serde_json::from_str(&output.text).unwrap())
+    }
+
+    #[test]
+    fn files_move_folders_at_once_and_put_the_files_back_when_the_save_fails() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-arvore-{}", new_id()));
+        let image = oxy_core::painting::PaintImage::new(2, 2, [200, 40, 40, 255])
+            .unwrap()
+            .to_png()
+            .unwrap();
+        std::fs::create_dir_all(dir.join("Imagens")).unwrap();
+        std::fs::write(dir.join("Imagens/Pedra.png"), image).unwrap();
+        let mut project = editing::blank_project("Pastas", SceneKind::ThreeD).unwrap();
+        project.layout = Layout::Tree;
+        let stone = new_id();
+        project.assets.push(Asset {
+            id: stone.clone(),
+            name: "Pedra".into(),
+            path: "Imagens/Pedra.png".into(),
+            kind: AssetKind::Texture,
+            model: None,
+        });
+        let file = dir.join(persistence::PROJECT_FILE);
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let moved = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_folder", "path": "Pista"},
+                {"op": "move", "items": ["Pedra"], "to": "Pista"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(
+            moved["moved"],
+            json!([{"from": "Imagens/Pedra.png", "to": "Pista/Pedra.png"}])
+        );
+        assert!(dir.join("Pista/Pedra.png").is_file());
+        // Saved: the project file has the new path, and the journal went.
+        assert!(!dir.join(journal::JOURNAL).exists());
+        let saved: Json = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["assets"][0]["path"], "Pista/Pedra.png");
+        let summary = on_files(&mut tools, &project_arg, "oxy_project", json!({})).unwrap();
+        assert_eq!(summary["assets"][0]["path"], "Pista/Pedra.png");
+        // A save that fails puts the files back where they were.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let held = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(&file)
+                .unwrap();
+            let error = on_files(
+                &mut tools,
+                &project_arg,
+                "oxy_apply",
+                json!({"commands": [{"op": "move", "items": ["Pedra"], "to": "Imagens"}]}),
+            )
+            .unwrap_err();
+            drop(held);
+            assert!(
+                error.contains("os arquivos voltaram para onde estavam"),
+                "{error}"
+            );
+            assert!(dir.join("Pista/Pedra.png").is_file());
+            assert!(!dir.join("Imagens/Pedra.png").exists());
+            assert!(!dir.join(journal::JOURNAL).exists());
+            let summary = on_files(&mut tools, &project_arg, "oxy_project", json!({})).unwrap();
+            assert_eq!(summary["assets"][0]["path"], "Pista/Pedra.png");
+            assert!(summary.get("open_warnings").is_none(), "{summary}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
