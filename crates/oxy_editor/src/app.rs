@@ -1121,6 +1121,9 @@ impl Editor {
         };
         if files {
             self.rebase_scan();
+            // The files moved back, and the texts whose `require` the step rewrote went back
+            // too: the Scripts card, the Hierarchy and the code tab see them.
+            self.script_status.look_again();
         }
         if let Err(error) = result {
             // Files that stayed moved halfway are a step of their own, which the document
