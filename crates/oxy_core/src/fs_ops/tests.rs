@@ -59,6 +59,10 @@ fn the_tree_modules_never_write_over_files() {
         ("journal.rs", include_str!("../journal.rs")),
         ("command/tree.rs", include_str!("../command/tree.rs")),
         (
+            "command/tree/requires.rs",
+            include_str!("../command/tree/requires.rs"),
+        ),
+        (
             "persistence/open.rs",
             include_str!("../persistence/open.rs"),
         ),
@@ -611,6 +615,64 @@ fn batches_undo_what_they_did_when_a_step_fails() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("foi esvaziada"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_script_is_written_only_while_it_says_what_was_read_and_undone_with_its_batch() {
+    let root = temp();
+    create_new_file(&root.join("a.luau"), b"return require('./b')\n").unwrap();
+    create_new_file(&root.join("c.wav"), b"c").unwrap();
+    create_new_file(&root.join("d.wav"), b"d").unwrap();
+    let before = files(&root);
+    let write = Op::Write {
+        path: "Pista/a.luau".into(),
+        before: "return require('./b')\n".into(),
+        after: "return require('@project/b')\n".into(),
+    };
+    let ops = [
+        Op::CreateDir {
+            path: "Pista".into(),
+        },
+        moving("a.luau", "Pista/a.luau"),
+        write.clone(),
+    ];
+    // A later step fails: the text goes back before the file does.
+    let mut failing = ops.to_vec();
+    failing.push(moving("c.wav", "d.wav"));
+    assert!(matches!(
+        batch(&root, &failing).unwrap_err(),
+        BatchError::RolledBack { step: 3, .. }
+    ));
+    assert_eq!(files(&root), before);
+    batch(&root, &ops).unwrap();
+    assert_eq!(
+        fs::read(root.join("Pista/a.luau")).unwrap(),
+        b"return require('@project/b')\n"
+    );
+    let undo: Vec<Op> = ops.iter().rev().map(Op::inverse).collect();
+    batch(&root, &undo).unwrap();
+    assert_eq!(files(&root), before);
+    // Changed outside OXY, or gone: never written over.
+    batch(&root, &ops[..2]).unwrap();
+    fs::write(root.join("Pista/a.luau"), b"-- meu\n").unwrap();
+    assert_eq!(
+        batch(&root, std::slice::from_ref(&write)).unwrap_err(),
+        BatchError::RolledBack {
+            step: 0,
+            message: "Não foi possível reescrever os require de Pista/a.luau: Pista/a.luau mudou \
+                      fora da OXY"
+                .into()
+        }
+    );
+    assert_eq!(fs::read(root.join("Pista/a.luau")).unwrap(), b"-- meu\n");
+    fs::remove_file(root.join("Pista/a.luau")).unwrap();
+    let error = batch(&root, std::slice::from_ref(&write)).unwrap_err();
+    assert!(
+        error.to_string().ends_with("Pista/a.luau não existe"),
+        "{error}"
+    );
+    assert!(!root.join("Pista/a.luau").exists());
     fs::remove_dir_all(root).unwrap();
 }
 

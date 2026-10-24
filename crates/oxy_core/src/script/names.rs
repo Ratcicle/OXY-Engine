@@ -12,9 +12,12 @@
 //! still stops the call at run time, with the same name. Only texts written where they are used
 //! count (constants of the module fold into them): a name built at run time or passed in a table
 //! of options is not read. Tools read the same names ([`references`]) to find where a script
-//! uses a sound, a model or a scene.
+//! uses a sound, a model or a scene. A `require` whose path the script builds, or that it uses
+//! as a value (`pcall(require, …)`), is told too: moving files in OXY rewrites only paths written
+//! whole.
 use super::bytecode::{Literal, Report, Site};
 use super::errors::{ScriptError, closest};
+use super::lexer::{self, RequireKind};
 use super::registry::{self, ApiFn, ApiKind, ApiParam, NameKind, View};
 use super::{ScriptHost, ScriptSources, api, load, sandbox};
 use crate::document::{AssetKind, Id, Project};
@@ -452,6 +455,32 @@ fn missing_finding(reference: &Reference, names: &ProjectNames) -> Finding {
     }
 }
 
+/// The `require` of the script `source` whose path it builds, or that it uses as a value, which
+/// moving files in OXY does not rewrite.
+fn unfollowed_requires(source: &str) -> impl Iterator<Item = Finding> {
+    lexer::requires(source).into_iter().filter_map(|require| {
+        let (key, message) = match require.kind {
+            RequireKind::Built => (
+                "require",
+                "require com caminho montado: a OXY não o atualiza quando move ou renomeia \
+                 arquivos; escreva o caminho inteiro, como require(\"@project/Pista/dados\")",
+            ),
+            RequireKind::Passed => (
+                "require-valor",
+                "require usado como valor (como em pcall(require, …)): a OXY não atualiza o \
+                 caminho quando move ou renomeia arquivos; chame require com o caminho \
+                 inteiro, como require(\"@project/Pista/dados\")",
+            ),
+            _ => return None,
+        };
+        Some(Finding {
+            line: require.line,
+            key: key.into(),
+            message: message.into(),
+        })
+    })
+}
+
 /// The findings of the lint in the bytecode `report` of one script: its imports, its choices
 /// and, with `names`, its names of the project.
 fn findings(report: &Report, names: Option<&ProjectNames>) -> Vec<Finding> {
@@ -532,8 +561,9 @@ fn told(path: &str, mut found: Vec<Finding>) -> Vec<ScriptError> {
 /// and the lines: the global paths each imports that scripts lack, the texts it gives a
 /// parameter whose type is a union of texts that leaves them out and, with `project`, the names
 /// of the project it gives that the project lacks (attributes the scripts of `sources` declare
-/// count as the project's). Each name is told once, at its first line, with the others. A
-/// script that does not compile, or that `sources` lacks, gets none: the check says why.
+/// count as the project's), and the `require` whose path it builds or that it uses as a value.
+/// Each name is told once, at its first line, with the others. A script that does not compile,
+/// or that `sources` lacks, gets none: the check says why.
 pub fn lint<'a>(
     sources: &ScriptSources,
     paths: impl IntoIterator<Item = &'a str>,
@@ -553,7 +583,13 @@ pub fn lint<'a>(
         project.map(|project| ProjectNames::new(project, declared_attribute_names(sources)));
     reports
         .iter()
-        .flat_map(|(path, report)| told(path, findings(report, names.as_ref())))
+        .flat_map(|(path, report)| {
+            let mut found = findings(report, names.as_ref());
+            if let Some(file) = sources.get(path) {
+                found.extend(unfollowed_requires(&file.text));
+            }
+            told(path, found)
+        })
         .collect()
 }
 
@@ -797,6 +833,37 @@ return M
                 "scripts/teste.luau:3: audio.play: o som \"Bipe\" não existe no projeto: o \
                  projeto não tem sons (importe um WAV na Biblioteca) (também nas linhas 4, 5, 6, \
                  7, 8 e mais 3)"
+            ]
+        );
+    }
+
+    /// A `require` whose path the script builds, or used as a value, is told, once with its
+    /// other lines; one with a whole text, a field called require and a comment are not.
+    #[test]
+    fn a_require_whose_path_the_script_builds_is_told() {
+        let source = "local M = {}\n\
+                      local dados = require(\"./dados\") -- require(nome)\n\
+                      local cartas = { require = 1 }\n\
+                      function M.carta(nome)\n\
+                          return require(\"@project/Cartas/\" .. nome)\n\
+                      end\n\
+                      function M.fase(nome)\n\
+                          return require(`./fases/{nome}`)\n\
+                      end\n\
+                      function M.sons()\n\
+                          local ok, sons = pcall(require, \"./sons\")\n\
+                          return ok and sons\n\
+                      end\n\
+                      return M\n";
+        assert_eq!(
+            warnings(source, None),
+            [
+                "scripts/teste.luau:5: require com caminho montado: a OXY não o atualiza quando \
+                 move ou renomeia arquivos; escreva o caminho inteiro, como \
+                 require(\"@project/Pista/dados\") (também na linha 8)",
+                "scripts/teste.luau:11: require usado como valor (como em pcall(require, …)): a \
+                 OXY não atualiza o caminho quando move ou renomeia arquivos; chame require com \
+                 o caminho inteiro, como require(\"@project/Pista/dados\")"
             ]
         );
     }

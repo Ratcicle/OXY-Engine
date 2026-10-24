@@ -130,6 +130,47 @@ fn paths_follow_moves_of_files_and_folders_both_ways_and_back_to_clean() {
 }
 
 #[test]
+fn a_script_rewritten_keeps_the_text_it_had_wherever_it_goes() {
+    let write = |path: &str, before: &str, after: &str| Op::Write {
+        path: path.into(),
+        before: before.into(),
+        after: after.into(),
+    };
+    let mut journal = Journal::new("h".into());
+    journal.apply(&write("Pista/a.luau", "v0", "v1"));
+    journal.apply(&moving("Pista", "Corrida"));
+    journal.apply(&write("Corrida/a.luau", "v1", "v2"));
+    assert_eq!(
+        journal.rewritten.keys().collect::<Vec<_>>(),
+        ["Corrida/a.luau"]
+    );
+    assert_eq!(&*journal.rewritten["Corrida/a.luau"].saved, "v0");
+    assert_eq!(journal.rewritten["Corrida/a.luau"].written, hash(b"v2"));
+    // To the trash and back, it keeps it.
+    journal.apply(&Op::Trash {
+        from: "Corrida/a.luau".into(),
+        slot: ".oxy/lixeira/p-1.luau".into(),
+        id: None,
+    });
+    assert!(journal.rewritten.contains_key(".oxy/lixeira/p-1.luau"));
+    journal.apply(&Op::Untrash {
+        slot: ".oxy/lixeira/p-1.luau".into(),
+        to: "Corrida/a.luau".into(),
+        id: None,
+    });
+    let saved: Journal = serde_json::from_slice(&serde_json::to_vec(&journal).unwrap()).unwrap();
+    assert_eq!(saved, journal);
+    // Changed outside OXY since it wrote it: what it said then is the person's.
+    journal.apply(&write("Corrida/a.luau", "meu", "v3"));
+    assert_eq!(&*journal.rewritten["Corrida/a.luau"].saved, "meu");
+    // Written back to that: nothing left to bring back.
+    journal.apply(&write("Corrida/a.luau", "v3", "meu"));
+    assert!(journal.rewritten.is_empty());
+    journal.apply(&moving("Corrida", "Pista"));
+    assert!(journal.is_clean(), "{journal:?}");
+}
+
+#[test]
 fn a_folder_removed_and_made_again_and_a_name_reused_stay_apart() {
     let mut journal = Journal::new("h".into());
     // Deleting a folder: what it holds goes up to the root, then the empty folder goes.
@@ -460,6 +501,94 @@ fn a_journal_of_another_save_is_set_aside_and_the_project_opens_as_saved() {
         })
         .count();
     assert_eq!(aside, 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A module moved into Pista, and the script that requires it rewritten to find it: the text
+/// before, the text after and the operations.
+fn rewriting() -> (&'static str, &'static str, [Op; 3]) {
+    let before = "return require('./porta')\n";
+    let after = "return require('@project/Pista/porta')\n";
+    let ops = [
+        folder("Pista"),
+        moving("scripts/porta.luau", "Pista/porta.luau"),
+        Op::Write {
+            path: "scripts/usa.luau".into(),
+            before: before.into(),
+            after: after.into(),
+        },
+    ];
+    (before, after, ops)
+}
+
+#[test]
+fn a_crash_while_requires_are_rewritten_opens_as_the_disk_shows_and_discards_back() {
+    quiet_crashes();
+    let (before, after, ops) = rewriting();
+    for at in [Some(Step::Op(2)), Some(Step::Done), None] {
+        let (root, _) = saved("reescrita");
+        put(&root, "scripts/usa.luau", before.as_bytes());
+        let start = files(&root);
+        let (_, mut report) = open_project(&root).unwrap();
+        let crashed = catch_unwind(AssertUnwindSafe(|| {
+            run_with(&root, &mut report.known, "Mover", &ops, &mut |step| {
+                if Some(step) == at {
+                    panic_any(Crash);
+                }
+            })
+        }));
+        assert_eq!(crashed.is_err(), at.is_some(), "{at:?}");
+        let written = fs::read_to_string(root.join("scripts/usa.luau")).unwrap() == after;
+        assert_eq!(written, at != Some(Step::Op(2)), "{at:?}");
+        let (project, report) = open_project(&root).unwrap();
+        assert_eq!(
+            project.scenes[0].entities[0].scripts[0].path, "Pista/porta.luau",
+            "{at:?}"
+        );
+        assert_eq!(
+            report
+                .known
+                .journal()
+                .rewritten
+                .contains_key("scripts/usa.luau"),
+            written,
+            "{at:?}"
+        );
+        // Discarding writes the text back and moves the module back.
+        let mut known = report.known.clone();
+        let discarded = discard(&root, &mut known);
+        assert!(discarded.kept.is_empty(), "{at:?}: {discarded:?}");
+        assert_eq!(files(&root), start, "{at:?}");
+        assert!(!root.join(JOURNAL).exists(), "{at:?}");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn discarding_leaves_a_script_changed_outside_oxy_after_it_rewrote_it() {
+    let (before, after, ops) = rewriting();
+    let (root, _) = saved("reescrita-mudada");
+    put(&root, "scripts/usa.luau", before.as_bytes());
+    let (_, mut report) = open_project(&root).unwrap();
+    run(&root, &mut report.known, "Mover", &ops).unwrap();
+    let edited = format!("-- meu\n{after}");
+    fs::write(root.join("scripts/usa.luau"), &edited).unwrap();
+    let discarded = discard(&root, &mut report.known);
+    assert_eq!(discarded.kept.len(), 1, "{discarded:?}");
+    assert!(
+        discarded.kept[0].contains(
+            "scripts/usa.luau mudou fora da OXY depois que ela reescreveu os require dele"
+        ),
+        "{discarded:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("scripts/usa.luau")).unwrap(),
+        edited
+    );
+    assert!(root.join("scripts/porta.luau").is_file());
+    assert!(!root.join("Pista").exists());
+    assert!(report.known.journal().is_clean());
+    assert!(!root.join(JOURNAL).exists());
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -51,6 +51,13 @@ pub enum FileOp {
         slot: String,
         id: Option<Id>,
     },
+    /// A script whose `require` the edit rewrote, from the text `before` to `after`: undoing
+    /// and redoing write it only while it says what the step left there.
+    Write {
+        path: String,
+        before: Arc<str>,
+        after: Arc<str>,
+    },
 }
 impl FileOp {
     /// The change `op` makes, as a step keeps it.
@@ -61,6 +68,15 @@ impl FileOp {
             Op::RemoveDir { path } => Self::RemoveDir { path },
             Op::Trash { from, slot, id } => Self::Trash { from, slot, id },
             Op::Untrash { slot, to, id } => Self::Created { path: to, slot, id },
+            Op::Write {
+                path,
+                before,
+                after,
+            } => Self::Write {
+                path,
+                before,
+                after,
+            },
         }
     }
     /// The operation that redoes it.
@@ -71,6 +87,15 @@ impl FileOp {
             Self::RemoveDir { path } => Op::RemoveDir { path },
             Self::Trash { from, slot, id } => Op::Trash { from, slot, id },
             Self::Created { path, slot, id } => Op::Untrash { slot, to: path, id },
+            Self::Write {
+                path,
+                before,
+                after,
+            } => Op::Write {
+                path,
+                before,
+                after,
+            },
         }
     }
     /// The operation that undoes it.
@@ -90,6 +115,11 @@ impl FileOp {
                 | Self::Created { path, slot, id } => {
                     path.capacity() + slot.capacity() + id.as_ref().map_or(0, String::capacity)
                 }
+                Self::Write {
+                    path,
+                    before,
+                    after,
+                } => path.capacity() + before.len() + after.len(),
             }
     }
 }
@@ -1427,6 +1457,41 @@ mod tests {
         let error = history.undo(&mut project, &mut cache).unwrap_err();
         assert!(error.contains("não tem pasta"), "{error}");
         assert_eq!(history.undo_len(), 1);
+    }
+    #[test]
+    fn the_texts_a_step_rewrote_count_in_the_historys_memory() {
+        let (project, mut cache, _) = setup();
+        let mut history = CommandHistory::new();
+        history.begin("Mover", &project, &cache);
+        let moved = vec![FileOp::Move {
+            from: "a.luau".into(),
+            to: "Pista/a.luau".into(),
+        }];
+        history
+            .commit_with_files(&project, &mut cache, moved)
+            .unwrap();
+        let without = history.estimated_bytes();
+        let text = "-- texto\n".repeat(1000);
+        history.begin("Mover", &project, &cache);
+        let rewritten = vec![
+            FileOp::Move {
+                from: "b.luau".into(),
+                to: "Pista/b.luau".into(),
+            },
+            FileOp::Write {
+                path: "c.luau".into(),
+                before: format!("{text}require('./b')").into(),
+                after: format!("{text}require('@project/Pista/b')").into(),
+            },
+        ];
+        history
+            .commit_with_files(&project, &mut cache, rewritten)
+            .unwrap();
+        assert!(
+            history.estimated_bytes() > 2 * without + 2 * text.len(),
+            "{} {without}",
+            history.estimated_bytes()
+        );
     }
     #[test]
     fn failed_undo_leaves_document_pixels_and_stacks_unchanged() {
