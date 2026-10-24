@@ -85,6 +85,7 @@ mod handles;
 mod host;
 #[cfg(test)]
 mod host_tests;
+pub mod lexer;
 mod load;
 mod math;
 pub(crate) mod memory;
@@ -795,6 +796,13 @@ pub fn used_scripts(
         }
     }
     used
+}
+
+/// The path of the module `require(name)` names in the script `from`, as the runtime reads it
+/// (`./` and `../` from the script's folder, `@project/` from the project's), whether or not the
+/// module exists; why not, for a path the runtime refuses.
+pub(crate) fn require_path(from: &str, name: &str) -> Result<String, String> {
+    sandbox::resolve(Some(from), name)
 }
 
 /// The first script an object of `project` attaches, in a scene or a model, that `exists` does

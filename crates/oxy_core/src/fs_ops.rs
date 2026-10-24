@@ -6,7 +6,7 @@
 use crate::{
     document::{Id, new_id},
     names,
-    persistence::{self, FileWrite},
+    persistence::{self, Expected, FileWrite, PersistenceError, WriteMode},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,7 +14,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{Duration, SystemTime},
 };
 
@@ -380,6 +380,13 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<Id>,
     },
+    /// Writes the text file `path` (a script whose `require` OXY rewrote) from the text `before`
+    /// to `after`: only while it still says `before`, never over a change made outside OXY.
+    Write {
+        path: String,
+        before: Arc<str>,
+        after: Arc<str>,
+    },
 }
 impl Op {
     /// The step that undoes this one.
@@ -390,6 +397,15 @@ impl Op {
             Self::RemoveDir { path } => Self::CreateDir { path },
             Self::Trash { from, slot, id } => Self::Untrash { slot, to: from, id },
             Self::Untrash { slot, to, id } => Self::Trash { from: to, slot, id },
+            Self::Write {
+                path,
+                before,
+                after,
+            } => Self::Write {
+                path,
+                before: after,
+                after: before,
+            },
         }
     }
     /// What the step does, as messages say it.
@@ -400,6 +416,7 @@ impl Op {
             Self::RemoveDir { path } => format!("apagar a pasta vazia {path}"),
             Self::Trash { from, .. } => format!("mandar {from} para a lixeira do projeto"),
             Self::Untrash { to, .. } => format!("trazer {to} de volta da lixeira do projeto"),
+            Self::Write { path, .. } => format!("reescrever os require de {path}"),
         }
     }
 }
@@ -509,8 +526,48 @@ fn run(root: &Path, op: &Op) -> Result<(), String> {
             let done = retrying(|| move_no_replace(&from, &to));
             (from, done)
         }
+        Op::Write {
+            path: file,
+            before,
+            after,
+        } => return write_text(&path(file)?, file, before, after),
     };
     done.map_err(|error| reason(op, &error, &source))
+}
+/// Writes `after` as the text file `target` (`file` in the project) while it says `before`; why
+/// not, when it does not or cannot be written now.
+fn write_text(target: &Path, file: &str, before: &str, after: &str) -> Result<(), String> {
+    let write = || {
+        persistence::transaction_write(vec![FileWrite {
+            target: target.to_owned(),
+            bytes: after.as_bytes().to_vec(),
+            mode: WriteMode::Replace {
+                expected: Some(Expected::Bytes(before.as_bytes().into())),
+            },
+        }])
+    };
+    let mut attempts = 0;
+    loop {
+        match write() {
+            Ok(()) => return Ok(()),
+            Err(PersistenceError::Io { source, .. } | PersistenceError::Fs(source))
+                if busy(&source) && attempts < RETRIES =>
+            {
+                attempts += 1;
+                std::thread::sleep(RETRY_WAIT);
+            }
+            Err(PersistenceError::Io { source, .. } | PersistenceError::Fs(source))
+                if busy(&source) =>
+            {
+                return Err(format!("{file} está aberto em outro programa"));
+            }
+            Err(PersistenceError::TargetChanged(_)) if target.exists() => {
+                return Err(format!("{file} mudou fora da OXY"));
+            }
+            Err(PersistenceError::TargetChanged(_)) => return Err(format!("{file} não existe")),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
 }
 /// Why `op` failed with `error`, its `source` being the file or folder it acts on.
 fn reason(op: &Op, error: &io::Error, source: &Path) -> String {
@@ -518,7 +575,7 @@ fn reason(op: &Op, error: &io::Error, source: &Path) -> String {
         Op::Move { from, to } => (from, to),
         Op::CreateDir { path } | Op::RemoveDir { path } => (path, path),
         Op::Trash { from, slot, .. } => (from, slot),
-        Op::Untrash { to, .. } => (to, to),
+        Op::Untrash { to, .. } | Op::Write { path: to, .. } => (to, to),
     };
     if busy(error) {
         return if source.is_dir() {

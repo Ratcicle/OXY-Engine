@@ -106,6 +106,11 @@ impl KnownFiles {
                 self.journal.apply(op);
                 return;
             }
+            Op::Write { path, .. } => {
+                self.note_stamp(root, path);
+                self.journal.apply(op);
+                return;
+            }
         };
         for (path, _) in self.models.values_mut() {
             rekey(path, from, to);

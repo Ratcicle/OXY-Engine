@@ -150,6 +150,9 @@ impl Editor {
                     command::add_warnings(&mut report, added);
                 }
                 let moved = !files.is_empty();
+                // The scripts whose `require` the batch rewrote on the disk are told, as an
+                // agent's script writes are.
+                let rewritten = command::rewritten(&files);
                 if let Err(error) = self.history.commit_with_files(
                     &self.state.project,
                     &mut self.state.images,
@@ -163,6 +166,11 @@ impl Editor {
                 }
                 for command in commands {
                     self.log(format!("{AGENT_PREFIX}{}", command.label()));
+                }
+                for path in rewritten {
+                    self.log(format!(
+                        "{AGENT_PREFIX}Script {path} alterado (require atualizados)"
+                    ));
                 }
                 // Whoever writes the scripts in VS Code gets the API's types.
                 if let Some(root) = root.as_deref().filter(|_| command::needs_scripts(commands)) {

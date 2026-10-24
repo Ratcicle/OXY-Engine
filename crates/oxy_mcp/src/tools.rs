@@ -1047,7 +1047,13 @@ first save organizes it). The files move on the disk at once and every reference
 name, to a folder (\"\" is the root); a name taken there is refused with a free one suggested, \
 never written over. delete_folder sends what the folder holds up to the root (a taken name \
 numbered, \"Pulo 2\"), Thumbs.db and desktop.ini to .oxy/lixeira, and removes the folder; no \
-asset is deleted. The answer adds moved [{from, to}] and trashed
+asset is deleted. The answer adds moved [{from, to}] and trashed. Moving or renaming scripts or \
+their folders (delete_folder too) rewrites each require written whole that would stop finding \
+its module, in the scripts requiring what moved and in the moved ones, as \
+require(\"@project/Folder/name\"), in the same undo step; the answer adds rewritten (re-read \
+those scripts before editing them). A require with a built path or used as a value \
+(pcall(require, ...)), or in a script declaring its own require, is not rewritten: warnings name \
+its file and line
 - Scene changes without a fixed scene: action.scene's scene input (text) replaces its scene \
 parameter. Restart: connect scene.current.scene -> action.scene.scene, and the logic reopens \
 whatever scene it is in, copied or placed anywhere. Next scene: value.scene gives the ID of the \
@@ -5382,6 +5388,70 @@ mod tests {
             let summary = on_files(&mut tools, &project_arg, "oxy_project", json!({})).unwrap();
             assert_eq!(summary["assets"][0]["path"], "Pista/Pedra.png");
             assert!(summary.get("open_warnings").is_none(), "{summary}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_moving_a_module_rewrites_its_requires_and_puts_them_back_when_the_save_fails() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-require-{}", new_id()));
+        std::fs::create_dir_all(dir.join("Pista")).unwrap();
+        std::fs::write(dir.join("Pista/dados.luau"), "return { volta = 1 }\n").unwrap();
+        let usa = "local dados = require(\"./dados\")\nreturn {}\n";
+        std::fs::write(dir.join("Pista/usa.luau"), usa).unwrap();
+        let mut project = editing::blank_project("Require", SceneKind::ThreeD).unwrap();
+        project.layout = Layout::Tree;
+        let file = dir.join(persistence::PROJECT_FILE);
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let moved = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "create_folder", "path": "Comum"},
+                {"op": "move", "items": ["Pista/dados.luau"], "to": "Comum"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(moved["rewritten"], json!(["Pista/usa.luau"]));
+        assert!(APPLY_DESCRIPTION.contains("the answer adds rewritten"));
+        let rewritten = "local dados = require(\"@project/Comum/dados\")\nreturn {}\n";
+        assert_eq!(
+            std::fs::read_to_string(dir.join("Pista/usa.luau")).unwrap(),
+            rewritten
+        );
+        assert!(!dir.join(journal::JOURNAL).exists());
+        // A save that fails puts the text back with the file.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let held = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(&file)
+                .unwrap();
+            let error = on_files(
+                &mut tools,
+                &project_arg,
+                "oxy_apply",
+                json!({"commands": [
+                    {"op": "move", "items": ["Comum/dados.luau"], "to": "Pista"},
+                ]}),
+            )
+            .unwrap_err();
+            drop(held);
+            assert!(
+                error.contains("os arquivos voltaram para onde estavam"),
+                "{error}"
+            );
+            assert!(dir.join("Comum/dados.luau").is_file());
+            assert_eq!(
+                std::fs::read_to_string(dir.join("Pista/usa.luau")).unwrap(),
+                rewritten
+            );
+            assert!(!dir.join(journal::JOURNAL).exists());
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -1562,8 +1562,9 @@ pub fn apply_and_report_with_scripts(
     Ok(report(project, &applied, &before))
 }
 
-/// What [`apply_on_files`] did: the batch's answer ([`report`], with `moved` and `trashed` when
-/// files moved) and the file operations, for the undo history.
+/// What [`apply_on_files`] did: the batch's answer ([`report`], with `moved`, `trashed` and
+/// `rewritten` when files moved; see [`add_files`]) and the file operations, for the undo
+/// history.
 #[derive(Clone, Debug)]
 pub struct OnFiles {
     pub report: Json,
@@ -1642,8 +1643,38 @@ pub fn apply_on_files(
     })
 }
 
+/// The scripts whose `require` `files` wrote again to find what moved, each where the last of
+/// them left it, once; none for one a later operation sent to the project's trash.
+pub fn rewritten(files: &[crate::edit_history::FileOp]) -> Vec<String> {
+    use crate::{edit_history::FileOp, journal, names};
+    let mut found: Vec<String> = Vec::new();
+    for (at, file) in files.iter().enumerate() {
+        let FileOp::Write { path, .. } = file else {
+            continue;
+        };
+        let mut now = Some(path.clone());
+        for later in &files[at + 1..] {
+            now = match (now, later) {
+                (Some(path), FileOp::Move { from, to }) => match journal::under(&path, from) {
+                    Some(rest) => Some(journal::join(to, rest)),
+                    None => Some(path),
+                },
+                (Some(path), FileOp::Trash { from, .. }) if names::same_name(&path, from) => None,
+                (now, _) => now,
+            };
+        }
+        if let Some(path) = now
+            && !found.iter().any(|known| names::same_name(known, &path))
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
 /// Adds to a [`report`] what `files` did on the disk: `moved` ([{from, to}], folders and files
-/// moved or renamed) and `trashed` (the files sent to the project's trash).
+/// moved or renamed), `trashed` (the files sent to the project's trash) and `rewritten` (see
+/// [`rewritten`]).
 pub fn add_files(report: &mut Json, files: &[crate::edit_history::FileOp]) {
     use crate::edit_history::FileOp;
     let moved: Vec<Json> = files
@@ -1660,11 +1691,15 @@ pub fn add_files(report: &mut Json, files: &[crate::edit_history::FileOp]) {
             _ => None,
         })
         .collect();
+    let rewritten = rewritten(files);
     if !moved.is_empty() {
         report["moved"] = json!(moved);
     }
     if !trashed.is_empty() {
         report["trashed"] = json!(trashed);
+    }
+    if !rewritten.is_empty() {
+        report["rewritten"] = json!(rewritten);
     }
 }
 

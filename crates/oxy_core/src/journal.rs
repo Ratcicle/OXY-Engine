@@ -2,7 +2,8 @@
 //! project since its project file was last saved, which goes to the disk at once while the
 //! project file changes only when saved. It holds the final state, not the steps: each file or
 //! folder moved or renamed by its path in the saved project and its path now, the folders made
-//! and removed, the files sent to the project's trash and the files made (imported) since.
+//! and removed, the files sent to the project's trash, the files made (imported) since, and the
+//! text each script whose `require` OXY rewrote had before.
 //!
 //! It is written before OXY touches the disk, with the operations about to be done as pending,
 //! and again once they are done; opening the project reads it first, settles a pending step by
@@ -21,6 +22,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
     path::Path,
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -38,6 +40,17 @@ pub struct Trashed {
     /// The asset it is, for an image, a sound or a model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
+}
+
+/// A script whose `require` OXY rewrote since the save.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rewritten {
+    /// Its text before OXY first rewrote it since the save, or since it last changed outside
+    /// OXY: what discarding writes back.
+    pub saved: Arc<str>,
+    /// The hash of the text OXY last wrote in it (see [`hash`]): discarding writes it back only
+    /// while it still says that.
+    pub written: String,
 }
 
 /// The operations OXY was about to do when the journal was written, not known to be done.
@@ -76,6 +89,10 @@ pub struct Journal {
     /// The files made, by their paths now, with the asset each one is.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub created: BTreeMap<String, Option<Id>>,
+    /// The scripts whose `require` OXY rewrote, by their paths now (a slot of the trash for one
+    /// sent there).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rewritten: BTreeMap<String, Rewritten>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<Pending>,
 }
@@ -132,6 +149,7 @@ impl Journal {
             + self.removed_folders.len()
             + self.trash.len()
             + self.created.len()
+            + self.rewritten.len()
     }
 
     /// Where the file or folder the saved project has at `saved` is now; none when it went to
@@ -219,31 +237,72 @@ impl Journal {
                     self.removed_folders.insert(saved);
                 }
             }
-            Op::Trash { from, slot, id } => match self.saved_of(from) {
-                None => self.created.retain(|made, _| !names::same_name(made, from)),
-                Some(saved) => {
-                    self.moved.retain(|_, to| !names::same_name(to, from));
-                    self.trash.insert(
-                        slot.clone(),
-                        Trashed {
-                            path: saved,
-                            id: id.clone(),
-                        },
-                    );
-                }
-            },
-            Op::Untrash { slot, to, id } => match self.trash.remove(slot) {
-                Some(trashed) => {
-                    if trashed.path != *to {
-                        self.moved.insert(trashed.path, to.clone());
+            Op::Trash { from, slot, id } => {
+                self.rekey_rewritten(from, slot);
+                match self.saved_of(from) {
+                    None => self.created.retain(|made, _| !names::same_name(made, from)),
+                    Some(saved) => {
+                        self.moved.retain(|_, to| !names::same_name(to, from));
+                        self.trash.insert(
+                            slot.clone(),
+                            Trashed {
+                                path: saved,
+                                id: id.clone(),
+                            },
+                        );
                     }
                 }
-                None => {
-                    self.created.insert(to.clone(), id.clone());
+            }
+            Op::Untrash { slot, to, id } => {
+                self.rekey_rewritten(slot, to);
+                match self.trash.remove(slot) {
+                    Some(trashed) => {
+                        if trashed.path != *to {
+                            self.moved.insert(trashed.path, to.clone());
+                        }
+                    }
+                    None => {
+                        self.created.insert(to.clone(), id.clone());
+                    }
                 }
-            },
+            }
+            Op::Write {
+                path,
+                before,
+                after,
+            } => self.wrote(path, before, after),
         }
         self.tidy();
+    }
+
+    /// Notes that OXY wrote `after` in the script `path`, which said `before`.
+    fn wrote(&mut self, path: &str, before: &Arc<str>, after: &Arc<str>) {
+        let written = hash(after.as_bytes());
+        let known = self
+            .rewritten
+            .keys()
+            .find(|now| names::same_name(now, path))
+            .cloned();
+        let saved = match known.and_then(|now| self.rewritten.remove(&now)) {
+            Some(entry) if entry.written == hash(before.as_bytes()) => entry.saved,
+            // Never rewritten, or changed outside OXY since: what it said is the person's.
+            _ => before.clone(),
+        };
+        if hash(saved.as_bytes()) != written {
+            self.rewritten
+                .insert(path.to_owned(), Rewritten { saved, written });
+        }
+    }
+
+    /// The scripts rewritten at or under `from` now at `to`.
+    fn rekey_rewritten(&mut self, from: &str, to: &str) {
+        self.rewritten = std::mem::take(&mut self.rewritten)
+            .into_iter()
+            .map(|(path, entry)| match under(&path, from) {
+                Some(rest) => (join(to, rest), entry),
+                None => (path, entry),
+            })
+            .collect();
     }
 
     fn take_removed(&mut self, saved: &str) -> bool {
@@ -257,6 +316,7 @@ impl Journal {
 
     fn moved_to(&mut self, from: &str, to: &str) {
         let origin = self.saved_of(from);
+        self.rekey_rewritten(from, to);
         let follow = |path: &mut String| {
             if let Some(rest) = under(path, from) {
                 *path = join(to, rest);
@@ -373,7 +433,16 @@ fn done_on_disk(root: &Path, op: &Op) -> bool {
         Op::RemoveDir { path } => !exists(root, path),
         Op::Trash { from, slot, .. } => exists(root, slot) && !exists(root, from),
         Op::Untrash { slot, to, .. } => exists(root, to) && !exists(root, slot),
+        Op::Write { path, after, .. } => says(root, path, after),
     }
+}
+
+/// Whether the file `relative` of the project at `root` says `text`, byte for byte.
+fn says(root: &Path, relative: &str, text: &str) -> bool {
+    names::resolve(root, relative)
+        .ok()
+        .and_then(|file| fs::read(file).ok())
+        .is_some_and(|bytes| bytes == text.as_bytes())
 }
 
 /// The journal of the project at `root`: none when there is none; why, when it cannot be read
@@ -781,6 +850,37 @@ fn before(done: &[Op], path: &str) -> Before {
     Before::Disk(path)
 }
 
+/// The text the last of `done` that writes the file at `path` (once they are done) left in it.
+fn written_by<'a>(done: &'a [Op], path: &str) -> Option<&'a str> {
+    let mut path = path.to_owned();
+    for op in done.iter().rev() {
+        match op {
+            Op::Write {
+                path: written,
+                after,
+                ..
+            } if names::same_name(written, &path) => return Some(after),
+            Op::Move { from, to } => {
+                if let Some(rest) = under(&path, to) {
+                    path = join(from, rest);
+                }
+            }
+            Op::Trash { from, slot, .. }
+            | Op::Untrash {
+                slot: from,
+                to: slot,
+                ..
+            } => {
+                if names::same_name(&path, slot) {
+                    path = from.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Checks that `ops` can be done now in the project at `root`, as undoing or redoing a step
 /// does before it touches anything: each source is there, unchanged since OXY last moved or
 /// wrote it (its stamp in `known`), and each target is free. A script needs no stamp: OXY
@@ -858,6 +958,22 @@ fn blocked(root: &Path, known: Option<&KnownFiles>, ops: &[Op]) -> Result<(), Bl
                     return changed(format!("a pasta {path} não está mais na pasta do projeto"));
                 }
             }
+            // A script is written back only while it says what the step left in it.
+            Op::Write {
+                path,
+                before: expected,
+                ..
+            } => match written_by(done, path) {
+                Some(text) if *text == **expected => {}
+                Some(_) => return changed(format!("{path} mudou fora da OXY")),
+                None => match before(done, path) {
+                    Before::Disk(disk) if says(root, &disk, expected) => {}
+                    Before::Disk(disk) if exists(root, &disk) => {
+                        return changed(format!("{path} mudou fora da OXY"));
+                    }
+                    _ => return changed(format!("{path} não está mais na pasta do projeto")),
+                },
+            },
         }
     }
     Ok(())
@@ -889,13 +1005,16 @@ enum Back {
 }
 
 /// Brings the files of the project at `root` back to how its project file was saved, from the
-/// journal in `known`: what was imported goes to the project's trash, what was moved or renamed
-/// goes back, what was sent to the trash comes back, the folders removed come back and those
-/// made go while empty. Each step is journaled as it is done; what cannot be done now (a file
-/// open in another program) stays, said in the answer, and the journal keeps it.
+/// journal in `known`: the scripts whose `require` OXY rewrote say what they said, what was
+/// imported goes to the project's trash, what was moved or renamed goes back, what was sent to
+/// the trash comes back, the folders removed come back and those made go while empty. Each step
+/// is journaled as it is done; what cannot be done now (a file open in another program) stays,
+/// said in the answer, and the journal keeps it. A script changed outside OXY after it rewrote
+/// it stays as it is, said too: what it says now is the person's.
 pub fn discard(root: &Path, known: &mut KnownFiles) -> Discarded {
     let step = format!("descartar-{}", &new_id()[..8]);
     let mut discarded = Discarded::default();
+    restore_rewritten(root, known, &mut discarded);
     let mut slots = 0;
     // Why each step that failed did: a name taken may free up after another step, the rest is
     // not tried again.
@@ -1040,6 +1159,64 @@ pub fn discard(root: &Path, known: &mut KnownFiles) -> Discarded {
     discarded
 }
 
+/// Writes back, where each one is now, the text the scripts whose `require` OXY rewrote since
+/// the save had (see [`discard`]).
+fn restore_rewritten(root: &Path, known: &mut KnownFiles, discarded: &mut Discarded) {
+    let rewritten: Vec<(String, Rewritten)> = known
+        .journal()
+        .rewritten
+        .iter()
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .collect();
+    let mut forgot = false;
+    for (path, entry) in rewritten {
+        let now = names::resolve(root, &path)
+            .map_err(|error| error.to_string())
+            .and_then(|file| {
+                fs_ops::retrying(|| fs::read(&file)).map_err(|error| match error.kind() {
+                    io::ErrorKind::NotFound => String::new(),
+                    _ => project_tree::now_unreadable(&error),
+                })
+            });
+        let gone = match now {
+            Ok(bytes) if hash(&bytes) == entry.written => {
+                let op = Op::Write {
+                    path: path.clone(),
+                    before: String::from_utf8_lossy(&bytes).into(),
+                    after: entry.saved,
+                };
+                match run(root, known, "Descartar alterações", &[op]) {
+                    Ok(()) => discarded.restored += 1,
+                    Err(error) => discarded
+                        .kept
+                        .push(format!("os require de {path} não voltaram: {error}")),
+                }
+                continue;
+            }
+            // What it says now is the person's.
+            Ok(_) => format!(
+                "{path} mudou fora da OXY depois que ela reescreveu os require dele, e ficou como \
+                 está"
+            ),
+            Err(why) if why.is_empty() => {
+                format!("{path}, cujos require a OXY reescreveu, não está mais na pasta do projeto")
+            }
+            Err(why) => {
+                discarded
+                    .kept
+                    .push(format!("os require de {path} não voltaram: ele {why}"));
+                continue;
+            }
+        };
+        known.journal_mut().rewritten.remove(&path);
+        forgot = true;
+        discarded.kept.push(gone);
+    }
+    if forgot {
+        let _ = write(root, known.journal());
+    }
+}
+
 /// The folder `back` puts something back into while what is at its path now is not the folder
 /// the project was saved with (moved away, or made since): `back` waits for it to come back.
 fn waits_for(journal: &Journal, back: &Back) -> Option<String> {
@@ -1104,6 +1281,10 @@ pub fn empty_trash(root: &Path, known: &mut KnownFiles) -> Result<fs_ops::Emptie
     journal
         .trash
         .retain(|slot, _| names::resolve(root, slot).is_ok_and(|file| file.exists()));
+    journal.rewritten.retain(|path, _| {
+        under(path, fs_ops::TRASH).is_none()
+            || names::resolve(root, path).is_ok_and(|file| file.exists())
+    });
     let _ = write(root, known.journal());
     emptied.map_err(|error| {
         format!(

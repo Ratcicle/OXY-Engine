@@ -5,7 +5,9 @@
 //! finds a file where an earlier one put it; the caller does the operations (journaled, see
 //! [`crate::journal::run`]) before the planned project takes the place of the old one. The
 //! editor live and the agents' tools on files share them. Nothing ever writes over a file: a
-//! name taken is refused, with a free one suggested.
+//! name taken is refused, with a free one suggested. A script moved, or a module it requires,
+//! keeps being found: the `require` that would no longer find theirs are rewritten in the same
+//! step (see [`requires`]).
 use super::{Command, ItemKind, asset_kind, find_asset, refuse_used};
 use crate::{
     document::{AssetKind, Id, Layout, Project, new_id},
@@ -18,10 +20,12 @@ use crate::{
     script::{self, ScriptSources},
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
+
+mod requires;
 
 /// Why the tree's commands wait for a project of the old layout to be organized in folders.
 const LEGACY: &str = "Este projeto ainda está no formato antigo, sem pastas: o próximo \
@@ -53,6 +57,8 @@ pub struct TreeView {
     /// The step the trash slots of the batch are named after.
     step: String,
     slots: usize,
+    /// What following the scripts' `require` told so far in the batch, told once.
+    told: BTreeSet<String>,
 }
 
 impl TreeView {
@@ -82,6 +88,7 @@ impl TreeView {
             files: Vec::new(),
             step: new_id()[..8].to_owned(),
             slots: 0,
+            told: BTreeSet::new(),
         }
     }
 
@@ -289,7 +296,8 @@ pub(super) fn apply(
     if project.layout == Layout::Legacy {
         return Err(LEGACY.into());
     }
-    match command {
+    let start = view.files.len();
+    let mut told = match command {
         Command::CreateFolder { path } => create_folder(view, path).map(|()| Vec::new()),
         Command::RenameFolder { folder, name } => {
             rename_folder(project, view, folder, name).map(|()| Vec::new())
@@ -307,7 +315,9 @@ pub(super) fn apply(
             detach,
         } => delete_item(project, view, asset, *kind, detach.unwrap_or(false)).map(|()| Vec::new()),
         _ => unreachable!("only the commands `handles` takes"),
-    }
+    }?;
+    told.extend(requires::follow(view, start));
+    Ok(told)
 }
 
 /// Every path `project` has at or under `from` now at `to`: the files of its assets (each named
