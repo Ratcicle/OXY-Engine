@@ -4,6 +4,7 @@ mod body_tools;
 mod camera_tools;
 mod code_view;
 mod console_feed;
+mod console_panel;
 mod diagnostics;
 mod export;
 mod hierarchy;
@@ -359,6 +360,10 @@ pub struct Editor {
     script_search: String,
     /// The script open in the dock's code tab.
     code_view: Option<code_view::CodeView>,
+    /// Which lines the Console shows.
+    console_show: console_panel::Show,
+    /// The script errors the test told, which the Console keeps after the runtime forgets them.
+    console_errors: console_panel::ScriptErrors,
 }
 
 impl Editor {
@@ -514,6 +519,8 @@ impl Editor {
             script_status: Default::default(),
             script_search: String::new(),
             code_view: None,
+            console_show: Default::default(),
+            console_errors: Default::default(),
         };
         if let Some(error) = preference_error {
             this.warn(error);
@@ -1192,6 +1199,7 @@ impl Editor {
         let runtime = Runtime::with_options(&self.state.project, scene, options)?;
         self.watch_test_scripts(scripts);
         self.script_status.start_test();
+        self.console_errors.clear();
         self.play.seed = Some(seed);
         self.play.previous_tab = self.tab;
         // The new test's logs count from zero.
@@ -1634,85 +1642,6 @@ impl Editor {
             rt.logs.clear();
         }
         self.console_feed.clear();
-    }
-    /// Editor messages, game logs and the last logic actions, each marked by its source.
-    /// Messages that also became notices are shown as warnings.
-    pub(crate) fn console_body(&mut self, ui: &mut egui::Ui) {
-        use crate::theme;
-        let warnings: std::collections::HashSet<&str> = self.notices.texts().collect();
-        let mut lines: Vec<(&str, String, bool)> = self
-            .console
-            .messages
-            .iter()
-            .map(|line| match line.strip_prefix(agent::AGENT_PREFIX) {
-                Some(text) => ("Agente", text.to_owned(), warnings.contains(line.as_str())),
-                None => ("Editor", line.clone(), warnings.contains(line.as_str())),
-            })
-            .collect();
-        if let Some(rt) = &self.play.runtime {
-            lines.extend(
-                rt.logs
-                    .iter()
-                    .map(|line| ("Jogo", line.text.clone(), false)),
-            );
-            let operations = oxy_core::graph::registry();
-            for trace in rt.traces.iter().rev().take(5).rev() {
-                let operation = operations
-                    .iter()
-                    .find(|op| op.id == trace.operation)
-                    .map_or("Ação não reconhecida", |op| op.label);
-                let object = rt
-                    .scene()
-                    .entity(&trace.object)
-                    .map_or(trace.object.as_str(), |e| e.name.as_str());
-                lines.push((
-                    "Lógica",
-                    format!("{:.3} s · {object} · {operation}", trace.time),
-                    false,
-                ));
-            }
-        }
-        if lines.is_empty() {
-            crate::widgets::hint(
-                ui,
-                "Nada no console. Mensagens do editor e do jogo aparecem aqui.",
-            );
-            return;
-        }
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.;
-                for (source, text, warning) in &lines {
-                    ui.horizontal_top(|ui| {
-                        let (tag, color) = match (*source, *warning) {
-                            (_, true) => ("Aviso", theme::WARNING),
-                            ("Jogo", _) => ("Jogo", theme::SUCCESS),
-                            ("Lógica", _) => ("Lógica", theme::ACCENT_BRIGHT),
-                            ("Agente", _) => ("Agente", Color32::from_rgb(190, 160, 240)),
-                            _ => ("Editor", theme::TEXT_MUTED),
-                        };
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(52., 18.), Sense::hover());
-                        ui.painter().text(
-                            rect.left_center(),
-                            egui::Align2::LEFT_CENTER,
-                            tag,
-                            theme::medium(11.),
-                            color,
-                        );
-                        let text = egui::RichText::new(text).monospace().size(12.);
-                        ui.add(
-                            egui::Label::new(if *warning {
-                                text.color(Color32::from_rgb(232, 210, 160))
-                            } else {
-                                text
-                            })
-                            .wrap(),
-                        );
-                    });
-                }
-            });
     }
 }
 

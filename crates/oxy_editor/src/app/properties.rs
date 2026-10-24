@@ -421,6 +421,17 @@ impl Editor {
                             false,
                         );
                     }
+                    // The test takes the scripts saved while it runs (see script_watch).
+                    if self.play.script_watch.is_some() {
+                        ui.add_space(8.);
+                        Self::test_card(
+                            ui,
+                            "Recarga dos scripts",
+                            "Quando um script muda no disco, o jogo troca o código e continua de \
+                             onde estava. Um erro mantém a versão anterior rodando.",
+                            false,
+                        );
+                    }
                     ui.disable();
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| self.properties_body(ui));

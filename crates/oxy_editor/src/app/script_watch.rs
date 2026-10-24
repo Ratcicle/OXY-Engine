@@ -143,6 +143,38 @@ impl Drop for ScriptWatch {
     }
 }
 
+/// How the Console's lines about reloads start: the Console marks them as the scripts', and
+/// links those that failed to their file and line (see [`reload_place`]).
+const RELOADED: &str = "Script recarregado: ";
+const NOT_RELOADED: &str = "Script não recarregado: ";
+const FAILED: &str = "Script com erro: ";
+const UNREADABLE: &str = "Scripts não recarregados: ";
+
+/// Whether `line` of the Console tells of a reload of scripts and, for a script that failed, its
+/// file and line (0 when the error names none).
+pub(crate) fn reload_place(line: &str) -> Option<Option<(String, u32)>> {
+    if line.starts_with(RELOADED) || line.starts_with(UNREADABLE) {
+        return Some(None);
+    }
+    let rest = line
+        .strip_prefix(NOT_RELOADED)
+        .or_else(|| line.strip_prefix(FAILED))?;
+    let Some(end) = rest.find(".luau").map(|at| at + ".luau".len()) else {
+        return Some(None);
+    };
+    let line = rest[end..]
+        .strip_prefix(':')
+        .map(|after| {
+            after
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .unwrap_or("")
+        })
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or(0);
+    Some(Some((rest[..end].to_owned(), line)))
+}
+
 /// The Console's lines about a reload, each with whether it is an error: the scripts that
 /// reloaded with how many objects of the scene attach them, the texts that did not load with
 /// their file and line (a file that existed in `before` goes on with its old text), and the
@@ -161,9 +193,9 @@ pub(crate) fn reload_lines(
             .count();
         lines.push((
             match objects {
-                0 => format!("Script recarregado: {path}"),
-                1 => format!("Script recarregado: {path} (1 objeto)"),
-                n => format!("Script recarregado: {path} ({n} objetos)"),
+                0 => format!("{RELOADED}{path}"),
+                1 => format!("{RELOADED}{path} (1 objeto)"),
+                n => format!("{RELOADED}{path} ({n} objetos)"),
             },
             false,
         ));
@@ -175,9 +207,9 @@ pub(crate) fn reload_lines(
             "."
         };
         let line = if before.get(&error.path).is_some() {
-            format!("Script não recarregado: {error}{stop} O teste segue com a versão anterior.")
+            format!("{NOT_RELOADED}{error}{stop} O teste segue com a versão anterior.")
         } else {
-            format!("Script com erro: {error}{stop}")
+            format!("{FAILED}{error}{stop}")
         };
         lines.push((line, true));
     }
@@ -202,11 +234,9 @@ pub(crate) fn unreadable_lines(
         })
         .map(|(path, reason)| {
             let line = if before.get(path).is_some() {
-                format!(
-                    "Script não recarregado: {path} {reason}. O teste segue com a versão anterior."
-                )
+                format!("{NOT_RELOADED}{path} {reason}. O teste segue com a versão anterior.")
             } else {
-                format!("Script com erro: {path} {reason}.")
+                format!("{FAILED}{path} {reason}.")
             };
             (line, true)
         })
@@ -235,18 +265,27 @@ impl Editor {
             return;
         };
         let mut lines = Vec::new();
+        let mut changed = false;
         for change in watch.changes.try_iter() {
             match change {
                 Change::Sources(sources) => {
+                    // The reload forgets the errors of the scripts it renews: the Console keeps
+                    // them as they were.
+                    super::console_panel::remember_script_errors(&mut self.console_errors, runtime);
                     let before = std::mem::replace(&mut watch.running, sources.clone());
                     let report = runtime.reload_scripts(sources.clone());
                     lines.extend(reload_lines(&report, &before, runtime.scene()));
                     lines.extend(unreadable_lines(&report, &before, &sources));
+                    changed = true;
                 }
                 Change::Unreadable(error) => {
-                    lines.push((format!("Scripts não recarregados: {error}"), true));
+                    lines.push((format!("{UNREADABLE}{error}"), true));
                 }
             }
+        }
+        // The Scripts card, the Hierarchy and the code tab see the new texts too.
+        if changed {
+            self.script_status.look_again();
         }
         for (line, error) in lines {
             if error {
@@ -377,6 +416,52 @@ mod tests {
         before.unreadable = after.unreadable.clone();
         before.unreadable.remove(PATH);
         assert!(unreadable_lines(&named, &before, &after).is_empty());
+    }
+
+    #[test]
+    fn the_console_knows_each_reload_line_and_where_a_failure_is() {
+        const DOORWAY: &str = "Pista/Minha porta.luau";
+        let mut failed = oxy_core::script::check(DOORWAY, "local x = (\n").unwrap_err();
+        let report = ScriptReload {
+            reloaded: vec![PATH.into()],
+            errors: vec![failed.clone()],
+            ..Default::default()
+        };
+        let before = ScriptSources::from_texts([(DOORWAY, DOOR)]);
+        let project = Project::new("Recarga");
+        let lines = reload_lines(&report, &before, &project.scenes[0]);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(reload_place(&lines[0].0), Some(None));
+        assert!(failed.line > 0, "{failed:?}");
+        assert_eq!(
+            reload_place(&lines[1].0),
+            Some(Some((DOORWAY.to_owned(), failed.line)))
+        );
+        // A new file that fails, an error without a line and a file that cannot be read.
+        failed.line = 0;
+        let report = ScriptReload {
+            errors: vec![failed],
+            ..Default::default()
+        };
+        let lines = reload_lines(&report, &ScriptSources::default(), &project.scenes[0]);
+        assert!(lines[0].0.starts_with("Script com erro: "), "{lines:?}");
+        assert_eq!(
+            reload_place(&lines[0].0),
+            Some(Some((DOORWAY.to_owned(), 0)))
+        );
+        let mut after = ScriptSources::default();
+        after
+            .unreadable
+            .insert(PATH.into(), "tem mais de 1 MB".into());
+        let lines = unreadable_lines(&ScriptReload::default(), &before, &after);
+        assert_eq!(reload_place(&lines[0].0), Some(Some((PATH.to_owned(), 0))));
+        assert_eq!(
+            reload_place("Scripts não recarregados: Não foi possível ler a pasta do projeto"),
+            Some(None)
+        );
+        // Anything else is not a reload.
+        assert_eq!(reload_place("Projeto aberto e validado."), None);
+        assert_eq!(reload_place("Agente · Script recarregado: x.luau"), None);
     }
 
     /// A test of `project` running the folder at `root`, a step in.

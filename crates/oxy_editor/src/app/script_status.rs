@@ -202,6 +202,15 @@ impl ScriptStatus {
         self.hashes.get(path).copied()
     }
 
+    /// The attached scripts whose `require`s name the script `path`, by path.
+    pub(crate) fn required_by(&self, path: &str) -> Vec<&str> {
+        self.uses
+            .iter()
+            .filter(|(_, used)| used.contains(path))
+            .map(|(script, _)| script.as_str())
+            .collect()
+    }
+
     /// Where the script `path` of `entity` fails on it: the script each error points at (that
     /// one or one it requires) and its line (0 for an error that names none), each place once,
     /// those of `path` first, then by line, with a message.
@@ -251,11 +260,12 @@ impl ScriptStatus {
 }
 
 impl Editor {
-    /// Once a frame: where the running test's scripts failed, and the check of the attached
-    /// scripts when it is due.
+    /// Once a frame: where the running test's scripts failed (for the Console too), and the
+    /// check of the attached scripts when it is due.
     pub(crate) fn refresh_scripts(&mut self) {
         if let Some(runtime) = &self.play.runtime {
             self.script_status.take_test(runtime);
+            super::console_panel::remember_script_errors(&mut self.console_errors, runtime);
         }
         let root = self.project_root();
         self.script_status
@@ -486,6 +496,12 @@ mod tests {
         let mut status = ScriptStatus::default();
         status.refresh(&project, Some(&root));
         assert!(!status.failing(&door));
+        // The code tab says who uses util.luau, which no object attaches.
+        assert_eq!(
+            status.required_by("scripts/comum/util.luau"),
+            ["scripts/porta.luau"]
+        );
+        assert!(status.required_by("scripts/porta.luau").is_empty());
         let runtime = test_run(&project, &root);
         status.start_test();
         status.take_test(&runtime);
