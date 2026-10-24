@@ -544,7 +544,7 @@ declare scene: {
     --- A conferência avisa de um atributo que nenhum objeto tem e nenhum script declara.
     with_attribute: (name: string) -> { Object },
     --- Põe uma cópia de um modelo da Biblioteca na cena e devolve a raiz dela.
-    --- O nome do modelo vale sem diferenciar maiúsculas. A cópia, com os nomes que os objetos têm no modelo, vai para a raiz da cena (ou para `parent`), na posição salva no modelo (ou em `position`, nos eixos do pai); o `on_start` dos scripts dela roda depois desta chamada. Os IDs saem deste objeto, deste script e de quantas cópias ele já fez, como em `obj:clone`.
+    --- O nome do modelo vale sem diferenciar maiúsculas; um texto que não é o nome de um modelo vale como o caminho do arquivo dele (`"Pista/Torre.modelo.json"`), que muda quando o modelo vai para outra pasta. A cópia, com os nomes que os objetos têm no modelo, vai para a raiz da cena (ou para `parent`), na posição salva no modelo (ou em `position`, nos eixos do pai); o `on_start` dos scripts dela roda depois desta chamada. Os IDs saem deste objeto, deste script e de quantas cópias ele já fez, como em `obj:clone`.
     --- A conferência avisa de um modelo que o projeto não tem.
     spawn_model: (model: string, options: SpawnOptions?) -> Object,
     --- O nome da cena que está rodando.

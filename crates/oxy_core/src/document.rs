@@ -1011,6 +1011,16 @@ impl Project {
             .iter()
             .find(|a| a.kind == AssetKind::Model && a.name.trim().to_lowercase() == wanted)
     }
+    /// The model whose file is `path` (`Pista/Torre.modelo.json`), in any case and with either
+    /// slash, as `scene.spawn_model` finds a model its name does not.
+    pub fn model_at(&self, path: &str) -> Option<&Asset> {
+        let path = path.trim().replace('\\', "/");
+        self.assets.iter().find(|a| {
+            a.kind == AssetKind::Model
+                && !a.path.is_empty()
+                && crate::names::same_name(&a.path, &path)
+        })
+    }
     /// `name` or, when a model has it, the first of "name 2", "name 3"… no model has.
     pub fn free_model_name(&self, name: &str) -> String {
         let name = name.trim();

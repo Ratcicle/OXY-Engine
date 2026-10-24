@@ -381,6 +381,19 @@ impl Editor {
                 if let Some(reason) = save_refusal {
                     status["save_refusal"] = json!(reason);
                 }
+                if !self.home.visible {
+                    let project = &self.state.project;
+                    let root = self.path.as_deref().and_then(std::path::Path::parent);
+                    status["project"]["layout"] = json!(query::layout_name(project.layout));
+                    if project.layout == Layout::Legacy && root.is_some() {
+                        // The person's next save organizes it in folders.
+                        status["project"]["conversion_pending"] = json!(true);
+                    }
+                    // Only oxy_status asks: the other tools read the status to find editors.
+                    if let (true, Some(root)) = (params["scripts"] == true, root) {
+                        status["project"]["scripts"] = query::scripts_status(project, root);
+                    }
+                }
                 Ok(status)
             }
             "play" => self.agent_play(params),
@@ -405,7 +418,7 @@ impl Editor {
                 if method == "entity"
                     && let Some(root) = self.path.as_deref().and_then(std::path::Path::parent)
                 {
-                    query::mark_missing_scripts(&mut answer, root);
+                    query::describe_scripts(&mut answer, &self.state.project, &scene, root);
                 }
                 Ok(answer)
             }

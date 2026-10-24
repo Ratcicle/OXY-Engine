@@ -72,6 +72,20 @@ impl ScriptValue {
         }
     }
 
+    /// The type as the tools name types in their answers (see `variables::type_name`).
+    pub(crate) fn type_name(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "Bool",
+            Self::Number(_) => "Number",
+            Self::Text(_) => "Text",
+            Self::Vector(_) => "Vector3",
+            Self::Vector2(_) => "Vector2",
+            Self::Object(_) => "Object",
+            Self::Surface(_) => "Surface",
+            Self::Table(_) => "Table",
+        }
+    }
+
     /// What the value weighs against [`MAX_BYTES`]: the bytes of its texts, IDs and text keys,
     /// 8 for a number, a whole key or a 2D vector, 12 for a vector and 1 for a boolean.
     pub(crate) fn size(&self) -> usize {

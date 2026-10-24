@@ -22,6 +22,7 @@ use crate::{
     },
     project_lock::{self, ConversionLock},
     project_tree::{self, FileKind},
+    script::{self, NameKind},
     texture_cache::TextureCache,
 };
 use serde::{Deserialize, Serialize};
@@ -159,7 +160,7 @@ pub struct Converted {
     /// Where the copy of the project as it was went, from the project's folder.
     pub backup: Option<String>,
     /// What the save tells besides: what became of a conversion that had stopped, an old name
-    /// that stayed.
+    /// that stayed, the names of sounds and models scripts give that it changed.
     pub warnings: Vec<String>,
     /// Whether the document changed beyond its layout mark (see [`Plan`]).
     pub changed_assets: bool,
@@ -800,11 +801,34 @@ pub(crate) fn convert_with(
     match organize(&file, project, images, known, who, &painted, hook) {
         Ok(mut converted) => {
             converted.warnings.splice(0..0, resumed);
+            let renamed = renamed_in_scripts(&root, project, &converted.project);
+            converted.warnings.extend(renamed);
             Ok(converted)
         }
         Err(error) if resumed.is_empty() => Err(error),
         Err(error) => Err(error.after(&resumed)),
     }
+}
+
+/// The names of sounds and models the scripts of the project at `root` give with literal texts
+/// that converting `before` into `after` changed (fitted to Windows, numbered), as warnings at
+/// the scripts' lines with the new name (see [`script::broken_citations`]): the lint's round
+/// right after the conversion. None when no name changed or the scripts cannot be read.
+fn renamed_in_scripts(root: &Path, before: &Project, after: &Project) -> Vec<String> {
+    let renamed = before
+        .assets
+        .iter()
+        .any(|old| after.asset(&old.id).is_some_and(|new| new.name != old.name));
+    if !renamed {
+        return Vec::new();
+    }
+    let Ok(sources) = persistence::load_scripts(root) else {
+        return Vec::new();
+    };
+    script::broken_citations(before, after, &sources, &[NameKind::Sound, NameKind::Model])
+        .into_iter()
+        .map(|broken| broken.warning.to_string())
+        .collect()
 }
 
 /// [`convert_with`] of the project file `file`, held for the conversion and without a journal

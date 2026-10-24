@@ -62,6 +62,30 @@ impl Editor {
         self.log(text);
         self.notice_last(false);
     }
+    /// What a rename or a deletion of the person's checks the scripts against: the project as
+    /// it is before the edit and the scripts of its folder; none without a folder or scripts.
+    pub(crate) fn script_names_before(&self) -> Option<(Project, ScriptSources)> {
+        let root = self.project_root()?;
+        let sources = persistence::load_scripts(&root).ok()?;
+        (!sources.files.is_empty()).then(|| (self.state.project.clone(), sources))
+    }
+    /// Warns in the Console of the names of `kinds` the scripts give with literal texts that the
+    /// edit since `before` (see [`Self::script_names_before`]) took away, with the line and the
+    /// new name, as an agent's batch tells them: the game would stop those calls.
+    pub(crate) fn warn_script_names(
+        &mut self,
+        before: Option<(Project, ScriptSources)>,
+        kinds: &[oxy_core::script::NameKind],
+    ) {
+        let Some((before, sources)) = before else {
+            return;
+        };
+        let broken =
+            oxy_core::script::broken_citations(&before, &self.state.project, &sources, kinds);
+        for broken in broken {
+            self.warn(broken.warning.to_string());
+        }
+    }
     /// Notice history, shown in the dock's Avisos tab. Viewing it marks entries as read.
     pub(crate) fn notices_body(&mut self, ui: &mut egui::Ui) {
         if self.notices.entries.is_empty() {

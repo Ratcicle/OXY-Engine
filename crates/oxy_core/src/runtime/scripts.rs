@@ -14,6 +14,24 @@ use std::collections::btree_map::Entry;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
+/// A script error a run told (see [`Runtime::script_error_counts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptErrorCount {
+    /// The object whose script it was; empty for a script that did not load.
+    pub object: Id,
+    /// The script file it points at; none for what the engine tells of the scripts as a whole
+    /// (the step's work spent, a VM that does not start, two objects with one key).
+    pub path: Option<String>,
+    /// Its line, from 1; 0 when only the file is known.
+    pub line: u32,
+    /// The log line of the first one: the object, the file and line and the message.
+    pub text: String,
+    /// How many times it happened at that place.
+    pub count: u64,
+    /// Whether it stopped the script on the object (a limit went past).
+    pub stopped: bool,
+}
+
 /// What tells a repeat of a script error on an object: the script line it happened at, and
 /// whether it stopped the script, whatever values its message carries; the whole text for one
 /// without a line (a script that did not load, a function the module lacks).
@@ -586,6 +604,34 @@ impl Runtime {
             .script_errors
             .iter()
             .map(|((owner, _), (text, count))| (owner.as_str(), text.as_str(), *count))
+    }
+
+    /// The script errors told in the run, as reports list them: each place an object got one,
+    /// in the order of the object and the place, with the file and line, the log line of the
+    /// first one and how many times it happened. The errors of a copy made during the run go
+    /// with it.
+    pub fn script_error_counts(&self) -> Vec<ScriptErrorCount> {
+        self.run
+            .script_errors
+            .iter()
+            .map(|((owner, place), (text, count))| {
+                let (path, line, stopped) = match place {
+                    ErrorPlace::Line { path, line, stops } => (Some(path.clone()), *line, *stops),
+                    ErrorPlace::Text(told) => match crate::script::place_at_start(told) {
+                        Some((path, line)) => (Some(path), line, false),
+                        None => (None, 0, false),
+                    },
+                };
+                ScriptErrorCount {
+                    object: owner.clone(),
+                    path,
+                    line,
+                    text: text.clone(),
+                    count: *count,
+                    stopped,
+                }
+            })
+            .collect()
     }
 
     /// Whether the run has a Luau VM: only once a scene attached a script.

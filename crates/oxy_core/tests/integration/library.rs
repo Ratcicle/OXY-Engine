@@ -372,6 +372,43 @@ fn scripts_are_listed_with_who_runs_them_and_the_check_tells_the_unused() {
 }
 
 #[test]
+fn an_import_named_after_a_file_like_an_id_says_so() {
+    let fixture = Fixture::new("importar-id");
+    let sources = fixture.root.with_extension("origem");
+    let id = "1d76fcf6-74c0-40ed-8168-64ef00b254fb";
+    put(&sources, &format!("{id}.wav"), &wav());
+    put(&sources, "vento.wav", &wav());
+    let path = |name: &str| sources.join(name).display().to_string();
+    let (mut project, _) = fixture.open();
+    let scene = project.start_scene.clone();
+    let import = |project: &mut Project, args: Json| {
+        let batch = ImportBatch::parse(&args).unwrap();
+        let read = batch.read().unwrap();
+        asset_import::import_batch(project, &fixture.root, &scene, &batch, &read).unwrap()
+    };
+    let done = import(&mut project, json!({"path": path(&format!("{id}.wav"))}));
+    assert_eq!(done[0].name, id);
+    assert_eq!(
+        done[0].warning.as_deref(),
+        Some(
+            "o nome 1d76fcf6-74c0-40ed-8168-64ef00b254fb veio do nome do arquivo e parece um \
+             ID; dê um nome que a pessoa reconheça com rename_asset (ou importe com name)"
+        )
+    );
+    let answer = serde_json::to_value(&done[0]).unwrap();
+    assert!(answer["warning"].is_string());
+    let done = import(&mut project, json!({"path": path("vento.wav")}));
+    assert!(done[0].warning.is_none());
+    assert!(
+        serde_json::to_value(&done[0])
+            .unwrap()
+            .get("warning")
+            .is_none()
+    );
+    let _ = fs::remove_dir_all(&sources);
+}
+
+#[test]
 fn imports_go_to_a_folder_made_when_missing_and_never_take_a_name_twice() {
     let fixture = Fixture::new("importar");
     let sources = fixture.root.with_extension("origem");

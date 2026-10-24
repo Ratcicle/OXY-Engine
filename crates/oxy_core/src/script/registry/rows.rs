@@ -745,7 +745,7 @@ pub static API: &[ApiFn] = &[
                 "model",
                 "string",
                 NameKind::Model,
-                "o nome do modelo na Biblioteca",
+                "o nome do modelo na Biblioteca, ou o caminho do arquivo dele",
             ),
             param(
                 "options",
@@ -755,13 +755,15 @@ pub static API: &[ApiFn] = &[
         ],
         returns: "Object",
         summary: "Põe uma cópia de um modelo da Biblioteca na cena e devolve a raiz dela.",
-        doc: "O nome do modelo vale sem diferenciar maiúsculas. A cópia, com os nomes que os \
+        doc: "O nome do modelo vale sem diferenciar maiúsculas; um texto que não é o nome de \
+              um modelo vale como o caminho do arquivo dele (`\"Pista/Torre.modelo.json\"`), que \
+              muda quando o modelo vai para outra pasta. A cópia, com os nomes que os \
               objetos têm no modelo, vai para a raiz da cena (ou para `parent`), na posição \
               salva no modelo (ou em `position`, nos eixos do pai); o `on_start` dos scripts dela roda depois desta chamada. Os IDs saem deste \
               objeto, deste script e de quantas cópias ele já fez, como em `obj:clone`.",
-        help_en: "Places a copy of a model of the project (by name, any case) in the scene and \
-                  returns its root; options position, rotation, parent, attributes. Its \
-                  on_start runs after this call.",
+        help_en: "Places a copy of a model of the project (by name, any case, else by its file \
+                  as Pista/Torre.modelo.json) in the scene and returns its root; options \
+                  position, rotation, parent, attributes. Its on_start runs after this call.",
         errors: &[
             "um modelo que o projeto não tem (o erro lista os modelos)",
             "um modelo de formas 2D numa cena 3D, ou o contrário",

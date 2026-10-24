@@ -18,7 +18,7 @@ use crate::{
     input_actions::{self, every_entity, every_holder},
     movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
     physics3d::{CollisionGeometry, CollisionShape},
-    script::{self, ScriptRef, ScriptSources},
+    script::{self, NameKind, ScriptRef, ScriptSources},
     spatial::{self, FitShape},
     surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace},
     variables,
@@ -612,6 +612,14 @@ pub enum Command {
         entity: Id,
         path: String,
     },
+    /// Takes the object's whole logic graph off (its nodes and their links), as converting an
+    /// object from nodes to scripts needs: a command apart from the legacy node commands, whose
+    /// contract is frozen since 0.7. The object's scripts, attributes and components stay.
+    ClearLogic {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+    },
     /// Writes a movement profile's values into a 3D character (see
     /// [`crate::character::PROFILE_FIELDS`]); they stay editable.
     ApplyMovementProfile {
@@ -830,6 +838,7 @@ impl Command {
             Self::FitCollider { .. } => "Ajustar colisor",
             Self::AttachScript { .. } => "Anexar script",
             Self::DetachScript { .. } => "Remover script",
+            Self::ClearLogic { .. } => "Tirar a lógica de nós",
             Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
             Self::AddNode { .. } => "Adicionar nó",
@@ -873,6 +882,10 @@ pub struct Applied {
     /// ([`Placeholder::Copied`]).
     #[serde(skip)]
     pub copies: Vec<Arc<CopyMap>>,
+    /// The attributes attach_script gave the object, by name: those its script declares that
+    /// the object lacked.
+    #[serde(skip)]
+    pub attributes: Vec<String>,
 }
 
 /// Which command of a batch, as errors and warnings name it: its index, counted from 0 as
@@ -974,6 +987,8 @@ fn plan(
     let mut checks: Vec<(usize, Check)> = Vec::new();
     // Nodes added without a position: (scene, object, node).
     let mut unplaced: Vec<(Id, Id, Id)> = Vec::new();
+    // The last command that renamed, moved or deleted each item scripts may name.
+    let mut took: BTreeMap<(NameKind, Id), usize> = BTreeMap::new();
     for (index, command) in commands.iter().enumerate() {
         let fail = |message: String| CommandError {
             index,
@@ -1013,6 +1028,9 @@ fn plan(
         let mut raised = Vec::new();
         let mut copies = Vec::new();
         let mut told = Vec::new();
+        let had = attach_target(&draft, &command, default_scene);
+        let kinds = renaming(&command);
+        let named = (!kinds.is_empty()).then(|| script::names_by_id(&draft, kinds));
         let created = match view.as_deref_mut() {
             Some(view) if tree::handles(&command, &draft) => {
                 tree::apply(&mut draft, &command, view).map(|lines| {
@@ -1057,6 +1075,14 @@ fn plan(
             _ => {}
         }
         validate_project(&draft).map_err(|e| fail(e.to_string()))?;
+        if let Some(named) = named {
+            let now = script::names_by_id(&draft, kinds);
+            for (item, name) in named {
+                if now.get(&item) != Some(&name) {
+                    took.insert(item, index);
+                }
+            }
+        }
         for check in raised {
             // The last layout of an object's logic is the one whose wires stay.
             if let Check::LongWires { scene, entity, .. } = &check {
@@ -1070,6 +1096,19 @@ fn plan(
                 checks.retain(|(_, earlier)| {
                     !matches!(earlier, Check::DeclaredAttributes { scene: s, entity: e, .. }
                         if s == scene && e == entity)
+                });
+            }
+            // A script attached again to an object tells its callbacks once.
+            if let Check::UnheardCallbacks {
+                scene,
+                entity,
+                path,
+                ..
+            } = &check
+            {
+                checks.retain(|(_, earlier)| {
+                    !matches!(earlier, Check::UnheardCallbacks { scene: s, entity: e, path: p, .. }
+                        if s == scene && e == entity && p == path)
                 });
             }
             checks.push((index, check));
@@ -1089,12 +1128,26 @@ fn plan(
             .into_iter()
             .map(|line| format!("{}: {line}", which(index, &op)))
             .collect();
+        // The attributes attach_script gave the object.
+        let attributes = had
+            .and_then(|(scene, entity, keys)| {
+                let e = draft.scene(&scene)?.entity(&entity)?;
+                Some(
+                    e.attributes
+                        .keys()
+                        .filter(|name| !keys.contains(*name))
+                        .cloned()
+                        .collect(),
+                )
+            })
+            .unwrap_or_default();
         applied.push(Applied {
             op,
             created,
             names,
             warnings,
             copies,
+            attributes,
         });
     }
     lay_out(&mut draft, &unplaced);
@@ -1109,7 +1162,91 @@ fn plan(
     }
     let scripts = view.as_deref().map_or(scripts, |view| &view.scripts);
     lint_attached(&draft, commands, scripts, &mut applied);
+    warn_broken_citations(project, &draft, commands, scripts, &took, &mut applied);
     Ok((draft, applied))
+}
+
+/// The object an attach_script command attaches to, as (scene, object), with the attributes it
+/// has before the command.
+fn attach_target(
+    project: &Project,
+    command: &Command,
+    default: &str,
+) -> Option<(Id, Id, BTreeSet<String>)> {
+    let Command::AttachScript { scene, entity, .. } = command else {
+        return None;
+    };
+    let scene = scene_id(project, scene, default).ok()?;
+    let e = project.scene(&scene)?.entity(entity)?;
+    let keys = e.attributes.keys().cloned().collect();
+    Some((scene, e.id.clone(), keys))
+}
+
+/// The kinds of names of the project `command` may take away from the scripts that give them
+/// as literal texts: renaming or deleting what has them (delete_folder renames a file whose
+/// name the root has), or moving a model, which `scene.spawn_model` finds by its file too.
+fn renaming(command: &Command) -> &'static [NameKind] {
+    use NameKind as K;
+    match command {
+        Command::RenameAsset { .. }
+        | Command::DeleteAsset { .. }
+        | Command::DeleteFolder { .. } => &[K::Sound, K::Model],
+        Command::Move { .. } | Command::RenameFolder { .. } => &[K::Model],
+        Command::RenameScene { .. } | Command::DeleteScene { .. } => &[K::Scene],
+        Command::UpdateVariable { name: Some(_), .. } | Command::DeleteVariable { .. } => {
+            &[K::Variable]
+        }
+        Command::RenameInputAction { .. } | Command::DeleteInputAction { .. } => &[K::Action],
+        Command::UpdateSurface { name: Some(_), .. } | Command::DeleteSurface { .. } => {
+            &[K::Surface]
+        }
+        _ => &[],
+    }
+}
+
+/// Whether a command of `commands` renames or deletes a sound, a model, a scene, a game
+/// variable, an input action or a surface, which scripts may give by name, or moves a model:
+/// hosts pass the project's scripts then, for the batch to warn of the names it takes from
+/// them.
+pub fn renames_script_names(commands: &[Command]) -> bool {
+    commands.iter().any(|command| !renaming(command).is_empty())
+}
+
+/// Adds the names the scripts of `scripts` give that `before` had and `after`, the project as
+/// the batch left it, no longer has (see [`script::broken_citations`]) to the command that took
+/// each away: the last that renamed, moved or deleted what the name found (`took`), else the
+/// last that could.
+fn warn_broken_citations(
+    before: &Project,
+    after: &Project,
+    commands: &[Command],
+    scripts: &ScriptSources,
+    took: &BTreeMap<(NameKind, Id), usize>,
+    applied: &mut [Applied],
+) {
+    let mut kinds: Vec<NameKind> = Vec::new();
+    for kind in commands.iter().flat_map(|command| renaming(command)) {
+        if !kinds.contains(kind) {
+            kinds.push(*kind);
+        }
+    }
+    if kinds.is_empty() || scripts.files.is_empty() {
+        return;
+    }
+    for broken in script::broken_citations(before, after, scripts, &kinds) {
+        let script::BrokenCitation { kind, id, warning } = broken;
+        let by = id.and_then(|id| took.get(&(kind, id)).copied());
+        let Some(index) = by.or_else(|| {
+            commands
+                .iter()
+                .rposition(|command| renaming(command).contains(&kind))
+        }) else {
+            continue;
+        };
+        let command = &mut applied[index];
+        let label = which(index, &command.op);
+        command.warnings.push(format!("{label}: {warning}"));
+    }
 }
 
 /// Adds to the last attach_script of `commands` that attached each script the lint of the
@@ -1226,6 +1363,16 @@ enum Check {
     /// attach_script was given `given`, the script `path` in another case, and attached `path`,
     /// in the case the disk has.
     ScriptCase { given: String, path: String },
+    /// attach_script attached `path`, which defines `callbacks`, some of which may never run on
+    /// the object (see [`script::unheard_callbacks`]).
+    UnheardCallbacks {
+        scene: Id,
+        entity: Id,
+        path: String,
+        callbacks: Vec<&'static str>,
+    },
+    /// What a command tells as it is.
+    Note(String),
 }
 impl Check {
     /// The warning, when what was checked is still so in `project`.
@@ -1500,6 +1647,21 @@ impl Check {
             Self::ScriptCase { given, path } => Some(format!(
                 "o script {given} está no disco como {path}, e foi anexado assim"
             )),
+            Self::UnheardCallbacks {
+                scene,
+                entity,
+                path,
+                callbacks,
+            } => {
+                let scene = project.scene(scene)?;
+                let e = scene.entity(entity)?;
+                if !e.scripts.iter().any(|s| s.path == *path) {
+                    return None;
+                }
+                let told = script::unheard_callbacks(e, scene.kind, path, callbacks);
+                (!told.is_empty()).then(|| told.join("; "))
+            }
+            Self::Note(text) => Some(text.clone()),
         }
     }
 }
@@ -1612,7 +1774,8 @@ impl From<FilesError> for String {
 /// `known`, see [`crate::journal::run`], and undone when one fails), and only then the project
 /// changes. Nothing changes when anything fails, but when undoing the operations failed too:
 /// then the project follows the files that stayed moved ([`FilesError::kept`]). A batch that
-/// needs no file ([`needs_files`]) reads none.
+/// needs no file ([`needs_files`]) reads none, but the scripts when it renames or deletes a
+/// name they may give ([`renames_script_names`]), to warn of it.
 pub fn apply_on_files(
     project: &mut Project,
     default_scene: &str,
@@ -1627,7 +1790,14 @@ pub fn apply_on_files(
     };
     let before = batch_warnings(project);
     if !needs_files(project, commands) {
-        let applied = apply(project, default_scene, commands).map_err(|e| failed(e.to_string()))?;
+        // The scripts tell the names they give that the batch takes away, when they can be read.
+        let scripts = if renames_script_names(commands) {
+            crate::persistence::load_scripts(root).unwrap_or_default()
+        } else {
+            ScriptSources::default()
+        };
+        let applied = apply_with_scripts(project, default_scene, commands, &scripts)
+            .map_err(|e| failed(e.to_string()))?;
         return Ok(OnFiles {
             report: report(project, &applied, &before),
             files: Vec::new(),
@@ -1852,6 +2022,15 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
         })
         .collect();
     let mut result = json!({"created": created});
+    let attributes: Map<String, Json> = applied
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !a.attributes.is_empty())
+        .map(|(index, a)| (index.to_string(), json!(a.attributes)))
+        .collect();
+    if !attributes.is_empty() {
+        result["attributes_created"] = Json::Object(attributes);
+    }
     let known: HashSet<&str> = before
         .iter()
         .flat_map(|w| w.about.iter().map(String::as_str))
@@ -3579,11 +3758,33 @@ fn apply_one(
                     Err(_) => {}
                 }
             }
+            // Callbacks that would never run on it, told when the batch ends: a later command
+            // may give it the area.
+            if let Some((_, Ok(outline))) = script::outlines(scripts, [path.as_str()]).pop() {
+                checks.push(Check::UnheardCallbacks {
+                    scene: id.clone(),
+                    entity: e.id.clone(),
+                    path: path.clone(),
+                    callbacks: outline.callbacks,
+                });
+            }
             checks.push(Check::DeclaredAttributes {
                 scene: id,
                 entity: e.id.clone(),
                 declared,
             });
+            Ok(vec![])
+        }
+        C::ClearLogic { scene, entity } => {
+            let id = scene_id(project, scene, default)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            if e.graph.nodes.is_empty() {
+                checks.push(Check::Note(format!(
+                    "{} não tinha lógica de nós; nada mudou nele",
+                    e.name
+                )));
+            }
+            e.graph = graph::Graph::default();
             Ok(vec![])
         }
         C::DetachScript {

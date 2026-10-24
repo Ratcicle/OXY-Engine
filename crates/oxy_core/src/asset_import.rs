@@ -134,6 +134,20 @@ pub struct Imported {
     /// The folders the import made for the file, each before those inside it.
     #[serde(skip)]
     pub made: Vec<String>,
+    /// What the name taken from the file may need: one that reads as an ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// Whether `name` reads as an ID (`1d76fcf6-74c0-40ed-8168-64ef00b254fb`), as the files of the
+/// old layout are named.
+fn reads_as_id(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => *b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        })
 }
 
 impl ImportRequest {
@@ -689,6 +703,13 @@ pub fn import_with(
         return Err(error);
     }
     *project = copy;
+    // People find assets by name: one taken from a file named like an ID tells nothing.
+    let warning = (request.name.is_none() && reads_as_id(&name)).then(|| {
+        format!(
+            "o nome {name} veio do nome do arquivo e parece um ID; dê um nome que a pessoa \
+             reconheça com rename_asset (ou importe com name)"
+        )
+    });
     Ok(Imported {
         asset: id,
         name,
@@ -700,6 +721,7 @@ pub fn import_with(
         applied_to: request.apply_to.clone(),
         in_place,
         made,
+        warning,
     })
 }
 

@@ -137,6 +137,39 @@ fn add_open_lines<'a>(answer: &mut Json, lines: impl IntoIterator<Item = &'a Str
     }
 }
 
+/// The options the tool `tool` declares, by name.
+fn options_of(tool: &str) -> Vec<String> {
+    static DEFINITIONS: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
+    DEFINITIONS
+        .get_or_init(definitions)
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|definition| definition["name"] == tool)
+        .and_then(|definition| definition["inputSchema"]["properties"].as_object())
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// `output`, an answer of the tool `tool` called with `args`, with the options it ignored
+/// because it does not declare them in `unknown_options` (see `query::unknown_options`).
+fn with_unknown_options(mut output: Output, tool: &str, args: &Json) -> Output {
+    let known = options_of(tool);
+    let known: Vec<&str> = known.iter().map(String::as_str).collect();
+    let unknown = query::unknown_options(args, &known);
+    if unknown.is_empty() {
+        return output;
+    }
+    let Ok(Json::Object(mut answer)) = serde_json::from_str::<Json>(&output.text) else {
+        return output;
+    };
+    answer.insert("unknown_options".into(), json!(unknown));
+    let image = output.image.take();
+    let mut told = Output::json(Json::Object(answer));
+    told.image = image;
+    told
+}
+
 /// What a tool call returns: JSON text and, optionally, a PNG image.
 #[derive(Debug)]
 pub struct Output {
@@ -289,6 +322,13 @@ part}}, part being what differed first (transform, visible, attributes.<name>, d
 character, animation, tasks, random, variables.<name> (a game variable), save…; exists: only one \
 copy has the object; order: both have it, in another scene order). identical: false \
 means the engine did not repeat itself: tell the person, it is not a fault of the logic.";
+const CHECK_VM_RESET: &str = "With scripts: runs another copy alongside, on the same inputs and \
+seed, whose scripts' Luau VM is thrown away and made anew every 30 steps (and at steps drawn \
+from the step's number) while the game's state stays, and compares the two after every step: \
+the answer adds vm_reset {identical, steps, first_difference?, error?}, read as replay. \
+identical: false means a script keeps state in its VM between calls (a module-level table it \
+fills, a value cached in a module), which a reload, a restore or the network would lose: keep \
+it in attributes or Module.state.";
 const BOT: &str = "Plays one 3D character along a path of points, as a person at the \
 controls: each step it gives the movement toward its point (in place of movement inputs and the \
 character's direction actions) and presses the character's own jump, sprint and crouch actions, \
@@ -361,7 +401,11 @@ box collider), with sensor: true for areas and enabled: false when off; bounds, 
 const ENTITY_DESCRIPTION: &str = "Objects in full or in part: the document form (transform in \
 radians plus rotation_degrees, material, attributes, components, logic graph, scripts [{path, \
 missing?}] (the Luau files it runs, in order, after its graph; missing: true when the project \
-folder lacks the file), animation clips, \
+folder lacks the file, else, as the script loads, callbacks (the on_* it defines), attributes \
+(the names Module.attributes declares), state ({field: type} of Module.state, typed as \
+oxy_project's variables, plus Table), error (why it \
+does not load) and warnings (callbacks that never run on this object: on_area_enter without an \
+area, on_click on what takes no clicks)), animation clips, \
 each keyframe with rotation_degrees too, as set_clip takes it, which update_entity refuses in \
 keyframes, as they keep radians; empty (null) parts are left out) plus world {position, \
 rotation_degrees, scale}, visual_bounds and collider_bounds as oxy_scene describes them, \
@@ -388,16 +432,26 @@ that differ from the operation's defaults (see oxy_catalog), a value that names 
 its name too ({\"Object\": \"<id>\", \"name\": \"Resultado\"}), and edges are text such as \
 \"event.input(Reiniciar).exec -> character.teleport.exec\" (label.port -> label.port). Meshes \
 and convex/triangle collision geometry come as counts. graph=full and geometry=full give them as \
-stored, IDs only, the form update_entity patches.";
-const CATALOG_DESCRIPTION: &str = "Catalog of logic nodes, components, shapes, interface \
-elements (ui_elements: the kinds and the fields of an object's ui, text_align and text_size \
-among them), presets [{id, description, creates, params}] (creates lists the pieces in the order \
-create_entity answers them; params are the preset's options), movement_profiles [{id, label, \
-values}] (what apply_movement_profile writes), surface presets, the keys input actions can use \
-(input_keys) and the value format. By default the nodes are brief (operation, label, category, \
-description) and categories \
-lists their categories; then ask for the nodes you will use with operations or category to get \
-their ports with types and parameters with defaults (only those nodes come back). A parameter \
+stored, IDs only, the form update_entity patches. Options the tool does not know are ignored and \
+named in unknown_options, with the nearest known one.";
+const CATALOG_DESCRIPTION: &str = "Catalog of the Luau scripts' API and of what commands build. \
+By default: api {areas: [{area, title, names}], total, types_file}, each area of the API with \
+the names of its callbacks, functions, properties and methods, then components, shapes, \
+interface elements (ui_elements: the kinds and the fields of an object's ui, text_align and \
+text_size among them), presets [{id, description, creates, params}] (creates lists the pieces in \
+the order create_entity answers them; params are the preset's options), movement_profiles [{id, \
+label, values}] (what apply_movement_profile writes), surface presets, the keys input actions \
+can use (input_keys), the value format and legacy_nodes. Read the API you will use before \
+writing a script: api (names as scripts write them, as audio.play, obj.position, obj:after, \
+obj.character:jump or on_area_enter, or prefixes ending in '.' or ':', as audio. or obj:) or \
+area (an area of the list) gives only those rows, in full: {api: [{name, signature, kind \
+(function|method|property|callback|declaration|constant|reserved), area, help, writable? (a \
+property scripts assign), names? (what its texts name in the project, which the lint of names \
+checks: sound, variable, scene…), nodes? (the legacy nodes that do the same)}], total, \
+next_offset?, types_file}. The logic node graph is legacy (frozen since 0.7, no new nodes) and \
+still runs: nodes: true lists the nodes brief (operation, label, category, description) with \
+their categories; operations or category gives only the nodes asked for, with \
+their ports with types and parameters with defaults. A parameter \
 with fixed values lists them in choices [{value, label}]: add_node and set_node_params refuse \
 any other. A number parameter the game limits gives min and max (no max: no upper limit): \
 add_node and set_node_params refuse a number outside them, naming the node and the range. ref \
@@ -447,8 +501,13 @@ pub fn definitions() -> Json {
     json!([
         tool(
             "oxy_status",
-            "Lists open OXY editors that allow AI agents (project, active scene, unsaved changes, \
-             whether the editor is busy and why, editor: its version) and explains how tools pick \
+            "Lists open OXY editors that allow AI agents (project {name, path, unsaved_changes, \
+             layout: tree|legacy, conversion_pending? (an old project the person's next save \
+             organizes in folders), scripts? {files (the .luau files of its folder), objects \
+             (how many attach a script), errors? (what keeps them from running, as oxy_scripts \
+             check finds it: a script that does not load, a file an object attaches that the \
+             folder lacks), errors_total?, checker}}, active scene, whether the editor is busy \
+             and why, editor: its version) and explains how tools pick \
              a target. server says which oxy-mcp answers: {version, build (16 hex digits \
              fingerprinting its executable: another build, another value), built_at (when the \
              executable was written, UTC)}, so a server older than the engine the person uses \
@@ -515,7 +574,10 @@ pub fn definitions() -> Json {
              collider3d), a node operation, attribute <name>, or for assets material, ui (an \
              interface element's image) or model (a model's placements, one per placed root); \
              model names the model asset holding an object that exists only inside it, which \
-             oxy_entity and oxy_find do not reach. used_by_total counts them when there are \
+             oxy_entity and oxy_find do not reach; after the objects come the script lines that \
+             name the asset, action, surface or variable with a literal text, {script, line, \
+             role (the function, as audio.play or vars.set)}, so what only a script uses is used \
+             (folder's used_by_count counts them too). used_by_total counts them when there are \
              more. With model, only that model: {id, name, root?, parts: [{id, name, parent \
              (null for the root), kind}], total, next_offset?}, each parent before its \
              children; a part's ID is what \"$N@<id>\" takes after a place_model N. layout: \
@@ -546,7 +608,8 @@ pub fn definitions() -> Json {
             "oxy_scene",
             "Object tree of a scene, with the scene's kind and background (\"sky\" or {color: \
              [r, g, b, a]}): each object's ID, name, kind, local position, shape, components, \
-             logic node count and children. fields adds world positions, sizes and boxes; root, \
+             logic node count, scripts (the Luau files it runs, by path) and children. fields \
+             adds world positions, sizes and boxes; root, \
              depth, offset and limit read a big scene part by part.",
             json!({"project": project, "scene": scene,
                    "fields": {"type": "array", "items": {"type": "string", "enum": [
@@ -604,7 +667,15 @@ pub fn definitions() -> Json {
         tool(
             "oxy_catalog",
             CATALOG_DESCRIPTION,
-            json!({"category": {"type": "string", "description":
+            json!({"api": {"type": "array", "items": {"type": "string"}, "description":
+                       "Only these rows of the scripts' API, in full: names as scripts write \
+                        them, or prefixes ending in '.' or ':'."},
+                   "area": {"type": "string", "description":
+                       "Only the rows of this area of the scripts' API (events, object, scene, \
+                        transform, audio…), in full."},
+                   "nodes": {"type": "boolean", "description":
+                       "The legacy logic nodes instead of the API: brief, with their categories."},
+                   "category": {"type": "string", "description":
                        "Only nodes of this category (see categories), in full. With operations, \
                         the operations asked for must be of it."},
                    "operations": {"type": "array", "items": {"type": "string"}, "description":
@@ -615,7 +686,7 @@ pub fn definitions() -> Json {
                         unless category or operations is given."},
                    "offset": offset,
                    "limit": {"type": "integer", "minimum": 0, "description":
-                       "Nodes at most (default: all)."}}),
+                       "Nodes, or rows of the API asked for, at most (default: all)."}}),
             json!([])
         ),
         tool(
@@ -869,6 +940,7 @@ pub fn definitions() -> Json {
                    "colliders": colliders,
                    "seed": seed,
                    "check_replay": check_replay,
+                   "check_vm_reset": {"type": "boolean", "description": CHECK_VM_RESET},
                    "save": save,
                    "bot": bot}),
             json!(["seconds"])
@@ -1085,7 +1157,13 @@ In a project in folders (\"layout\": \"Tree\" in project.oxy.json) an asset's na
 rename_asset renames the file in its folder and delete_asset sends it to .oxy/lixeira, both at \
 once; a script goes by its path with kind Script (objects attaching it follow a rename; \
 delete_asset refuses it while attached, unless detach: true takes it off them). In an old \
-project only the name changes and the file stays
+project only the name changes and the file stays. A sound or model a script names with a \
+literal text (audio.play(\"Bipe\"), scene.spawn_model(\"Torre\"), which also finds a model \
+by its file, \"Pista/Torre.modelo.json\") is used too (oxy_project used_by): renaming or \
+deleting it (moving a model given by its file), or a scene, input action, surface or game \
+variable a script names, is done and comes back in warnings with the script's line and the new \
+name, on the command that took it, since the game would stop that call: fix the script with \
+oxy_scripts
 - create_folder {path}; rename_folder {folder, name}; move {items, to, kind?}; delete_folder \
 {folder}: the project's folders, in a project in folders (an old one: on files the batch \
 organizes it first, answered as converted; live, refused until the person saves it). The files \
@@ -1133,9 +1211,14 @@ e.g. {\"Number\": 3}, {\"Text\": \"...\"}, {\"Bool\": true}, {\"Object\": \"<id>
 the project folder, Pista/porta.luau) on the object, at index of its list (default the end; its \
 scripts run in \
 that order, after its logic graph), and gives the object, with their defaults, the attributes the \
-script declares in Module.attributes that it lacks (one it has keeps its value). A type that \
-differs from the object's or between its scripts, and a script that does not load or declares \
-no table of defaults (its attributes unread), come back in warnings, with the lint of names of \
+script declares in Module.attributes that it lacks (one it has keeps its value; the answer's \
+attributes_created maps the command's index to the names created, as {\"3\": [\"Ordem\"]}). A \
+type that differs from the object's or between its scripts, a script that does not load or \
+declares no table of defaults (its attributes unread) and callbacks that never run on that \
+object as the batch leaves it (on_area_enter and on_area_exit on one without an area: add \
+sensor3d, sensor2d in a 2D scene, or attach to the area; on_click on one that is neither a \
+shape nor an interface \
+button) come back in warnings, with the lint of names of \
 oxy_scripts check once per script, on its last attach in the batch. Again on an attached script: \
 moves it to index and \
 creates what is missing. A path in another case attaches the file in the case the disk has, \
@@ -1143,7 +1226,10 @@ with a warning; a file the project lacks is refused, with the one meant (oxy_scr
 creates it). The \
 first attach in a project without this version's VS Code types writes them (vscode in the \
 answer, as oxy_scripts vscode). detach_script {entity, path}: takes it off, keeping the \
-attributes
+attributes. clear_logic {entity}: takes the object's whole logic graph off (every node and \
+link), keeping its scripts, attributes and components; not one of the legacy node commands. To \
+turn an object's nodes into a script: write it (oxy_scripts write), attach_script and \
+clear_logic in one batch, then oxy_simulate to compare
 - add_component / remove_component {entity, component: character|collider3d|sensor3d|platform|\
 camera_control|collider2d|sensor2d|controller2d}. A box collider takes the shape's dimensions \
 when added and follows the object's scale, not later dimension changes
@@ -1255,7 +1341,8 @@ refused before its first save); on files, the project file is saved once \
 it, as oxy_apply does; an older project is saved in the current format and its original is kept \
 once, as oxy_apply says: .oxy/backup or project.oxy.json.schema-N.….backup.json). Answers \
 {asset, name, kind, path (where the file is, from the project folder), width and height \
-(images), seconds (sounds), applied_to?, in_place?}; with paths, {imported: [one such entry per \
+(images), seconds (sounds), applied_to?, in_place?, warning? (a name taken from a file named \
+like an ID: give it one the person knows with rename_asset)}; with paths, {imported: [one such entry per \
 file, in the order of \
 paths]}. Use the asset ID in set_material texture, an interface element's ui.texture \
 (update_entity) or the asset parameter of an action.sound (once), action.sound_loop or \
@@ -1299,61 +1386,21 @@ the nearest name (write warns the same and saves); types are not checked (types_
 Code checks them). vscode: writes what VS Code with the luau-lsp extension (1.70.1) needs: \
 .oxy/tipos/oxy.d.luau (the API's types), .luaurc with the alias \"project\": \"./\" (added to \
 the person's) and the luau-lsp keys .vscode/settings.json lacks, never changing a key it has: \
-{written, notes?}. The API of this \
-version: callbacks on_start(self), on_step(self, dt), on_input(self, action, phase \
-\"pressed\"|\"released\"), on_click(self), on_area_enter(self, other), on_area_exit(self, other), \
-on_marker(self, marker, clip), on_character(self, event), on_pause(self, paused), \
-on_message(self, name, value, from); obj.name, obj.attr.Name (nil when absent; writing needs an \
-attribute of that type), obj.position and obj.world_position (vectors in metres, \
-vector.create(x, y, z); writing moves it), obj.rotation (degrees), obj.orientation (a quat), \
-obj.scale, obj.yaw (read), obj:jump_to(p), obj:to_world_direction(v), obj.id, obj.parent, \
-obj:children(), obj:find_child(name, deep?) (nil when absent), obj:get_child(name, deep?) (an \
-error listing the children), obj.visible, obj.logic_enabled (the node graph only), \
-obj:has_component(kind), obj:destroy(), obj:clone(options?), obj:first_hit(other) (once per \
-activation of the object's area), obj:exists(), obj:has_attribute(name), self.state \
-(the fields Module.state declares), obj:send(name, value?); scene.find/get/find_all(name), \
-scene.with_attribute(name), scene.spawn_model(model, options?) (copies get the same IDs every \
-run; their on_start runs after the call), scene.current(), scene.change(name) and \
-scene.restart() (when the function ends); vmath.* and quat.* (quaternions never change); \
-self:after(seconds, Module.f, ...) \
-(at least the next step, as control.wait), self:every(seconds, Module.f, ...), \
-self:sequence(interval, Module.f, items) (item \
-k (k-1) × interval after the call, as self:after would call it: the first on the next step and \
-the rest on the grid of a graph's waits), self:schedule({ {delay, Module.f, data?}, ... }), \
-self:cancel(id); audio.play(name, {volume?, audience?}) (audience changes nothing before 0.8: \
-the one player hears every sound, so check the character's own attribute to play it only for \
-them); vars.get(name, key?) (a key never written reads the variable's initial value; a name the \
-project lacks is an error with the nearest one), vars.set(name, value, key?); views of an object \
-with the component (on one without it, reading the view is an error naming the object: check \
-obj:has_component(kind)): obj.character (its state read only: position, velocity, speed, \
-grounded, posture, support, surface (the ground's), body_surface (the body's, writable), aim (a \
-unit direction from the simulated input's look, not from the camera image) and look (degrees, x \
-turn and y pitch); its commands move(axis), jump(), set_posture, add_velocity, set_velocity, \
-block, apply_profile, set_param, get_param, set_option, set_yaw and teleport(feet, {search?, \
-keep_velocity?, yaw?, look?}) returning ok, reason, destination: no room is no error but false \
-and why), obj.collider.enabled/is_area/surface, obj.platform.enabled, obj.controller.enabled, \
-obj.animation:play(clip, restart?)/playing/clip, obj.ui.text and obj.ui.color (a vector of red, \
-green, blue from 0 to 1); physics.raycast/sphere_cast/capsule_cast (a hit {object, point, normal, \
-distance, fraction, surface} or nil; a refused query returns nil and the reason) and \
-physics.capsule_fits; camera.active/look/forward/mode() and \
-camera.activate/set_mode/follow/look_at/release_look/set(camera, ...); audio.loop(name, \
-{channel?, volume?, fade?}), audio.stop({sound?, channel?, fade?}), audio.set_volume(channel, v), \
-audio.volume(channel); game.pause/resume/paused/show_cursor/hide_cursor/quit(); \
-save.write/clear/exists(); input.pressed/held/released(action), input.movement(), input.look(), \
-input.wheel() (no player argument before 0.8); time.now(), time.dt, time.format(seconds, \
-format); random.number/integer(min, max), random.seed(n), random.stream(name):number/integer (the \
-engine's draws, a sequence per object and script); print, warn, error and assert. A wrong name of \
-a parameter, option, mode, clip or action is refused with the nearest one and the list. \
-players, Player, session, game.online/is_host/is_server, on_request and \
-on_player_join/on_player_leave are kept for 0.8: using them is an error that says it \"chega na \
-0.8\". Game variables keep their values when a scene restarts: reset in on_start what must start \
-over. \
-Module.attributes = {Name = default} declares what attach_script gives an object \
-(param.object() an empty Object attribute, param.surface(name?) a Surface of the project, \
-param.vector2(x, y) a Vector2; in Module.state they declare fields that start empty). An error \
-about a nil names the attribute the call last read as nil. Every function's help, \
-made from the engine's API table, is in the types vscode writes (.oxy/tipos/oxy.d.luau). \
-Objects, attributes, sounds, actions and variables go by the person's names.";
+{written, notes?}. The API (callbacks such as on_start(self), on_step(self, dt), \
+on_input(self, action, phase), on_area_enter(self, other) and on_click(self); obj.attr.Name, \
+obj.position, self:after, audio.play(name), vars.get/set, scene.find…) is oxy_catalog's: by \
+default it names every function by area, and api or area gives their signatures and help (the \
+types vscode writes, .oxy/tipos/oxy.d.luau, have the same help in Portuguese). Calls take the \
+person's names of objects, attributes, sounds, actions and variables; a wrong name of a \
+parameter, option, mode, clip or action is refused with the nearest one and the list. Before \
+0.8 there is one player: audio.play's audience changes nothing before 0.8, input has no player \
+argument before 0.8, and players, Player, session, game.online/is_host/is_server, on_request \
+and on_player_join/on_player_leave are kept for 0.8: using them is an error that says it \
+\"chega na 0.8\". Game variables keep their values when a scene restarts: reset in on_start what \
+must start over. Module.attributes = {Name = default} declares what attach_script gives an \
+object (param.object() an empty Object attribute, param.surface(name?) a Surface of the \
+project, param.vector2(x, y) a Vector2; in Module.state they declare fields that start empty). \
+An error about a nil names the attribute the call last read as nil.";
 
 const EXPORT_DESCRIPTION: &str = "Exports the game as the editor's Projeto > Exportar jogo \
 does, into <destination>\\<game name>: the game name is game.title of oxy_project (set with \
@@ -1399,7 +1446,10 @@ a project (project.oxy.json) or any other file, a file, and a path ending in pro
 
 const CONSOLE_DESCRIPTION: &str = "Live only: the editor's console, read-only, for when the \
 person says something did not work: {lines: [{seq, origin, text, warning?, object? {id, name}, \
-node?, operation?}], last_seq, session, omitted?, reset?}. origin is editor, agente (your edits \
+node?, operation?, script? {path, line}}], last_seq, session, omitted?, reset?}. script is the \
+script line a game line came from (print, warn, a script error) or that an editor or agent line \
+names (Script não recarregado: Pista/porta.luau:12: …): open it with oxy_scripts read. origin \
+is editor, agente (your edits \
 and their errors), jogo (logs of the person's play test: debug.message texts, with the value \
 wired to its value input, and node errors, with the object and node they come from, and, once \
 per node in a run, \"<object> · <node label> falhou: <reason>\" for an action whose failure \
@@ -1463,10 +1513,16 @@ timer calls run), steps (the steps it ran in, a scene start counting as one), p5
 (microseconds of those steps: half took p50_us or less, the slowest max_us; wall time, which \
 varies between runs and machines), most_entries (the most table entries it converted between \
 Luau and the engine in one step: script memory read and written back, messages), warning? \
-(past 1024 of them)}] tells what each script file cost. \
+(past 1024 of them)}] tells what each script file cost, and script_errors [{object? {id, name} \
+(none for a script that did not load), path? (none for what the engine tells of the scripts \
+as a whole, as the step's work spent), line?, text (the log line of the first one), \
+count (how many times it happened there), stopped? (a limit stopped the script on that \
+object)}] each script error once per object and line (a copy removed during the run takes its \
+own with it); check_vm_reset checks that no script keeps state in its VM. \
 Lists keep the most recent 300 entries and `truncated` counts what was dropped. Times are \
 seconds rounded to 0.1 ms. Set screenshot=true to also get the game camera view at the end, \
-with the game interface drawn.";
+with the game interface drawn. Options the tool does not know are ignored and named in \
+unknown_options, with the nearest known one.";
 
 const SCREENSHOT_DESCRIPTION: &str = "PNG image. view=editor (live only, the default there): \
 the editor viewport as the person sees it (during a test, the game with its interface), with the \
@@ -1747,20 +1803,26 @@ impl Tools {
                         "find"
                     }
                 };
-                self.read(args, request, |p, scene, root| {
+                let read = self.read(args, request, |p, scene, root| {
                     if request == "summary" {
                         return query::summary_in(p, Some(root), args, &|_| false);
                     }
                     let mut answer = query::answer(p, scene, request, args)?;
                     if request == "entity" {
-                        query::mark_missing_scripts(&mut answer, root);
+                        query::describe_scripts(&mut answer, p, scene, root);
                     }
                     Ok(answer)
+                })?;
+                Ok(match request {
+                    "entity" => with_unknown_options(read, name, args),
+                    _ => read,
                 })
             }
             "oxy_validate" => self.validate(args),
             "oxy_apply" => self.apply(args),
-            "oxy_simulate" => self.simulate(args),
+            "oxy_simulate" => self
+                .simulate(args)
+                .map(|output| with_unknown_options(output, name, args)),
             "oxy_screenshot" => self.screenshot(args),
             "oxy_import" => self.import(args),
             "oxy_scripts" => self.scripts(args),
@@ -1851,7 +1913,8 @@ impl Tools {
     fn status(&mut self) -> Result<Output, String> {
         let mut editors = Vec::new();
         for info in editors::discover() {
-            let status = self.live(info.port, "status", json!({}));
+            // Only this read checks the scripts: the other tools ask for the status to find editors.
+            let status = self.live(info.port, "status", json!({"scripts": true}));
             match status {
                 Ok(status) => editors.push(status),
                 Err(_) => continue,
@@ -1864,7 +1927,10 @@ impl Tools {
                 tools act on it live: edits show at once, are undoable with Ctrl+Z and the person \
                 saves (oxy_save saves for them only when they allow it: can_save). Pass `project` \
                 (a folder or project.oxy.json) to pick an editor by project, or to edit the files \
-                directly when no editor has that project open.",
+                directly when no editor has that project open. Scripts are files: oxy_scripts \
+                write (or your file tools) saves them at once, live too and while the person \
+                tests the game, which reloads them; edits of the document (oxy_apply, \
+                oxy_import) are refused while a test runs.",
         })))
     }
 
@@ -2477,8 +2543,7 @@ impl Tools {
                 .map_err(invalid("Semente (seed) inválida"))?
                 .unwrap_or_default(),
             check_replay: args["check_replay"].as_bool() == Some(true),
-            // Not offered by the tool yet.
-            check_vm_reset: false,
+            check_vm_reset: args["check_vm_reset"].as_bool() == Some(true),
             save: arg("save")
                 .map(headless::SimulationRequest::read_save)
                 .transpose()
@@ -2984,7 +3049,16 @@ mod tests {
             assert!(schema("oxy_find")[option]["description"].is_string());
         }
         let catalog = schema("oxy_catalog");
-        for option in ["category", "operations", "brief", "offset", "limit"] {
+        for option in [
+            "api",
+            "area",
+            "nodes",
+            "category",
+            "operations",
+            "brief",
+            "offset",
+            "limit",
+        ] {
             assert!(catalog[option]["description"].is_string(), "{option}");
         }
         assert!(ENTITY_DESCRIPTION.contains("event.input(Reiniciar).exec"));
@@ -3101,7 +3175,7 @@ mod tests {
             serde_json::from_str(&Tools::default().call("oxy_catalog", &args).unwrap().text)
                 .unwrap()
         };
-        let brief = catalog(json!({}));
+        let brief = catalog(json!({"nodes": true}));
         assert!(
             brief["categories"]
                 .as_array()
@@ -3743,8 +3817,139 @@ mod tests {
         let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
         assert_eq!(
             entity["scripts"],
-            json!([{"path": "Pista/Checkpoints/porta.luau"}])
+            json!([{"path": "Pista/Checkpoints/porta.luau", "callbacks": ["on_start"]}])
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// What the tools tell of scripts on files (stage 5h): the names a script gives as uses
+    /// and as warnings when a batch deletes them, the attributes attach_script created and the
+    /// callbacks that never run, the scripts in the scene tree and in objects, clear_logic, the
+    /// errors a run tells, the VM made anew and unknown options.
+    #[test]
+    fn files_tell_what_scripts_use_create_and_fail_on() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-scripts-5h-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Cinco", SceneKind::ThreeD).unwrap();
+        project.scenes[0]
+            .entities
+            .push(Entity::new("Controle", None));
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| -> Result<Json, String> {
+            let mut args = json!({"project": project_arg});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            tools
+                .call(tool, &args)
+                .map(|output| serde_json::from_str(&output.text).unwrap())
+        };
+        call(
+            "oxy_apply",
+            json!({"commands": [{"op": "create_variable", "name": "Contagem", "value": 0}]}),
+        )
+        .unwrap();
+        call(
+            "oxy_scripts",
+            json!({"action": "write", "path": "Pista/area.luau", "text":
+                "local M = {}\nM.attributes = { Ordem = 1 }\nfunction M.on_area_enter(self, \
+                 other) end\nfunction M.on_step(self)\n    local n = vars.get(\"Contagem\")\n    \
+                 error(\"travou \" .. n)\nend\nreturn M\n"}),
+        )
+        .unwrap();
+        let attached = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "attach_script", "entity": "Controle",
+                                 "path": "Pista/area.luau"}]}),
+        )
+        .unwrap();
+        assert_eq!(attached["attributes_created"], json!({"0": ["Ordem"]}));
+        assert!(
+            attached["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("Controle não tem área (sensor3d"),
+            "{attached}"
+        );
+        let summary = call("oxy_project", json!({})).unwrap();
+        assert_eq!(
+            summary["variables"][0]["used_by"],
+            json!([{"script": "Pista/area.luau", "line": 5, "role": "vars.get"}])
+        );
+        let tree = call("oxy_scene", json!({})).unwrap();
+        assert_eq!(tree["objects"][0]["scripts"], json!(["Pista/area.luau"]));
+        let entity = call(
+            "oxy_entity",
+            json!({"id": "Controle", "fields": ["scripts"], "fieldz": ["x"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            entity["scripts"][0]["callbacks"],
+            json!(["on_step", "on_area_enter"])
+        );
+        assert_eq!(entity["scripts"][0]["attributes"], json!(["Ordem"]));
+        assert_eq!(
+            entity["unknown_options"],
+            json!(["fieldz: opção desconhecida, ignorada; quis dizer fields?"])
+        );
+        let report = call(
+            "oxy_simulate",
+            json!({"seconds": 0.1, "ui": false, "check_vm_reset": true, "check_vm_rest": true}),
+        )
+        .unwrap();
+        assert_eq!(report["vm_reset"]["identical"], true, "{report}");
+        assert_eq!(report["script_errors"][0]["path"], "Pista/area.luau");
+        assert_eq!(report["script_errors"][0]["line"], 6);
+        assert_eq!(report["script_errors"][0]["object"]["name"], "Controle");
+        assert_eq!(report["script_errors"][0]["count"], 6);
+        assert_eq!(
+            report["unknown_options"],
+            json!(["check_vm_rest: opção desconhecida, ignorada; quis dizer check_vm_reset?"])
+        );
+        let quiet = call("oxy_simulate", json!({"seconds": 0.1, "ui": false})).unwrap();
+        assert!(quiet.get("vm_reset").is_none() && quiet.get("unknown_options").is_none());
+        // Deleting what the script reads is done, with the line it breaks.
+        let deleted = call(
+            "oxy_apply",
+            json!({"commands": [{"op": "delete_variable", "variable": "Contagem"},
+                                {"op": "clear_logic", "entity": "Controle"}]}),
+        )
+        .unwrap();
+        let warnings = deleted["warnings"].to_string();
+        assert!(
+            warnings.contains("Pista/area.luau:5: vars.get: a variável do jogo \\\"Contagem\\\" não existe mais no projeto"),
+            "{warnings}"
+        );
+        assert!(
+            warnings.contains("Controle não tinha lógica de nós"),
+            "{warnings}"
+        );
+        // The descriptions say all of it.
+        for (description, text) in [
+            (APPLY_DESCRIPTION, "clear_logic {entity}"),
+            (APPLY_DESCRIPTION, "attributes_created"),
+            (
+                APPLY_DESCRIPTION,
+                "comes back in warnings with the script's line",
+            ),
+            (CATALOG_DESCRIPTION, "nodes: true"),
+            (CATALOG_DESCRIPTION, "api (names as scripts write them"),
+            (SIMULATE_DESCRIPTION, "script_errors [{object?"),
+            (SIMULATE_DESCRIPTION, "unknown_options"),
+            (CHECK_VM_RESET, "vm_reset {identical"),
+            (CONSOLE_DESCRIPTION, "script? {path, line}"),
+            (ENTITY_DESCRIPTION, "callbacks (the on_* it defines)"),
+            (ENTITY_DESCRIPTION, "unknown_options"),
+            (
+                IMPORT_DESCRIPTION,
+                "warning? (a name taken from a file named",
+            ),
+        ] {
+            assert!(description.contains(text), "{text}");
+        }
+        assert!(schema("oxy_simulate")["check_vm_reset"]["description"].is_string());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3947,11 +4152,13 @@ mod tests {
                 .starts_with("scripts/area.luau:2: on_area_entre não é um evento"),
             "{checked}"
         );
-        // oxy_entity names the scripts and marks one the folder lacks.
+        // oxy_entity names the scripts, with what each defines and declares, and marks one the
+        // folder lacks.
         let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
         assert_eq!(
             entity["scripts"],
-            json!([{"path": "scripts/contador.luau"}])
+            json!([{"path": "scripts/contador.luau", "callbacks": ["on_start"],
+                    "attributes": ["Vezes"]}])
         );
         oxy_core::fs_ops::move_no_replace(
             &dir.join("scripts/contador.luau"),
@@ -3987,19 +4194,67 @@ mod tests {
         assert!(SCRIPTS_DESCRIPTION.contains("require(\"@project/Folder/name\")"));
         assert!(!SCRIPTS_DESCRIPTION.contains("agente.bak"));
         for text in [
-            "item k (k-1) × interval after the call",
             "audience changes nothing before 0.8",
-            "a key never written reads the variable's initial value",
             "keep their values when a scene restarts",
-            "returning ok, reason, destination",
-            "body_surface (the body's, writable)",
-            "a refused query returns nil and the reason",
             "no player argument before 0.8",
-            "random.stream(name):number/integer",
             "\"chega na 0.8\"",
+            "oxy_catalog's",
         ] {
             assert!(SCRIPTS_DESCRIPTION.contains(text), "{text}");
         }
+        // Each function's help is the catalog's, from the API's table, not the description's.
+        let rows: Json = serde_json::from_str(
+            &Tools::default()
+                .call(
+                    "oxy_catalog",
+                    &json!({"api": ["obj:sequence", "vars.get", "obj.character:teleport",
+                                    "physics.raycast", "random.stream", "obj.character.body_surface"]}),
+                )
+                .unwrap()
+                .text,
+        )
+        .unwrap();
+        let help = |name: &str| {
+            rows["api"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["name"] == name)
+                .unwrap()["help"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        for (name, text) in [
+            (
+                "Object:sequence",
+                "item k (k-1) x interval seconds after the call",
+            ),
+            (
+                "vars.get",
+                "a key never written reads the variable's initial value",
+            ),
+            (
+                "Character:teleport",
+                "returns ok, the refusal reason and the destination",
+            ),
+            (
+                "physics.raycast",
+                "a refused query returns nil and the reason",
+            ),
+            ("random.stream", "A named sequence of draws"),
+            (
+                "Character.body_surface",
+                "takes a surface, a surface's name or nil",
+            ),
+        ] {
+            assert!(help(name).contains(text), "{name}: {}", help(name));
+        }
+        assert!(
+            SCRIPTS_DESCRIPTION.len() < 6_000,
+            "{}",
+            SCRIPTS_DESCRIPTION.len()
+        );
         assert!(SIMULATE_DESCRIPTION.contains("script_time [{path, calls"));
         assert!(SIMULATE_DESCRIPTION.contains("most_entries (the most table entries"));
         assert!(ENTITY_DESCRIPTION.contains("scripts [{path, missing?}]"));

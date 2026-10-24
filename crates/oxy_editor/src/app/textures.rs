@@ -160,6 +160,11 @@ impl Editor {
                     self.log(error);
                 }
                 self.rebase_scan();
+                // A sound or model a script names goes all the same: the Console says where.
+                let warnings = done.report["warnings"].as_array().cloned();
+                for warning in warnings.iter().flatten().filter_map(|w| w.as_str()) {
+                    self.warn(oxy_core::script_files::without_command(warning));
+                }
                 Ok(())
             }
             Err(command::FilesError { message, kept }) => {

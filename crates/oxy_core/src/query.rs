@@ -17,8 +17,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+mod api;
 mod library;
-pub use library::{asset_warnings, folder, layout_name, scripts_list, summary_in, unused_scripts};
+pub use library::{
+    asset_warnings, folder, layout_name, scripts_list, scripts_status, summary_in, unused_scripts,
+};
 
 fn kind_name(kind: SceneKind) -> &'static str {
     match kind {
@@ -90,6 +93,22 @@ pub fn answer(project: &Project, scene: &str, request: &str, args: &Json) -> Res
         "catalog" => catalog_query(args),
         other => Err(format!("Pedido desconhecido: {other}")),
     }
+}
+
+/// The options of `args` that `known`, a tool's, lacks, each with the nearest known one: the
+/// tool ignores them, and its answer says so instead of ignoring them in silence.
+pub fn unknown_options(args: &Json, known: &[&str]) -> Vec<String> {
+    let Some(map) = args.as_object() else {
+        return Vec::new();
+    };
+    map.keys()
+        .filter(|key| !known.contains(&key.as_str()))
+        .map(|key| {
+            let hint = crate::script::closest(key, known.iter().copied())
+                .map_or_else(String::new, |near| format!("; quis dizer {near}?"));
+            format!("{key}: opção desconhecida, ignorada{hint}")
+        })
+        .collect()
 }
 
 /// An optional argument: absent and null give None.
@@ -407,7 +426,7 @@ pub fn validation_with(
 }
 
 /// What `scene_tree` adds to each object, besides its ID, name, kind, local position, shape,
-/// components, logic size, visibility and children.
+/// components, logic size, scripts, visibility and children.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TreeField {
@@ -652,6 +671,9 @@ impl<'a> Tree<'a> {
         if !e.graph.nodes.is_empty() {
             node["logic_nodes"] = json!(e.graph.nodes.len());
         }
+        if !e.scripts.is_empty() {
+            node["scripts"] = json!(e.scripts.iter().map(|s| &s.path).collect::<Vec<_>>());
+        }
         if !e.visible {
             node["visible"] = json!(false);
         }
@@ -838,21 +860,26 @@ pub fn entities(project: &Project, scene: &str, query: &EntityQuery) -> Result<J
     })
 }
 
-/// Marks with `missing: true`, in an answer of [`entities`], each script an object attaches that
-/// the tree of the project saved in `root` lacks, each path looked for alone (see
-/// `project_tree::presence`). A file that cannot be read now is not marked.
-pub fn mark_missing_scripts(answer: &mut Json, root: &std::path::Path) {
-    use crate::project_tree::{Presence, presence};
-    let objects: Vec<&mut Json> = if answer.get("objects").is_some() {
+/// The objects of an answer of [`entities`]: the one object, or those listed under `objects`.
+fn answer_objects(answer: &mut Json) -> Vec<&mut Json> {
+    if answer.get("objects").is_some() {
         match answer.get_mut("objects") {
             Some(Json::Array(objects)) => objects.iter_mut().collect(),
             _ => Vec::new(),
         }
     } else {
         vec![answer]
-    };
+    }
+}
+
+/// Marks with `missing: true`, in an answer of [`entities`], each script an object attaches that
+/// the tree of the project saved in `root` lacks, each path looked for alone (see
+/// `project_tree::presence`). A file that cannot be read now is not marked. Answers each path
+/// with whether it is missing.
+pub fn mark_missing_scripts(answer: &mut Json, root: &std::path::Path) -> BTreeMap<String, bool> {
+    use crate::project_tree::{Presence, presence};
     let mut seen: BTreeMap<String, bool> = BTreeMap::new();
-    for object in objects {
+    for object in answer_objects(answer) {
         let Some(Json::Array(scripts)) = object.get_mut("scripts") else {
             continue;
         };
@@ -865,6 +892,78 @@ pub fn mark_missing_scripts(answer: &mut Json, root: &std::path::Path) {
                 .or_insert_with(|| presence(root, path) == Presence::Missing);
             if missing {
                 script["missing"] = json!(true);
+            }
+        }
+    }
+    seen
+}
+
+/// Completes the scripts of each object in an answer of [`entities`] of the scene `scene` of
+/// `project`, saved in the folder `root`: `missing: true` for a file the tree lacks, each path
+/// looked for alone (see `project_tree::presence`; a file that cannot be read now is not
+/// marked); else what the script defines and declares as it loads (see
+/// [`crate::script::outlines`]): `callbacks`, `attributes` (the names `Module.attributes`
+/// declares), `state` (each field `Module.state` declares, with its kind), `error` when it does
+/// not load, and `warnings` for callbacks that never run on that object (see
+/// [`crate::script::unheard_callbacks`]).
+pub fn describe_scripts(answer: &mut Json, project: &Project, scene: &str, root: &std::path::Path) {
+    let seen = mark_missing_scripts(answer, root);
+    let present: Vec<&str> = seen
+        .iter()
+        .filter(|(_, missing)| !**missing)
+        .map(|(path, _)| path.as_str())
+        .collect();
+    if present.is_empty() {
+        return;
+    }
+    let sources = crate::persistence::load_scripts(root).unwrap_or_default();
+    let outlines: BTreeMap<&str, Result<crate::script::Outline, String>> =
+        crate::script::outlines(&sources, present)
+            .into_iter()
+            .map(|(path, outline)| (path, outline.map_err(|error| error.to_string())))
+            .collect();
+    let scene = project.find_scene(scene, "scene").ok();
+    for object in answer_objects(answer) {
+        let entity = object["id"]
+            .as_str()
+            .and_then(|id| scene.and_then(|s| s.entity(id)));
+        let Some(Json::Array(scripts)) = object.get_mut("scripts") else {
+            continue;
+        };
+        for script in scripts {
+            let Some(outline) = script["path"].as_str().and_then(|p| outlines.get(p)) else {
+                continue;
+            };
+            let outline = match outline {
+                Ok(outline) => outline,
+                Err(error) => {
+                    script["error"] = json!(error);
+                    continue;
+                }
+            };
+            if !outline.callbacks.is_empty() {
+                script["callbacks"] = json!(outline.callbacks);
+            }
+            if !outline.attributes.is_empty() {
+                script["attributes"] = json!(outline.attributes);
+            }
+            if !outline.state.is_empty() {
+                let state: Map<String, Json> = outline
+                    .state
+                    .iter()
+                    .map(|(name, kind)| (name.clone(), json!(kind)))
+                    .collect();
+                script["state"] = Json::Object(state);
+            }
+            let path = script["path"].as_str().unwrap_or_default().to_owned();
+            let unheard = match (scene, entity) {
+                (Some(scene), Some(e)) => {
+                    crate::script::unheard_callbacks(e, scene.kind, &path, &outline.callbacks)
+                }
+                _ => Vec::new(),
+            };
+            if !unheard.is_empty() {
+                script["warnings"] = json!(unheard);
             }
         }
     }
@@ -1602,6 +1701,9 @@ fn movement_profiles() -> Json {
 /// Options of `catalog_with`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CatalogQuery {
+    /// The legacy logic nodes instead of the scripts' API; implied by `category`, `operations`
+    /// and `brief`.
+    pub nodes: bool,
     /// Only nodes of this category (case-insensitive).
     pub category: Option<String>,
     /// Only these operations; an entry ending in "." (or ".*") takes every operation that
@@ -1610,28 +1712,51 @@ pub struct CatalogQuery {
     /// Nodes as operation, label, category and description only. When absent, true unless
     /// category or operations is given.
     pub brief: Option<bool>,
-    /// Over the nodes.
+    /// Only these rows of the scripts' API, in full: names or prefixes (see `api::section`).
+    pub api: Vec<String>,
+    /// Only the rows of this area of the scripts' API, in full.
+    pub area: Option<String>,
+    /// Over the nodes, or the API's rows asked for.
     pub page: Page,
 }
 impl Default for CatalogQuery {
     fn default() -> Self {
         Self {
+            nodes: false,
             category: None,
             operations: Vec::new(),
             brief: None,
+            api: Vec::new(),
+            area: None,
             page: Page::ALL,
         }
     }
 }
 impl CatalogQuery {
-    /// From the arguments `category`, `operations`, `brief`, `offset` and `limit`.
+    /// From the arguments `nodes`, `category`, `operations`, `brief`, `api`, `area`, `offset`
+    /// and `limit`.
     pub fn parse(args: &Json) -> Result<Self, String> {
-        Ok(Self {
+        let query = Self {
+            nodes: arg(args, "nodes")?.unwrap_or(false),
             category: arg(args, "category")?,
             operations: arg(args, "operations")?.unwrap_or_default(),
             brief: arg(args, "brief")?,
+            api: arg(args, "api")?.unwrap_or_default(),
+            area: arg(args, "area")?,
             page: Page::parse(args, usize::MAX)?,
-        })
+        };
+        if query.wants_nodes() && (!query.api.is_empty() || query.area.is_some()) {
+            return Err(
+                "Peça a API dos scripts (api, area) ou os nós legados (nodes, category, \
+                 operations, brief), um de cada vez"
+                    .into(),
+            );
+        }
+        Ok(query)
+    }
+    /// Whether it asks for the legacy nodes.
+    fn wants_nodes(&self) -> bool {
+        self.nodes || self.category.is_some() || !self.operations.is_empty() || self.brief.is_some()
     }
 }
 
@@ -1640,8 +1765,15 @@ pub fn catalog_query(args: &Json) -> Result<Json, String> {
     catalog_with(&CatalogQuery::parse(args)?)
 }
 
-/// The catalog cut down by `query`. Without a filter, everything with brief nodes and the
-/// list of categories; with category or operations, only the nodes asked for, in full.
+/// What the catalog without options says of the legacy nodes.
+const LEGACY_NODES: &str = "The logic node graph is legacy (frozen since 0.7: no new nodes) and \
+still runs in projects that have it; write new logic as Luau scripts. nodes: true lists the \
+nodes in brief with their categories; category or operations gives the ones asked for in full.";
+
+/// The catalog cut down by `query`. Without options, everything but the nodes, with the scripts'
+/// API in brief (each area with its names, see `api::section`); with api or area, only those
+/// rows of the API, in full. With nodes, everything with brief nodes and the list of
+/// categories; with category or operations, only the nodes asked for, in full.
 pub fn catalog_with(query: &CatalogQuery) -> Result<Json, String> {
     let Json::Object(mut sections) = catalog() else {
         return Err("Catálogo inválido".into());
@@ -1649,6 +1781,16 @@ pub fn catalog_with(query: &CatalogQuery) -> Result<Json, String> {
     let Some(Json::Array(mut nodes)) = sections.remove("nodes") else {
         return Err("Catálogo sem nós".into());
     };
+    if !query.wants_nodes() {
+        let filtered = !query.api.is_empty() || query.area.is_some();
+        let api = api::section(&query.api, query.area.as_deref(), query.page)?;
+        if filtered {
+            return Ok(api);
+        }
+        sections.insert("api".into(), api);
+        sections.insert("legacy_nodes".into(), json!(LEGACY_NODES));
+        return Ok(Json::Object(sections));
+    }
     let text = |node: &Json, key: &str| node[key].as_str().unwrap_or_default().to_owned();
     let mut categories: Vec<String> = Vec::new();
     for node in &nodes {

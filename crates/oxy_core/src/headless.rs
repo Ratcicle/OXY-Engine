@@ -448,8 +448,7 @@ pub struct SimulationRequest {
     /// 30 steps and at steps drawn from the step's number, keeping the game's state, and
     /// compares the two after every step: the report's `vm_reset` says whether they stayed the
     /// same. A script that keeps anything in its VM between calls, which a reload, a restore or
-    /// the network would lose, makes them differ. Provisional: the tools pass it with the
-    /// project's scripts in a later stage of 0.7.
+    /// the network would lose, makes them differ.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub check_vm_reset: bool,
     /// The progress a returning player has, which starts the persistent game variables: each
@@ -857,6 +856,10 @@ pub struct SimulationReport {
     /// which varies from run to run and machine to machine.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub script_time: Vec<ScriptTime>,
+    /// The script errors the run told, once per object and place, with how many times each
+    /// happened; absent when none did.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub script_errors: Vec<ScriptErrorReport>,
     /// Entries dropped per list because it reached `MAX_ENTRIES`; for samples, those of
     /// `sample_every` each watched object dropped past [`MAX_SAMPLES`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -878,6 +881,29 @@ pub struct ScriptTime {
     /// Why it may cost too much.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+}
+
+/// A script error of the run (see [`crate::runtime::ScriptErrorCount`]): the object whose
+/// script it was (none for a script that did not load), the file and line (no file for what the
+/// engine tells of the scripts as a whole, as the step's work spent), the log line of the first
+/// one and how many times it happened there.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ScriptErrorReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<Named>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// 0 when only the file is known.
+    #[serde(skip_serializing_if = "is_zero_line")]
+    pub line: u32,
+    pub text: String,
+    pub count: u64,
+    /// The error stopped the script on that object (a limit went past).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
+}
+fn is_zero_line(line: &u32) -> bool {
+    *line == 0
 }
 
 /// Simulation time rounded to 0.1 ms, which keeps reports short.
@@ -2959,6 +2985,7 @@ pub fn run_with_scripts(
         save: None,
         audio: None,
         script_time: Vec::new(),
+        script_errors: Vec::new(),
         truncated: BTreeMap::new(),
     };
     let steps = (request.seconds / f64::from(FIXED_DT)).round().max(1.) as usize;
@@ -3112,6 +3139,21 @@ pub fn run_with_scripts(
             report.ui.drain(..extra);
             report.truncated.insert("ui", extra);
         }
+    }
+    {
+        let lookup = recorder.lookup(&runtime);
+        report.script_errors = runtime
+            .script_error_counts()
+            .into_iter()
+            .map(|error| ScriptErrorReport {
+                object: (!error.object.is_empty()).then(|| lookup.named(&error.object)),
+                path: error.path,
+                line: error.line,
+                text: error.text,
+                count: error.count,
+                stopped: error.stopped,
+            })
+            .collect();
     }
     recorder.finish(&mut report);
     let (variables, left_out) = runtime.variable_values(MAX_ENTRIES);

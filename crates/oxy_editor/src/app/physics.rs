@@ -356,8 +356,15 @@ impl Editor {
                         ))
                         .clicked()
                     {
+                        let names = self.script_names_before();
                         match surface::remove(&mut self.state.project, id) {
-                            Ok(()) => self.physics_ui.surface_edit = None,
+                            Ok(()) => {
+                                self.physics_ui.surface_edit = None;
+                                self.warn_script_names(
+                                    names,
+                                    &[oxy_core::script::NameKind::Surface],
+                                );
+                            }
                             Err(e) => self.warn(e),
                         }
                     }

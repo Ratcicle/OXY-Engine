@@ -2412,7 +2412,7 @@ fn the_current_scene_wires_into_the_scene_change_and_the_catalog_lists_both() {
     }
 
     let catalog = |args: serde_json::Value| query::catalog_query(&args).unwrap();
-    let categories = catalog(json!({}))["categories"].clone();
+    let categories = catalog(json!({"nodes": true}))["categories"].clone();
     let categories: Vec<&str> = categories
         .as_array()
         .unwrap()

@@ -803,9 +803,9 @@ fn search_is_paged() {
 }
 
 #[test]
-fn the_catalog_is_brief_by_default_and_full_for_the_nodes_asked_for() {
+fn the_catalog_lists_the_nodes_brief_on_request_and_in_full_when_asked() {
     let registry = graph::registry();
-    let brief = query::catalog_query(&json!({})).unwrap();
+    let brief = query::catalog_query(&json!({"nodes": true})).unwrap();
     let nodes = brief["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), registry.len());
     assert_eq!(brief["total"], registry.len());
@@ -894,7 +894,7 @@ fn the_catalog_is_brief_by_default_and_full_for_the_nodes_asked_for() {
     let brief_picked =
         query::catalog_query(&json!({"operations": ["event.input"], "brief": true})).unwrap();
     assert!(brief_picked["nodes"][0].get("params").is_none());
-    let window = query::catalog_query(&json!({"limit": 3, "offset": 3})).unwrap();
+    let window = query::catalog_query(&json!({"nodes": true, "limit": 3, "offset": 3})).unwrap();
     assert_eq!(window["nodes"][0]["operation"], registry[3].id);
     assert_eq!(window["next_offset"], 6);
     let everything = query::catalog_query(&json!({"brief": false})).unwrap();

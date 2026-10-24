@@ -55,6 +55,7 @@ mod scripts_format;
 mod scripts_host;
 mod scripts_names;
 mod scripts_objects;
+mod scripts_project;
 mod scripts_registry;
 mod scripts_state;
 mod scripts_timers;

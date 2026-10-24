@@ -59,6 +59,7 @@ pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
 pub use operations::ObjectComponent;
 pub use script_state::{SCRIPT_ENTRIES_WARNING, ScriptCost};
+pub use scripts::ScriptErrorCount;
 pub use state_hash::{StateDifference, StateDigest, StatePart};
 pub use transforms::{TransformPart, TransformSpace, look_of, yaw_of};
 

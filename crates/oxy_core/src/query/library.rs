@@ -9,7 +9,7 @@ use crate::{
     input_actions::{Use, every_entity},
     names,
     persistence::{self, AssetState, Checked},
-    project_tree::{self, FileKind, Tree},
+    project_tree::{FileKind, Tree},
     script,
 };
 use serde_json::{Map, Value as Json, json};
@@ -66,13 +66,23 @@ pub fn summary_in(
             }
         }
     }
-    let tree = match project_tree::walk(root) {
-        Ok(tree) => tree,
+    let (sources, tree) = match persistence::load_scripts_in_tree(root) {
+        Ok(read) => read,
         Err(error) => {
             answer["tree_error"] = json!(error.to_string());
             return Ok(answer);
         }
     };
+    // What the scripts name with literal texts counts as a use: a sound only a script plays.
+    let cited = script::citations(project, &sources);
+    for list in ["assets", "input_actions", "surfaces", "variables"] {
+        for entry in answer[list].as_array_mut().into_iter().flatten() {
+            let id = entry["id"].as_str().unwrap_or_default();
+            if let Some(citations) = cited.get(id) {
+                add_citations(entry, citations);
+            }
+        }
+    }
     if project.layout == Layout::Tree {
         let folders: Vec<Json> = tree
             .folders
@@ -95,6 +105,48 @@ pub fn summary_in(
         })
         .collect();
     Ok(answer)
+}
+
+/// What oxy_status says of the scripts of `project`, saved in the folder `root`: `files`, the
+/// `.luau` files of its tree; `objects`, how many objects attach one; `errors`, what keeps them
+/// from running as oxy_scripts check finds it (a script that does not load, a file an object
+/// attaches that the tree lacks or cannot read), the first [`USES_LISTED`] with
+/// `errors_total` counting them when there are more; and `checker`. A tree that cannot be
+/// walked answers `error`.
+pub fn scripts_status(project: &Project, root: &Path) -> Json {
+    let sources = match persistence::load_scripts(root) {
+        Ok(sources) => sources,
+        Err(error) => return json!({"error": error.to_string()}),
+    };
+    let attached = script::attached_paths(project);
+    let objects = every_entity(project)
+        .filter(|(_, e)| !e.scripts.is_empty())
+        .count();
+    let reports = script::check_loading(&sources, sources.files.keys().map(String::as_str), |p| {
+        attached.contains(p)
+    });
+    let mut errors: Vec<String> = script::absent_by_file(project, &sources)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect();
+    errors.extend(
+        reports
+            .iter()
+            .filter_map(|report| report.error.as_ref().map(ToString::to_string)),
+    );
+    let mut answer = json!({
+        "files": sources.files.len() + sources.unreadable.len(),
+        "objects": objects,
+        "checker": {"name": "oxy", "version": crate::export::engine_version()},
+    });
+    if errors.len() > USES_LISTED {
+        answer["errors_total"] = json!(errors.len());
+        errors.truncate(USES_LISTED);
+    }
+    if !errors.is_empty() {
+        answer["errors"] = json!(errors);
+    }
+    answer
 }
 
 /// How the summary names a layout.
@@ -130,6 +182,30 @@ fn uses_json(entry: &mut Json, uses: Vec<Use>) {
         entry["used_by_total"] = json!(uses.len());
     }
     entry["used_by"] = json!(uses.into_iter().take(USES_LISTED).collect::<Vec<_>>());
+}
+
+/// Adds to an entry's `used_by` (see [`uses_json`]) the script lines `citations` that name it,
+/// `{script, line, role}` after the objects, `used_by_total` counting both when they pass
+/// [`USES_LISTED`].
+fn add_citations(entry: &mut Json, citations: &[script::Citation]) {
+    let Some(listed) = entry["used_by"].as_array().map(Vec::len) else {
+        return;
+    };
+    let uses = entry["used_by_total"]
+        .as_u64()
+        .map_or(listed, |total| total as usize);
+    let total = uses + citations.len();
+    if let Some(list) = entry["used_by"].as_array_mut() {
+        list.extend(
+            citations
+                .iter()
+                .take(USES_LISTED.saturating_sub(listed))
+                .map(|citation| json!(citation)),
+        );
+    }
+    if total > USES_LISTED {
+        entry["used_by_total"] = json!(total);
+    }
 }
 
 /// The objects of `project` that attach the script `path`, in scenes and models.
@@ -171,7 +247,8 @@ pub fn folder(
     page: Page,
     unsaved: &dyn Fn(&str) -> bool,
 ) -> Result<Json, String> {
-    let tree = project_tree::walk(root).map_err(|e| e.to_string())?;
+    let (sources, tree) = persistence::load_scripts_in_tree(root).map_err(|e| e.to_string())?;
+    let cited = script::citations(project, &sources);
     let text = wanted.trim().replace('\\', "/");
     let text = text.trim_matches('/');
     let path = if text.is_empty() {
@@ -243,7 +320,7 @@ pub fn folder(
             continue;
         };
         listed.insert(asset.id.as_str());
-        items.push(asset_item(project, asset, checked.get(&asset.id)));
+        items.push(asset_item(project, asset, checked.get(&asset.id), &cited));
     }
     // Assets whose files are not there, in the folder of their paths.
     for asset in &project.assets {
@@ -254,7 +331,7 @@ pub fn folder(
         {
             continue;
         }
-        items.push(asset_item(project, asset, checked.get(&asset.id)));
+        items.push(asset_item(project, asset, checked.get(&asset.id), &cited));
     }
     let (items, about) = page.cut(items);
     let mut answer = Map::new();
@@ -277,18 +354,22 @@ fn kind_name(kind: ItemKind) -> &'static str {
     }
 }
 
-/// An asset's entry in a folder's list.
+/// An asset's entry in a folder's list, its uses counting the script lines that name it
+/// (`cited`, see [`script::citations`]).
 fn asset_item(
     project: &Project,
     asset: &crate::document::Asset,
     checked: Option<&Checked>,
+    cited: &BTreeMap<String, Vec<script::Citation>>,
 ) -> Json {
+    let uses = crate::editing::asset_uses(project, &asset.id).len()
+        + cited.get(&asset.id).map_or(0, Vec::len);
     let mut entry = json!({
         "kind": format!("{:?}", asset.kind),
         "name": asset.name,
         "path": asset.path,
         "id": asset.id,
-        "used_by_count": crate::editing::asset_uses(project, &asset.id).len(),
+        "used_by_count": uses,
     });
     if let Some(checked) = checked {
         add_state(&mut entry, checked);
