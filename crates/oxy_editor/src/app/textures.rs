@@ -114,8 +114,7 @@ impl Editor {
                 match self.copy_texture_asset(&id) { Ok(copy)=>next=Some(copy),Err(e)=>self.log(e) }
             }
             if ui.button("Localizar na biblioteca").clicked() {
-                // Filtering by name keeps the card in view without depending on scrolling.
-                self.asset_ui.search=self.state.project.asset(&id).map(|a|a.name.clone()).unwrap_or_default();
+                // The Library opens the folder of the image and selects its row.
                 self.asset_ui.locate=Some(id.clone()); self.compact_panel=CompactPanel::Library;
                 self.show_dock(DockTab::Library);
             }

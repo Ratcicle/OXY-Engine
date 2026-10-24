@@ -221,7 +221,6 @@ pub(crate) struct HierarchyUi {
 }
 #[derive(Default)]
 pub(crate) struct AssetUi {
-    pub(crate) search: String,
     pub(crate) thumbnail: Option<(Id, egui::TextureHandle)>,
     pub(crate) locate: Option<Id>,
     pub(crate) delete: Option<Id>,
@@ -341,6 +340,8 @@ pub struct Editor {
     attribute_name: String,
     attribute_type: u8,
     pub(crate) asset_ui: AssetUi,
+    /// The Library's folders, filters, selection and dialogs.
+    pub(crate) library: library::LibraryUi,
     save_requested: bool,
     /// What agents' writes kept of the scripts they changed in this editor session (see
     /// `script_files`).
@@ -510,6 +511,7 @@ impl Editor {
             attribute_name: String::new(),
             attribute_type: 0,
             asset_ui: Default::default(),
+            library: Default::default(),
             save_requested: false,
             agent_scripts_kept: Default::default(),
             tree_scan: None,
@@ -588,6 +590,7 @@ impl Editor {
         self.history.clear();
         self.history.mark_saved();
         self.asset_ui.thumbnail = None;
+        self.library = Default::default();
         self.script_status = Default::default();
         self.script_search.clear();
         self.close_code();
@@ -614,6 +617,7 @@ impl Editor {
                 self.known_files = report.known.clone();
                 self.reset_context();
                 self.rebase_scan();
+                self.library.report = report.assets.clone();
                 self.home.visible = false;
                 self.home.example_copy = false;
                 if add_recent {
@@ -857,6 +861,8 @@ impl Editor {
                     }
                 }
                 self.history.mark_saved();
+                // What was new in the folder is the project's now.
+                self.library.new.clear();
                 conversion::forget_agent_note(&root);
                 self.rebase_scan();
                 self.remember_project();
@@ -1403,94 +1409,137 @@ impl Editor {
         } else {
             dialog.add_filter("Áudio WAV", &["wav"]).pick_file()
         };
-        if let Some(source) = file {
-            // In a project in folders, its own step: the file it makes goes with it (undoing
-            // sends it to the project's trash, redoing brings it back). In the old layout it
-            // joins the edit in progress, as before.
-            let tree = self.state.project.layout == Layout::Tree;
-            if tree {
-                self.finish_history(true);
-                // What changed outside OXY is told before the walk takes the import's file.
-                self.scan_project();
-            }
-            if !self.history.is_pending() {
-                self.history
-                    .begin("Importar recurso", &self.state.project, &self.state.images);
-            }
-            let root = self.root();
-            let mut creating = tree.then(|| {
-                oxy_core::journal::Creating::new(&root, &mut self.known_files, "Importar recurso")
-            });
-            let imported = persistence::import_asset_with(
+        let source = file?;
+        // Into the folder the Library shows, as its Importar para <pasta>… does.
+        let folder = self.open_folder();
+        self.import_files(&[(source, kind)], &folder, true)
+            .into_iter()
+            .next()
+    }
+    /// Imports `sources` (each file with its kind) into the folder `folder` of the project's
+    /// tree ("" is the root); with `apply`, an image goes on the selected object. In a project in
+    /// folders it is its own step: the files it makes go with it (undoing sends them to the
+    /// project's trash, redoing brings them back), and a file that fails leaves the others. In
+    /// the old layout it joins the edit in progress, as before. Answers the assets made.
+    pub(crate) fn import_files(
+        &mut self,
+        sources: &[(PathBuf, AssetKind)],
+        folder: &str,
+        apply: bool,
+    ) -> Vec<Id> {
+        if sources.is_empty() {
+            return Vec::new();
+        }
+        let tree = self.state.project.layout == Layout::Tree;
+        let label = match sources.len() {
+            1 => "Importar recurso".to_owned(),
+            count => format!("Importar {count} recursos"),
+        };
+        if tree {
+            self.finish_history(true);
+            // What changed outside OXY is told before the walk takes the import's files.
+            self.scan_project();
+        }
+        if !self.history.is_pending() {
+            self.history
+                .begin(label.clone(), &self.state.project, &self.state.images);
+        }
+        let root = self.root();
+        let mut files = Vec::new();
+        let mut imported = Vec::new();
+        for (source, kind) in sources {
+            let mut creating = tree
+                .then(|| oxy_core::journal::Creating::new(&root, &mut self.known_files, &label));
+            let result = persistence::import_asset_into(
                 &mut self.state.project,
                 &root,
-                &source,
-                kind,
+                source,
+                *kind,
+                folder,
                 &mut |path, id| creating.as_mut().map_or(Ok(()), |c| c.before(path, id)),
             );
-            let files = creating
-                .map(|creating| creating.finish(imported.is_ok()))
-                .unwrap_or_default();
-            match imported {
+            files.extend(
+                creating
+                    .map(|creating| creating.finish(result.is_ok()))
+                    .unwrap_or_default(),
+            );
+            match result {
                 Ok(id) => {
-                    if kind == AssetKind::Texture {
+                    if *kind == AssetKind::Texture {
                         if let Some(asset) = self.state.project.asset(&id)
                             && let Ok(file) = persistence::resolve_asset_path(&root, &asset.path)
                             && let Ok(image) = PaintImage::load(&file)
                         {
                             self.state.images.insert(id.clone(), image);
                         }
-                        let ratio = self
-                            .state
-                            .images
-                            .get(&id)
-                            .map(|p| p.width as f32 / p.height as f32);
-                        if let Some(entity) = self
-                            .selected
-                            .clone()
-                            .and_then(|id| self.scene_mut().entity_mut(&id))
-                        {
-                            entity.material.texture = Some(id.clone());
-                            if entity.primitive == Some(Primitive::Sprite)
-                                && let Some(ratio) = ratio
-                            {
-                                entity.dimensions[0] = entity.dimensions[1] * ratio;
-                            }
-                        }
                         self.refresh_texture(&id);
                     }
-                    if tree {
-                        if let Err(error) = self.history.commit_with_files(
-                            &self.state.project,
-                            &mut self.state.images,
-                            files,
-                        ) {
-                            self.log(error);
-                        }
-                        self.rebase_scan();
-                        // What the panel that asked for it changes next is another edit.
-                        self.history.begin(
-                            "Editar projeto",
-                            &self.state.project,
-                            &self.state.images,
-                        );
-                    }
-                    self.log("Recurso importado como cópia local.");
-                    Some(id)
+                    imported.push(id);
                 }
                 Err(e) => {
-                    if tree {
-                        self.history
-                            .cancel(&mut self.state.project, &mut self.state.images);
-                    }
-                    self.log(e);
+                    let name = source
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.log(if sources.len() > 1 {
+                        format!("{name}: {e}")
+                    } else {
+                        e.to_string()
+                    });
                     self.notice_last(false);
-                    None
                 }
             }
-        } else {
-            None
         }
+        if apply
+            && let Some(id) = imported.first().cloned()
+            && self
+                .state
+                .project
+                .asset(&id)
+                .is_some_and(|a| a.kind == AssetKind::Texture)
+        {
+            let ratio = self
+                .state
+                .images
+                .get(&id)
+                .map(|p| p.width as f32 / p.height as f32);
+            if let Some(entity) = self
+                .selected
+                .clone()
+                .and_then(|selected| self.scene_mut().entity_mut(&selected))
+            {
+                entity.material.texture = Some(id.clone());
+                if entity.primitive == Some(Primitive::Sprite)
+                    && let Some(ratio) = ratio
+                {
+                    entity.dimensions[0] = entity.dimensions[1] * ratio;
+                }
+            }
+        }
+        if tree {
+            if imported.is_empty() {
+                self.history
+                    .cancel(&mut self.state.project, &mut self.state.images);
+            } else {
+                if let Err(error) = self.history.commit_with_files(
+                    &self.state.project,
+                    &mut self.state.images,
+                    files,
+                ) {
+                    self.log(error);
+                }
+                self.rebase_scan();
+                // What the panel that asked for it changes next is another edit.
+                self.history
+                    .begin("Editar projeto", &self.state.project, &self.state.images);
+            }
+        }
+        match imported.len() {
+            0 => {}
+            1 => self.log("Recurso importado como cópia local."),
+            count => self.log(format!("{count} recursos importados como cópias locais.")),
+        }
+        imported
     }
     fn game(&mut self, ui: &mut egui::Ui, dt: f32) {
         if self.play.runtime.is_none() {
@@ -1758,7 +1807,8 @@ impl eframe::App for Editor {
             || self.pending.is_some()
             || self.logic_ui.inputs
             || self.logic_ui.variables_open()
-            || self.logic_ui.guide;
+            || self.logic_ui.guide
+            || self.library.dialog_open();
         if dialog_open && self.play.capture {
             self.pause();
             oxy_render::input::release_cursor(ctx);
@@ -1771,6 +1821,7 @@ impl eframe::App for Editor {
         {
             self.save_requested = true;
         }
+        self.follow_library_focus(ctx);
         if !dialog_open
             && !self.navigation.active
             && !self.play.capture
@@ -1800,7 +1851,12 @@ impl eframe::App for Editor {
                 self.undo(true);
             }
             let animation = self.tab == Tab::Studio && self.studio.tab == StudioTab::Animation;
-            if self.tab != Tab::Logic && !self.playing() && (!animation || self.hierarchy_ui.focus)
+            if self.library_focused() {
+                // The last click was in the Library: its items take the keys.
+                self.library_keys(ctx);
+            } else if self.tab != Tab::Logic
+                && !self.playing()
+                && (!animation || self.hierarchy_ui.focus)
             {
                 if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
                     self.delete();
@@ -1910,6 +1966,7 @@ impl eframe::App for Editor {
         }
         self.camera_preview_window(ctx);
         self.asset_delete_dialog(ctx);
+        self.library_dialogs(ctx);
         self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);
         self.project_dialogs(ctx);

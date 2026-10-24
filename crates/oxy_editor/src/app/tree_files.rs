@@ -4,6 +4,7 @@
 //! project between two steps of the undo history (a new file registered, a path in the disk's
 //! case, a model found by its ID, a file missing told, an image changed read again).
 //! "Descartar alterações" also brings the files back to the last save.
+use super::library::Key;
 use super::*;
 use oxy_core::{journal, project_tree};
 
@@ -60,6 +61,16 @@ impl Editor {
                     return;
                 }
             };
+        // The scripts new in the folder are marked in the Library.
+        for file in after.scripts() {
+            if !before
+                .files
+                .iter()
+                .any(|old| oxy_core::names::same_name(&old.path, &file.path))
+            {
+                self.library.new.insert(Key::Script(file.path.clone()));
+            }
+        }
         self.tree_scan = Some(after);
         if changes.is_empty() {
             return;
@@ -71,6 +82,27 @@ impl Editor {
             &changes,
             &mut self.known_files,
         );
+        // What the Library tells of each change: a file new in the folder, the files that may
+        // be one that went, and a state that may have changed.
+        for change in &changes {
+            match change {
+                project_tree::Change::New { path, .. } => {
+                    if let Some(asset) = self.state.project.assets.iter().find(|a| a.path == *path)
+                    {
+                        self.library.new.insert(Key::Asset(asset.id.clone()));
+                    }
+                }
+                project_tree::Change::Missing { asset, near } => {
+                    self.library.near.insert(asset.clone(), near.clone());
+                }
+                project_tree::Change::Case { asset, .. }
+                | project_tree::Change::Found { asset, .. }
+                | project_tree::Change::Changed { asset } => {
+                    self.library.report.remove(asset);
+                    self.library.near.remove(asset);
+                }
+            }
+        }
         self.state.images.configure(&root, &self.state.project);
         for fix in adopted.fixes {
             self.log(fix);

@@ -780,15 +780,18 @@ impl Editor {
                 self.modeling.selection.through = !self.modeling.selection.through;
                 return true;
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
-                if let Ok(mesh) = self.model_source() {
-                    self.modeling.selection.ids = self.modeling.selection.available(&mesh);
+            // With the last click in the Library, Ctrl+A and Delete act on its items.
+            if !self.library_focused() {
+                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+                    if let Ok(mesh) = self.model_source() {
+                        self.modeling.selection.ids = self.modeling.selection.available(&mesh);
+                    }
+                    return true;
                 }
-                return true;
-            }
-            if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
-                self.begin_mesh_operation(Operation::Delete);
-                return true;
+                if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+                    self.begin_mesh_operation(Operation::Delete);
+                    return true;
+                }
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F1)) {

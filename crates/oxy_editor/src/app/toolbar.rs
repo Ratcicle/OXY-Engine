@@ -365,6 +365,10 @@ impl Editor {
                         ui.add_space(8.);
                         ui.add(egui::Label::new(muted(format!("Selecionado: {name}"))).truncate());
                     }
+                    if let Some(place) = self.library_status() {
+                        ui.add_space(8.);
+                        ui.add(egui::Label::new(muted(place)).truncate());
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(muted(
                             concat!("OXY Engine ", env!("OXY_APP_VERSION")).into(),

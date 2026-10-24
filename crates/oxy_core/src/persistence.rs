@@ -23,7 +23,10 @@ mod files;
 mod open;
 pub use files::departed;
 pub(crate) use open::name_of;
-pub use open::{Adopted, AssetState, KnownFiles, OpenReport, adopt, open_project, scan};
+pub use open::{
+    Adopted, AssetState, KnownFiles, OpenReport, adopt, open_project, relink_asset, relink_script,
+    scan,
+};
 
 /// Why a project, asset or save operation failed. Messages are shown to the user as-is.
 #[derive(Debug, thiserror::Error)]
@@ -627,6 +630,19 @@ pub fn import_asset_with(
     kind: AssetKind,
     before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<Id, PersistenceError> {
+    import_asset_into(project, root, source, kind, "", before)
+}
+/// [`import_asset_with`] into the folder `folder` of the project's tree ("" is the root), which
+/// exists, as the Library imports into the folder it shows; the old layout has no folders, and
+/// the copy goes where it always went.
+pub fn import_asset_into(
+    project: &mut Project,
+    root: &Path,
+    source: &Path,
+    kind: AssetKind,
+    folder: &str,
+    before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
+) -> Result<Id, PersistenceError> {
     if kind == AssetKind::Model {
         return Err(PersistenceError::ModelImport);
     }
@@ -645,7 +661,7 @@ pub fn import_asset_with(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Asset importado".into());
-    store_asset_as(project, root, new_id(), &bytes, name, kind, before)
+    store_asset_as(project, root, new_id(), &bytes, name, kind, folder, before)
 }
 /// Writes PNG or WAV bytes, already checked, to the project's assets folder under a new name
 /// (only created: a file there is never written over) and adds the asset as `name`.
@@ -657,9 +673,13 @@ pub(crate) fn store_asset(
     kind: AssetKind,
     before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<Id, PersistenceError> {
-    store_asset_as(project, root, new_id(), bytes, name, kind, before)
+    store_asset_as(project, root, new_id(), bytes, name, kind, "", before)
 }
-/// [`store_asset`] as the asset `id`.
+/// [`store_asset`] as the asset `id`, in the folder `folder` of the tree layout.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the folder joins what a store already takes"
+)]
 fn store_asset_as(
     project: &mut Project,
     root: &Path,
@@ -667,10 +687,11 @@ fn store_asset_as(
     bytes: &[u8],
     name: String,
     kind: AssetKind,
+    folder: &str,
     before: &mut dyn FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<Id, PersistenceError> {
     fs::create_dir_all(root)?;
-    let (name, relative) = new_asset_file(project, Some(root), &id, &name, kind);
+    let (name, relative) = new_asset_file_in(project, Some(root), &id, &name, kind, folder);
     let target = resolve_asset_path(root, &relative)?;
     before(&relative, &id).map_err(PersistenceError::InvalidProject)?;
     transaction_write(vec![FileWrite::create(target, bytes.to_vec())])?;
@@ -2078,6 +2099,7 @@ mod tests {
             b"RIFF",
             "Pulo".into(),
             AssetKind::Audio,
+            "",
             &mut |_, _| Ok(()),
         )
         .unwrap_err();

@@ -12,6 +12,7 @@ mod final_flow;
 mod input_guide;
 mod inspector;
 mod layout;
+mod library;
 mod mesh;
 mod modeling;
 mod movement;
@@ -270,6 +271,7 @@ impl NativeQa {
             Action::Click("Localizar na biblioteca"),
             Action::Key(Key::Escape, false),
             Action::DeleteTextureAsset,
+            Action::Click("Excluir…"),
             // A new egui window is measured invisibly on its first frame.
             Action::Wait(4),
             Action::Check("texture_reference_blocked"),
@@ -685,6 +687,9 @@ impl NativeQa {
         }
         if label.starts_with("pause_") {
             return self.check_pause(label);
+        }
+        if label.starts_with("lib7_") {
+            return self.check_library(label);
         }
         if label.starts_with("sc7_") {
             return self.check_scripts(label);
@@ -1817,12 +1822,13 @@ impl NativeQa {
                     .ok_or("Recurso selecionado ausente")?;
                 self.find("Biblioteca", false)
                     .ok_or("Biblioteca não visível")?;
-                let delete = self
+                let row = self
                     .editor
-                    .qa_icon_rect(&format!("Excluir {}", asset.name))
+                    .qa_icon_rect(&format!("Recurso: {}", asset.name))
                     .ok_or("Localizar na biblioteca não revelou o recurso")?;
-                self.click(delete.center());
-                description = "Excluir recurso pelo cartão de sua própria textura".into();
+                // The row's menu; the next action clicks its Excluir….
+                self.click_with(row.center(), PointerButton::Secondary, Modifiers::NONE);
+                description = "Abrir o menu da linha da própria textura na Biblioteca".into();
             }
             Action::Click(label) | Action::OptionalClick(label) => {
                 let Some(position) = self.find(label, false) else {

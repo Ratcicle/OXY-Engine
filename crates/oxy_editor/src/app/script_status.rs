@@ -4,6 +4,7 @@
 //! the runtime loads them, again when what is attached changes and when the files may have
 //! changed: the window got the focus back, F5, an agent's write), the attributes each one
 //! declares, and where the current or last test's scripts failed.
+use super::library::ScriptFacts;
 use super::*;
 use oxy_core::script::{self, ScriptRef};
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,6 +31,10 @@ pub(crate) struct ScriptStatus {
     hashes: BTreeMap<String, u64>,
     /// Where the current or last test's scripts failed.
     test: Vec<TestError>,
+    /// What compiling found of every script of the folder, for the Library, by path, with the
+    /// hash of the text it was compiled at: a script whose text did not change is not compiled
+    /// again. Whether an attached one loads is not kept here: it changes with what it requires.
+    facts: BTreeMap<String, (u64, ScriptFacts)>,
 }
 
 /// An error of a test's script.
@@ -189,6 +194,90 @@ impl ScriptStatus {
             self.test.retain(|e| same(&e.path) && same(&e.script));
         }
         self.hashes = hashes;
+        self.check_files(&sources, attached);
+    }
+
+    /// Compiles every script of `sources` whose text changed since the last check, for the
+    /// Library: whether it compiles, and the sounds it plays by name. A script that cannot be
+    /// read, an `attached` one in a folder that cannot be read included, is listed with why.
+    fn check_files(&mut self, sources: &ScriptSources, attached: &BTreeSet<String>) {
+        let mut facts = BTreeMap::new();
+        for (path, file) in &sources.files {
+            let known = self
+                .facts
+                .remove(path)
+                .filter(|(hash, _)| *hash == file.hash);
+            let found = match known {
+                Some((_, found)) => found,
+                None => {
+                    let mut found = ScriptFacts::default();
+                    match script::check(path, &file.text) {
+                        Ok(checked) => {
+                            found.sounds = checked
+                                .references
+                                .into_iter()
+                                .filter(|r| r.kind == script::NameKind::Sound)
+                                .map(|r| r.name)
+                                .collect();
+                        }
+                        Err(error) => found.error = Some((error.line, error.message)),
+                    }
+                    found
+                }
+            };
+            facts.insert(path.clone(), (file.hash, found));
+        }
+        let unreadable = sources
+            .unreadable
+            .iter()
+            .map(|(path, why)| (path, why.as_str()));
+        let unlisted = attached
+            .iter()
+            .filter(|path| !sources.unreadable.contains_key(*path))
+            .filter_map(|path| Some((path, sources.why_none(path)?)));
+        for (path, why) in unreadable.chain(unlisted) {
+            let found = ScriptFacts {
+                unreadable: Some(why.to_owned()),
+                ..ScriptFacts::default()
+            };
+            facts.insert(path.clone(), (0, found));
+        }
+        self.facts = facts;
+    }
+
+    /// What the Library shows of each script of the folder, and of each attached one that cannot
+    /// be read, by path: an attached script that compiles but does not load fails as the check of
+    /// the attached ones says now.
+    pub(crate) fn library_facts(&self) -> BTreeMap<String, ScriptFacts> {
+        self.facts
+            .iter()
+            .map(|(path, (_, compiled))| {
+                let mut found = compiled.clone();
+                if found.error.is_none()
+                    && found.unreadable.is_none()
+                    && let Some((at, line, message)) = self.load.get(path)
+                {
+                    found.error = Some((if at == path { *line } else { 0 }, message.clone()));
+                }
+                (path.clone(), found)
+            })
+            .collect()
+    }
+
+    /// How many scripts the Library lists: those [`Self::library_facts`] has and the attached
+    /// ones the folder lacks.
+    pub(crate) fn library_len(&self) -> usize {
+        let lacking = self
+            .missing
+            .iter()
+            .filter(|path| !self.facts.contains_key(*path))
+            .count();
+        self.facts.len() + lacking
+    }
+
+    /// The attached scripts the project's folder lacks.
+    pub(crate) fn missing_paths(&self) -> &BTreeSet<String> {
+        &self.missing
     }
 
     /// Whether the project's folder lacks the script `path`.
@@ -538,6 +627,93 @@ mod tests {
         );
         assert!(errors[0].2.contains("util.luau:2"), "{errors:?}");
         assert!(status.failing(&door) && !status.failing(&lamp));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_library_learns_what_every_script_of_the_folder_is() {
+        let root = std::env::temp_dir().join(format!("oxy-editor-script-facts-{}", new_id()));
+        std::fs::create_dir_all(root.join("Pista")).unwrap();
+        std::fs::write(
+            root.join("Pista/checkpoint.luau"),
+            "local M = {}\nfunction M.on_start(self)\n    audio.play(\"Bipe\")\nend\nreturn M\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("Pista/quebrado.luau"), "local M = {\nreturn M\n").unwrap();
+        std::fs::write(root.join("Pista/binario.luau"), [0xff, 0xfe, 0x00]).unwrap();
+        let project = Project::new("Fatos");
+        let mut status = ScriptStatus::default();
+        status.refresh(&project, Some(&root));
+        let facts = status.library_facts();
+        assert_eq!(
+            facts.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "Pista/binario.luau",
+                "Pista/checkpoint.luau",
+                "Pista/quebrado.luau"
+            ]
+        );
+        // No object attaches them: each is compiled all the same.
+        let checkpoint = &facts["Pista/checkpoint.luau"];
+        assert_eq!(checkpoint.sounds, ["Bipe"]);
+        assert_eq!(checkpoint.error, None);
+        let broken = &facts["Pista/quebrado.luau"];
+        assert_eq!(broken.error.as_ref().map(|(line, _)| *line), Some(2));
+        assert!(broken.sounds.is_empty());
+        assert!(
+            facts["Pista/binario.luau"]
+                .unreadable
+                .as_deref()
+                .is_some_and(|why| why.contains("UTF-8")),
+            "{facts:?}"
+        );
+        // Fixed outside OXY, it compiles once the files are looked at again.
+        std::fs::write(root.join("Pista/quebrado.luau"), "return {}\n").unwrap();
+        status.look_again();
+        status.refresh(&project, Some(&root));
+        assert_eq!(status.library_facts()["Pista/quebrado.luau"].error, None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_library_forgets_why_a_script_did_not_load_once_that_goes() {
+        let root = std::env::temp_dir().join(format!("oxy-editor-script-facts-{}", new_id()));
+        std::fs::create_dir_all(root.join("scripts/comum")).unwrap();
+        std::fs::write(root.join("scripts/comum/util.luau"), "local util = {\n").unwrap();
+        std::fs::write(
+            root.join("scripts/porta.luau"),
+            "local util = require(\"./comum/util\")\nreturn {}\n",
+        )
+        .unwrap();
+        let mut project = Project::new("Porta");
+        let mut door = Entity::new("Porta", None);
+        door.scripts = vec![ScriptRef::new("scripts/porta.luau")];
+        project.scenes[0].entities.push(door);
+        let mut status = ScriptStatus::default();
+        let error_line = |status: &ScriptStatus, path: &str| {
+            status.library_facts()[path]
+                .error
+                .as_ref()
+                .map(|(line, _)| *line)
+        };
+        status.refresh(&project, Some(&root));
+        // porta.luau compiles, but does not load: it fails at its require.
+        assert_eq!(error_line(&status, "scripts/porta.luau"), Some(1));
+        assert!(error_line(&status, "scripts/comum/util.luau").is_some());
+        // util.luau fixed: porta.luau, whose text did not change, fails no more.
+        std::fs::write(root.join("scripts/comum/util.luau"), "return {}\n").unwrap();
+        status.look_again();
+        status.refresh(&project, Some(&root));
+        assert_eq!(error_line(&status, "scripts/porta.luau"), None);
+        // Broken again, then taken off the door: nothing loads it, and it fails no more.
+        std::fs::write(root.join("scripts/comum/util.luau"), "local util = {\n").unwrap();
+        status.look_again();
+        status.refresh(&project, Some(&root));
+        assert_eq!(error_line(&status, "scripts/porta.luau"), Some(1));
+        project.scenes[0].entities[0].scripts.clear();
+        status.refresh(&project, Some(&root));
+        assert_eq!(error_line(&status, "scripts/porta.luau"), None);
+        assert_eq!(status.library_len(), 2);
         std::fs::remove_dir_all(root).unwrap();
     }
 

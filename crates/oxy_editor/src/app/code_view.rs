@@ -206,6 +206,19 @@ impl Editor {
         self.show_dock(DockTab::Code);
     }
 
+    /// The script the code tab shows was moved or renamed by OXY to `to`: the tab follows it,
+    /// and the dock stays on the tab it shows.
+    pub(crate) fn code_moved(&mut self, to: &str) {
+        let root = self.project_root();
+        let Some(view) = self.code_view.as_mut() else {
+            return;
+        };
+        view.path = to.to_owned();
+        view.read(root.as_deref());
+        view.hash = self.script_status.hash(to);
+        view.stamp = root.as_deref().and_then(|root| file_stamp(root, to));
+    }
+
     /// Closes the code tab.
     pub(crate) fn close_code(&mut self) {
         self.code_view = None;
