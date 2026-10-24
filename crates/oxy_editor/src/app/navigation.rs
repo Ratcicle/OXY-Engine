@@ -229,7 +229,6 @@ impl Editor {
             || self.new_project.is_some()
             || self.scene_dialog.is_some()
             || self.pending.is_some()
-            || self.asset_ui.delete.is_some()
             || self.library.dialog_open()
             || self.spatial.fit.is_some()
             || self.logic_ui.inputs

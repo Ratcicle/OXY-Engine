@@ -170,7 +170,7 @@ impl NativeQa {
                 {
                     return Err("Delete com o foco na Biblioteca apagou o objeto".into());
                 }
-                if !self.editor.qa_library_dialog() || !visible("Excluir “Bip”?") {
+                if !self.editor.qa_library_dialog() || !visible("Excluir o som “Bip”?") {
                     return Err("Delete com o foco na Biblioteca não pediu para excluir Bip".into());
                 }
             }

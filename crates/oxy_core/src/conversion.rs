@@ -90,6 +90,10 @@ pub struct Plan {
     pub orphans: Vec<String>,
     /// The scripts of the project's tree, which stay where they are (and go to the copy).
     pub scripts: Vec<String>,
+    /// The images, sounds and models of the project's folder that the project does not name
+    /// (see [`plan_all`]): they stay where they are, and once the project is in folders they are
+    /// its own.
+    pub others: Vec<String>,
     /// What to tell about the names: fitted, numbered, files that were not there.
     pub notes: Vec<String>,
     /// How many images, sounds and models went to their folders.
@@ -100,6 +104,15 @@ impl Plan {
     /// The paths of the models' files, as the project has them.
     pub fn model_paths(&self) -> Vec<String> {
         self.models.iter().map(|model| model.path.clone()).collect()
+    }
+
+    /// How many assets of `kind` go to the folder of their kind.
+    pub fn count(&self, kind: AssetKind) -> usize {
+        match kind {
+            AssetKind::Texture => self.counts[0],
+            AssetKind::Audio => self.counts[1],
+            AssetKind::Model => self.counts[2],
+        }
     }
 
     /// What went where, as the summary says it: "9 sons em Sons/, 2 modelos em Modelos/".
@@ -390,6 +403,7 @@ fn assign(project: &Project, root: Option<&Path>, painted: &HashSet<Id>) -> Resu
         models: Vec::new(),
         orphans: Vec::new(),
         scripts: Vec::new(),
+        others: Vec::new(),
         notes: Vec::new(),
         counts: [0; 3],
     };
@@ -569,6 +583,43 @@ pub fn old_asset_file(path: &str) -> bool {
 /// saved in a folder with other files would take them all once in folders. Why not, when it
 /// cannot be organized there.
 pub fn plan(root: &Path, project: &Project, painted: &HashSet<Id>) -> Result<Plan, String> {
+    let plan = plan_all(root, project, painted)?;
+    refuse_others(&plan.others, &[])?;
+    Ok(plan)
+}
+
+/// Refuses organizing in folders a project whose folder holds `others` (see [`Plan::others`])
+/// beyond those `including` takes in.
+fn refuse_others(others: &[String], including: &[String]) -> Result<(), String> {
+    let others: Vec<&String> = others
+        .iter()
+        .filter(|path| !including.iter().any(|taken| names::same_name(taken, path)))
+        .collect();
+    if others.is_empty() {
+        return Ok(());
+    }
+    let shown: Vec<&str> = others.iter().take(3).map(|path| path.as_str()).collect();
+    let more = match others.len() - shown.len() {
+        0 => String::new(),
+        n => format!(" e mais {n}"),
+    };
+    Err(format!(
+        "a pasta do projeto tem {} que ele não usa ({}{more}); a OXY só organiza em pastas um \
+         projeto que está numa pasta só dele: mova esses arquivos para fora dela, ou o \
+         projeto para uma pasta nova",
+        match others.len() {
+            1 => "1 imagem, som ou modelo".to_owned(),
+            n => format!("{n} imagens, sons ou modelos"),
+        },
+        shown.join(", ")
+    ))
+}
+
+/// [`plan`] without refusing the images, sounds and models of the project's folder that the
+/// project does not name: they are listed in [`Plan::others`], for the person to choose between
+/// taking them in ([`convert_including`]) and organizing the project in a new folder
+/// ([`save_copy`]). Why not, when the folder cannot be read whole.
+pub fn plan_all(root: &Path, project: &Project, painted: &HashSet<Id>) -> Result<Plan, String> {
     let tree = project_tree::walk(root).map_err(|error| error.to_string())?;
     if let Some((folder, why)) = tree.unreadable.iter().next() {
         let folder = if folder.is_empty() {
@@ -606,23 +657,7 @@ pub fn plan(root: &Path, project: &Project, painted: &HashSet<Id>) -> Result<Pla
             others.push(file.path.clone());
         }
     }
-    if !others.is_empty() {
-        let shown: Vec<&str> = others.iter().take(3).map(String::as_str).collect();
-        let more = match others.len() - shown.len() {
-            0 => String::new(),
-            n => format!(" e mais {n}"),
-        };
-        return Err(format!(
-            "a pasta do projeto tem {} que ele não usa ({}{more}); a OXY só organiza em pastas um \
-             projeto que está numa pasta só dele: mova esses arquivos para fora dela, ou o \
-             projeto para uma pasta nova",
-            match others.len() {
-                1 => "1 imagem, som ou modelo".to_owned(),
-                n => format!("{n} imagens, sons ou modelos"),
-            },
-            shown.join(", ")
-        ));
-    }
+    plan.others = others;
     plan.orphans = orphans;
     plan.scripts = tree.scripts().map(|file| file.path.clone()).collect();
     Ok(plan)
@@ -727,7 +762,21 @@ pub fn convert(
     known: &mut KnownFiles,
     who: Who,
 ) -> Result<Converted, ConversionError> {
-    convert_with(path, project, images, known, who, &mut |_| {})
+    convert_with(path, project, images, known, who, &[], &mut |_| {})
+}
+
+/// [`convert`] of a project whose folder holds `others`, images, sounds and models the project
+/// does not name (see [`plan_all`]), which the person chose to take in: they stay where they are
+/// and are the project's once it is in folders. One the folder gained since is still refused.
+pub fn convert_including(
+    path: &Path,
+    project: &Project,
+    images: Option<&mut TextureCache>,
+    known: &mut KnownFiles,
+    who: Who,
+    others: &[String],
+) -> Result<Converted, ConversionError> {
+    convert_with(path, project, images, known, who, others, &mut |_| {})
 }
 
 pub(crate) fn convert_with(
@@ -736,6 +785,7 @@ pub(crate) fn convert_with(
     images: Option<&mut TextureCache>,
     known: &mut KnownFiles,
     who: Who,
+    including: &[String],
     hook: &mut dyn FnMut(Step),
 ) -> Result<Converted, ConversionError> {
     use ConversionError::{Busy, Failed, Kept, Refused};
@@ -797,7 +847,9 @@ pub(crate) fn convert_with(
         resumed.extend(told.fixes);
         resumed.extend(told.warnings);
     }
-    match organize(&file, project, images, known, who, &painted, hook) {
+    match organize(
+        &file, project, images, known, who, &painted, including, hook,
+    ) {
         Ok(mut converted) => {
             converted.warnings.splice(0..0, resumed);
             Ok(converted)
@@ -809,6 +861,7 @@ pub(crate) fn convert_with(
 
 /// [`convert_with`] of the project file `file`, held for the conversion and without a journal
 /// left behind.
+#[allow(clippy::too_many_arguments)]
 fn organize(
     file: &Path,
     project: &Project,
@@ -816,6 +869,7 @@ fn organize(
     known: &mut KnownFiles,
     who: Who,
     painted: &HashSet<Id>,
+    including: &[String],
     hook: &mut dyn FnMut(Step),
 ) -> Result<Converted, ConversionError> {
     use ConversionError::{Failed, Kept, Refused};
@@ -835,7 +889,8 @@ fn organize(
         ));
     }
     let source_format = source_json.and_then(|value| value["schema_version"].as_u64());
-    let plan = plan(&root, project, painted).map_err(Refused)?;
+    let plan = plan_all(&root, project, painted).map_err(Refused)?;
+    refuse_others(&plan.others, including).map_err(Refused)?;
     validate_project(&plan.project).map_err(Failed)?;
     let manifest = manifest(&plan.project).map_err(|e| Failed(e.to_string()))?;
     let moved: Vec<Moved> = plan

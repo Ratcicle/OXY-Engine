@@ -93,6 +93,7 @@ impl Editor {
                 self.import(AssetKind::Audio);
                 ui.close();
             }
+            self.trash_menu_item(ui);
             ui.separator();
             if ui.button("Tela inicial").clicked() {
                 self.pause();

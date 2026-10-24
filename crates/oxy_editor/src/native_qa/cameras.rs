@@ -186,6 +186,7 @@ fn native_cameras_v030() {
                 Action::Click("Parar"),
                 Action::Check("fp_stopped"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
             ]);
             Ok(Box::new(qa))

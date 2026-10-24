@@ -225,6 +225,7 @@ fn native_basic_modeling_workflow() {
                 Action::Key(Key::Y, true),
                 Action::Check("m4_redo"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::SelectEntity("Peça pintada"),
                 Action::Click("Estúdio"),

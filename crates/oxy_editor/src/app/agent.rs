@@ -153,6 +153,7 @@ impl Editor {
                 // The scripts whose `require` the batch rewrote on the disk are told, as an
                 // agent's script writes are.
                 let rewritten = command::rewritten(&files);
+                let followed = files.clone();
                 if let Err(error) = self.history.commit_with_files(
                     &self.state.project,
                     &mut self.state.images,
@@ -163,6 +164,8 @@ impl Editor {
                 if moved {
                     self.rebase_scan();
                     self.script_status.look_again();
+                    // The Library and the code tab follow what the agent moved.
+                    self.follow_moves(&followed, false);
                 }
                 for command in commands {
                     self.log(format!("{AGENT_PREFIX}{}", command.label()));

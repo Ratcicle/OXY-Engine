@@ -5,6 +5,7 @@
 use oxy_core::{
     document::{AssetKind, Id, Layout, Project, Value},
     edit_history::FileOp,
+    journal::Journal,
     names,
     persistence::AssetState,
     project_tree::{FileKind, Tree},
@@ -56,6 +57,73 @@ impl Kind {
             Self::Sound => "o som",
             Self::Model => "o modelo",
             Self::Script => "o script",
+        }
+    }
+
+    /// How a message says another item of this kind has a name: "um som chamado".
+    pub(crate) fn called(self) -> &'static str {
+        match self {
+            Self::Image => "uma imagem chamada",
+            Self::Sound => "um som chamado",
+            Self::Model => "um modelo chamado",
+            Self::Script => "um script chamado",
+        }
+    }
+
+    /// How a message points back at an item of this kind: "este", "esta".
+    pub(crate) fn this(self) -> &'static str {
+        match self {
+            Self::Image => "esta",
+            _ => "este",
+        }
+    }
+
+    /// One item of this kind, as a message brings it up: "um som", "uma imagem".
+    pub(crate) fn one(self) -> &'static str {
+        match self {
+            Self::Image => "uma imagem",
+            Self::Sound => "um som",
+            Self::Model => "um modelo",
+            Self::Script => "um script",
+        }
+    }
+
+    /// The pronoun that stands for an item of this kind, and its object form: "ele", "o".
+    pub(crate) fn pronouns(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Image => ("ela", "a"),
+            _ => ("ele", "o"),
+        }
+    }
+
+    /// What is left without an item of this kind when it goes: "fica sem som".
+    pub(crate) fn without(self) -> &'static str {
+        match self {
+            Self::Image => "fica sem a imagem",
+            Self::Sound => "fica sem som",
+            Self::Model => "fica sem o modelo",
+            Self::Script => "fica sem o script",
+        }
+    }
+
+    /// How many of this kind, as the dialogs count them: "1 som", "2 imagens".
+    pub(crate) fn count(self, n: usize) -> String {
+        match self {
+            Self::Image => count(n, "imagem", "imagens"),
+            Self::Sound => count(n, "som", "sons"),
+            Self::Model => count(n, "modelo", "modelos"),
+            Self::Script => count(n, "script", "scripts"),
+        }
+    }
+
+    /// The kind of the file `path`, by its extension; none for a file OXY does not use.
+    pub(crate) fn of_file(path: &str) -> Option<Self> {
+        match FileKind::of(file_name(path)) {
+            FileKind::Image => Some(Self::Image),
+            FileKind::Sound => Some(Self::Sound),
+            FileKind::Model => Some(Self::Model),
+            FileKind::Script => Some(Self::Script),
+            FileKind::Other => None,
         }
     }
 
@@ -163,8 +231,11 @@ pub(crate) struct ScriptFacts {
     pub(crate) error: Option<(u32, String)>,
     /// Why the file cannot be a script now, said after its path.
     pub(crate) unreadable: Option<String>,
-    /// The names of the sounds it plays with a literal text (`audio.play("Bipe")`).
-    pub(crate) sounds: Vec<String>,
+    /// The names of the sounds it plays with a literal text (`audio.play("Bipe")`), each with
+    /// its line (0 when the bytecode carries none).
+    pub(crate) sounds: Vec<(String, u32)>,
+    /// The names of the models it gives with a literal text, each with its line.
+    pub(crate) models: Vec<(String, u32)>,
 }
 
 /// What the Library is made from.
@@ -230,26 +301,222 @@ fn under<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     .then(|| &path[cut + 1..])
 }
 
-/// Where `path` is once `files` are done: moved with each move of it or of a folder it is in;
-/// none when one sends it to the project's trash.
-pub(crate) fn moved(path: &str, files: &[FileOp]) -> Option<String> {
+/// Where `path` is once the step whose files are `files` is done: moved with each move of it or
+/// of a folder it is in; or once it is `undone`: each move followed backwards in reverse order.
+/// None when it goes to the project's trash (sent there, or a file the step made that undoing
+/// takes away).
+pub(crate) fn moved_by(path: &str, files: &[FileOp], undone: bool) -> Option<String> {
+    let follow = |now: &str, from: &str, to: &str| {
+        under(now, from).map(|rest| {
+            if rest.is_empty() {
+                to.to_owned()
+            } else {
+                join(to, rest)
+            }
+        })
+    };
     let mut now = path.to_owned();
-    for file in files {
-        match file {
-            FileOp::Move { from, to } => {
-                if let Some(rest) = under(&now, from) {
-                    now = if rest.is_empty() {
-                        to.clone()
-                    } else {
-                        join(to, rest)
-                    };
+    let steps: Box<dyn Iterator<Item = &FileOp>> = if undone {
+        Box::new(files.iter().rev())
+    } else {
+        Box::new(files.iter())
+    };
+    for file in steps {
+        match (file, undone) {
+            (FileOp::Move { from, to }, false) => {
+                if let Some(moved) = follow(&now, from, to) {
+                    now = moved;
                 }
             }
-            FileOp::Trash { from, .. } if under(&now, from).is_some() => return None,
+            (FileOp::Move { from, to }, true) => {
+                if let Some(moved) = follow(&now, to, from) {
+                    now = moved;
+                }
+            }
+            (FileOp::Trash { from, .. }, false) if under(&now, from).is_some() => return None,
+            (FileOp::Created { path, .. }, true) if under(&now, path).is_some() => return None,
             _ => {}
         }
     }
     Some(now)
+}
+
+/// `names` as one line: "Checkpoint 1 a Checkpoint 6" for three or more names numbered one
+/// after the other, else as [`listed`] says them.
+pub(crate) fn names_line(names: &[String]) -> String {
+    let numbered: Option<Vec<(&str, u64)>> = names
+        .iter()
+        .map(|name| {
+            let (base, number) = name.rsplit_once(' ')?;
+            Some((base, number.parse::<u64>().ok()?))
+        })
+        .collect();
+    if let Some(mut numbered) = numbered.filter(|n| n.len() >= 3)
+        && numbered.iter().all(|(base, _)| *base == numbered[0].0)
+    {
+        numbered.sort_by_key(|(_, number)| *number);
+        let first = numbered[0].1;
+        if numbered
+            .iter()
+            .enumerate()
+            .all(|(index, (_, number))| *number == first + index as u64)
+        {
+            let base = numbered[0].0;
+            let last = numbered[numbered.len() - 1].1;
+            return format!("{base} {first} a {base} {last}");
+        }
+    }
+    listed(names)
+}
+
+/// The name of the file `name` without its extension (`.modelo.json` whole).
+pub(crate) fn stem(name: &str) -> &str {
+    let lower = name.to_ascii_lowercase();
+    if lower.len() > ".modelo.json".len() && lower.ends_with(".modelo.json") {
+        return &name[..name.len() - ".modelo.json".len()];
+    }
+    match name.rfind('.') {
+        Some(at) if at > 0 => &name[..at],
+        _ => name,
+    }
+}
+
+/// `bytes` as a person reads a size: "24 KB", "3,2 MB".
+pub(crate) fn size_line(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    if bytes < MB {
+        format!("{} KB", bytes.div_ceil(1024).max(1))
+    } else {
+        let tenths = (bytes * 10 + MB / 2) / MB;
+        format!("{},{} MB", tenths / 10, tenths % 10)
+    }
+}
+
+/// The scripts of `scripts` that name the sound or the model `name` with a literal text, each
+/// with the line (0 when it names none), by path.
+pub(crate) fn script_uses(
+    scripts: &BTreeMap<String, ScriptFacts>,
+    kind: Kind,
+    name: &str,
+) -> Vec<(String, u32)> {
+    let wanted = name.trim().to_lowercase();
+    let mut uses = Vec::new();
+    for (path, facts) in scripts {
+        let cited = match kind {
+            Kind::Sound => &facts.sounds,
+            Kind::Model => &facts.models,
+            Kind::Image | Kind::Script => continue,
+        };
+        if let Some((_, line)) = cited
+            .iter()
+            .find(|(cited, _)| cited.trim().to_lowercase() == wanted)
+        {
+            uses.push((path.clone(), *line));
+        }
+    }
+    uses
+}
+
+/// What "Descartar alterações" brings back of the files, as its dialog lists it, from the
+/// journal of what OXY did since the last save: files moved back to their folders, renamed back,
+/// out of the project's trash, imported ones sent there, and the folders made and removed.
+/// `folder` tells whether a path now is a folder.
+pub(crate) fn discard_lines(journal: &Journal, folder: &dyn Fn(&str) -> bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    // Moved, by the folder each goes back to (files and folders apart); renamed in place.
+    let mut back: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut renamed = 0;
+    for (from, to) in &journal.moved {
+        if parent(from) == parent(to) {
+            renamed += 1;
+            continue;
+        }
+        let counts = back.entry(parent(from).to_owned()).or_default();
+        if folder(to) {
+            counts.1 += 1;
+        } else {
+            counts.0 += 1;
+        }
+    }
+    for (place, (files, folders)) in &back {
+        let place = if place.is_empty() {
+            "a raiz do projeto".to_owned()
+        } else {
+            format!("{place}/")
+        };
+        let what = match (files, folders) {
+            (0, n) => count(*n, "pasta movida", "pastas movidas"),
+            (n, 0) => count(*n, "arquivo movido", "arquivos movidos"),
+            (f, n) => format!(
+                "{} e {}",
+                count(*f, "arquivo movido", "arquivos movidos"),
+                count(*n, "pasta movida", "pastas movidas")
+            ),
+        };
+        let go = if files + folders == 1 {
+            "volta"
+        } else {
+            "voltam"
+        };
+        lines.push(format!("{what} {go} para {place}"));
+    }
+    if renamed > 0 {
+        lines.push(format!(
+            "{} ao nome de antes",
+            if renamed == 1 {
+                "1 arquivo renomeado volta".to_owned()
+            } else {
+                format!("{renamed} arquivos renomeados voltam")
+            }
+        ));
+    }
+    let by_kind = |paths: &mut dyn Iterator<Item = &String>| {
+        let mut counts: BTreeMap<Option<Kind>, usize> = BTreeMap::new();
+        for path in paths {
+            *counts.entry(Kind::of_file(path)).or_default() += 1;
+        }
+        counts
+    };
+    let deleted = by_kind(&mut journal.trash.values().map(|trashed| &trashed.path));
+    for (kind, n) in deleted {
+        let what = match kind {
+            Some(Kind::Image) => count(n, "imagem excluída", "imagens excluídas"),
+            Some(Kind::Sound) => count(n, "som excluído", "sons excluídos"),
+            Some(Kind::Model) => count(n, "modelo excluído", "modelos excluídos"),
+            Some(Kind::Script) => count(n, "script excluído", "scripts excluídos"),
+            None => count(n, "arquivo excluído", "arquivos excluídos"),
+        };
+        let go = if n == 1 { "volta" } else { "voltam" };
+        lines.push(format!("{what} {go} da lixeira"));
+    }
+    let imported = by_kind(&mut journal.created.keys());
+    for (kind, n) in imported {
+        let what = match kind {
+            Some(Kind::Image) => count(n, "imagem importada", "imagens importadas"),
+            Some(Kind::Sound) => count(n, "som importado", "sons importados"),
+            Some(Kind::Model) => count(n, "modelo importado", "modelos importados"),
+            Some(Kind::Script) => count(n, "script importado", "scripts importados"),
+            None => count(n, "arquivo importado", "arquivos importados"),
+        };
+        let go = if n == 1 { "vai" } else { "vão" };
+        lines.push(format!("{what} {go} para a lixeira"));
+    }
+    match journal.created_folders.len() {
+        0 => {}
+        1 => lines.push("1 pasta criada sai".into()),
+        n => lines.push(format!("{n} pastas criadas saem")),
+    }
+    match journal.removed_folders.len() {
+        0 => {}
+        1 => lines.push("1 pasta excluída volta".into()),
+        n => lines.push(format!("{n} pastas excluídas voltam")),
+    }
+    match journal.rewritten.len() {
+        0 => {}
+        1 => lines.push("os require de 1 script voltam a como estavam".into()),
+        n => lines.push(format!("os require de {n} scripts voltam a como estavam")),
+    }
+    lines
 }
 
 /// The script `path` as the Library names it: its file's name without `.luau`.
@@ -456,7 +723,7 @@ impl Library {
                                 facts
                                     .sounds
                                     .iter()
-                                    .any(|s| s.trim().to_lowercase() == wanted)
+                                    .any(|(s, _)| s.trim().to_lowercase() == wanted)
                             })
                             .map(|(path, _)| file_name(path).to_owned()),
                     );
@@ -860,7 +1127,7 @@ mod tests {
             (
                 "Pista/Checkpoints/checkpoint.luau".to_owned(),
                 ScriptFacts {
-                    sounds: vec!["bipe".into(), "Clique".into()],
+                    sounds: vec![("bipe".into(), 3), ("Clique".into(), 9)],
                     ..ScriptFacts::default()
                 },
             ),
@@ -1216,15 +1483,18 @@ mod tests {
             },
         ];
         assert_eq!(
-            moved("pista/porta.luau", &files).as_deref(),
+            moved_by("pista/porta.luau", &files, false).as_deref(),
             Some("Fases/Pista/Porta.luau")
         );
-        assert_eq!(moved("Pista", &files).as_deref(), Some("Fases/Pista"));
         assert_eq!(
-            moved("Pistas/x.luau", &files).as_deref(),
+            moved_by("Pista", &files, false).as_deref(),
+            Some("Fases/Pista")
+        );
+        assert_eq!(
+            moved_by("Pistas/x.luau", &files, false).as_deref(),
             Some("Pistas/x.luau")
         );
-        assert_eq!(moved("Sons/Bip.wav", &files), None);
+        assert_eq!(moved_by("Sons/Bip.wav", &files, false), None);
         assert_eq!(count(1, "objeto", "objetos"), "1 objeto");
         assert_eq!(count(6, "colocado", "colocados"), "6 colocados");
         let names: Vec<String> = ["A", "B", "C", "D", "E"].map(String::from).to_vec();
@@ -1232,5 +1502,141 @@ mod tests {
         assert_eq!(listed(&names[..3]), "A, B e C");
         assert_eq!(listed(&names), "A, B e mais 3");
         assert_eq!(script_name("Pista/contagem.luau"), "contagem");
+    }
+
+    #[test]
+    fn undoing_a_step_follows_its_moves_backwards() {
+        let files = vec![
+            FileOp::Move {
+                from: "Pista".into(),
+                to: "Fases/Pista".into(),
+            },
+            FileOp::Move {
+                from: "Fases/Pista/porta.luau".into(),
+                to: "Fases/Pista/Porta.luau".into(),
+            },
+            FileOp::Created {
+                path: "Sons/Novo.wav".into(),
+                slot: ".oxy/lixeira/1-1.wav".into(),
+                id: None,
+            },
+        ];
+        assert_eq!(
+            moved_by("Fases/Pista/Porta.luau", &files, true).as_deref(),
+            Some("Pista/porta.luau")
+        );
+        assert_eq!(
+            moved_by("Fases/Pista/Checkpoints", &files, true).as_deref(),
+            Some("Pista/Checkpoints")
+        );
+        // Undone, the import goes to the trash; done again, it is where it was made.
+        assert_eq!(moved_by("Sons/Novo.wav", &files, true), None);
+        assert_eq!(
+            moved_by("Sons/Novo.wav", &files, false).as_deref(),
+            Some("Sons/Novo.wav")
+        );
+    }
+
+    #[test]
+    fn the_dialogs_name_objects_sizes_and_files_as_people_read_them() {
+        let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            names_line(&names(&[
+                "Checkpoint 3",
+                "Checkpoint 1",
+                "Checkpoint 2",
+                "Checkpoint 4"
+            ])),
+            "Checkpoint 1 a Checkpoint 4"
+        );
+        // A gap, another name or only two: listed.
+        assert_eq!(
+            names_line(&names(&["Checkpoint 1", "Checkpoint 3", "Checkpoint 4"])),
+            "Checkpoint 1, Checkpoint 3 e Checkpoint 4"
+        );
+        assert_eq!(names_line(&names(&["Porta", "Chave"])), "Porta e Chave");
+        assert_eq!(stem("Checkpoint.modelo.json"), "Checkpoint");
+        assert_eq!(stem("Clique 2.wav"), "Clique 2");
+        assert_eq!(stem("menu"), "menu");
+        assert_eq!(size_line(10), "1 KB");
+        assert_eq!(size_line(24 * 1024), "24 KB");
+        assert_eq!(size_line(3_355_443), "3,2 MB");
+        assert_eq!(Kind::Sound.count(9), "9 sons");
+        assert_eq!(Kind::Image.count(1), "1 imagem");
+        assert_eq!(Kind::of_file("Pista/x.modelo.json"), Some(Kind::Model));
+        assert_eq!(Kind::of_file("notas.txt"), None);
+    }
+
+    #[test]
+    fn a_sound_or_model_a_script_names_is_found_with_its_line() {
+        let mut scripts = BTreeMap::new();
+        scripts.insert(
+            "Pista/checkpoint.luau".to_owned(),
+            ScriptFacts {
+                sounds: vec![("checkpoint".into(), 20)],
+                models: vec![("Porta".into(), 4)],
+                ..ScriptFacts::default()
+            },
+        );
+        scripts.insert("Menu/menu.luau".to_owned(), ScriptFacts::default());
+        assert_eq!(
+            script_uses(&scripts, Kind::Sound, " Checkpoint "),
+            [("Pista/checkpoint.luau".to_owned(), 20)]
+        );
+        assert_eq!(
+            script_uses(&scripts, Kind::Model, "porta"),
+            [("Pista/checkpoint.luau".to_owned(), 4)]
+        );
+        assert!(script_uses(&scripts, Kind::Image, "Porta").is_empty());
+    }
+
+    #[test]
+    fn discarding_lists_what_comes_back_in_the_folders() {
+        use oxy_core::journal::{Rewritten, Trashed};
+        let mut journal = Journal::new("hash".into());
+        journal
+            .moved
+            .insert("Pista/Bipe.wav".into(), "Sons/Bipe.wav".into());
+        journal
+            .moved
+            .insert("Pista/contagem.luau".into(), "contagem.luau".into());
+        journal.moved.insert("Pista/Fases".into(), "Fases".into());
+        journal
+            .moved
+            .insert("Menu/menu.luau".into(), "Menu/Menu.luau".into());
+        journal.trash.insert(
+            ".oxy/lixeira/1-1.wav".into(),
+            Trashed {
+                path: "Sons/Clique.wav".into(),
+                id: None,
+            },
+        );
+        journal.created.insert("Imagens/Pedra.png".into(), None);
+        journal.created_folders.insert("Novas".into());
+        journal.rewritten.insert(
+            "Menu/menu.luau".into(),
+            Rewritten {
+                saved: "".into(),
+                written: String::new(),
+            },
+        );
+        let lines = discard_lines(&journal, &|path| path == "Fases");
+        assert_eq!(
+            lines,
+            [
+                "2 arquivos movidos e 1 pasta movida voltam para Pista/",
+                "1 arquivo renomeado volta ao nome de antes",
+                "1 som excluído volta da lixeira",
+                "1 imagem importada vai para a lixeira",
+                "1 pasta criada sai",
+                "os require de 1 script voltam a como estavam",
+            ]
+        );
+        let mut root = Journal::new("hash".into());
+        root.moved.insert("Bipe.wav".into(), "Sons/Bipe.wav".into());
+        assert_eq!(
+            discard_lines(&root, &|_| false),
+            ["1 arquivo movido volta para a raiz do projeto"]
+        );
     }
 }

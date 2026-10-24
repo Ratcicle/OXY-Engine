@@ -287,6 +287,7 @@ fn native_camera_body_v032() {
                 Action::Check("v032_restored"),
                 Action::Screenshot("small-120-percent.png"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::Click("Jogar"),
                 Action::HoldSeconds(Key::W, 0.4),

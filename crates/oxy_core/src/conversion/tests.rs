@@ -319,6 +319,7 @@ fn a_crash_at_any_point_is_finished_or_undone_at_the_next_opening() {
         None,
         &mut KnownFiles::default(),
         Who::Person,
+        &[],
         &mut |step| steps.push(step),
     )
     .unwrap();
@@ -348,6 +349,7 @@ fn a_crash_at_any_point_is_finished_or_undone_at_the_next_opening() {
                 None,
                 &mut KnownFiles::default(),
                 Who::Person,
+                &[],
                 &mut |at| {
                     if at == step {
                         panic_any(Crash);
@@ -407,6 +409,7 @@ fn an_undo_that_cannot_finish_now_is_tried_again_at_the_next_opening() {
             None,
             &mut KnownFiles::default(),
             Who::Person,
+            &[],
             &mut |at| {
                 if at == Step::Install(0) {
                     panic_any(Crash);
@@ -449,6 +452,7 @@ fn a_journal_of_a_project_saved_another_way_is_set_aside() {
             None,
             &mut KnownFiles::default(),
             Who::Person,
+            &[],
             &mut |at| {
                 if at == Step::Name(1) {
                     panic_any(Crash);
@@ -526,6 +530,60 @@ fn a_folder_with_other_files_stays_in_the_old_layout() {
     fs::remove_file(old.root.join("assets/fundo.png")).unwrap();
     let told = preview(&old.root, &old.project);
     assert!(told.contains("Ao salvar, a OXY o organiza em pastas (1 imagem em Imagens/, 3 sons em Sons/, 1 modelo em Modelos/, os scripts ficam onde estão)"), "{told}");
+}
+
+#[test]
+fn the_other_files_are_listed_and_taken_in_only_as_chosen() {
+    let old = Old::new("incluir");
+    put(&old.root, "Fotos/praia.png", &png([1, 2, 3, 255]));
+    let planned = plan_all(&old.root, &old.project, &HashSet::new()).unwrap();
+    assert_eq!(planned.others, ["Fotos/praia.png"]);
+    let counts = [AssetKind::Texture, AssetKind::Audio, AssetKind::Model].map(|k| planned.count(k));
+    assert_eq!(counts, [1, 3, 1]);
+    assert!(plan(&old.root, &old.project, &HashSet::new()).is_err());
+    // A file the folder gained after the person chose is still a reason.
+    put(&old.root, "Fotos/serra.png", &png([7, 8, 9, 255]));
+    let before = files(&old.root);
+    let error = convert_including(
+        &old.root,
+        &old.project,
+        None,
+        &mut KnownFiles::default(),
+        Who::Person,
+        &planned.others,
+    )
+    .unwrap_err();
+    let ConversionError::Refused(why) = error else {
+        panic!("{error}");
+    };
+    assert!(
+        why.contains("Fotos/serra.png") && !why.contains("praia"),
+        "{why}"
+    );
+    assert_eq!(files(&old.root), before);
+    // Both chosen: organized in place, the photos where they were, the project's once opened.
+    let converted = convert_including(
+        &old.root,
+        &old.project,
+        None,
+        &mut KnownFiles::default(),
+        Who::Person,
+        &["Fotos/praia.png".into(), "fotos/SERRA.png".into()],
+    )
+    .unwrap();
+    assert_eq!(converted.project.layout, Layout::Tree);
+    assert_eq!(
+        fs::read(old.root.join("Fotos/praia.png")).unwrap(),
+        png([1, 2, 3, 255])
+    );
+    let (opened, _) = persistence::open_project(&old.root).unwrap();
+    let photos: Vec<&str> = opened
+        .assets
+        .iter()
+        .filter(|asset| asset.path.starts_with("Fotos/"))
+        .map(|asset| asset.name.as_str())
+        .collect();
+    assert_eq!(photos, ["praia", "serra"]);
 }
 
 #[test]
@@ -665,6 +723,7 @@ fn crash_at(old: &Old, step: Step) {
             None,
             &mut KnownFiles::default(),
             Who::Person,
+            &[],
             &mut |at| {
                 if at == step {
                     panic_any(Crash);

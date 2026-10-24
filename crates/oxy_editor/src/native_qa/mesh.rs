@@ -255,6 +255,7 @@ fn native_mesh_foundation_workflow() {
                 Action::Screenshot("mesh-small.png"),
                 Action::Idle,
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::Check("m3_saved"),
                 Action::Click("Cena"),
                 Action::Check("m3_creationbase"),

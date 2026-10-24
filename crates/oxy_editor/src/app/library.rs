@@ -1,21 +1,26 @@
 //! The dock's Biblioteca: the project's real folders (the PASTAS column, a breadcrumb in a narrow
 //! dock), "Todos os recursos" as one flat list, the chips that filter by kind inside the open
 //! folder, a search over the whole project, and the compact list of images, sounds, models and
-//! scripts with their state, how they are used and the action of their kind. Renaming, moving,
-//! deleting and making folders go through the tree's commands, each its own undo step with the
-//! files it moves; organizing waits for the test to stop, while viewing, listening and searching
-//! do not. When the last click was in the Library, Delete, F2 and Ctrl+A act on its items.
+//! scripts with their state, how they are used and the action of their kind. Renaming, moving
+//! (dragging to a folder or "Mover para…"), deleting and making folders go through the tree's
+//! commands, each its own undo step with the files it moves; organizing waits for the test to
+//! stop, while viewing, listening and searching do not. When the last click was in the Library,
+//! Delete, F2 and Ctrl+A act on its items.
 mod actions;
 mod dialogs;
+mod drag;
 mod model;
+mod project;
 
-pub(crate) use model::{Key, ScriptFacts};
+pub(crate) use model::{Key, Kind, ScriptFacts};
+pub(crate) use project::agent_note_line;
 
 use super::*;
 use crate::icons::{self, Icon};
 use crate::theme;
+use drag::LibraryDrag;
 use egui::{Align, RichText, UiBuilder};
-use model::{Item, Kind, Library, Sources, State};
+use model::{Item, Library, Sources, State};
 use oxy_core::{
     command::{self, Command},
     edit_history::FileOp,
@@ -105,7 +110,15 @@ pub(crate) struct LibraryUi {
     rename: Option<Rename>,
     move_to: Option<dialogs::MoveDialog>,
     delete_folder: Option<dialogs::DeleteFolder>,
-    delete_items: Option<Vec<Key>>,
+    delete_items: Option<dialogs::DeleteItems>,
+    organize: Option<project::Organize>,
+    discard: Option<project::Discard>,
+    empty_trash: Option<project::EmptyTrash>,
+    /// The images, sounds and models of the folder the next save organizing the project in
+    /// folders takes in, as the person chose.
+    pub(crate) save_including: Vec<String>,
+    /// The next save organizes the project in a new folder the person picks.
+    pub(crate) save_elsewhere: bool,
     /// What opening told of each asset with a problem.
     pub(crate) report: BTreeMap<Id, persistence::AssetState>,
     /// The new files a walk found that may be each missing asset.
@@ -120,12 +133,21 @@ pub(crate) struct LibraryUi {
     column: bool,
     /// The folder selected last was picked in the list rather than in the column.
     picked_in_list: bool,
+    /// What dropping what is dragged does on the folder under the pointer, this frame.
+    landing: Option<drag::Landing>,
+    /// What dropping the items dragged does on each folder hovered so far.
+    landings: Option<(Vec<Key>, BTreeMap<String, drag::Landing>)>,
 }
 
 impl LibraryUi {
-    /// A dialog of the Library is open.
+    /// A dialog of the Library, or of the project's files, is open.
     pub(crate) fn dialog_open(&self) -> bool {
-        self.move_to.is_some() || self.delete_folder.is_some() || self.delete_items.is_some()
+        self.move_to.is_some()
+            || self.delete_folder.is_some()
+            || self.delete_items.is_some()
+            || self.organize.is_some()
+            || self.discard.is_some()
+            || self.empty_trash.is_some()
     }
 }
 
@@ -388,6 +410,7 @@ impl Editor {
         let lib = self.library_model();
         let area = ui.available_rect_before_wrap();
         self.library.rect = Some(area);
+        self.library.landing = None;
         self.settle_library(&lib);
         let blank = ui.interact(area, ui.id().with("library_blank"), Sense::click());
         if blank.clicked() {
@@ -431,6 +454,7 @@ impl Editor {
         );
         self.library_list(&mut list_ui, &lib, column);
         ui.advance_cursor_after_rect(area);
+        self.drag_label(ui.ctx(), &lib);
     }
 
     /// Keeps the Library's state in step with what it lists: a located asset opened and
@@ -497,7 +521,7 @@ impl Editor {
                 ui.spacing_mut().item_spacing.y = 1.;
                 if self.path.is_none() {
                     let name = RichText::new(&self.state.project.name).color(theme::TEXT);
-                    self.folder_line(ui, 0, Some(true), name, None, true, "");
+                    self.folder_line(ui, 0, Some(true), name, None, true, "", None);
                     ui.add_space(6.);
                     crate::widgets::hint(ui, UNSAVED);
                     return;
@@ -507,8 +531,16 @@ impl Editor {
                     .italics()
                     .color(theme::TEXT_MUTED);
                 let selected = self.library.place == Place::All;
-                let (row, _) =
-                    self.folder_line(ui, 0, None, all, Some(total), selected, "Todos os recursos");
+                let (row, _) = self.folder_line(
+                    ui,
+                    0,
+                    None,
+                    all,
+                    Some(total),
+                    selected,
+                    "Todos os recursos",
+                    None,
+                );
                 if row.clicked() {
                     self.library.place = Place::All;
                     self.library.selection.clear();
@@ -540,7 +572,9 @@ impl Editor {
     }
 
     /// One line of the PASTAS column: its chevron (none for a line without one), its name and
-    /// its count at the right; the line's response and whether the chevron was clicked.
+    /// its count at the right; the line's response and whether the chevron was clicked. The line
+    /// of a folder (`target`, "" for the root) takes what is dragged in the Library, green or
+    /// red as dropping there goes, and a folder of the tree can be dragged itself.
     #[allow(clippy::too_many_arguments)]
     fn folder_line(
         &mut self,
@@ -551,12 +585,19 @@ impl Editor {
         count: Option<usize>,
         selected: bool,
         qa: &str,
+        target: Option<&str>,
     ) -> (egui::Response, bool) {
+        let sense = if target.is_some_and(|folder| !folder.is_empty()) {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        };
         let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), FOLDER_ROW), Sense::click());
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), FOLDER_ROW), sense);
         if !qa.is_empty() {
             icons::register_qa(ui, qa, rect);
         }
+        let landing = target.and_then(|folder| self.hovered_landing(&response, folder));
         let fill = if selected {
             theme::ACCENT_SOFT
         } else if response.hovered() {
@@ -565,6 +606,11 @@ impl Editor {
             Color32::TRANSPARENT
         };
         ui.painter().rect_filled(rect, 4., fill);
+        Self::paint_landing(ui, rect, landing.as_ref());
+        let name = match landing.as_ref().and_then(drag::Landing::colors) {
+            Some((_, _, text)) => name.color(text),
+            None => name,
+        };
         let left = rect.left() + 6. + depth as f32 * 14.;
         let mut toggled = false;
         if let Some(open) = chevron {
@@ -616,6 +662,9 @@ impl Editor {
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         name_ui.add(egui::Label::new(name).truncate().selectable(false));
+        if let Some(folder) = target {
+            self.take_drop(&response, folder);
+        }
         (response, toggled)
     }
 
@@ -649,7 +698,11 @@ impl Editor {
             Some(folder.direct),
             open,
             &format!("Pasta: {}", folder.name),
+            Some(&folder.path),
         );
+        if !folder.path.is_empty() {
+            self.begin_drag(&row, &Key::Folder(folder.path.clone()));
+        }
         let row = row.on_hover_text(format!(
             "{} nesta pasta · {} com as subpastas",
             model::count(folder.direct, "item", "itens"),
@@ -856,7 +909,8 @@ impl Editor {
             });
     }
 
-    /// The breadcrumb of `folder`, each part opening its folder.
+    /// The breadcrumb of `folder`, each part opening its folder and taking what is dragged in
+    /// the Library.
     fn breadcrumb(&mut self, ui: &mut egui::Ui, folder: &str) {
         let mut parts = vec![(String::new(), self.state.project.name.clone())];
         let mut at = String::new();
@@ -874,11 +928,30 @@ impl Editor {
             } else {
                 theme::TEXT_MUTED
             };
+            // Filled once it is known whether something dragged lands on it.
+            let slot = ui.painter().add(egui::Shape::Noop);
             let part = ui.add(
                 egui::Label::new(RichText::new(name).size(12.5).color(color))
                     .sense(Sense::click())
                     .selectable(false),
             );
+            if let Some((fill, stroke, _)) = self
+                .hovered_landing(&part, &path)
+                .as_ref()
+                .and_then(drag::Landing::colors)
+            {
+                ui.painter().set(
+                    slot,
+                    egui::epaint::RectShape::new(
+                        part.rect.expand2(Vec2::new(4., 1.)),
+                        4.,
+                        fill,
+                        egui::Stroke::new(1., stroke),
+                        egui::StrokeKind::Inside,
+                    ),
+                );
+            }
+            self.take_drop(&part, &path);
             if part.clicked() && index != last {
                 self.open_place(Place::Folder(path));
                 self.library.selection.clear();
@@ -932,9 +1005,12 @@ impl Editor {
     ) {
         let key = Key::Folder(folder.path.clone());
         let selected = self.library.selection.contains(&key);
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), ROW_HEIGHT),
+            Sense::click_and_drag(),
+        );
         icons::register_qa(ui, &format!("Subpasta: {}", folder.name), rect);
+        let landing = self.hovered_landing(&response, &folder.path);
         let fill = if selected {
             theme::ACCENT_SOFT
         } else if response.hovered() {
@@ -943,6 +1019,11 @@ impl Editor {
             Color32::TRANSPARENT
         };
         ui.painter().rect_filled(rect, 4., fill);
+        Self::paint_landing(ui, rect, landing.as_ref());
+        let name_color = landing
+            .as_ref()
+            .and_then(drag::Landing::colors)
+            .map_or(Color32::from_rgb(180, 180, 182), |(_, _, text)| text);
         let mut row = ui.new_child(
             UiBuilder::new()
                 .max_rect(rect.shrink2(Vec2::new(8., 0.)))
@@ -963,11 +1044,9 @@ impl Editor {
         } else {
             row.allocate_ui(Vec2::new(name_width, ROW_HEIGHT), |ui| {
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(&folder.name).color(Color32::from_rgb(180, 180, 182)),
-                    )
-                    .truncate()
-                    .selectable(false),
+                    egui::Label::new(RichText::new(&folder.name).color(name_color))
+                        .truncate()
+                        .selectable(false),
                 );
             });
             row.label(
@@ -990,6 +1069,8 @@ impl Editor {
             self.library.anchor = None;
             self.library.picked_in_list = true;
         }
+        self.begin_drag(&response, &key);
+        self.take_drop(&response, &folder.path);
         response.context_menu(|ui| self.folder_menu(ui, lib, &folder.path, true));
     }
 
@@ -1005,9 +1086,14 @@ impl Editor {
         widths: [f32; 2],
     ) {
         let selected = self.library.selection.contains(&item.key);
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), ROW_HEIGHT),
+            Sense::click_and_drag(),
+        );
         icons::register_qa(ui, &format!("Recurso: {}", item.name), rect);
+        // Dragged, the row stays where it is, faded.
+        let dragged = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+            .is_some_and(|drag| drag.items.contains(&item.key));
         let warns = item.state.warns();
         let fill = if selected {
             theme::ACCENT_SOFT
@@ -1029,6 +1115,9 @@ impl Editor {
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         row.spacing_mut().item_spacing.x = 10.;
+        if dragged {
+            row.multiply_opacity(0.4);
+        }
         let failing = matches!(item.state, State::Error(_));
         let icon_color = if warns {
             theme::WARNING
@@ -1118,6 +1207,7 @@ impl Editor {
             self.library.selection = vec![item.key.clone()];
             self.library.anchor = Some(item.key.clone());
         }
+        self.begin_drag(&response, &item.key);
         response.context_menu(|ui| self.item_menu(ui, lib, item));
     }
 
@@ -1676,8 +1766,8 @@ impl Editor {
         }
     }
 
-    /// Delete on the Library's selection: a folder asks before its items go to the root; an
-    /// image, sound or model asks as before; scripts and several items ask in their own dialog.
+    /// Delete on the Library's selection: a folder asks before its items go to the root; items
+    /// ask with who uses them.
     pub(crate) fn library_delete(&mut self, keys: Vec<Key>) {
         if self.playing() && !keys.is_empty() {
             self.warn(PLAYING);
@@ -1695,7 +1785,6 @@ impl Editor {
                 }
                 self.open_delete_folder(folder);
             }
-            [Key::Asset(id)] => self.asset_ui.delete = Some(id.clone()),
             _ => {
                 let items: Vec<Key> = keys
                     .into_iter()
@@ -1708,7 +1797,7 @@ impl Editor {
                     return;
                 }
                 if !items.is_empty() {
-                    self.library.delete_items = Some(items);
+                    self.open_delete_items(items);
                 }
             }
         }
@@ -1865,9 +1954,13 @@ impl Editor {
             })
             .collect()
     }
-    /// Whether a dialog of the Library, the deletion of an asset's included, is open.
+    /// Whether a dialog of the Library, or of the project's files, is open.
     pub(crate) fn qa_library_dialog(&self) -> bool {
-        self.library.dialog_open() || self.asset_ui.delete.is_some()
+        self.library.dialog_open()
+    }
+    /// The path of the script the code tab shows.
+    pub(crate) fn qa_code_path(&self) -> Option<&str> {
+        self.code_view.as_ref().map(|view| view.path.as_str())
     }
     /// Whether Delete, F2 and Ctrl+A go to the Library now.
     pub(crate) fn qa_library_focus(&self) -> bool {

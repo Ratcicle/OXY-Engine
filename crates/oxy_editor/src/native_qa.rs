@@ -13,6 +13,7 @@ mod input_guide;
 mod inspector;
 mod layout;
 mod library;
+mod library_dialogs;
 mod mesh;
 mod modeling;
 mod movement;
@@ -98,6 +99,11 @@ enum Action {
     PanZoom,
     WheelZoom(f32),
     CollapseEntity(&'static str),
+    /// Presses on the control registered for QA as the first label and moves to the second,
+    /// holding the button: the next actions see the drag over its target.
+    DragHold(&'static str, &'static str),
+    /// Releases the button held by DragHold where the pointer is.
+    Release,
     ReopenProject,
     Idle,
 }
@@ -181,6 +187,8 @@ struct NativeQa {
     cursor_captured: bool,
     /// The editor sees its window without focus, as when the person works in another window.
     unfocused: bool,
+    /// The folder of the project the flow checks, kept once the editor leaves it.
+    qa_root: Option<PathBuf>,
 }
 
 impl NativeQa {
@@ -264,6 +272,8 @@ impl NativeQa {
             Action::Key(Key::Y, true),
             Action::Check("paint_redo"),
             Action::Key(Key::S, true),
+            // The first save of the old example organizes it in folders, as the person chooses.
+            Action::Click("Organizar e salvar"),
             Action::Check("saved_roundtrip"),
             Action::Check("texture_controls_baseline"),
             Action::OptionalClick("Pintar"),
@@ -496,6 +506,7 @@ impl NativeQa {
             click_candidate: None,
             cursor_captured: false,
             unfocused: false,
+            qa_root: None,
         }
     }
 
@@ -687,6 +698,9 @@ impl NativeQa {
         }
         if label.starts_with("pause_") {
             return self.check_pause(label);
+        }
+        if label.starts_with("lib8") {
+            return self.check_library_dialogs(label);
         }
         if label.starts_with("lib7_") {
             return self.check_library(label);
@@ -1635,6 +1649,44 @@ impl NativeQa {
                     modifiers: Modifiers::NONE,
                 }]);
                 description = "Pan e zoom reais no viewport".into();
+            }
+            Action::DragHold(from, to) => {
+                let source = self
+                    .editor
+                    .qa_icon_rect(from)
+                    .ok_or_else(|| format!("Origem do arrasto ausente: {from}"))?
+                    .center();
+                let target = self
+                    .editor
+                    .qa_icon_rect(to)
+                    .map(|rect| rect.center())
+                    .or_else(|| self.find(to, false))
+                    .ok_or_else(|| format!("Destino do arrasto ausente: {to}"))?;
+                self.events.push_back(vec![Event::PointerMoved(source)]);
+                self.events.push_back(vec![Event::PointerButton {
+                    pos: source,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                }]);
+                for index in 1..=8 {
+                    self.events.push_back(vec![Event::PointerMoved(
+                        source.lerp(target, index as f32 / 8.),
+                    )]);
+                }
+                description = format!("Arrastar e segurar: {from} → {to}");
+            }
+            Action::Release => {
+                let at = ctx
+                    .input(|i| i.pointer.latest_pos())
+                    .ok_or("Nenhum arrasto segurado")?;
+                self.events.push_back(vec![Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                }]);
+                description = "Soltar o arrasto".into();
             }
             Action::CollapseEntity(label) => {
                 self.entity_position(label)

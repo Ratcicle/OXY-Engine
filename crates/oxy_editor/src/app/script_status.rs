@@ -213,12 +213,14 @@ impl ScriptStatus {
                     let mut found = ScriptFacts::default();
                     match script::check(path, &file.text) {
                         Ok(checked) => {
-                            found.sounds = checked
-                                .references
-                                .into_iter()
-                                .filter(|r| r.kind == script::NameKind::Sound)
-                                .map(|r| r.name)
-                                .collect();
+                            for reference in checked.references {
+                                let cited = (reference.name, reference.line);
+                                match reference.kind {
+                                    script::NameKind::Sound => found.sounds.push(cited),
+                                    script::NameKind::Model => found.models.push(cited),
+                                    _ => {}
+                                }
+                            }
                         }
                         Err(error) => found.error = Some((error.line, error.message)),
                     }
@@ -332,6 +334,11 @@ impl ScriptStatus {
             .scripts
             .iter()
             .any(|s| self.missing(&s.path) || !self.errors(entity, &s.path).is_empty())
+    }
+
+    /// The attributes the attached script `path` declares.
+    pub(crate) fn declared(&self, path: &str) -> &[String] {
+        self.declared.get(path).map_or(&[], Vec::as_slice)
     }
 
     /// The scripts of `scripts` that declare the attribute `name`, in their order.
@@ -655,7 +662,7 @@ mod tests {
         );
         // No object attaches them: each is compiled all the same.
         let checkpoint = &facts["Pista/checkpoint.luau"];
-        assert_eq!(checkpoint.sounds, ["Bipe"]);
+        assert_eq!(checkpoint.sounds, [("Bipe".to_owned(), 3)]);
         assert_eq!(checkpoint.error, None);
         let broken = &facts["Pista/quebrado.luau"];
         assert_eq!(broken.error.as_ref().map(|(line, _)| *line), Some(2));

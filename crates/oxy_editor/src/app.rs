@@ -223,7 +223,6 @@ pub(crate) struct HierarchyUi {
 pub(crate) struct AssetUi {
     pub(crate) thumbnail: Option<(Id, egui::TextureHandle)>,
     pub(crate) locate: Option<Id>,
-    pub(crate) delete: Option<Id>,
 }
 /// Active gizmo and the multi-selection rotation/scale fields.
 pub(crate) struct TransformUi {
@@ -641,10 +640,11 @@ impl Editor {
                 for fix in &report.fixes {
                     self.log(fix.clone());
                 }
-                // What an agent's write that organized the project in folders did, until the
-                // person saves it; and what the first save of a project of the old layout does.
+                // What an agent's write that organized the project in folders did, under the
+                // Agente mark until the person saves it; and what the first save of a project of
+                // the old layout does.
                 for line in conversion::agent_note(&root) {
-                    self.log(line);
+                    self.log(library::agent_note_line(&line));
                     self.notice_last(true);
                 }
                 if add_recent && report.layout == Layout::Legacy {
@@ -725,23 +725,18 @@ impl Editor {
                         && let Some(t) = self.pending.take()
                     {
                         // The files go back to the last save too (decision 2 of the tree).
-                        let current = self.path.clone();
-                        let files = self.discard_files();
-                        if !self.apply_transition(t)
-                            && files
-                            && let Some(current) = current
-                        {
-                            // The other project did not open: this one is read again as the
-                            // files are now, so its paths and undo steps match them.
-                            self.open_with_recent(current, false);
-                        }
+                        self.discard_before(t);
                     }
                 });
             });
         });
         match choice {
             Some(true) => {
-                if self.save()
+                if self.organize_first() {
+                    // The first save of an old project asks how to organize it first.
+                    let then = self.pending.take();
+                    self.organize_then(then);
+                } else if self.save()
                     && let Some(t) = self.pending.take()
                 {
                     self.apply_transition(t);
@@ -752,11 +747,32 @@ impl Editor {
             None => {}
         }
     }
+    /// Discards the changes, the files' included, then does `t`; when `t` leaves this project
+    /// open (another one did not open), it is read again as the files are now.
+    fn discard_and_go(&mut self, t: Transition) {
+        let current = self.path.clone();
+        let files = self.discard_files();
+        if !self.apply_transition(t)
+            && files
+            && let Some(current) = current
+        {
+            // Its paths and undo steps then match the files.
+            self.open_with_recent(current, false);
+        }
+    }
+    /// The person's save; the first one of a project of the old layout asks how to organize it
+    /// in folders first, and answers false while it asks.
     pub fn save(&mut self) -> bool {
+        if self.organize_first() {
+            return false;
+        }
         self.save_from("")
     }
     /// Saves, writing the Console line "Salvo: …" with `origin` before it (an agent's prefix).
     pub(crate) fn save_from(&mut self, origin: &str) -> bool {
+        // What the person chose in "Organizar o projeto em pastas", for this save only.
+        let elsewhere = std::mem::take(&mut self.library.save_elsewhere);
+        let including = std::mem::take(&mut self.library.save_including);
         if self.mesh_operation_active() {
             self.warn("Termine o gesto de modelagem ou pressione Esc antes de salvar.");
             return false;
@@ -793,11 +809,16 @@ impl Editor {
         // What changed outside OXY reaches the project first, as the save writes it.
         self.scan_project();
         let previous_path = self.path.clone();
-        if self.path.is_none() || self.home.example_copy {
-            let Some(folder) = rfd::FileDialog::new()
-                .set_title("Escolha a pasta do novo projeto OXY")
-                .pick_folder()
-            else {
+        // A copy in a new folder: an example's, or an old project organized there.
+        let elsewhere = elsewhere && self.path.is_some();
+        let copy = self.home.example_copy || elsewhere;
+        if self.path.is_none() || copy {
+            let title = if elsewhere {
+                "Escolha a pasta nova do projeto organizado em pastas"
+            } else {
+                "Escolha a pasta do novo projeto OXY"
+            };
+            let Some(folder) = rfd::FileDialog::new().set_title(title).pick_folder() else {
                 return false;
             };
             match new_project_file(&folder) {
@@ -817,7 +838,7 @@ impl Editor {
         // The project as saved, when the save organized it in folders: what it tells, and
         // whether its assets' names and paths changed.
         let mut organized = None;
-        let result = if self.home.example_copy {
+        let result = if copy {
             conversion::save_copy(
                 &path,
                 &self.state.project,
@@ -825,7 +846,7 @@ impl Editor {
                 previous_path
                     .as_deref()
                     .and_then(Path::parent)
-                    .expect("Exemplo com pasta de origem"),
+                    .expect("Cópia com pasta de origem"),
                 &mut self.known_files,
             )
             .map(|copied| {
@@ -836,7 +857,7 @@ impl Editor {
             })
             .map_err(|error| error.to_string())
         } else if self.state.project.layout == Layout::Legacy {
-            self.save_organizing(&path, &mut organized, origin.is_empty())
+            self.save_organizing(&path, &mut organized, origin.is_empty(), &including)
         } else {
             persistence::save_cached_bundle_with(
                 &path,
@@ -899,15 +920,17 @@ impl Editor {
     /// Saves the project of the old layout at `path` organizing it in folders (see
     /// `conversion::convert`), leaving in `organized` the project as saved; one that cannot be
     /// organized now is saved in the old layout, telling why (also in `kept_layout`). An agent's
-    /// save (`by_person` false) is told as the agent's. Answers the lines to tell.
+    /// save (`by_person` false) is told as the agent's. `including` are the other images,
+    /// sounds and models of the folder the person chose to take in. Answers the lines to tell.
     fn save_organizing(
         &mut self,
         path: &Path,
         organized: &mut Option<(Project, bool)>,
         by_person: bool,
+        including: &[String],
     ) -> Result<Vec<String>, String> {
         use conversion::ConversionError::{Busy, Failed, Kept, Refused};
-        let converted = conversion::convert(
+        let converted = conversion::convert_including(
             path,
             &self.state.project,
             Some(&mut self.state.images),
@@ -917,6 +940,7 @@ impl Editor {
             } else {
                 conversion::Who::Agent
             },
+            including,
         );
         let why = match converted {
             Ok(done) => {
@@ -1116,6 +1140,8 @@ impl Editor {
         if files {
             self.scan_project();
         }
+        // What the step moves, which the Library and the code tab follow once it is done.
+        let moved = self.history.next_files(redo).to_vec();
         let root = self.project_root();
         let disk = root.as_deref().map(|root| (root, &mut self.known_files));
         let result = if redo {
@@ -1144,6 +1170,9 @@ impl Editor {
             self.notice_last(false);
             return Err(error);
         } else {
+            if !moved.is_empty() {
+                self.follow_moves(&moved, !redo);
+            }
             if self.state.project.scene(&self.scene_id).is_none() {
                 self.scene_id = self.state.project.start_scene.clone()
             };
@@ -1965,7 +1994,6 @@ impl eframe::App for Editor {
             }
         }
         self.camera_preview_window(ctx);
-        self.asset_delete_dialog(ctx);
         self.library_dialogs(ctx);
         self.fit_dialog(ctx);
         self.diagnostics_ui(ctx);

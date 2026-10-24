@@ -462,6 +462,7 @@ fn native_direct_modeling_v021_workflow() {
                 Action::Key(Key::Y, true),
                 Action::Direct("restored"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::Direct("roundtrip"),
                 Action::Click("Voltar à cena"),
                 Action::SelectEntity("Face inclinada"),

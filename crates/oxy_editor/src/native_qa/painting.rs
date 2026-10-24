@@ -232,6 +232,7 @@ fn native_mesh_painting_workflow() {
                 Action::Key(Key::Y, true),
                 Action::Check("m6_redo"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::SelectEntity("Peça pintável"),
                 Action::Click("Estúdio"),

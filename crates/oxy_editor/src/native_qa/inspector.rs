@@ -248,6 +248,8 @@ fn native_inspector_v031() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let output = oxy_core::qa::output_dir("v0.3.1/inspector");
     let folder = output.join("project");
+    // The model file the last run saved would be a file the new project does not name.
+    let _ = std::fs::remove_dir_all(&folder);
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");
     let mut p = Project::new("Inspetor e responsabilidades");
@@ -355,6 +357,7 @@ fn native_inspector_v031() {
                 Action::Key(Key::Y, true),
                 Action::Check("i031_original"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
             ]);
             Ok(Box::new(qa))

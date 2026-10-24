@@ -134,6 +134,7 @@ fn native_spatial_workflow() {
                 Action::Check("spatial_redo"),
                 Action::Key(Key::W, false),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::Check("saved_roundtrip"),
                 Action::Resize(Vec2::new(920., 600.)),
                 Action::Wait(3),

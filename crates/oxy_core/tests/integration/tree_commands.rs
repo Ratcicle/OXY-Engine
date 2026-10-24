@@ -884,3 +884,53 @@ fn a_command_without_the_projects_folder_keeps_the_old_rules() {
     .unwrap();
     assert!(fixture.root.join("Sons/Bip.wav").exists());
 }
+
+#[test]
+fn the_trash_says_what_it_holds_and_each_step_what_it_did_to_the_files() {
+    let fixture = Fixture::new("conta");
+    let root = &fixture.root;
+    let mut session = Session::open(root);
+    assert_eq!(
+        fs_ops::trash_contents(root).unwrap(),
+        fs_ops::Emptied::default()
+    );
+    session
+        .run(json!([{"op": "move", "items": ["Bip"], "to": "Imagens"}]))
+        .unwrap();
+    assert_eq!(
+        session.history.next_files(false),
+        [oxy_core::edit_history::FileOp::Move {
+            from: "Sons/Bip.wav".into(),
+            to: "Imagens/Bip.wav".into()
+        }]
+    );
+    assert!(session.history.next_files(true).is_empty());
+    session
+        .run(json!([{"op": "delete_asset", "asset": "Bip"}]))
+        .unwrap();
+    session
+        .run(json!([{"op": "delete_asset", "asset": "Clique"}]))
+        .unwrap();
+    let held = fs_ops::trash_contents(root).unwrap();
+    assert_eq!(held.files, 2);
+    assert_eq!(held.bytes, (wav(6).len() + wav(8).len()) as u64);
+    // Undone, the delete is the next redo, and the trash holds one file less.
+    session.undo().unwrap().unwrap();
+    assert!(matches!(
+        session.history.next_files(true),
+        [oxy_core::edit_history::FileOp::Trash { from, .. }] if from == "Menu/Clique.wav"
+    ));
+    assert_eq!(fs_ops::trash_contents(root).unwrap().files, 1);
+    let emptied = journal::empty_trash(root, &mut session.known).unwrap();
+    assert_eq!(
+        emptied,
+        fs_ops::Emptied {
+            files: 1,
+            bytes: wav(6).len() as u64
+        }
+    );
+    assert_eq!(
+        fs_ops::trash_contents(root).unwrap(),
+        fs_ops::Emptied::default()
+    );
+}

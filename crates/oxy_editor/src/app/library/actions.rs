@@ -102,7 +102,7 @@ impl Editor {
                 if moved {
                     self.rebase_scan();
                     self.script_status.look_again();
-                    self.follow_moves(&files);
+                    self.follow_moves(&files, false);
                 }
                 self.state
                     .images
@@ -120,30 +120,32 @@ impl Editor {
         }
     }
 
-    /// The Library's places, its selection and the code tab follow what `files` moved.
-    fn follow_moves(&mut self, files: &[FileOp]) {
+    /// The Library's places, its selection and the code tab follow what `files` moved, the files
+    /// of a step done (an operation of the Library or of an agent, a redo) or `undone`.
+    pub(crate) fn follow_moves(&mut self, files: &[FileOp], undone: bool) {
+        let moved = |path: &str| model::moved_by(path, files, undone);
         let follow = |key: &Key| -> Option<Key> {
             match key {
                 Key::Asset(id) => Some(Key::Asset(id.clone())),
-                Key::Script(path) => model::moved(path, files).map(Key::Script),
-                Key::Folder(path) => model::moved(path, files).map(Key::Folder),
+                Key::Script(path) => moved(path).map(Key::Script),
+                Key::Folder(path) => moved(path).map(Key::Folder),
             }
         };
         self.library.selection = self.library.selection.iter().filter_map(follow).collect();
         self.library.anchor = self.library.anchor.as_ref().and_then(follow);
         self.library.new = self.library.new.iter().filter_map(follow).collect();
         if let Place::Folder(folder) = &self.library.place {
-            self.library.place = Place::Folder(model::moved(folder, files).unwrap_or_default());
+            self.library.place = Place::Folder(moved(folder).unwrap_or_default());
         }
         self.library.expanded = self
             .library
             .expanded
             .iter()
-            .filter_map(|folder| model::moved(folder, files))
+            .filter_map(|folder| moved(folder))
             .collect();
         let shown = self.code_view.as_ref().map(|view| view.path.clone());
         if let Some(path) = shown
-            && let Some(to) = model::moved(&path, files)
+            && let Some(to) = moved(&path)
             && to != path
         {
             self.code_moved(&to);
