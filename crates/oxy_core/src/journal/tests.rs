@@ -4,6 +4,7 @@
 //! program holds told and kept for the next opening.
 use super::*;
 use crate::{
+    asset_import::Making,
     document::{Entity, Primitive},
     persistence::{PROJECT_FILE, open_project, save_project_with},
     script::ScriptRef,
@@ -436,7 +437,12 @@ fn an_import_journaled_before_its_file_opens_with_its_asset_after_a_crash() {
         let id = new_id();
         let crashed = catch_unwind(AssertUnwindSafe(|| {
             let mut creating = Creating::new(&root, &mut report.known, "Importar recurso");
-            creating.before("Sons/Novo.wav", &id).unwrap();
+            creating
+                .before(Making::File {
+                    path: "Sons/Novo.wav",
+                    id: &id,
+                })
+                .unwrap();
             if write_file {
                 put(&root, "Sons/Novo.wav", &wav(10));
             }
@@ -616,7 +622,12 @@ fn change_everything(root: &Path, known: &mut KnownFiles) {
         run(root, known, "Mudar", std::slice::from_ref(&op)).unwrap();
     }
     let mut creating = Creating::new(root, known, "Importar recurso");
-    creating.before("Sons/Novo.wav", &new_id()).unwrap();
+    creating
+        .before(Making::File {
+            path: "Sons/Novo.wav",
+            id: &new_id(),
+        })
+        .unwrap();
     put(root, "Sons/Novo.wav", &wav(12));
     assert_eq!(creating.finish(true).len(), 1);
 }

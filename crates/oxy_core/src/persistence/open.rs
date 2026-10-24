@@ -692,26 +692,134 @@ struct Opening<'a, 'b> {
     /// [`journal::relink_assets`]): missing, whatever file their saved path has now.
     trashed: HashSet<Id>,
 }
+/// The line that tells what is wrong with `asset` (`state`), as opening and the checks say it.
+fn problem_line(asset: &Asset, state: &AssetState) -> String {
+    let label = label(asset);
+    let path = &asset.path;
+    match state {
+        AssetState::Missing => {
+            format!("{label}: o arquivo {path} não existe na pasta do projeto; {REFUSED}")
+        }
+        AssetState::Unreadable(why) => format!("{label}: o arquivo {path} {why}; {REFUSED}"),
+        AssetState::InvalidPath(why) => {
+            format!("{label}: o caminho {path} é inválido ({why}); {REFUSED}")
+        }
+        AssetState::Broken(why) if asset.kind == AssetKind::Model => {
+            format!("{label}: o arquivo {path} {why}; o modelo fica indisponível, e {REFUSED}")
+        }
+        AssetState::Broken(why) => {
+            format!("{label}: o arquivo {path} não pode ser usado ({why}); {REFUSED}")
+        }
+    }
+}
+
+/// How an asset of an open project stands on the disk now (see [`check_assets`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Checked {
+    /// Something is wrong with it, told by the line opening would tell.
+    Problem(AssetState, String),
+    /// Its file is made by the next save: a model saved in OXY, an image whose pixels wait.
+    Unsaved,
+}
+
+/// How each asset of `project`, saved in the folder `root`, stands on the disk now, looked for
+/// as opening looks (see [`open_project`]): a file missing, one that cannot be read now, a saved
+/// path that names no file OXY reads (another asset's included), a content OXY cannot use, a
+/// model that cannot be read or does not fit the project; or a file the next save makes.
+/// `unsaved` says which images have pixels the next save writes, whose files may not be there
+/// yet. Assets that are fine are left out. Nothing is changed or written.
+pub fn check_assets(
+    project: &Project,
+    root: &Path,
+    unsaved: &dyn Fn(&str) -> bool,
+) -> BTreeMap<Id, Checked> {
+    let tree = if project.layout == Layout::Tree {
+        project_tree::walk(root).ok()
+    } else {
+        None
+    };
+    let disk = Disk::new(root, project.layout, tree.as_ref());
+    let mut checked = BTreeMap::new();
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for asset in &project.assets {
+        if asset.path.is_empty() && asset.kind == AssetKind::Model {
+            // Inside the project file of the old layout.
+            continue;
+        }
+        let why = path_problem(&disk, asset).or_else(|| {
+            seen.iter()
+                .find(|(path, _)| names::same_name(path, &asset.path))
+                .map(|(_, other)| format!("é o mesmo de {other}"))
+        });
+        seen.push((asset.path.clone(), label(asset)));
+        let state = match why {
+            Some(why) => Err(AssetState::InvalidPath(why)),
+            None => match disk.find(&asset.path) {
+                Found::At(path) if asset.kind == AssetKind::Model => {
+                    model_now(&disk, project, asset, &path)
+                }
+                Found::At(path) => {
+                    let mut there = asset.clone();
+                    there.path = path;
+                    header_state(root, &there).map_or(Ok(false), Err)
+                }
+                Found::Unreadable(why, _) => Err(AssetState::Unreadable(why)),
+                Found::Outside(why) => Err(AssetState::InvalidPath(why)),
+                Found::Missing if asset.kind == AssetKind::Model && asset.model.is_some() => {
+                    Ok(true)
+                }
+                Found::Missing if asset.kind == AssetKind::Texture && unsaved(&asset.id) => {
+                    Ok(true)
+                }
+                Found::Missing => Err(AssetState::Missing),
+            },
+        };
+        match state {
+            Ok(false) => {}
+            Ok(true) => {
+                checked.insert(asset.id.clone(), Checked::Unsaved);
+            }
+            Err(state) => {
+                let line = problem_line(asset, &state);
+                checked.insert(asset.id.clone(), Checked::Problem(state, line));
+            }
+        }
+    }
+    checked
+}
+
+/// How the model `asset`, whose file is at `path`, stands: fine with its pieces, else what its
+/// file holds now (it could not be used when the project opened).
+fn model_now(
+    disk: &Disk,
+    project: &Project,
+    asset: &Asset,
+    path: &str,
+) -> Result<bool, AssetState> {
+    if asset.model.is_some() {
+        return Ok(false);
+    }
+    match read_model(disk.root, path) {
+        Ok((id, entities, _)) if id == asset.id => {
+            let mut fitted = asset.clone();
+            fitted.model = Some(entities);
+            Err(AssetState::Broken(match validate_model(project, &fitted) {
+                Err(error) => format!("não serve neste projeto: {error}"),
+                Ok(()) => "mudou fora da OXY depois da abertura; reabra o projeto para \
+                    carregá-lo"
+                    .into(),
+            }))
+        }
+        // Another model's file has its name now.
+        Ok(_) | Err(FileProblem::Missing) => Err(AssetState::Missing),
+        Err(FileProblem::Unreadable(why)) => Err(AssetState::Unreadable(why)),
+        Err(FileProblem::Broken(why)) => Err(AssetState::Broken(why)),
+    }
+}
+
 impl Opening<'_, '_> {
     fn problem(&mut self, asset: &Asset, state: AssetState) {
-        let label = label(asset);
-        let path = &asset.path;
-        let line = match &state {
-            AssetState::Missing => {
-                format!("{label}: o arquivo {path} não existe na pasta do projeto; {REFUSED}")
-            }
-            AssetState::Unreadable(why) => format!("{label}: o arquivo {path} {why}; {REFUSED}"),
-            AssetState::InvalidPath(why) => {
-                format!("{label}: o caminho {path} é inválido ({why}); {REFUSED}")
-            }
-            AssetState::Broken(why) if asset.kind == AssetKind::Model => {
-                format!("{label}: o arquivo {path} {why}; o modelo fica indisponível, e {REFUSED}")
-            }
-            AssetState::Broken(why) => {
-                format!("{label}: o arquivo {path} não pode ser usado ({why}); {REFUSED}")
-            }
-        };
-        self.report.warnings.push(line);
+        self.report.warnings.push(problem_line(asset, &state));
         self.report.assets.insert(asset.id.clone(), state);
     }
 
@@ -1131,6 +1239,13 @@ fn name_by_files(project: &mut Project, report: &mut OpenReport) {
             asset.name = name;
         }
     }
+    report.warnings.extend(shared_names(project));
+}
+
+/// The names two files of a kind share, one line each (the scripts and the agents find assets
+/// by name).
+pub fn shared_names(project: &Project) -> Vec<String> {
+    let mut lines = Vec::new();
     let mut shared: BTreeMap<(String, &'static str), Vec<(&str, &str)>> = BTreeMap::new();
     for asset in &project.assets {
         let kind = match asset.kind {
@@ -1146,7 +1261,7 @@ fn name_by_files(project: &mut Project, report: &mut OpenReport) {
     for ((_, kind), files) in shared {
         if let [(name, _), _, ..] = files.as_slice() {
             let paths: Vec<&str> = files.iter().map(|(_, path)| *path).collect();
-            report.warnings.push(format!(
+            lines.push(format!(
                 "O nome \"{name}\" é de {} {kind} ({}); renomeie os arquivos para que os scripts \
                  e os agentes achem cada um pelo nome",
                 files.len(),
@@ -1154,4 +1269,5 @@ fn name_by_files(project: &mut Project, report: &mut OpenReport) {
             ));
         }
     }
+    lines
 }

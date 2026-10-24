@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+mod library;
+pub use library::{asset_warnings, folder, layout_name, scripts_list, summary_in, unused_scripts};
+
 fn kind_name(kind: SceneKind) -> &'static str {
     match kind {
         SceneKind::TwoD => "2d",
@@ -76,13 +79,8 @@ pub fn entity_kind(e: &Entity) -> &'static str {
 /// "catalog") with the tool's arguments. `scene` is the scene the request defaults to.
 pub fn answer(project: &Project, scene: &str, request: &str, args: &Json) -> Result<Json, String> {
     match request {
-        "summary" => match ProjectQuery::parse(args)? {
-            ProjectQuery {
-                model: Some(model),
-                page,
-            } => model_parts(project, &model, page),
-            _ => Ok(project_summary(project)),
-        },
+        // Without the project's folder: summary_in with it adds what the disk says.
+        "summary" => summary_in(project, None, args, &|_| false),
         "scene_tree" => scene_tree(project, scene, &TreeQuery::parse(args)?),
         "entity" => entities(project, scene, &EntityQuery::parse(args)?),
         "find" => {
@@ -218,6 +216,8 @@ pub fn project_summary(project: &Project) -> Json {
     json!({
         "name": project.name,
         "schema_version": project.schema_version,
+        // tree: the project's folder is the Library; legacy: an old project, its assets in assets/.
+        "layout": layout_name(project.layout),
         "start_scene": project.start_scene,
         "scenes": project.scenes.iter().map(|s| json!({
             "id": s.id,
@@ -259,19 +259,32 @@ pub fn project_summary(project: &Project) -> Json {
     })
 }
 
-/// What the summary request asks: the whole summary, or one model's parts (`model`, by its ID
-/// or name), `offset` and `limit` paging them (default [`TREE_LIMIT`]).
+/// What the summary request asks: the whole summary (`offset` and `limit` paging its folders),
+/// one model's parts (`model`, by its ID, name or path) or what a folder holds (`folder`, by
+/// its path, with `kind` keeping the files of one kind), `offset` and `limit` paging them
+/// (default [`TREE_LIMIT`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectQuery {
     pub model: Option<String>,
+    pub folder: Option<String>,
+    pub kind: Option<command::ItemKind>,
     pub page: Page,
 }
 impl ProjectQuery {
     pub fn parse(args: &Json) -> Result<Self, String> {
-        Ok(Self {
+        let query = Self {
             model: arg(args, "model")?,
+            folder: arg(args, "folder")?,
+            kind: arg(args, "kind")?,
             page: Page::parse(args, TREE_LIMIT)?,
-        })
+        };
+        if query.model.is_some() && query.folder.is_some() {
+            return Err("Informe model ou folder, só um deles".into());
+        }
+        if query.kind.is_some() && query.folder.is_none() {
+            return Err("kind só vale com folder: os itens de um tipo naquela pasta".into());
+        }
+        Ok(query)
     }
 }
 
@@ -340,8 +353,22 @@ pub fn validation(project: &Project) -> Json {
 /// they give that it lacks, names of the API they read that it lacks; the `.luau` files that
 /// cannot be scripts (over 1 MB, not UTF-8 text, held by another program), and what the tree
 /// warns of (see `script_files::tree_warnings`): `.LUAU` files, links, names that are not UTF-8,
-/// a configuration that gives the project's alias another folder.
+/// a configuration that gives the project's alias another folder; and how its assets stand on
+/// the disk (see [`validation_with`]).
 pub fn validation_in(project: &Project, root: Option<&std::path::Path>) -> Json {
+    validation_with(project, root, &|_| false)
+}
+
+/// [`validation_in`] whose warnings also tell how the assets stand on the disk: files missing,
+/// that cannot be read now or hold nothing OXY uses, saved paths that name no file OXY reads
+/// (names Windows refuses, another asset's path), models unavailable with why, and the names
+/// two files of a kind share (see [`asset_warnings`]). `unsaved` says which images have pixels
+/// the next save writes, whose files may not be there yet.
+pub fn validation_with(
+    project: &Project,
+    root: Option<&std::path::Path>,
+    unsaved: &dyn Fn(&str) -> bool,
+) -> Json {
     let mut result = match validate_project(project) {
         Ok(()) => json!({"valid": true}),
         Err(error) => json!({"valid": false, "error": error}),
@@ -351,6 +378,7 @@ pub fn validation_in(project: &Project, root: Option<&std::path::Path>) -> Json 
         .map(|w| w.message)
         .collect();
     if let Some(root) = root {
+        warnings.extend(asset_warnings(project, root, unsaved));
         warnings.extend(crate::persistence::script_warnings(project, root));
         match crate::persistence::load_scripts_in_tree(root) {
             Ok((sources, tree)) => {

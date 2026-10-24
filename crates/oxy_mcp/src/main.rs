@@ -27,7 +27,12 @@ to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long li
 (limit, offset, next_offset), oxy_entity summarizes logic and geometry unless asked in full, and \
 world positions and boxes (oxy_scene fields, oxy_entity) measure distances across parent groups. \
 Edit the project only through oxy_apply (atomic batches, validated with the editor's own rules) \
-and oxy_import (PNG and WAV files the person points you to). On files, your first write to a \
+and oxy_import (PNG and WAV files the person points you to). In a project in folders (oxy_project \
+layout: tree) the project folder is the Library: .png, .wav, <Name>.modelo.json and .luau files in \
+any folder, named after their files (unique per kind); oxy_project lists folders and scripts, and \
+with folder what one holds. Move, rename and delete files and folders with oxy_apply (create_folder, \
+move, rename_asset…) or oxy_scripts rename/delete, never with your file tools, so references and \
+require follow. On files, your first write to a \
 project of the old layout (images and sounds as assets/<id>) organizes it in folders (Sons/, \
 Imagens/, Modelos/, scripts where they are, a full copy in .oxy/backup); the answer's converted \
 says what moved: tell the person. When the project is open in the \
@@ -163,6 +168,9 @@ mod tests {
         assert!(instructions.contains("oxy_new_project creates its project"));
         assert!(instructions.contains("oxy_scripts") && instructions.contains("attach_script"));
         assert!(instructions.contains("oxy_scripts vscode sets VS Code up"));
+        // The project folder is the Library: files move through OXY, so references follow.
+        assert!(instructions.contains("the project folder is the Library"));
+        assert!(instructions.contains("never with your file tools, so references and require"));
         let call = handle(
             &mut tools,
             &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -327,6 +335,20 @@ mod tests {
                 &json!({"action": "write", "path": "scripts/porta.luau", "text": "return {}\n"})
             )
         );
+        // Renaming reaches it too, which runs it as its commands on its project's folder.
+        let renamed = echo(
+            "oxy_scripts",
+            json!({"project": "C:/ao-vivo/project.oxy.json", "action": "rename",
+                   "path": "scripts/porta.luau", "to": "Pista/portao.luau"}),
+        );
+        assert_eq!(
+            (&renamed["method"], &renamed["params"]),
+            (
+                &json!("scripts"),
+                &json!({"action": "rename", "path": "scripts/porta.luau",
+                        "to": "Pista/portao.luau"})
+            )
+        );
 
         assert_eq!(
             (&save["method"], &save["params"]),
@@ -398,7 +420,7 @@ mod tests {
         );
         assert_eq!(
             methods.iter().filter(|m| *m == "scripts").count(),
-            1,
+            2,
             "{methods:?}"
         );
         let result: Json = serde_json::from_str(&output.text).unwrap();
@@ -432,7 +454,11 @@ mod tests {
                 ]}),
             )
             .unwrap();
-        assert!(applied.text.contains("agente.bak"), "{}", applied.text);
+        assert!(
+            applied.text.contains("agente") && applied.text.contains("project.oxy.json.bak"),
+            "{}",
+            applied.text
+        );
         let saved = persistence::load_project(&file).unwrap();
         assert_eq!(saved.scenes[0].entities.len(), 1);
         let simulated = tools
@@ -483,7 +509,7 @@ mod tests {
         let saved: Json = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(saved["schema_version"], SCHEMA_VERSION);
         assert_eq!(
-            std::fs::read(file.with_extension("json.agente.bak")).unwrap(),
+            std::fs::read(dir.join(".oxy/agente/project.oxy.json.bak")).unwrap(),
             original
         );
         // Organized in folders on the way, the project as it was is in the full copy, and no

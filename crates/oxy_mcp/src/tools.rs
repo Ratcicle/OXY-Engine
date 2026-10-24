@@ -119,6 +119,15 @@ fn put_back(
     }
 }
 
+/// What a write that failed after it organized the project in folders says: `error`, then what
+/// the organization (`converted`, as the answer tells it) changed, which stays.
+fn after_conversion(converted: &Json, error: &str) -> String {
+    let summary = converted["summary"]
+        .as_str()
+        .unwrap_or("o projeto foi organizado em pastas");
+    format!("{error}. Antes disso, o projeto foi organizado em pastas, e isso ficou: {summary}")
+}
+
 /// Adds to `answer`, as `open_warnings`, the `lines` opening the project on files told (see
 /// [`OpenReport::lines`]), when there are any.
 fn add_open_lines<'a>(answer: &mut Json, lines: impl IntoIterator<Item = &'a String>) {
@@ -486,9 +495,12 @@ pub fn definitions() -> Json {
             "oxy_project",
             "Summary of a project: scenes (ID, name, 2D/3D, object count, background: \"sky\" \
              or {color: [r, g, b, a]}, as set_scene_background takes it), assets [{id, name, \
-             kind: Texture|Audio|Model, path (images and sounds, relative to the project \
-             folder), part_count and root {id, name} (models: the root a placement gets, by \
-             the name place_model gives it), used_by}], input actions [{id, name, key, \
+             kind: Texture|Audio|Model, path (its file from the project folder; none for a \
+             model of an old project, inside its project file), state? (missing, unreadable, \
+             invalid_path, error: unusable or a model unavailable; unsaved: the next save makes \
+             its file) with problem? (why), part_count and root {id, name} (models: the root a \
+             placement gets, by the name place_model gives it), used_by}], input actions [{id, \
+             name, key, \
              shares_key_with?, used_by}] \
              (shares_key_with: the other actions [{id, name}] on the same key, which the game \
              fires together), physics surfaces [{id, name, friction, traction, \
@@ -506,13 +518,28 @@ pub fn definitions() -> Json {
              oxy_entity and oxy_find do not reach. used_by_total counts them when there are \
              more. With model, only that model: {id, name, root?, parts: [{id, name, parent \
              (null for the root), kind}], total, next_offset?}, each parent before its \
-             children; a part's ID is what \"$N@<id>\" takes after a place_model N.",
+             children; a part's ID is what \"$N@<id>\" takes after a place_model N. layout: \
+             tree (the project folder is the Library: folders [{path, items}] in tree order, \
+             paged by offset and limit, with folders_total) or legacy (an old project, all its \
+             assets in assets/; conversion_pending: organized in folders by the person's next \
+             save live, where folder commands wait for it, or by the next write on files); \
+             scripts [{path, used_by}]: every .luau of the project folder. With folder, what that \
+             folder holds instead: {folder, items: [{kind: Folder|Texture|Audio|Model|Script, \
+             name, path, items? (a folder's count), id?, state?, problem?, used_by_count?}], \
+             total, next_offset?, other_files? (files OXY does not use, left out)}, folders \
+             first, assets whose file is missing in the folder of their path.",
             json!({"project": project,
                    "model": {"type": "string", "description":
-                       "A model's ID or name (any case): its parts instead of the summary."},
+                       "A model's ID, name (any case) or file path: its parts instead of the \
+                        summary."},
+                   "folder": {"type": "string", "description":
+                       "A folder by its path from the project folder, any case (\"\" is the \
+                        root): what it holds instead of the summary."},
+                   "kind": {"type": "string", "enum": ["Texture", "Audio", "Model", "Script"],
+                       "description": "With folder: only its files of this kind."},
                    "offset": offset,
                    "limit": {"type": "integer", "minimum": 0, "description":
-                       "With model: parts at most (default 100)."}}),
+                       "Default 100: parts with model, entries with folder, else folders."}}),
             json!([])
         ),
         tool(
@@ -618,17 +645,23 @@ pub fn definitions() -> Json {
                            "path": {"type": "string"},
                            "name": {"type": "string"},
                            "kind": {"type": "string", "enum": ["texture", "audio"]},
-                           "apply_to": {"type": "string"}},
+                           "apply_to": {"type": "string"},
+                           "folder": {"type": "string"}},
                         "required": ["path"]}]},
                        "description": "Several files at once, instead of path and data_base64: \
                         each an absolute path, as path takes it, or {path, name?, kind?, \
-                        apply_to?} with the options below for that file (name, kind and apply_to \
-                        go there, not beside paths; scene stays beside it)."},
+                        apply_to?, folder?} with the options below for that file (name, kind and \
+                        apply_to go there, not beside paths; scene stays beside it, and folder \
+                        beside it is each file's that gives none)."},
                    "kind": {"type": "string", "enum": ["texture", "audio"], "description":
                        "texture (PNG) or audio (WAV). Optional: found from the extension and \
                         the content, and refused when they disagree."},
                    "name": {"type": "string", "description":
-                       "Asset name (default: the file name without the extension)."},
+                       "Asset name (default: the file name without the extension); in a project \
+                        in folders also its file's name, unique per kind in the project."},
+                   "folder": {"type": "string", "description":
+                       "Projects in folders: the folder the file goes to, by its path from the \
+                        project folder (default the root), made when missing."},
                    "apply_to": {"type": "string", "description":
                        "Images only: an object of `scene` that shows it, in its image when it \
                         is an interface element, else in its material; a sprite takes the \
@@ -645,7 +678,13 @@ pub fn definitions() -> Json {
                         Pista/porta.luau (folders are created; none starting with '.')."},
                    "text": {"type": "string", "description":
                        "write: the whole text of the file (UTF-8, up to 1 MB). check: a text \
-                        checked as path would be, without saving it."}}),
+                        checked as path would be, without saving it."},
+                   "to": {"type": "string", "description":
+                       "rename: the script's new path from the project folder (another name, \
+                        folder or both, as Menu/porta.luau)."},
+                   "detach": {"type": "boolean", "description":
+                       "delete: takes the script off the objects attaching it first (default \
+                        false: a script in use is refused, naming them)."}}),
             json!(["action"])
         ),
         tool(
@@ -674,9 +713,11 @@ pub fn definitions() -> Json {
              is not of the variable's type (both stop with an error in the game), scripts \
              objects attach that the project folder lacks (the project opens and saves, but the \
              editor's test and the export refuse it until the file is back or detach_script), \
-             the lint of names of the project's scripts, as oxy_scripts check gives it, and what \
+             the lint of names of the project's scripts, as oxy_scripts check gives it, what \
              its folder holds that is no script by mistake (.LUAU, links, a subfolder's \
-             .luaurc giving @project another folder).",
+             .luaurc giving @project another folder), how its assets stand on the disk (a file \
+             missing, unreadable or unusable, a saved path Windows reads otherwise or another \
+             asset's, a model unavailable and why) and names two files of a kind share.",
             json!({"project": project}),
             json!([])
         ),
@@ -946,11 +987,13 @@ const APPLY_DESCRIPTION: &str = "Edits the project with a batch of commands, all
 one fails, nothing changes and the error names it as \"Comando N (op, o Kº do lote)\", N being \
 its 0-based index, the one \"$N\" and created use (K = N + 1). Live, the batch is one undo step \
 labelled 'Agente: …' in the editor and the person saves (or oxy_save, if they allow it); on \
-files, the project file is saved (project.oxy.json.agente.bak keeps it as it was before this \
-server session first changed it: taken once per session, not on every call, and answered as \
-previous_version; a project from an older OXY is saved in the current format and its original \
-is kept once: in the full copy in .oxy/backup when the write organizes it in folders, answered \
-as converted, else as project.oxy.json.schema-N.….backup.json). The answer is {created, \
+files, the project file is saved (.oxy/agente/project.oxy.json.bak keeps it as it was before \
+this server session first changed it: taken once per session, not on every call, and answered \
+as previous_version; each model's file the save changes gets the same in \
+.oxy/agente/<path>.bak, answered as previous_models; a project from an older OXY is saved in the \
+current format and its original is kept once: in the full copy in .oxy/backup when the write \
+organizes it in folders, answered as converted, else as project.oxy.json.schema-N.….backup.json; \
+a batch that needs folders organizes an old project first). The answer is {created, \
 warnings?}: created maps the index of each command that created something to [{id, name}] \
 (keys in command order, \"2\" before \"10\"; every piece of a preset, its root first; a node's \
 name is its operation; what a later command removed keeps the name it was created with), and \
@@ -1017,20 +1060,24 @@ move them, under a scaled or turned parent too; answers the copies' roots. Refus
 point to objects or animations left behind (copy those too). action.scene and value.scene nodes \
 keep their scene: those naming the scene copied from come back in warnings, each with its copy's \
 ID (set_node_params them), unless their scene input is connected
-- save_model {entity, name?, replace?}: the object and everything under it become a model asset \
-(answers its ID); a name another model has is refused (any case). With replace (a model's ID or \
-name) they become that model's content instead: it keeps its ID (answered all the same) and, \
-without name, its name. Placements already made are editable copies that only record the model \
+- save_model {entity, name?, replace?, folder?}: the object and everything under it become a \
+model asset (answers its ID); a name another model has is refused (any case). In a project in \
+folders its file is <folder>/<name>.modelo.json (folder: a path, made when missing; default the \
+root), written when the project is saved. With replace (a model's ID or name) they become that \
+model's content instead: it keeps its ID (answered all the same), its file and, without name, \
+its name. Placements already made are editable copies that only record the model \
 they came from: they keep their pieces, and only later place_model calls get the new content. \
-place_model {model: ID or name, parent?, position?, name?}: places a copy in `scene`, answering \
+place_model {model: ID, name or file path, parent?, position?, name?}: places a copy in `scene`, \
+answering \
 every piece with its name, its root first; the root keeps the name it was saved with \
 (oxy_project root) unless name gives it another, so name placements to tell them apart. \
 Reuse a player rig, HUD or puzzle across levels this way. A model's action.scene and value.scene \
 nodes keep the scene they named when it was saved, with no warning (a restart saved in level 1 \
 reopens level 1): set_node_params them after placing
 - rename_asset {asset, name, kind?}; delete_asset {asset, kind?, detach?}: any asset oxy_project \
-lists, by ID or name (any case); kind (Texture|Audio|Model|Script) picks among items of \
-different kinds that share a name (two of one kind: by ID, the refusal naming their files). \
+lists, by ID, name (any case) or file path; kind (Texture|Audio|Model|Script) picks among items \
+of different kinds that share a name (two of one kind: by path or ID, the refusal naming their \
+files). \
 rename_asset keeps the ID, which nodes and objects use; a name another asset of its kind has is \
 refused. delete_asset is refused while anything uses the asset (oxy_project used_by: objects \
 showing an image, nodes playing a sound, a model's placements by their roots), naming the uses. \
@@ -1040,13 +1087,15 @@ once; a script goes by its path with kind Script (objects attaching it follow a 
 delete_asset refuses it while attached, unless detach: true takes it off them). In an old \
 project only the name changes and the file stays
 - create_folder {path}; rename_folder {folder, name}; move {items, to, kind?}; delete_folder \
-{folder}: the project's folders, in a project in folders only (refused in an old one until its \
-first save organizes it). The files move on the disk at once and every reference follows \
+{folder}: the project's folders, in a project in folders (an old one: on files the batch \
+organizes it first, answered as converted; live, refused until the person saves it). The files \
+move on the disk at once and every reference follows \
 (asset paths, scripts objects attach). move takes paths (files or folders) or assets by ID or \
-name, to a folder (\"\" is the root); a name taken there is refused with a free one suggested, \
-never written over. delete_folder sends what the folder holds up to the root (a taken name \
-numbered, \"Pulo 2\"), Thumbs.db and desktop.ini to .oxy/lixeira, and removes the folder; no \
-asset is deleted. The answer adds moved [{from, to}] and trashed. Moving or renaming scripts or \
+name, to a folder (\"\" is the root; made when missing); a name taken there is refused with a \
+free one suggested, never written over. delete_folder sends what the folder holds up to the \
+root (a taken name numbered, \"Pulo 2\"), Thumbs.db and desktop.ini to .oxy/lixeira, and \
+removes the folder; no asset is deleted. The answer adds created_folders, removed_folders, \
+moved [{from, to}] and trashed. Moving or renaming scripts or \
 their folders (delete_folder too) rewrites each require written whole that would stop finding \
 its module, in the scripts requiring what moved and in the moved ones, as \
 require(\"@project/Folder/name\"), in the same undo step; the answer adds rewritten (re-read \
@@ -1190,18 +1239,24 @@ refused saying what the field received, with the scenes [{id, name}].";
 
 const IMPORT_DESCRIPTION: &str = "Imports PNG images and WAV sounds as project assets, as the \
 editor's Importar does: each source is checked (extension, header, full content, at most 64 MB, \
-16 MB inline) and copied into the project's assets folder under a new name; nothing else is \
-written. Import only files the person asked for. Give exactly one of path, data_base64 and \
+16 MB inline) and copied into the project, never over a file. In a project in folders the copy \
+is <name>.<ext> in folder (the root by default, made when missing): a name an asset of its kind \
+has is refused with a free one suggested (names are unique per kind), and a file already in the \
+project folder is registered where it is, nothing copied (in_place: true). In an old project the \
+copy goes to its assets folder under a new name, and folder organizes the project in folders \
+first (on files; live, refused until the person saves). Import only files the person asked \
+for. Give exactly one of path, data_base64 and \
 paths. paths imports several files in one call (up to 32, 256 MB together), all of them or \
 none: every file is read and checked first, and an error names the file as paths[N] (from 0). \
 Live, it is one undo step 'Agente: Importar recurso' ('Agente: Importar N recursos' for N \
 files) and the person saves (or oxy_save, if they allow it; the project needs a folder: \
 refused before its first save); on files, the project file is saved once \
-(project.oxy.json.agente.bak keeps it as it was before this server session first changed it, \
-as oxy_apply does; an older project is saved in the current format and its original is kept \
+(.oxy/agente/project.oxy.json.bak keeps it as it was before this server session first changed \
+it, as oxy_apply does; an older project is saved in the current format and its original is kept \
 once, as oxy_apply says: .oxy/backup or project.oxy.json.schema-N.….backup.json). Answers \
-{asset, name, kind, path (relative to the project folder), width and height (images), seconds \
-(sounds), applied_to?}; with paths, {imported: [one such entry per file, in the order of \
+{asset, name, kind, path (where the file is, from the project folder), width and height \
+(images), seconds (sounds), applied_to?, in_place?}; with paths, {imported: [one such entry per \
+file, in the order of \
 paths]}. Use the asset ID in set_material texture, an interface element's ui.texture \
 (update_entity) or the asset parameter of an action.sound (once), action.sound_loop or \
 action.sound_stop node.";
@@ -1213,7 +1268,14 @@ which is legacy and still runs). A script requires another with require(\"@proje
 (its path without .luau) or ./name and ../name from its own folder. The disk is the truth, live \
 too: a write is saved \
 at once, a test running in the editor reloads it between steps, and Ctrl+Z in the editor does \
-not undo it. read {path}: {path, lines, text}, each line of text after its number and a tab (not \
+not undo it. list: {total, scripts: [{path, lines, kind: script (objects attach it)|module \
+(a script they run requires it)|unused (never runs; exported all the same when it compiles), \
+used_by, required_by?, requires?, error?}]}. rename {path, to}: another name, folder or both; \
+delete {path, detach?}: to .oxy/lixeira, refused while objects attach it unless detach takes it \
+off them. Both are oxy_apply's rename_asset, move and delete_asset (kind Script): objects follow, \
+require written whole are rewritten (rewritten in the answer, as oxy_apply's), live it is one \
+undo step, and the answer is oxy_apply's with path (the new one) or deleted. \
+read {path}: {path, lines, text}, each line of text after its number and a tab (not \
 part of the file). write {path, text}: the whole file, all-or-nothing: checked as the game loads \
 it (syntax, a top-level local some function changes, the module's top run, the project's other \
 scripts serving require) and refused as \"<path>.luau:LINE: reason\" with nothing written; a \
@@ -1222,9 +1284,10 @@ answers {path, saved, created, lines, added?, removed?, previous_version? \
 (.oxy/agente/<path>.bak, outside the project's scripts, the file as it was before this \
 session first changed it; live, the editor's session), warnings?, \
 vscode? (the first write or attach_script sets VS Code up)}. check {path?, text?}: a script, text as that script \
-without saving it, or every script: {ok, checked, errors?, warnings?}, each \"<path>.luau:LINE: \
-message\" (every script: also a .luau that cannot be one, over 1 MB or not UTF-8, as an error, \
-and a .LUAU or a subfolder's .luaurc changing @project as warnings); warnings are functions \
+without saving it, or every script: {ok, checked, errors?, warnings?, unused?}, each \
+\"<path>.luau:LINE: message\" (every script: also a .luau that cannot be one, over 1 MB or not \
+UTF-8, as an error, a .LUAU or a subfolder's .luaurc changing @project as warnings, and unused, \
+the scripts no object runs); warnings are functions \
 named like callbacks that are none (they never run), a \
 Module.attributes that is no table of defaults (except in a module other scripts require and no \
 object attaches) and the lint of names: a name the script writes as a literal text that the \
@@ -1685,6 +1748,9 @@ impl Tools {
                     }
                 };
                 self.read(args, request, |p, scene, root| {
+                    if request == "summary" {
+                        return query::summary_in(p, Some(root), args, &|_| false);
+                    }
                     let mut answer = query::answer(p, scene, request, args)?;
                     if request == "entity" {
                         query::mark_missing_scripts(&mut answer, root);
@@ -1716,8 +1782,8 @@ impl Tools {
                         }
                         "oxy_save" => {
                             "Nos arquivos não há o que salvar: cada oxy_apply e cada oxy_import \
-                             já salva o projeto, e project.oxy.json.agente.bak guarda como ele \
-                             estava antes da primeira mudança desta sessão do servidor."
+                             já salva o projeto, e .oxy/agente/project.oxy.json.bak guarda como \
+                             ele estava antes da primeira mudança desta sessão do servidor."
                         }
                         _ => "Esta ferramenta só funciona com o projeto aberto no editor.",
                     }
@@ -1983,62 +2049,111 @@ impl Tools {
             Target::Live(port) => self
                 .live(port, "apply", json!({"commands": commands}))
                 .map(Output::json),
-            Target::File(file) => {
-                let parsed = command::parse(&Json::Array(commands))?;
-                let root = file
-                    .parent()
-                    .map_or_else(|| PathBuf::from("."), Path::to_owned);
-                // Nobody else writes the project meanwhile; refused while the editor has it.
-                let _lock = AgentLock::hold(&root)?;
-                let (mut project, mut opened) = open_file(&file)?;
-                let known = persistence::missing_scripts(&project, &root).unwrap_or_default();
-                let start = project.start_scene.clone();
-                // The tree's commands move files at once (journaled), and attach_script reads
-                // the scripts where the batch leaves them.
-                let label = match parsed.as_slice() {
-                    [one] => format!("Agente: {}", one.label()),
-                    many => format!("Agente: {} comandos", many.len()),
-                };
-                let done = command::apply_on_files(
-                    &mut project,
-                    &start,
-                    &parsed,
-                    &root,
-                    &mut opened.known,
-                    &label,
-                )?;
-                let mut report = done.report;
-                command::add_warnings(
-                    &mut report,
-                    persistence::added_script_warnings(&known, &project, &root),
-                );
-                let saved = self.keep_previous_version(&file).and_then(|backup| {
-                    save_on_files(&file, &mut project, &mut opened.known)
-                        .map(|(told, converted)| (backup, told, converted))
+            Target::File(file) => self.apply_on_file(&file, commands).map(Output::json),
+        }
+    }
+
+    /// Applies `commands` to the project file `file` on files, as oxy_apply does, and saves it.
+    /// A batch that needs folders organizes a project of the old layout first (an agent may do it
+    /// by itself; converted says what changed), and the save of any write does when it can.
+    fn apply_on_file(&mut self, file: &Path, commands: Vec<Json>) -> Result<Json, String> {
+        let parsed = command::parse(&Json::Array(commands))?;
+        let root = file
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_owned);
+        // Nobody else writes the project meanwhile; refused while the editor has it.
+        let _lock = AgentLock::hold(&root)?;
+        let (mut project, mut opened) = open_file(file)?;
+        let first = if project.layout == Layout::Legacy && command::needs_tree_layout(&parsed) {
+            Some(self.convert_first(file, &mut project, &mut opened.known)?)
+        } else {
+            None
+        };
+        let known = persistence::missing_scripts(&project, &root).unwrap_or_default();
+        let start = project.start_scene.clone();
+        // The tree's commands move files at once (journaled), and attach_script reads
+        // the scripts where the batch leaves them.
+        let label = match parsed.as_slice() {
+            [one] => format!("Agente: {}", one.label()),
+            many => format!("Agente: {} comandos", many.len()),
+        };
+        let done = command::apply_on_files(
+            &mut project,
+            &start,
+            &parsed,
+            &root,
+            &mut opened.known,
+            &label,
+        )
+        .map_err(|error| match &first {
+            Some((converted, _)) => after_conversion(converted, &error.message),
+            None => error.message,
+        })?;
+        let mut report = done.report;
+        command::add_warnings(
+            &mut report,
+            persistence::added_script_warnings(&known, &project, &root),
+        );
+        let saved = self.keep_copies(file, &project).and_then(|copies| {
+            save_on_files(file, &mut project, &mut opened.known)
+                .map(|(told, converted)| (copies, told, converted))
+        });
+        let ((backup, models), told, converted) = match saved {
+            Ok(saved) => saved,
+            Err(error) => {
+                let error = put_back(&root, &mut opened.known, &done.files, error);
+                return Err(match &first {
+                    Some((converted, _)) => after_conversion(converted, &error),
+                    None => error,
                 });
-                let (backup, told, converted) = match saved {
-                    Ok(saved) => saved,
-                    Err(error) => {
-                        return Err(put_back(&root, &mut opened.known, &done.files, error));
-                    }
-                };
-                command::add_warnings(&mut report, told);
-                if let Some(converted) = converted {
-                    report["converted"] = converted;
-                }
-                add_open_lines(&mut report, opened.lines());
-                report["saved"] = json!(file.display().to_string());
-                report["previous_version"] = json!(backup.display().to_string());
-                // Whoever writes the scripts in VS Code gets the API's types.
-                if command::needs_scripts(&parsed) {
-                    match script_files::setup_vscode_when_due(&root) {
-                        Ok(Some(setup)) => report["vscode"] = setup.json(),
-                        Ok(None) => {}
-                        Err(error) => command::add_warnings(&mut report, vec![error]),
-                    }
-                }
-                Ok(Output::json(report))
             }
+        };
+        command::add_warnings(&mut report, told);
+        if let Some((converted, warnings)) = first {
+            report["converted"] = converted;
+            command::add_warnings(&mut report, warnings);
+        } else if let Some(converted) = converted {
+            report["converted"] = converted;
+        }
+        add_open_lines(&mut report, opened.lines());
+        report["saved"] = json!(file.display().to_string());
+        report["previous_version"] = json!(backup.display().to_string());
+        if !models.is_empty() {
+            report["previous_models"] = json!(models);
+        }
+        // Whoever writes the scripts in VS Code gets the API's types.
+        if command::needs_scripts(&parsed) {
+            match script_files::setup_vscode_when_due(&root) {
+                Ok(Some(setup)) => report["vscode"] = setup.json(),
+                Ok(None) => {}
+                Err(error) => command::add_warnings(&mut report, vec![error]),
+            }
+        }
+        Ok(report)
+    }
+
+    /// Organizes `project`, of the old layout and saved at `file`, in folders before a write
+    /// that needs them (see `conversion::convert`), with the agent's copy of the project file
+    /// kept first; `project` becomes the one saved. Answers what changed, as converted tells it,
+    /// with what the save told; refused with why when it cannot be organized now.
+    fn convert_first(
+        &mut self,
+        file: &Path,
+        project: &mut Project,
+        known: &mut persistence::KnownFiles,
+    ) -> Result<(Json, Vec<String>), String> {
+        self.keep_copies(file, project)?;
+        match conversion::convert(file, project, None, known, conversion::Who::Agent) {
+            Ok(done) => {
+                let answer = done.json();
+                let warnings = done.warnings.clone();
+                *project = done.project;
+                Ok((answer, warnings))
+            }
+            Err(error) => Err(format!(
+                "Este projeto ainda está no formato antigo, sem pastas, e o pedido precisa de \
+                 pastas; ele não pôde ser organizado em pastas agora: {error}"
+            )),
         }
     }
 
@@ -2047,6 +2162,7 @@ impl Tools {
     fn scripts(&mut self, args: &Json) -> Result<Output, String> {
         let request = script_files::Request::parse(args)?;
         match self.target(args)? {
+            // Live, renaming and deleting are the editor's commands, on its project's folder.
             Target::Live(port) => {
                 let mut params = args.clone();
                 if let Some(map) = params.as_object_mut() {
@@ -2056,6 +2172,16 @@ impl Tools {
             }
             Target::File(file) => {
                 let root = file.parent().unwrap_or(Path::new("."));
+                // Renaming and deleting are oxy_apply's commands: the objects and the require
+                // follow.
+                let taken = |folder: &str, name: &str| script_files::taken_in(root, folder, name);
+                if let Some(commands) = request.commands(&taken) {
+                    let mut report = self
+                        .apply_on_file(&file, commands?)
+                        .map_err(|error| script_files::without_command(&error))?;
+                    request.add_to(&mut report);
+                    return Ok(Output::json(report));
+                }
                 // Writing waits for nobody else to write the project; refused while the editor
                 // has it.
                 let _lock = match request {
@@ -2077,22 +2203,26 @@ impl Tools {
         }
     }
 
-    /// Keeps the project file as it was before this session first changed it, in
-    /// project.oxy.json.agente.bak, so the copy is what the session can go back to however
-    /// many writes follow: taken once per session (and again if someone deleted it).
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the agent's copy of the project file is OXY's own, kept fresh each session"
-    )]
-    fn keep_previous_version(&mut self, file: &Path) -> Result<PathBuf, String> {
-        let backup = file.with_extension("json.agente.bak");
-        let key = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
-        if !self.kept.contains(&key) || !backup.is_file() {
-            std::fs::copy(file, &backup)
-                .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))?;
-            self.kept.insert(key);
-        }
-        Ok(backup)
+    /// Keeps the project file `file`, and each model's file the save of `project` changes, as
+    /// they were before this session first changed them, in .oxy/agente/<path>.bak, so the
+    /// copies are what the session can go back to however many writes follow: taken once per
+    /// session (and again if someone deleted them; see `persistence::keep_agent_copies`).
+    /// Answers the project file's copy, in full, and the models' copies, from the project's
+    /// folder.
+    fn keep_copies(
+        &mut self,
+        file: &Path,
+        project: &Project,
+    ) -> Result<(PathBuf, Vec<String>), String> {
+        let copies = persistence::keep_agent_copies(file, project, &mut self.kept)
+            .map_err(|e| format!("Não foi possível guardar a versão anterior: {e}"))?;
+        let root = file.parent().unwrap_or(Path::new("."));
+        let mut copies = copies.into_iter();
+        let backup = copies
+            .next()
+            .map(|copy| root.join(copy.replace('/', std::path::MAIN_SEPARATOR_STR)))
+            .unwrap_or_default();
+        Ok((backup, copies.collect()))
     }
 
     fn import(&mut self, args: &Json) -> Result<Output, String> {
@@ -2113,19 +2243,34 @@ impl Tools {
                 // Nobody else writes the project meanwhile; refused while the editor has it.
                 let _lock = AgentLock::hold(&root)?;
                 let (mut project, mut opened) = open_file(&file)?;
+                // A folder asks for the project in folders.
+                let first = if project.layout == Layout::Legacy
+                    && batch.requests.iter().any(|r| r.folder.is_some())
+                {
+                    Some(self.convert_first(&file, &mut project, &mut opened.known)?)
+                } else {
+                    None
+                };
                 let start = project.start_scene.clone();
                 let mut imported =
-                    asset_import::import_batch(&mut project, &root, &start, &batch, &sources)?;
-                let saved = self.keep_previous_version(&file).and_then(|backup| {
+                    asset_import::import_batch(&mut project, &root, &start, &batch, &sources)
+                        .map_err(|error| match &first {
+                            Some((converted, _)) => after_conversion(converted, &error),
+                            None => error,
+                        })?;
+                let saved = self.keep_copies(&file, &project).and_then(|copies| {
                     save_on_files(&file, &mut project, &mut opened.known)
-                        .map(|(told, converted)| (backup, told, converted))
+                        .map(|(told, converted)| (copies, told, converted))
                 });
-                let (backup, told, converted) = match saved {
+                let ((backup, _), told, converted) = match saved {
                     Ok(saved) => saved,
                     Err(error) => {
                         // The project file does not name the copies: they go too.
                         asset_import::remove_copies(&root, &imported);
-                        return Err(error);
+                        return Err(match &first {
+                            Some((converted, _)) => after_conversion(converted, &error),
+                            None => error,
+                        });
                     }
                 };
                 // Organizing the project in folders named the copies anew.
@@ -2137,7 +2282,10 @@ impl Tools {
                 }
                 let mut report = batch.answer(&imported)?;
                 command::add_warnings(&mut report, told);
-                if let Some(converted) = converted {
+                if let Some((converted, warnings)) = first {
+                    report["converted"] = converted;
+                    command::add_warnings(&mut report, warnings);
+                } else if let Some(converted) = converted {
                     report["converted"] = converted;
                 }
                 add_open_lines(&mut report, opened.lines());
@@ -2254,7 +2402,7 @@ impl Tools {
         .map_err(|e| e.to_string())?;
         // As oxy_project reads it.
         let saved = persistence::load_project(&file).map_err(|e| e.to_string())?;
-        let mut answer = query::answer(&saved, &saved.start_scene, "summary", &json!({}))?;
+        let mut answer = query::summary_in(&saved, file.parent(), &json!({}), &|_| false)?;
         answer["folder"] = json!(file.parent().unwrap_or(&file).display().to_string());
         answer["saved"] = json!(file.display().to_string());
         answer["note"] = json!(
@@ -3343,7 +3491,8 @@ mod tests {
             "warnings",
             "\"$N.M\"",
             "input_keys",
-            "agente.bak",
+            ".oxy/agente/project.oxy.json.bak",
+            "previous_models",
             "schema-N.….backup.json",
         ] {
             assert!(APPLY_DESCRIPTION.contains(text), "{text}");
@@ -3816,13 +3965,22 @@ mod tests {
         );
         // Bad arguments fail before the project is read.
         let error = Tools::default()
-            .call("oxy_scripts", &json!({"action": "rename"}))
+            .call("oxy_scripts", &json!({"action": "renomear"}))
             .unwrap_err();
         assert!(error.starts_with("action inválido"), "{error}");
+        let error = Tools::default()
+            .call(
+                "oxy_scripts",
+                &json!({"action": "rename", "path": "a.luau"}),
+            )
+            .unwrap_err();
+        assert!(error.starts_with("action rename precisa de to"), "{error}");
         let schema = schema("oxy_scripts");
         assert_eq!(
             schema["action"]["enum"],
-            json!(["read", "write", "check", "vscode"])
+            json!([
+                "list", "read", "write", "check", "rename", "delete", "vscode"
+            ])
         );
         assert!(SCRIPTS_DESCRIPTION.contains("Ctrl+Z in the editor does not undo it"));
         assert!(SCRIPTS_DESCRIPTION.contains(".oxy/agente/<path>.bak"));
@@ -4790,14 +4948,14 @@ mod tests {
         assert_eq!((edges.len(), sources.len()), (2, 2), "{graph}");
 
         for text in [
-            "save_model {entity, name?, replace?}",
+            "save_model {entity, name?, replace?, folder?}",
             "rename_asset {asset, name, kind?}",
             "delete_asset {asset, kind?, detach?}",
             "create_folder {path}; rename_folder {folder, name}; move {items, to, kind?}",
             "disconnect takes the same two forms",
             "split_shared_data: true",
             "names it and suggests split_shared_data",
-            "two of one kind: by ID",
+            "two of one kind: by path or ID",
             "wires arrange_logic left running across the logic",
             "a part ID from oxy_project {model}",
         ] {
@@ -5395,6 +5553,253 @@ mod tests {
     }
 
     #[test]
+    fn files_read_and_organize_folders_with_their_scripts_models_and_imports() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-biblioteca-{}", new_id()));
+        let sources = dir.with_extension("origem");
+        std::fs::create_dir_all(dir.join("Pista")).unwrap();
+        std::fs::create_dir_all(&sources).unwrap();
+        std::fs::write(dir.join("Pista/Pulo.wav"), wav(800, 8000)).unwrap();
+        std::fs::write(sources.join("vento.wav"), wav(800, 8000)).unwrap();
+        std::fs::write(sources.join("pulo.wav"), wav(800, 8000)).unwrap();
+        std::fs::write(dir.join("Pista/porta.luau"), "local M = {}\nreturn M\n").unwrap();
+        let mut project = editing::blank_project("Biblioteca", SceneKind::ThreeD).unwrap();
+        project.layout = Layout::Tree;
+        project.assets.push(Asset {
+            id: new_id(),
+            name: "Pulo".into(),
+            path: "Pista/Pulo.wav".into(),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        let mut door = Entity::new("Porta", Some(Primitive::Cube));
+        door.scripts
+            .push(script::ScriptRef::new("Pista/porta.luau"));
+        project.scenes[0].entities.push(door);
+        project.scenes[0]
+            .entities
+            .push(Entity::new("Torre", Some(Primitive::Cube)));
+        let file = dir.join(persistence::PROJECT_FILE);
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let mut call = |tool: &str, extra: Json| on_files(&mut tools, &project_arg, tool, extra);
+
+        // The summary: layout, folders and scripts with who attaches them.
+        let summary = call("oxy_project", json!({})).unwrap();
+        assert_eq!(summary["layout"], "tree");
+        assert_eq!(summary["folders"], json!([{"path": "Pista", "items": 2}]));
+        assert_eq!(summary["scripts"][0]["path"], "Pista/porta.luau");
+        assert_eq!(summary["scripts"][0]["used_by"][0]["name"], "Porta");
+        let pista = call("oxy_project", json!({"folder": "pista"})).unwrap();
+        assert_eq!(pista["folder"], "Pista");
+        assert_eq!(pista["total"], 2);
+        let scripts = call("oxy_project", json!({"folder": "Pista", "kind": "Script"})).unwrap();
+        assert_eq!(scripts["items"][0]["name"], "porta");
+        let error = call("oxy_project", json!({"kind": "Script"})).unwrap_err();
+        assert!(error.contains("kind só vale com folder"), "{error}");
+
+        // An import into a folder made for it; a name a sound has is refused.
+        let vento = sources.join("vento.wav").display().to_string();
+        let imported = call(
+            "oxy_import",
+            json!({"path": vento, "name": "Vento", "folder": "Sons/Fundo"}),
+        )
+        .unwrap();
+        assert_eq!(imported["path"], "Sons/Fundo/Vento.wav");
+        assert!(dir.join("Sons/Fundo/Vento.wav").is_file());
+        let pulo = sources.join("pulo.wav").display().to_string();
+        let error = call("oxy_import", json!({"path": pulo, "folder": "Sons"})).unwrap_err();
+        assert!(
+            error.contains("Já existe o som \"Pulo\" (Pista/Pulo.wav)")
+                && error.contains("pulo 2 está livre"),
+            "{error}"
+        );
+        assert!(!dir.join("Sons/pulo.wav").exists());
+
+        // A model saved into a folder, placed by its path; replaced, its file's copy is kept.
+        let saved = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "save_model", "entity": "Torre", "folder": "Pista/Modelos"},
+                {"op": "place_model", "model": "Pista/Modelos/Torre.modelo.json",
+                 "name": "Torre 2"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(saved["created"]["1"][0]["name"], "Torre 2");
+        assert_eq!(saved["created_folders"], json!(["Pista/Modelos"]));
+        assert!(dir.join("Pista/Modelos/Torre.modelo.json").is_file());
+        assert!(saved.get("previous_models").is_none(), "{saved}");
+        let model_file = std::fs::read(dir.join("Pista/Modelos/Torre.modelo.json")).unwrap();
+        let replaced = call(
+            "oxy_apply",
+            json!({"commands": [
+                {"op": "save_model", "entity": "Porta", "replace": "Torre"},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(
+            replaced["previous_models"],
+            json!([".oxy/agente/Pista/Modelos/Torre.modelo.json.bak"])
+        );
+        assert_eq!(
+            std::fs::read(dir.join(".oxy/agente/Pista/Modelos/Torre.modelo.json.bak")).unwrap(),
+            model_file
+        );
+        assert!(
+            replaced["previous_version"]
+                .as_str()
+                .unwrap()
+                .ends_with("project.oxy.json.bak")
+        );
+
+        // oxy_scripts: list, rename into another folder (objects follow), delete with detach.
+        let listed = call("oxy_scripts", json!({"action": "list"})).unwrap();
+        assert_eq!(listed["scripts"][0]["kind"], "script");
+        // The new name is taken where the script is, free where it goes: moved, then renamed.
+        std::fs::write(dir.join("Pista/portao.luau"), "return {}\n").unwrap();
+        let renamed = call(
+            "oxy_scripts",
+            json!({"action": "rename", "path": "Pista/porta.luau", "to": "Menu/portao.luau"}),
+        )
+        .unwrap();
+        assert_eq!(renamed["path"], "Menu/portao.luau");
+        assert_eq!(
+            renamed["moved"],
+            json!([{"from": "Pista/porta.luau", "to": "Menu/porta.luau"},
+                   {"from": "Menu/porta.luau", "to": "Menu/portao.luau"}])
+        );
+        assert!(dir.join("Pista/portao.luau").is_file());
+        assert!(dir.join("Menu/portao.luau").is_file());
+        let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
+        assert_eq!(entity["scripts"], json!([{"path": "Menu/portao.luau"}]));
+        let error = call(
+            "oxy_scripts",
+            json!({"action": "delete", "path": "Menu/portao.luau"}),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("O script Menu/portao.luau está anexado a 2 objetos")
+                && error.contains("detach: true"),
+            "{error}"
+        );
+        let deleted = call(
+            "oxy_scripts",
+            json!({"action": "delete", "path": "menu/portao.luau", "detach": true}),
+        )
+        .unwrap();
+        // Said in the disk's case.
+        assert_eq!(deleted["deleted"], "Menu/portao.luau");
+        assert_eq!(deleted["trashed"], json!(["Menu/portao.luau"]));
+        assert!(!dir.join("Menu/portao.luau").exists());
+        let entity = call("oxy_entity", json!({"id": "Porta", "fields": ["scripts"]})).unwrap();
+        assert!(entity.get("scripts").is_none_or(Json::is_null), "{entity}");
+
+        // The validation tells how the assets stand on the disk.
+        std::fs::remove_file(dir.join("Sons/Fundo/Vento.wav")).unwrap();
+        let summary = call("oxy_project", json!({})).unwrap();
+        assert!(
+            summary["assets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|a| a["name"] != "Vento"),
+            "unused and gone: out of the project, {summary}"
+        );
+        let descriptions = [SCRIPTS_DESCRIPTION, IMPORT_DESCRIPTION, APPLY_DESCRIPTION];
+        for (description, text) in [
+            (0, "rename {path, to}"),
+            (0, "delete {path, detach?}"),
+            (0, "list: {total, scripts"),
+            (0, "unused, the scripts no object runs"),
+            (
+                1,
+                "a file already in the project folder is registered where it is",
+            ),
+            (2, "save_model {entity, name?, replace?, folder?}"),
+            (2, "place_model {model: ID, name or file path"),
+            (2, "made when missing"),
+        ] {
+            assert!(descriptions[description].contains(text), "{text}");
+        }
+        let scripts_schema = schema("oxy_scripts");
+        assert!(scripts_schema["to"]["description"].is_string());
+        assert!(scripts_schema["detach"].is_object());
+        assert!(schema("oxy_import")["folder"]["description"].is_string());
+        std::fs::remove_dir_all(dir).unwrap();
+        let _ = std::fs::remove_dir_all(sources);
+    }
+
+    #[test]
+    fn files_a_batch_that_needs_folders_organizes_an_old_project_first() {
+        let dir = std::env::temp_dir().join(format!("oxy-mcp-antes-{}", new_id()));
+        let file = dir.join(persistence::PROJECT_FILE);
+        let mut project = editing::blank_project("Antigo", SceneKind::ThreeD).unwrap();
+        let sound = new_id();
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join(format!("assets/{sound}.wav")), wav(800, 8000)).unwrap();
+        project.assets.push(Asset {
+            id: sound.clone(),
+            name: "Pulo".into(),
+            path: format!("assets/{sound}.wav"),
+            kind: AssetKind::Audio,
+            model: None,
+        });
+        persistence::save_project(&file, &project).unwrap();
+        let project_arg = dir.display().to_string();
+        let mut tools = Tools::default();
+        let summary = on_files(&mut tools, &project_arg, "oxy_project", json!({})).unwrap();
+        assert_eq!(
+            (&summary["layout"], &summary["conversion_pending"]),
+            (&json!("legacy"), &json!(true))
+        );
+        // Folders need the project in folders: the batch organizes it first, and says so.
+        let moved = on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_apply",
+            json!({"commands": [{"op": "move", "items": ["Pulo"], "to": "Pista"}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            moved["converted"]["moved"],
+            json!([{"from": format!("assets/{sound}.wav"), "to": "Sons/Pulo.wav"}])
+        );
+        assert_eq!(
+            moved["moved"],
+            json!([{"from": "Sons/Pulo.wav", "to": "Pista/Pulo.wav"}])
+        );
+        assert!(dir.join("Pista/Pulo.wav").is_file());
+        let saved = persistence::load_project(&file).unwrap();
+        assert_eq!(saved.layout, Layout::Tree);
+        assert_eq!(saved.assets[0].id, sound);
+        assert_eq!(saved.assets[0].path, "Pista/Pulo.wav");
+        // The copy of the project as it was, before the organization, is the agent's.
+        let backup = PathBuf::from(moved["previous_version"].as_str().unwrap());
+        let old: Json = serde_json::from_slice(&std::fs::read(backup).unwrap()).unwrap();
+        assert!(old.get("layout").is_none(), "{old}");
+        // A batch that fails after the organization says what stayed.
+        let second = dir.with_extension("segundo");
+        std::fs::create_dir_all(second.join("assets")).unwrap();
+        std::fs::write(second.join(format!("assets/{sound}.wav")), wav(800, 8000)).unwrap();
+        persistence::save_project(&second.join(persistence::PROJECT_FILE), &project).unwrap();
+        let error = on_files(
+            &mut tools,
+            &second.display().to_string(),
+            "oxy_apply",
+            json!({"commands": [{"op": "move", "items": ["Fantasma"], "to": "Pista"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Antes disso, o projeto foi organizado em pastas, e isso ficou"),
+            "{error}"
+        );
+        assert!(second.join("Sons/Pulo.wav").is_file());
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
     fn files_first_write_organizes_an_old_project_in_folders_and_says_what_changed() {
         let dir = std::env::temp_dir().join(format!("oxy-mcp-pastas-{}", new_id()));
         let file = dir.join(persistence::PROJECT_FILE);
@@ -5577,11 +5982,24 @@ mod tests {
             json!({"commands": [{"op": "rename_project", "name": "Lote 2"}]}),
         )
         .unwrap();
-        on_files(
+        // In folders a name a sound has is refused, with a free one suggested.
+        let error = on_files(
             &mut tools,
             &project_arg,
             "oxy_import",
             json!({"path": jump}),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Já existe o som \"pulo\" (Sons/pulo.wav)")
+                && error.contains("passe outro name (pulo 2 está livre)"),
+            "{error}"
+        );
+        on_files(
+            &mut tools,
+            &project_arg,
+            "oxy_import",
+            json!({"path": jump, "name": "Pulo alto"}),
         )
         .unwrap();
         assert_eq!(std::fs::read(&backup).unwrap(), original);
@@ -5593,7 +6011,7 @@ mod tests {
             &mut tools,
             &project_arg,
             "oxy_import",
-            json!({"paths": [jump, broken]}),
+            json!({"paths": [{"path": jump, "name": "Pulo baixo"}, broken]}),
         )
         .unwrap_err();
         assert!(error.starts_with("paths[1] (o 2º arquivo): "), "{error}");
@@ -5630,7 +6048,7 @@ mod tests {
             import["paths"]["description"]
                 .as_str()
                 .unwrap()
-                .contains("{path, name?, kind?, apply_to?}")
+                .contains("{path, name?, kind?, apply_to?, folder?}")
         );
         for text in [
             "Give exactly one of path, data_base64 and paths",
@@ -5845,8 +6263,10 @@ mod tests {
             "64 MB",
             "16 MB",
             "Agente: Importar",
-            "agente.bak",
+            ".oxy/agente/project.oxy.json.bak",
             "schema-N.….backup.json",
+            "<name>.<ext> in folder",
+            "in_place: true",
             "action.sound",
             "action.sound_loop",
         ] {
@@ -5890,7 +6310,18 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        assert!(project.contains("path (images and sounds") && project.contains("material, ui"));
+        assert!(
+            project.contains("path (its file from the project folder")
+                && project.contains("material, ui")
+        );
+        for text in [
+            "layout: tree",
+            "folders [{path, items}]",
+            "scripts [{path, used_by}]",
+            "With folder, what that folder holds",
+        ] {
+            assert!(project.contains(text), "{text}");
+        }
         assert!(
             project.contains("game {title") && project.contains("set_game_settings"),
             "{project}"
@@ -5977,7 +6408,7 @@ mod tests {
             .call("oxy_save", &json!({"project": project_arg}))
             .unwrap_err();
         assert!(
-            error.contains("já salva") && error.contains("agente.bak"),
+            error.contains("já salva") && error.contains(".oxy/agente/project.oxy.json.bak"),
             "{error}"
         );
         std::fs::remove_dir_all(dir).unwrap();
@@ -6110,14 +6541,21 @@ mod tests {
         assert_eq!(std::fs::read(&file).unwrap(), before);
         assert_eq!(copies(), count);
         // So does one whose save fails after the file was copied (here the previous version
-        // cannot be kept, a folder holding its name): the copy is taken away again.
-        let backup = file.with_extension("json.agente.bak");
+        // cannot be kept, a folder holding its name): the copy is taken away again, and the
+        // folder made for it.
+        let backup = root.join(".oxy/agente/project.oxy.json.bak");
         std::fs::remove_file(&backup).unwrap();
         std::fs::create_dir(&backup).unwrap();
-        let error = call("oxy_import", json!({"path": image.display().to_string()})).unwrap_err();
+        let error = call(
+            "oxy_import",
+            json!({"path": image.display().to_string(), "name": "Placa nova",
+                   "folder": "Pista/Placas"}),
+        )
+        .unwrap_err();
         assert!(error.contains("versão anterior"), "{error}");
         assert_eq!(std::fs::read(&file).unwrap(), before);
         assert_eq!(copies(), count);
+        assert!(!root.join("Pista").exists());
         std::fs::remove_dir(&backup).unwrap();
 
         // The console exists only live.
@@ -6411,6 +6849,11 @@ mod tests {
                 answer.as_object_mut().unwrap().remove(key);
             }
             assert_eq!(summary, answer);
+            // In folders from the start, with none yet and no script.
+            assert_eq!(
+                (&summary["layout"], &summary["folders"], &summary["scripts"]),
+                (&json!("tree"), &json!([]), &json!([]))
+            );
             assert_eq!(valid, json!({"valid": true}));
             let (opened, migrated) = persistence::load_project_lazy_report(&file).unwrap();
             assert_eq!(migrated, None);
@@ -7160,12 +7603,26 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(model["path"], "Pista/Torre.modelo.json");
+        // The summary says how each asset stands: the image whose file went is missing.
+        let stone = summary["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == "Pedra")
+            .unwrap();
+        assert_eq!(stone["state"], "missing");
+        // The validation tells it among its own warnings, once, as live.
         let validation = call("oxy_validate", json!({})).unwrap();
         assert_eq!(validation["valid"], true);
         assert!(
-            told(&validation).contains(&missing.to_owned()),
+            validation["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w == missing),
             "{validation}"
         );
+        assert!(!told(&validation).contains(&missing.to_owned()));
         let simulated = call("oxy_simulate", json!({"seconds": 0.1})).unwrap();
         assert!(told(&simulated).contains(&found.to_owned()), "{simulated}");
         let checked = call("oxy_scripts", json!({"action": "check"})).unwrap();
@@ -7261,9 +7718,10 @@ mod tests {
         drop(editor);
         call("oxy_apply", create).unwrap();
         assert!(
-            !dir.join(".oxy").exists(),
+            !dir.join(oxy_core::project_lock::AGENT_LOCK).exists(),
             "the agent's lock goes after the write"
         );
+        assert!(dir.join(".oxy/agente/project.oxy.json.bak").is_file());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -12,6 +12,7 @@ mod geometry;
 mod guide_recipes;
 mod history_amendment;
 mod input_actions;
+mod library;
 mod logic_math;
 mod mesh_bevel;
 mod mesh_bevel_preservation;

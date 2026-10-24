@@ -391,8 +391,15 @@ impl Editor {
                 self.agent_scene(params)?;
                 serde_json::to_value(&self.state.project).map_err(|e| e.to_string())
             }
-            // The same answers, with the same arguments, as the MCP server gives on files.
-            "summary" | "scene_tree" | "entity" | "find" => {
+            // The same answers, with the same arguments, as the MCP server gives on files; the
+            // summary with what the project's folder holds.
+            "summary" => {
+                self.agent_scene(params)?;
+                let root = self.path.as_deref().and_then(std::path::Path::parent);
+                let images = &self.state.images;
+                query::summary_in(&self.state.project, root, params, &|id| images.is_dirty(id))
+            }
+            "scene_tree" | "entity" | "find" => {
                 let scene = self.agent_scene(params)?;
                 let mut answer = query::answer(&self.state.project, &scene, method, params)?;
                 if method == "entity"
@@ -406,7 +413,10 @@ impl Editor {
             "validate" => {
                 self.agent_scene(params)?;
                 let root = self.path.as_deref().and_then(std::path::Path::parent);
-                Ok(query::validation_in(&self.state.project, root))
+                let images = &self.state.images;
+                Ok(query::validation_with(&self.state.project, root, &|id| {
+                    images.is_dirty(id)
+                }))
             }
             "apply" => {
                 let commands = command::parse(&params["commands"])?;

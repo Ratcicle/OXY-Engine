@@ -402,7 +402,9 @@ pub enum Command {
     },
     /// Saves an object and everything under it as a model asset that any scene can place, or,
     /// with `replace` (a model's ID or name), as the new content of that model, which keeps its
-    /// ID. Placements already made are copies and stay as they are.
+    /// ID. Placements already made are copies and stay as they are. In the tree layout a new
+    /// model's file is `<folder>/<name>.modelo.json` (the root by default; a folder missing is
+    /// made), written by the next save.
     SaveModel {
         #[serde(default)]
         scene: Option<Id>,
@@ -412,9 +414,15 @@ pub enum Command {
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         replace: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "folder_or_root"
+        )]
+        folder: Option<String>,
     },
-    /// Places a copy of a model (its ID or name). Position is relative to the parent. The root
-    /// keeps the name it was saved with unless `name` is given.
+    /// Places a copy of a model (its ID, name or file's path). Position is relative to the
+    /// parent. The root keeps the name it was saved with unless `name` is given.
     PlaceModel {
         #[serde(default)]
         scene: Option<Id>,
@@ -984,6 +992,24 @@ fn plan(
         ) {
             lay_out(&mut draft, &unplaced);
         }
+        // A model saved in a folder: the folder as the disk has it, made when missing.
+        let command = match (&command, view.as_deref_mut()) {
+            (
+                Command::SaveModel {
+                    folder: Some(_), ..
+                },
+                Some(view),
+            ) => tree::save_model_in(&draft, &command, default_scene, view).map_err(fail)?,
+            (
+                Command::SaveModel {
+                    folder: Some(_), ..
+                },
+                None,
+            ) if draft.layout == Layout::Tree => {
+                return Err(fail(tree::NO_FOLDER.into()));
+            }
+            _ => command,
+        };
         let mut raised = Vec::new();
         let mut copies = Vec::new();
         let mut told = Vec::new();
@@ -1661,9 +1687,9 @@ pub fn rewritten(files: &[crate::edit_history::FileOp]) -> Vec<String> {
     found
 }
 
-/// Adds to a [`report`] what `files` did on the disk: `moved` ([{from, to}], folders and files
-/// moved or renamed), `trashed` (the files sent to the project's trash) and `rewritten` (see
-/// [`rewritten`]).
+/// Adds to a [`report`] what `files` did on the disk: `created_folders` and `removed_folders`,
+/// `moved` ([{from, to}], folders and files moved or renamed), `trashed` (the files sent to the
+/// project's trash) and `rewritten` (see [`rewritten`]).
 pub fn add_files(report: &mut Json, files: &[crate::edit_history::FileOp]) {
     use crate::edit_history::FileOp;
     let moved: Vec<Json> = files
@@ -1681,6 +1707,23 @@ pub fn add_files(report: &mut Json, files: &[crate::edit_history::FileOp]) {
         })
         .collect();
     let rewritten = rewritten(files);
+    let folders = |made: bool| -> Vec<&str> {
+        files
+            .iter()
+            .filter_map(|file| match file {
+                FileOp::CreateDir { path } if made => Some(path.as_str()),
+                FileOp::RemoveDir { path } if !made => Some(path.as_str()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (made, removed) = (folders(true), folders(false));
+    if !made.is_empty() {
+        report["created_folders"] = json!(made);
+    }
+    if !removed.is_empty() {
+        report["removed_folders"] = json!(removed);
+    }
     if !moved.is_empty() {
         report["moved"] = json!(moved);
     }
@@ -1701,6 +1744,33 @@ pub fn add_warnings(report: &mut Json, warnings: Vec<String>) {
         Some(listed) => listed.extend(warnings.into_iter().map(Json::from)),
         None => report["warnings"] = json!(warnings),
     }
+}
+
+/// Why renaming or deleting a script waits: the old layout, until its first save organizes the
+/// project in folders, or a project that has no folder yet.
+fn script_files_need(project: &Project) -> &'static str {
+    if project.layout == Layout::Legacy {
+        tree::LEGACY
+    } else {
+        tree::NO_FOLDER
+    }
+}
+
+/// Whether `commands` need a project in folders: those of folders, a model saved in a folder,
+/// renaming or deleting a script. On files an agent's batch with one organizes a project of the
+/// old layout in folders first.
+pub fn needs_tree_layout(commands: &[Command]) -> bool {
+    let script = |asset: &str, kind: &Option<ItemKind>| {
+        *kind == Some(ItemKind::Script) || asset.trim().to_ascii_lowercase().ends_with(".luau")
+    };
+    commands.iter().any(|command| {
+        tree::needs_folder(command)
+            || match command {
+                Command::RenameAsset { asset, kind, .. }
+                | Command::DeleteAsset { asset, kind, .. } => script(asset, kind),
+                _ => false,
+            }
+    })
 }
 
 /// Whether a command of `commands` needs the project's scripts (see [`apply_with_scripts`]):
@@ -2026,6 +2096,15 @@ pub fn batch_warnings(project: &Project) -> Vec<Warning> {
         });
     }
     found
+}
+
+/// A command's folder, none for the project's root ("" or "/"), where it goes without one.
+fn folder_or_root<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let folder = Option::<String>::deserialize(deserializer)?;
+    Ok(folder.filter(|folder| !folder.trim().trim_matches(['/', '\\']).trim().is_empty()))
 }
 
 /// Parses a JSON array (or a single object) of commands.
@@ -2695,7 +2774,13 @@ fn find_asset(project: &Project, asset: &str, kind: Option<AssetKind>) -> Result
             asset_kind(kind).1
         )
     };
-    if let Some(found) = project.asset(asset) {
+    let path = asset.trim().replace('\\', "/");
+    if let Some(found) = project.asset(asset).or_else(|| {
+        project
+            .assets
+            .iter()
+            .find(|a| !a.path.is_empty() && crate::names::same_name(&a.path, &path))
+    }) {
         return match kind {
             Some(kind) if kind != found.kind => Err(other_kind(&[found], kind)),
             _ => Ok(found.id.clone()),
@@ -2737,7 +2822,32 @@ fn find_asset(project: &Project, asset: &str, kind: Option<AssetKind>) -> Result
         many => {
             let kinds: BTreeSet<&str> = many.iter().map(|a| asset_kind(a.kind).0).collect();
             // Of different kinds, the kind tells them apart; of one kind, only the ID does,
-            // which the message leaves to oxy_project: images and sounds by their files.
+            // which the message leaves to oxy_project: images and sounds by their files. In a
+            // project in folders the path of the file tells any of them apart.
+            if project.layout == Layout::Tree {
+                let mut listed: Vec<String> = many
+                    .iter()
+                    .map(|a| format!("{} ({}, {})", a.name, asset_kind(a.kind).0, a.path))
+                    .collect();
+                first_ten(&mut listed);
+                let kinds = if kinds.len() == many.len() {
+                    format!(
+                        "kind ({}) ou ",
+                        many.iter()
+                            .map(|a| format!("{:?}", a.kind))
+                            .collect::<Vec<_>>()
+                            .join(" ou ")
+                    )
+                } else {
+                    String::new()
+                };
+                return Err(format!(
+                    "\"{}\" é o nome de {} recursos: {}; passe {kinds}o caminho do arquivo",
+                    asset.trim(),
+                    many.len(),
+                    listed.join(", ")
+                ));
+            }
             if kinds.len() == many.len() {
                 Err(format!(
                     "\"{}\" é o nome de {} recursos: {}; passe kind ({})",
@@ -3103,7 +3213,11 @@ fn apply_one(
             entity,
             name,
             replace,
+            folder,
         } => {
+            if folder.is_some() && project.layout == Layout::Legacy {
+                return Err(tree::LEGACY.into());
+            }
             let id = scene_id(project, scene, default)?;
             let replaced = replace
                 .as_deref()
@@ -3144,7 +3258,7 @@ fn apply_one(
                     let map = project.replace_model_mapped(&model, &id, entity, name)?;
                     (model, map)
                 }
-                None => project.save_model_mapped(&id, entity, name)?,
+                None => project.save_model_mapped_in(&id, entity, name, folder.as_deref())?,
             };
             copies.push(Arc::new(map));
             Ok(vec![model])
@@ -3170,7 +3284,7 @@ fn apply_one(
         }
         C::RenameAsset { asset, name, kind } => {
             if *kind == Some(ItemKind::Script) {
-                return Err(tree::NO_FOLDER.into());
+                return Err(script_files_need(project).into());
             }
             let id = find_asset(project, asset, kind.and_then(ItemKind::asset))?;
             let name = name.trim();
@@ -3199,7 +3313,7 @@ fn apply_one(
         }
         C::DeleteAsset { asset, kind, .. } => {
             if *kind == Some(ItemKind::Script) {
-                return Err(tree::NO_FOLDER.into());
+                return Err(script_files_need(project).into());
             }
             let id = find_asset(project, asset, kind.and_then(ItemKind::asset))?;
             refuse_used(project, &id)?;
@@ -4331,7 +4445,8 @@ fn copy_entities(
     Ok((created, map))
 }
 
-/// A model asset by ID or, when no asset has that ID, by name (ignoring case).
+/// A model asset by ID, else by the path of its file (`Pista/Checkpoint.modelo.json`, with or
+/// without the extension), else by name (ignoring case).
 pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
     if let Some(asset) = project.asset(model) {
         return if asset.kind == AssetKind::Model && asset.model.is_some() {
@@ -4339,6 +4454,16 @@ pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
         } else {
             Err(format!("O recurso {} não é um modelo", asset.name))
         };
+    }
+    let path = model.trim().replace('\\', "/");
+    let with_extension = format!("{path}{}", crate::model_file::EXTENSION);
+    if let Some(asset) = project.assets.iter().find(|a| {
+        a.kind == AssetKind::Model
+            && !a.path.is_empty()
+            && (crate::names::same_name(&a.path, &path)
+                || path.contains('/') && crate::names::same_name(&a.path, &with_extension))
+    }) {
+        return Ok(asset.id.clone());
     }
     let wanted = model.trim().to_lowercase();
     let named: Vec<&Asset> = project
@@ -4353,7 +4478,11 @@ pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
                 .assets
                 .iter()
                 .filter(|a| a.kind == AssetKind::Model)
-                .map(|a| format!("{} ({})", a.name, a.id))
+                // A model's file tells it apart in a project in folders, its ID in an old one.
+                .map(|a| match a.path.as_str() {
+                    "" => format!("{} ({})", a.name, a.id),
+                    path => format!("{} ({path})", a.name),
+                })
                 .collect();
             Err(if models.is_empty() {
                 format!(
@@ -4367,6 +4496,15 @@ pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
                 )
             })
         }
+        many if many.iter().all(|a| !a.path.is_empty()) => Err(format!(
+            "{} modelos se chamam \"{}\" ({}); passe o caminho do arquivo de um deles",
+            many.len(),
+            model.trim(),
+            many.iter()
+                .map(|a| a.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
         many => Err(format!(
             "{} modelos se chamam \"{}\"; use o ID",
             many.len(),

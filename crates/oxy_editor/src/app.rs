@@ -1393,7 +1393,11 @@ impl Editor {
                 &root,
                 &source,
                 kind,
-                &mut |path, id| creating.as_mut().map_or(Ok(()), |c| c.before(path, id)),
+                &mut |path, id| {
+                    creating.as_mut().map_or(Ok(()), |c| {
+                        c.before(oxy_core::asset_import::Making::File { path, id })
+                    })
+                },
             );
             let files = creating
                 .map(|creating| creating.finish(imported.is_ok()))
