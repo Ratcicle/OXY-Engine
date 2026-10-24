@@ -228,14 +228,7 @@ impl Editor {
                                 self.show_dock(DockTab::Console);
                             }
                         }
-                        if widgets::icon_text_button(
-                            ui,
-                            Icon::Book,
-                            "Guia de lógica visual",
-                            false,
-                            false,
-                        )
-                        .clicked()
+                        if widgets::icon_text_button(ui, Icon::Book, "Guia", false, false).clicked()
                         {
                             self.open_guide("");
                         }

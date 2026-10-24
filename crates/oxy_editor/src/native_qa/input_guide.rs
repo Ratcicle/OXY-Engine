@@ -119,10 +119,11 @@ fn native_input_guide_workflow() {
             );
             qa.editor = Editor::new(cc);
             qa.actions = VecDeque::from([
-                Action::Click("Guia de lógica visual"),
+                Action::Click("Guia"),
                 Action::Screenshot("guide-first.png"),
                 Action::Idle,
-                Action::Scroll("Guia de lógica visual", -650.),
+                Action::Scroll("Guia", -3000.),
+                Action::Click("Primeiro comportamento"),
                 Action::Click("Abrir cópia da receita: primeira mensagem"),
                 Action::Check("m2_recipe"),
                 Action::Click("Ações de entrada"),
@@ -158,8 +159,8 @@ fn native_input_guide_workflow() {
                 Action::Wait(20),
                 Action::Check("m2_released"),
                 Action::Click("Parar"),
-                Action::Click("Guia de lógica visual"),
-                Action::Click("Buscar operação ou assunto"),
+                Action::Click("Guia"),
+                Action::Click("Buscar assunto, função ou nó"),
                 Action::Text("Esperar"),
                 Action::Click("Esperar sem bloquear"),
                 Action::Screenshot("guide-node.png"),

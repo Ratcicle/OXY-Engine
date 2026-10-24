@@ -77,8 +77,8 @@ Propriedades mostra os componentes presentes; + Adicionar componente oferece
 as opções compatíveis. Na Hierarquia, arraste para definir parentesco e use
 o botão direito para duplicar, agrupar, excluir ou salvar hierarquia como modelo.
 Lógica: selecione um objeto, adicione nós pelo catálogo e ligue saídas a entradas.
-Guia (ou Ajuda > Guia de lógica visual): consulte os nós e abra cópias de catorze
-receitas editáveis, disponíveis offline dentro do executável.
+Guia (ou Ajuda > Guia, F1): aprenda a escrever scripts, consulte a API e os nós e abra
+cópias das receitas editáveis, disponíveis offline dentro do executável.
 Estúdio: em Modelagem, crie formas e edite faces/arestas/vértices; em Pintura e
 Animação, pinte e anime peças rígidas. Soltar a alça aplica a edição; Esc
 cancela o gesto inteiro. Última operação ajusta o mesmo comando. Shift+U cria

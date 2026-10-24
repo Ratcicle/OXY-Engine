@@ -419,6 +419,11 @@ impl Editor {
                                 }
                                 shown.1 = number;
                                 let fails = lines.contains(&number);
+                                let look = Look {
+                                    font: &font,
+                                    gutter: GUTTER,
+                                    numbers: true,
+                                };
                                 paint_line(
                                     painter,
                                     row_rect,
@@ -426,7 +431,7 @@ impl Editor {
                                     index,
                                     number == asked,
                                     fails,
-                                    &font,
+                                    &look,
                                 );
                             }
                             Row::Error(index) => paint_error(painter, row_rect, &messages[index]),
@@ -461,6 +466,14 @@ impl Editor {
     }
 }
 
+/// How lines of code are drawn: their font, where the text starts and whether their numbers
+/// show, right-aligned before it.
+struct Look<'f> {
+    font: &'f egui::FontId,
+    gutter: f32,
+    numbers: bool,
+}
+
 /// One line of code in `rect`: its number, then its text in colours. The line asked for is
 /// highlighted, and the number of one that fails is red.
 fn paint_line(
@@ -470,8 +483,9 @@ fn paint_line(
     index: usize,
     asked: bool,
     fails: bool,
-    font: &egui::FontId,
+    look: &Look,
 ) {
+    let font = look.font;
     if asked {
         painter.rect_filled(rect, 0., theme::ACCENT_FILL);
         painter.rect_filled(
@@ -480,13 +494,15 @@ fn paint_line(
             theme::ACCENT,
         );
     }
-    painter.text(
-        egui::pos2(rect.left() + GUTTER - 14., rect.center().y),
-        egui::Align2::RIGHT_CENTER,
-        (index + 1).to_string(),
-        font.clone(),
-        if fails { theme::ERROR } else { LINE_NUMBER },
-    );
+    if look.numbers {
+        painter.text(
+            egui::pos2(rect.left() + look.gutter - 14., rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            (index + 1).to_string(),
+            font.clone(),
+            if fails { theme::ERROR } else { LINE_NUMBER },
+        );
+    }
     let (range, pieces) = &code.lines[index];
     let line = &code.text[range.clone()];
     let mut job = LayoutJob::default();
@@ -511,7 +527,51 @@ fn paint_line(
     }
     let galley = painter.layout_job(job);
     let top = rect.center().y - galley.size().y / 2.;
-    painter.galley(egui::pos2(rect.left() + GUTTER, top), galley, theme::TEXT);
+    painter.galley(
+        egui::pos2(rect.left() + look.gutter, top),
+        galley,
+        theme::TEXT,
+    );
+}
+
+/// A script's text as the Guide shows it, read only: in a dark block, in the code tab's colours,
+/// with its line numbers when `numbers`; a line wider than the page scrolls sideways.
+pub(crate) fn snippet(ui: &mut egui::Ui, id: impl std::hash::Hash, text: &str, numbers: bool) {
+    let code = Code::new(text.trim_end().to_owned());
+    let font = egui::FontId::monospace(12.);
+    let glyph = ui
+        .painter()
+        .layout_no_wrap("0".into(), font.clone(), theme::TEXT)
+        .size()
+        .x;
+    let look = Look {
+        font: &font,
+        gutter: if numbers { 42. } else { 10. },
+        numbers,
+    };
+    let height = code.lines.len() as f32 * LINE_HEIGHT;
+    egui::Frame::new()
+        .fill(Color32::from_rgb(30, 30, 32))
+        .stroke(egui::Stroke::new(1., theme::CARD_BORDER))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(0, 6))
+        .show(ui, |ui| {
+            let width = (look.gutter + code.widest as f32 * glyph + 12.).max(ui.available_width());
+            egui::ScrollArea::horizontal()
+                .id_salt(id)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+                    for index in 0..code.lines.len() {
+                        let row = Rect::from_min_size(
+                            rect.min + Vec2::new(0., index as f32 * LINE_HEIGHT),
+                            Vec2::new(width, LINE_HEIGHT),
+                        );
+                        paint_line(ui.painter(), row, &code, index, false, false, &look);
+                    }
+                });
+        });
 }
 
 /// The block under a line that fails, in `rect`: what failed, with a red edge.

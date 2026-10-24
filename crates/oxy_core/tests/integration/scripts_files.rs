@@ -3,10 +3,11 @@
 //! file, and the files VS Code with luau-lsp reads; with them, what a reload in the editor's
 //! test warns about and the scripts an object attaches that the folder lacks. When
 //! `OXY_LUAU_LSP` names a luau-lsp 1.70.1 executable, its check of the generated types, of the
-//! API's examples, of objects typed by their scripts and of the plan-B module runs too, in both
-//! of Luau's solvers (design §5.7).
+//! API's examples, of the Guide's scripts, of objects typed by their scripts and of the plan-B
+//! module runs too, in both of Luau's solvers (design §5.7).
 use oxy_core::{
     document::*,
+    guide_scripts,
     persistence::{self, PersistenceError},
     query,
     runtime::{FIXED_DT, InputFrame, Runtime, RuntimeOptions},
@@ -822,6 +823,18 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
         .collect();
     let mut files: Vec<(String, String)> = examples.clone();
     files.push(("scripts/tipado.luau".into(), TYPED.into()));
+    // The scripts the Guide's pages of Scripts show.
+    let guide: Vec<(String, String)> = guide_scripts::pages()
+        .iter()
+        .flat_map(|page| page.blocks)
+        .filter_map(|block| match block {
+            guide_scripts::Block::Code { file, code } => {
+                Some((format!("scripts/guia/{file}"), (*code).to_owned()))
+            }
+            _ => None,
+        })
+        .collect();
+    files.extend(guide.iter().cloned());
     // The module require's example loads by the project's alias, which the .luaurc OXY writes
     // gives luau-lsp, for the examples in both forms.
     files.push(("Pista/dados.luau".into(), "return { custo = 2 }\n".into()));
@@ -886,6 +899,7 @@ fn luau_lsp_reads_every_example_typed_objects_and_the_module_in_both_solvers() {
         .iter()
         .map(|path| path.replace("scripts/", "modulo/"))
         .collect();
+    good.extend(guide.iter().map(|(path, _)| path.as_str()));
     let mut module: Vec<&str> = module.iter().map(String::as_str).collect();
     module.push(".oxy/tipos/oxy.luau");
     for new_solver in [false, true] {

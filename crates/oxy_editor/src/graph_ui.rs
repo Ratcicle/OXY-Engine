@@ -69,6 +69,9 @@ pub fn operation(id: &str) -> Option<&'static OperationDef> {
     registry().iter().find(|op| op.id == id)
 }
 
+/// The Guide's topic of its page "Seu primeiro comportamento", in the nodes (legacy).
+pub const GUIDE_FIRST_BEHAVIOR: &str = "first-behavior";
+
 /// Operations grouped by category in registry order, each category listed once.
 pub fn categories() -> &'static [(&'static str, Vec<&'static OperationDef>)] {
     static CATEGORIES: std::sync::OnceLock<Vec<(&'static str, Vec<&'static OperationDef>)>> =
@@ -1279,7 +1282,7 @@ impl GraphView {
                     )
                     .clicked()
                 {
-                    self.guide_requested = Some(String::new());
+                    self.guide_requested = Some(GUIDE_FIRST_BEHAVIOR.into());
                 }
             });
         if let Some(op) = chosen {

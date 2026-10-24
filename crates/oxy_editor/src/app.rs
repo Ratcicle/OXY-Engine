@@ -277,6 +277,9 @@ enum Transition {
     Create(String, SceneKind),
     Open(PathBuf),
     Recipe(PathBuf),
+    /// A copy of a recipe in script, opened in the Cena with the first object that runs a script
+    /// selected, whose Scripts card shows it.
+    ScriptRecipe(PathBuf),
     Laboratory(PathBuf),
     Close,
 }
@@ -1007,6 +1010,21 @@ impl Editor {
                     self.home.example_copy = true;
                     self.tab = Tab::Logic;
                     self.select(self.scene().entities.first().map(|e| e.id.clone()));
+                }
+                opened
+            }
+            Transition::ScriptRecipe(path) => {
+                let opened = self.open_with_recent(path, false);
+                if !self.home.visible {
+                    self.home.example_copy = true;
+                    self.tab = Tab::Scene;
+                    let scripted = self
+                        .scene()
+                        .entities
+                        .iter()
+                        .find(|e| !e.scripts.is_empty())
+                        .map(|e| e.id.clone());
+                    self.select(scripted);
                 }
                 opened
             }

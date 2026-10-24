@@ -160,19 +160,12 @@ impl Editor {
     }
     fn toolbar_right(&mut self, ui: &mut egui::Ui, compact: bool) {
         ui.add_space(4.);
-        icons::menu_button(
-            ui,
-            Icon::Help,
-            "Ajuda",
-            "Ajuda e guia de lógica visual (F1)",
-            false,
-            |ui| {
-                if ui.button("Guia de lógica visual").clicked() {
-                    self.open_guide("");
-                    ui.close();
-                }
-            },
-        );
+        icons::menu_button(ui, Icon::Help, "Ajuda", "Ajuda e Guia (F1)", false, |ui| {
+            if ui.button("Guia").clicked() {
+                self.open_guide("");
+                ui.close();
+            }
+        });
         ui.add_space(4.);
         let Some((paused, game_paused)) = self
             .play

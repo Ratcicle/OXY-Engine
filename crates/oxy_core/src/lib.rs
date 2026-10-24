@@ -20,6 +20,7 @@ pub mod geometry;
 pub mod graph;
 pub mod guide;
 pub mod guide_recipes;
+pub mod guide_scripts;
 pub mod headless;
 pub mod history;
 pub mod input_actions;

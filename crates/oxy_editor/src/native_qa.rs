@@ -9,6 +9,7 @@ mod cuts;
 mod direct;
 mod export;
 mod final_flow;
+mod guide_scripts;
 mod input_guide;
 mod inspector;
 mod layout;
@@ -707,6 +708,9 @@ impl NativeQa {
         }
         if label.starts_with("sc7_") {
             return self.check_scripts(label);
+        }
+        if label.starts_with("gs7_") {
+            return self.check_guide_scripts(label);
         }
         let ensure = |condition: bool, message: &str| {
             if condition {
