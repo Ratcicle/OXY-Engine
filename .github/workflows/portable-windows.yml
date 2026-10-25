@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  # By hand on any branch too, as a feature branch is checked before merging:
+  # gh workflow run portable-windows.yml --ref <branch>
   workflow_dispatch:
 
 permissions:
@@ -12,7 +14,7 @@ permissions:
 jobs:
   package:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
@@ -40,6 +42,12 @@ jobs:
       - name: Luau compilado com /EHsc
         shell: pwsh
         run: ./scripts/check-luau-ehsc.ps1 -BuildDirectory target/x86_64-pc-windows-msvc/release/build
+      # The ZIP's build is the only one with Luau's C++ in release with the static runtime (-MT):
+      # ci.yml builds dev with -MD. The script tests of oxy_core run on it, among them the
+      # engine's errors (Rust) crossing Luau's C++ exceptions to a script's pcall and back, the
+      # host's panic barrier and the parkour in Luau played against the 0.6 graph.
+      - name: Testar scripts em release
+        run: cargo test -p oxy_core --release --locked --target x86_64-pc-windows-msvc --lib --test integration -- script parkour_ab::
       - name: Testar
         run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
       - name: Gerar ZIP e checksum

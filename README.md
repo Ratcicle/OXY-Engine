@@ -24,7 +24,7 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 Requisitos: Windows 10/11 x64, driver gráfico atualizado e GPU compatível com DirectX 12 ou Vulkan.
 
 1. Baixe o ZIP da [última Release](https://github.com/Ratcicle/OXY-Engine/releases/latest) e extraia tudo em uma pasta gravável.
-2. Abra **`OXY Engine.exe`**. Mantenha as pastas `data` e `parkour` e as DLLs junto dos executáveis.
+2. Abra **`OXY Engine.exe`**. Mantenha as pastas `data` e `parkour` junto dos executáveis.
 3. Na tela inicial, escolha **Novo projeto**, **Abrir projeto**, **Projeto de exemplo**, **Laboratório 3D · movimento** ou **OXY Parkour**.
 
 Os exemplos abrem como cópias seguras. Projetos recentes e preferências ficam em `%LOCALAPPDATA%/OXY Engine`, fora do projeto.

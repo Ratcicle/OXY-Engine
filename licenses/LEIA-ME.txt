@@ -1,4 +1,5 @@
-OXY Engine — dependências adicionadas na 0.3.0 (consultas físicas) e na 0.6.0 (saída de áudio e céu)
+OXY Engine — dependências adicionadas na 0.3.0 (consultas físicas), na 0.6.0 (saída de áudio e céu)
+e na 0.7.0 (scripts em Luau)
 
 Rapier 3D 0.35.3 e Parry 3D 0.30.2, Dimforge / Sébastien Crozet.
 Licença Apache-2.0. Os textos originais, sem alterações, estão nesta pasta.
@@ -9,10 +10,26 @@ está em cpal-0.18.2.txt. cpal abre o dispositivo de som; a mixagem é da OXY.
 No Windows ele usa dasp_sample e as bibliotecas windows (Microsoft), sob
 MIT OR Apache-2.0, nas versões do Cargo.lock.
 
+mlua 0.12.2 e mlua-sys 0.13.0, Aleksandr Orlenko e colaboradores (mlua-rs).
+Licença MIT; o texto original, sem alterações, está em mlua-0.12.2.txt. O
+mlua-sys sai do mesmo repositório e do mesmo commit, com a mesma licença. mlua
+liga a OXY ao Luau; a API dos scripts é da OXY. Ele usa bstr, sob MIT OR
+Apache-2.0, na versão do Cargo.lock.
+
+Luau 0.740, Roblox Corporation, derivado do Lua 5.1 (Lua.org, PUC-Rio),
+compilado das fontes do luau0-src 0.22.0+luau740 (Aleksandr Orlenko). Licença
+MIT; o texto original, sem alterações, com as notas da Roblox, da Lua.org e do
+luau0-src, está em luau-0.740.txt. O Luau vai compilado no editor, no player
+(os jogos exportados) e no servidor MCP (oxy-mcp), que rodam os scripts.
+
 Fontes das licenças, fixadas nas mesmas versões do Cargo.lock:
 https://github.com/dimforge/rapier/blob/v0.35.3/LICENSE
 https://github.com/dimforge/parry/blob/v0.30.2/LICENSE
 https://github.com/RustAudio/cpal/blob/v0.18.2/LICENSE
+O LICENSE dos pacotes mlua 0.12.2 e luau0-src 0.22.0+luau740 do crates.io, dos
+commits de onde foram publicados:
+https://github.com/mlua-rs/mlua/blob/a186d461c7772aed4cb0a9fa1d1899121c6450e7/LICENSE
+https://github.com/mlua-rs/luau-src-rs/blob/70d93d08358fbd666d2cc6e77c0d831da769089e/LICENSE
 
 Fontes embutidas na interface do editor e do player: IBM Plex Sans (Regular e Medium) e
 IBM Plex Mono (Regular), IBM Corp. Licença SIL Open Font License 1.1; o texto
@@ -27,5 +44,5 @@ editor, no player (os jogos exportados) e no servidor MCP (oxy-mcp), que faz
 as capturas. Fonte: https://opengameart.org/content/skyboxes-1
 
 Demais dependências e versões: Cargo.lock no código-fonte da OXY Engine.
-Esta relação documenta as adições da 0.3.0 e da 0.6.0; não é uma auditoria
-jurídica de todas as bibliotecas do workspace.
+Esta relação documenta as adições da 0.3.0, da 0.6.0 e da 0.7.0; não é uma
+auditoria jurídica de todas as bibliotecas do workspace.

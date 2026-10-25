@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Destination = '',
     [string]$BinaryDirectory = '',
     [switch]$SkipBuild
@@ -30,8 +30,8 @@ Copy-Item -LiteralPath (Join-Path $workspace 'examples/laboratorio-3d/project.ox
 # OXY Parkour, which the home screen opens as a copy: the project's folder as the Library sees
 # it (sounds, models and scripts in their folders), never what stays out of a project: entries
 # starting with a dot (OXY's own .oxy, with the agent's copies and the backups, .vscode,
-# .luaurc), backups next to the project file, links, another project inside it and the files
-# Windows and text editors leave.
+# .luaurc), backups next to the project file, links, another project or an exported game inside
+# it and the files Windows and text editors leave.
 $parkourSource = Join-Path $workspace 'examples/parkour'
 $parkour = Join-Path $destinationPath 'parkour'
 function Copy-ProjectTree([string]$From, [string]$To, [bool]$Root) {
@@ -40,7 +40,7 @@ function Copy-ProjectTree([string]$From, [string]$To, [bool]$Root) {
         $name = $item.Name
         if ($name.StartsWith('.') -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
         if ($item.PSIsContainer) {
-            if (!(Test-Path -LiteralPath (Join-Path $item.FullName 'project.oxy.json'))) { Copy-ProjectTree $item.FullName (Join-Path $To $name) $false }
+            if (!(Test-Path -LiteralPath (Join-Path $item.FullName 'project.oxy.json')) -and !(Test-Path -LiteralPath (Join-Path $item.FullName 'data/export.oxy.json'))) { Copy-ProjectTree $item.FullName (Join-Path $To $name) $false }
             continue
         }
         if ($Root -and ($name -like 'project.oxy.json.*' -or $name -eq 'export.oxy.json')) { continue }
@@ -49,6 +49,8 @@ function Copy-ProjectTree([string]$From, [string]$To, [bool]$Root) {
     }
 }
 Copy-ProjectTree $parkourSource $parkour $true
+# This file is UTF-8 with a BOM, so Windows PowerShell 5.1 (a local package) reads the accents of
+# the text below as pwsh (the CI package) does.
 $instructions = @"
 OXY Engine $version — Windows x64 portátil
 
@@ -63,7 +65,8 @@ Projeto de exemplo: sala 2D, oficina 3D e cartas; Salvar cria sua cópia.
 Laboratório 3D · movimento: pista editável; WASD, mouse, Espaço, Shift e C.
 V alterna primeira/terceira pessoa; Q muda ombro; R retorna ao checkpoint.
 OXY Parkour: jogo completo em primeira pessoa (menu, pista, pausa, recorde e música),
-aberto como cópia; R volta ao checkpoint e Esc abre o menu de pausa do jogo.
+aberto como cópia, em pastas (Pista, Menu e Comum) e com a lógica em scripts Luau;
+R volta ao checkpoint e Esc abre o menu de pausa do jogo.
 Jogador e Câmera principal são objetos separados, ligados pelo Alvo da câmera.
 Personagem 3D > Corpo de movimento: escolha cápsula, caixa, esfera ou convexo.
 Deslocamento local alinha a colisão sem mover a raiz ou a aparência.
@@ -76,16 +79,25 @@ Interface guarda velocidade e sensibilidade locais; a câmera de jogo não muda.
 Propriedades mostra os componentes presentes; + Adicionar componente oferece
 as opções compatíveis. Na Hierarquia, arraste para definir parentesco e use
 o botão direito para duplicar, agrupar, excluir ou salvar hierarquia como modelo.
-Lógica: selecione um objeto, adicione nós pelo catálogo e ligue saídas a entradas.
+Scripts em Luau: a lógica do jogo fica em arquivos .luau nas pastas do projeto,
+escritos no VS Code ou por um agente de IA (veja Agentes de IA, abaixo). O cartão
+Scripts, nas Propriedades, anexa, liga e desliga os scripts do objeto; Ver código
+mostra o script, só para leitura, e um erro de script no Console abre a linha que
+falhou. Um script salvo durante o teste é recarregado sem parar o teste.
+Biblioteca: as pastas reais do projeto; renomear, mover e excluir ali mudam os
+arquivos no disco, e Ctrl+Z desfaz.
+Lógica: os nós continuam funcionando, com o selo Nós (legado); selecione um objeto,
+adicione nós pelo catálogo e ligue saídas a entradas.
 Guia (ou Ajuda > Guia, F1): aprenda a escrever scripts, consulte a API e os nós e abra
-cópias das receitas editáveis, disponíveis offline dentro do executável.
+cópias das receitas editáveis, três em script e catorze em nós, disponíveis offline
+dentro do executável.
 Estúdio: em Modelagem, crie formas e edite faces/arestas/vértices; em Pintura e
 Animação, pinte e anime peças rígidas. Soltar a alça aplica a edição; Esc
 cancela o gesto inteiro. Última operação ajusta o mesmo comando. Shift+U cria
 borda interna; Shift+E extruda. Ctrl+caixa soma componentes, inclusive ocultos.
 F1 abre ajuda contextual.
 Interface: ajuste a escala pendente e clique Aplicar; Cancelar mantém a atual.
-Mantenha as pastas data e parkour e quaisquer DLLs ao lado dos executáveis.
+Mantenha as pastas data e parkour ao lado dos executáveis.
 
 Agentes de IA (MCP): oxy-mcp.exe é um servidor MCP que deixa agentes como o Claude
 ler, editar, testar e capturar projetos da OXY. No Claude Code, registre com
@@ -94,12 +106,14 @@ No editor, ligue Permitir agentes de IA em Preferências do editor (Interface: 1
 na barra de status). Com o projeto aberto, as mudanças do agente aparecem na hora,
 entram no histórico como "Agente: ..." e podem ser desfeitas com Ctrl+Z; quem salva
 é você. Sem o editor aberto, o agente edita os arquivos do projeto e guarda o projeto
-como estava antes da primeira mudança de cada sessão em project.oxy.json.agente.bak.
+como estava antes da primeira mudança de cada sessão em .oxy\agente. O agente também
+escreve, confere, anexa e testa scripts.
 
 oxy_player.exe é o runtime separado de jogos exportados. Neste pacote,
 abre os dados de exemplo; os painéis de edição pertencem apenas ao editor.
 Projetos antigos (schema 1 a 5) são convertidos em memória, sem alterar o original
-ao abrir. Ao salvar convertido, a OXY preserva um backup do documento original.
+ao abrir. O primeiro salvamento abre Organizar o projeto em pastas, que mostra o que
+vai para onde e guarda antes uma cópia completa do projeto em .oxy\backup.
 O schema 6 requer OXY Engine 0.7 ou mais recente: a 0.6.x e versões anteriores
 não abrem projetos salvos pela 0.7.
 Sem instalador, atualização automática ou assinatura digital.
