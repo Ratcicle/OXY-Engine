@@ -29,6 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Height of a row of the list.
 const ROW_HEIGHT: f32 = 24.;
+/// The open dock's least height, and the height it opens at first.
+const DOCK_MIN: f32 = 110.;
+const DOCK_DEFAULT: f32 = 176.;
 /// Height of a row of the PASTAS column.
 const FOLDER_ROW: f32 = 22.;
 /// Width of the PASTAS column.
@@ -127,6 +130,11 @@ pub(crate) struct LibraryUi {
     pub(crate) new: BTreeSet<Key>,
     /// Where the Library's body was drawn: a click there gives it the focus.
     rect: Option<Rect>,
+    /// Where the rows start this frame.
+    rows_top: Option<f32>,
+    /// How far below the dock's top the rows started when the Library last showed: the tabs,
+    /// the old layout's banner and the chips.
+    chrome: Option<f32>,
     /// The row to scroll to.
     reveal: Option<Key>,
     /// The PASTAS column shows (a dock wide enough, a project in folders).
@@ -863,6 +871,7 @@ impl Editor {
             Some(folder) if self.library.filter.is_none() => lib.subfolders(folder),
             _ => Vec::new(),
         };
+        self.library.rows_top = Some(ui.cursor().top());
         egui::ScrollArea::vertical()
             .id_salt("library_items")
             .auto_shrink([false, false])
@@ -1839,23 +1848,17 @@ impl Editor {
             self.show_dock(DockTab::Library);
         }
         let open = self.dock_open();
-        let panel = egui::TopBottomPanel::bottom("dock").frame(
-            egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(8, 0)),
+        let library = open && self.dock.tab == DockTab::Library;
+        let heights = dock_heights(
+            ctx.content_rect().height(),
+            self.library.chrome.filter(|_| library),
         );
-        let panel = if open {
-            panel
-                .resizable(true)
-                .default_height(176.)
-                .height_range(110.0..=(ctx.content_rect().height() * 0.45).max(120.))
-        } else {
-            panel
-                .resizable(false)
-                .exact_height(theme::PANEL_HEADER_HEIGHT)
-        };
-        if !open || self.dock.tab != DockTab::Library {
+        let panel = dock_panel(open, heights, &ctx.style());
+        if !library {
             self.library.rect = None;
         }
-        panel.show(ctx, |ui| {
+        self.library.rows_top = None;
+        let shown = panel.show(ctx, |ui| {
             if self.mesh_operation_active() {
                 ui.disable();
             }
@@ -1926,6 +1929,44 @@ impl Editor {
                 }
             }
         });
+        // Measured as drawn, whatever the dock's height: the next frames keep room for rows.
+        if let Some(rows) = self.library.rows_top {
+            self.library.chrome = Some(rows - shown.response.rect.top());
+        }
+    }
+}
+
+/// The heights of the open dock in a window `content` tall: at least two of the Library's rows
+/// under what it draws above them (`library_chrome`, from the dock's top, while the Library
+/// shows), which the old layout's banner and the chips make taller than the other tabs need,
+/// and no more than 45% of the window.
+fn dock_heights(content: f32, library_chrome: Option<f32>) -> std::ops::RangeInclusive<f32> {
+    let max = (content * 0.45).max(120.);
+    // Two rows and the point between them.
+    let min = library_chrome.map_or(DOCK_MIN, |chrome| chrome + 2. * ROW_HEIGHT + 1.);
+    min.clamp(DOCK_MIN, max)..=max
+}
+
+/// The bottom dock's panel: open, resizable within `heights`; collapsed, its tab row only, in
+/// a panel of its own, so the open dock opens again as tall as it was (a reveal in the Library
+/// included).
+fn dock_panel(
+    open: bool,
+    heights: std::ops::RangeInclusive<f32>,
+    style: &egui::Style,
+) -> egui::TopBottomPanel {
+    let id = if open { "dock" } else { "dock_collapsed" };
+    let panel = egui::TopBottomPanel::bottom(id)
+        .frame(egui::Frame::side_top_panel(style).inner_margin(egui::Margin::symmetric(8, 0)));
+    if open {
+        panel
+            .resizable(true)
+            .default_height(DOCK_DEFAULT)
+            .height_range(heights)
+    } else {
+        panel
+            .resizable(false)
+            .exact_height(theme::PANEL_HEADER_HEIGHT)
     }
 }
 
@@ -1965,6 +2006,10 @@ impl Editor {
     /// Whether Delete, F2 and Ctrl+A go to the Library now.
     pub(crate) fn qa_library_focus(&self) -> bool {
         self.library_focused()
+    }
+    /// How far below the dock's top the Library's rows started when it last showed.
+    pub(crate) fn qa_library_chrome(&self) -> Option<f32> {
+        self.library.chrome
     }
 }
 
@@ -2009,7 +2054,65 @@ fn chip(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
-    use super::plain;
+    use super::{DOCK_DEFAULT, DOCK_MIN, ROW_HEIGHT, dock_heights, dock_panel, plain};
+    use crate::theme;
+    use egui::{Pos2, Rect, Vec2};
+
+    /// The dock's height after one frame of a 1440 × 900 window, open or collapsed.
+    fn dock_height(ctx: &egui::Context, open: bool, chrome: Option<f32>) -> f32 {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440., 900.))),
+            ..Default::default()
+        };
+        let mut height = 0.;
+        let _ = ctx.run(input, |ctx| {
+            let panel = dock_panel(open, dock_heights(900., chrome), &ctx.style());
+            // As each tab's body does, it fills the dock.
+            height = panel
+                .show(ctx, |ui| ui.allocate_space(ui.available_size()))
+                .response
+                .rect
+                .height();
+        });
+        height
+    }
+
+    /// Collapsing the dock (the Studio and the Lógica start so) must not lose its height: a
+    /// reveal in the Library, such as Salvar hierarquia como modelo, opens it as it was, not at
+    /// the least height, where the old layout's banner and the chips leave no row.
+    #[test]
+    fn the_dock_opens_again_as_tall_as_it_was() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        assert_eq!(dock_height(&ctx, true, None), DOCK_DEFAULT);
+        assert_eq!(dock_height(&ctx, false, None), theme::PANEL_HEADER_HEIGHT);
+        assert_eq!(dock_height(&ctx, true, None), DOCK_DEFAULT);
+    }
+
+    /// At its least, the open dock keeps two of the Library's rows under what the Library draws
+    /// above them (with the old layout's banner, 124 points from the dock's top at 100%); in a
+    /// window too short for that the Library gets 45% of it, as every tab; the other tabs keep
+    /// the old least height.
+    #[test]
+    fn the_library_keeps_room_for_two_rows() {
+        let chrome = 124.;
+        let heights = dock_heights(900., Some(chrome));
+        assert!(*heights.start() - chrome >= 2. * ROW_HEIGHT);
+        assert_eq!(*heights.end(), 405.);
+        assert_eq!(*dock_heights(900., None).start(), DOCK_MIN);
+        assert_eq!(*dock_heights(900., Some(20.)).start(), DOCK_MIN);
+        let short = dock_heights(300., Some(chrome));
+        assert_eq!(short, 135.0..=135.0);
+        // A dock lower than that, as it was on another tab, grows to it on the Library.
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        assert_eq!(dock_height(&ctx, true, None), DOCK_DEFAULT);
+        let tall = 160.;
+        assert_eq!(
+            dock_height(&ctx, true, Some(tall)),
+            tall + 2. * ROW_HEIGHT + 1.
+        );
+    }
 
     #[test]
     fn a_batch_message_reads_without_its_place() {

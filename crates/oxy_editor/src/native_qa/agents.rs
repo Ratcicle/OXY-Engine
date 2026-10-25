@@ -4,13 +4,15 @@
 //! answering as they do on files), captures the viewport (with the collider view too, also
 //! while the game runs), imports a PNG (applied to a sprite, its pixels in the texture cache)
 //! and a WAV, reads the console (its own edits, then the game's logs and logic of the person's
-//! test, still there after the test stops) and the play state, is refused edits and imports
-//! while the game is running, and undoes its own steps. It also plays a test of its own with
-//! the window in the background (the game goes on, the mouse stays free, its inputs and Esc
-//! reach the game), is refused saving until the person allows it in Preferências do editor
-//! and then saves with a backup (never an example copy, which would ask for a folder), hands a
-//! first-person test to the person through Assumir, and then may pause the person's test but
-//! not stop it, resume it or send it inputs. Turning agents off turns their saving off.
+//! test, still there after the test stops) and the play state, and is refused edits and
+//! imports while the game is running. It also plays a test of its own with the window in the
+//! background (the game goes on, the mouse stays free, its inputs and Esc reach the game),
+//! undoes and redoes its own steps, is refused saving until the person allows it in
+//! Preferências do editor and then saves with a backup (never an example copy, which would ask
+//! for a folder); that first save organizes the old project in folders and starts the undo
+//! over. It hands a first-person test to the person through Assumir, and then may pause the
+//! person's test but not stop it, resume it or send it inputs. Turning agents off turns their
+//! saving off.
 use super::*;
 use crate::app::Driver;
 use oxy_core::{document::Value, encoding, painting::PaintImage, query, random};
@@ -471,6 +473,8 @@ impl NativeQa {
                     "Aplicar deveria permitir que agentes salvem",
                     &state,
                 )?;
+                // The project as the save takes it, in the old layout.
+                self.before_paint = Some(self.editor.state.clone());
                 std::thread::spawn(move || {
                     client(
                         dir,
@@ -523,6 +527,48 @@ impl NativeQa {
                 {
                     return Err("O Console não diz que o agente salvou".into());
                 }
+                // 0.7 (aa29b20; tree design §2.8 and §7): the first save of a project of the
+                // old layout, the agent's too, organizes it in folders, telling the agent what
+                // moved; the undo starts over, its steps naming the files by their old paths.
+                let before = self.before_paint.as_ref().ok_or("Sem o projeto de antes")?;
+                let moved = saved["converted"]["moved"].as_array().cloned();
+                for (name, to) in [
+                    ("Placa do agente", "Imagens/Placa do agente.png"),
+                    ("Pulo", "Sons/Pulo.wav"),
+                ] {
+                    let from = &before
+                        .project
+                        .assets
+                        .iter()
+                        .find(|a| a.name == name)
+                        .ok_or_else(|| format!("{name} não estava no projeto salvo"))?
+                        .path;
+                    if !moved
+                        .iter()
+                        .flatten()
+                        .any(|m| *m == json!({"from": from, "to": to}))
+                    {
+                        return Err(format!(
+                            "A resposta de salvar não diz que {from} foi para {to}: {saved}"
+                        ));
+                    }
+                    if !self.editor.root().join(to).is_file() {
+                        return Err(format!("{to} não está na pasta do projeto"));
+                    }
+                }
+                if after["project"]["layout"] != "tree" || !after["undo"].is_null() {
+                    return Err(format!(
+                        "O projeto salvo deveria estar em pastas, sem desfazer: {after}"
+                    ));
+                }
+                if !self.editor.console.messages.iter().any(|m| {
+                    m == "O desfazer recomeçou: as edições anteriores citavam os arquivos pelos \
+                          nomes antigos."
+                }) {
+                    return Err("O Console não diz que o desfazer recomeçou".into());
+                }
+                // What the person's test below must leave as it is.
+                self.after_paint = Some(self.editor.state.clone());
             }
             "agent_example_copy" => {
                 // Salvar would ask the person for a folder, in a dialog the agent cannot answer.
@@ -1032,14 +1078,14 @@ impl NativeQa {
                 }
             }
             "agent_undo" => {
+                // Before the first save, which organizes the project in folders and starts the
+                // undo over (0.7, aa29b20; tree design §7): the agent's three steps are there.
+                self.after_paint = Some(self.editor.state.clone());
                 let dir = self.agent_dir();
                 std::thread::spawn(move || {
                     client(
                         dir,
                         vec![
-                            // The test stopped: its lines are still there.
-                            ("console", json!({"origin": "jogo"})),
-                            ("status", json!({})),
                             ("undo", json!({})),
                             ("undo", json!({})),
                             ("undo", json!({})),
@@ -1050,16 +1096,6 @@ impl NativeQa {
             "agent_undone" => {
                 let answers = take_results()?;
                 let get = |method: &str, index: usize| answer(&answers, method, index);
-                let console = get("console", 0)??;
-                if !lines(&console).iter().any(|l| l["text"] == GREETING) {
-                    return Err(format!("O log do teste sumiu ao parar: {console}"));
-                }
-                let status = get("status", 0)??;
-                // Stopped, with the seed of the test that ran.
-                let seed = self.editor.play.seed.ok_or("Teste sem semente")?;
-                if status["play"] != json!({"running": false, "seed": seed}) {
-                    return Err(format!("Teste ainda em andamento ou sem semente: {status}"));
-                }
                 let labels: Vec<Json> = (0..3)
                     .map(|i| get("undo", i).and_then(|a| a).map(|a| a["label"].clone()))
                     .collect::<Result<_, _>>()?;
@@ -1084,6 +1120,107 @@ impl NativeQa {
                     .any(|id| base.asset(id).is_none())
                 {
                     return Err("A imagem importada ficou no cache depois de desfazer".into());
+                }
+            }
+            "agent_redo" => {
+                let dir = self.agent_dir();
+                std::thread::spawn(move || {
+                    client(
+                        dir,
+                        vec![
+                            ("redo", json!({})),
+                            ("redo", json!({})),
+                            ("redo", json!({})),
+                            ("status", json!({})),
+                        ],
+                    )
+                });
+            }
+            "agent_redone" => {
+                // The agent's steps back, unsaved: what the save below writes.
+                let answers = take_results()?;
+                let get = |method: &str, index: usize| answer(&answers, method, index);
+                let labels: Vec<Json> = (0..3)
+                    .map(|i| get("redo", i).and_then(|a| a).map(|a| a["label"].clone()))
+                    .collect::<Result<_, _>>()?;
+                if labels
+                    != [
+                        json!("Agente: 8 comandos"),
+                        json!("Agente: Importar recurso"),
+                        json!("Agente: Importar recurso"),
+                    ]
+                {
+                    return Err(format!("Refez outros passos: {labels:?}"));
+                }
+                let edited = self.after_paint.as_ref().ok_or("Sem o documento editado")?;
+                if self.editor.state.project != edited.project {
+                    return Err("Refazer do agente não trouxe o documento de volta".into());
+                }
+                let image = self
+                    .editor
+                    .state
+                    .project
+                    .assets
+                    .iter()
+                    .find(|a| a.name == "Placa do agente")
+                    .ok_or("A imagem importada não voltou ao projeto")?;
+                if self
+                    .editor
+                    .state
+                    .images
+                    .get(&image.id)
+                    .is_none_or(|p| (p.width, p.height) != (16, 8))
+                    || !self.editor.state.images.is_dirty(&image.id)
+                {
+                    return Err("Refazer não devolveu os pixels importados ao cache".into());
+                }
+                let status = get("status", 0)??;
+                if status["project"]["unsaved_changes"] != true
+                    || status["undo"] != "Agente: Importar recurso"
+                    || !status["redo"].is_null()
+                {
+                    return Err(format!("Status depois de refazer inesperado: {status}"));
+                }
+            }
+            "agent_history" => {
+                let dir = self.agent_dir();
+                std::thread::spawn(move || {
+                    client(
+                        dir,
+                        vec![
+                            // The test stopped: its lines are still there.
+                            ("console", json!({"origin": "jogo"})),
+                            ("status", json!({})),
+                            ("undo", json!({})),
+                        ],
+                    )
+                });
+            }
+            "agent_history_restarted" => {
+                let answers = take_results()?;
+                let get = |method: &str, index: usize| answer(&answers, method, index);
+                let console = get("console", 0)??;
+                if !lines(&console).iter().any(|l| l["text"] == GREETING) {
+                    return Err(format!("O log do teste sumiu ao parar: {console}"));
+                }
+                let status = get("status", 0)??;
+                // Stopped, with the seed of the test that ran.
+                let seed = self.editor.play.seed.ok_or("Teste sem semente")?;
+                if status["play"] != json!({"running": false, "seed": seed}) {
+                    return Err(format!("Teste ainda em andamento ou sem semente: {status}"));
+                }
+                // The save that organized the project in folders started the undo over: the
+                // steps before it named the files by their old paths.
+                if !status["undo"].is_null() {
+                    return Err(format!("O desfazer não recomeçou ao organizar: {status}"));
+                }
+                let undo = get("undo", 0)??;
+                if undo != json!({"done": false, "label": null}) {
+                    return Err(format!("Desfez um passo de antes da organização: {undo}"));
+                }
+                let saved = self.after_paint.as_ref().ok_or("Sem o documento salvo")?;
+                if self.editor.state.project != saved.project {
+                    return Err("O documento mudou depois de salvar".into());
                 }
             }
             "agent_disable" => {
@@ -1185,6 +1322,14 @@ fn native_agents_live_channel() {
                 Action::Check("agent_play_input"),
                 Action::Wait(90),
                 Action::Check("agent_play_stopped"),
+                // The agent undoes its own steps and redoes them, before its first save
+                // organizes the project in folders.
+                Action::Check("agent_undo"),
+                Action::Wait(60),
+                Action::Check("agent_undone"),
+                Action::Check("agent_redo"),
+                Action::Wait(60),
+                Action::Check("agent_redone"),
                 // The person lets agents save, in Preferências do editor.
                 Action::Click("Interface: 100%"),
                 Action::Check("agent_preferences"),
@@ -1211,9 +1356,9 @@ fn native_agents_live_channel() {
                 Action::Wait(90),
                 Action::Check("agent_refused_while_playing"),
                 Action::Click("Parar"),
-                Action::Check("agent_undo"),
+                Action::Check("agent_history"),
                 Action::Wait(60),
-                Action::Check("agent_undone"),
+                Action::Check("agent_history_restarted"),
                 // A first-person test the agent plays, which the person takes over.
                 Action::Check("agent_takeover"),
                 Action::Wait(90),

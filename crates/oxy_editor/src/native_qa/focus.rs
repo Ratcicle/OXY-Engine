@@ -339,7 +339,10 @@ fn native_test_unfocused() {
                 Action::Check("fc7_focus"),
                 Action::Wait(4),
                 Action::Check("fc7_hover_chip"),
-                Action::Wait(60),
+                // egui opens a tooltip after the pointer rests 0.5 s of wall-clock time (its
+                // tooltip_delay), counted once the 0.1 s of pointer history stops moving: frames
+                // say nothing of it on a fast display.
+                Action::WaitSeconds(1.),
                 Action::Check("fc7_paused_tooltip"),
                 Action::Screenshot("test-paused-unfocused.png"),
                 // The person turns the option on in Preferências do editor › Teste, with the
@@ -354,7 +357,8 @@ fn native_test_unfocused() {
                 Action::Wait(4),
                 Action::Check("fc7_on"),
                 Action::Check("fc7_hover_chip"),
-                Action::Wait(60),
+                // As long as the tooltip took above: had it any, it would show.
+                Action::WaitSeconds(1.),
                 Action::Check("fc7_no_advice"),
                 Action::Click("Parar"),
                 Action::Wait(4),
@@ -371,7 +375,8 @@ fn native_test_unfocused() {
                 Action::Check("fc7_running_unfocused"),
                 Action::Screenshot("test-running-unfocused.png"),
                 Action::Check("fc7_rewrite"),
-                Action::Wait(120),
+                // The scripts' watcher looks every 300 ms and reloads at two equal looks.
+                Action::WaitSeconds(1.5),
                 Action::Check("fc7_reloaded"),
                 // Back in OXY with a click on the game's button, which the game does not take;
                 // then the keyboard and the mouse reach the game again.

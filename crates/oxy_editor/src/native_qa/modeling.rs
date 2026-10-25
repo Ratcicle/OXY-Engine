@@ -83,6 +83,56 @@ impl NativeQa {
                     return Err("Refazer perdeu geometria ou pixels".into());
                 }
             }
+            "m4_reopened" => {
+                // 0.7 (aa29b20, 78154e7; tree design §2.8 and §7): the first save of a project
+                // of the old layout organizes it in folders, each image in Imagens/ by its name;
+                // the geometry, the IDs, the material links and the pixels stay. What may change
+                // is written here by hand, not taken from the conversion this saved with.
+                let redone = self.after_paint.clone().ok_or("Sem o estado refeito")?;
+                let mut expected = redone.project.clone();
+                expected.layout = Layout::Tree;
+                for asset in &mut expected.assets {
+                    let saved = self
+                        .editor
+                        .state
+                        .project
+                        .asset(&asset.id)
+                        .ok_or_else(|| format!("{} sumiu ao salvar", asset.name))?;
+                    if asset.kind == AssetKind::Texture
+                        && saved.path != format!("Imagens/{}.png", saved.name)
+                    {
+                        return Err(format!(
+                            "{} não foi para Imagens/ com o nome dela: {}",
+                            saved.name, saved.path
+                        ));
+                    }
+                    asset.name = saved.name.clone();
+                    asset.path = saved.path.clone();
+                }
+                if self.editor.state.project != expected {
+                    return Err("O salvamento organizado perdeu geometria, IDs ou vínculos".into());
+                }
+                // The names it chose are the ones a new folder gives.
+                if expected != oxy_core::conversion::in_folders(&redone.project).project {
+                    return Err("O salvamento organizado não deu às imagens os nomes delas".into());
+                }
+                for asset in expected
+                    .assets
+                    .iter()
+                    .filter(|asset| asset.kind == AssetKind::Texture)
+                {
+                    // Read from its new file.
+                    self.editor.state.images.ensure(&asset.id)?;
+                    if self.editor.state.images.get(&asset.id) != redone.images.get(&asset.id) {
+                        return Err(format!(
+                            "O salvamento organizado alterou os pixels de {}",
+                            asset.name
+                        ));
+                    }
+                }
+                // What the undo after the reopening must come back to: the document as saved.
+                self.after_paint = Some(self.editor.state.clone());
+            }
             "m4_snap_preview" => {
                 if !self.editor.mesh_operation_active() || source.transform.position != [1., 0., 0.]
                 {
@@ -227,6 +277,7 @@ fn native_basic_modeling_workflow() {
                 Action::Key(Key::S, true),
                 Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
+                Action::Check("m4_reopened"),
                 Action::SelectEntity("Peça pintada"),
                 Action::Click("Estúdio"),
                 Action::OptionalClick("Ferramentas"),
@@ -234,7 +285,9 @@ fn native_basic_modeling_workflow() {
                 Action::Click("Visualização"),
                 Action::Click("Enquadrar seleção"),
             ]);
-            // Reopen clears history. Additional object alignment is tested from the saved mesh below.
+            // Reopen clears history, and the first save organized the project in folders (0.7):
+            // the undo below comes back to the reopened document. Additional object alignment is
+            // tested from the saved mesh below.
             qa.actions.extend([
                 Action::Key(Key::Num2, false),
                 Action::ComponentClick([0.1767767, 0., 0.6767767], false),

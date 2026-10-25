@@ -21,9 +21,18 @@ impl NativeQa {
                 if topic != Some("") {
                     return Err(format!("O Guia abriu em {topic:?}, não em Primeiro script"));
                 }
+                // Its title, in the modal: the Lógica's Guia button stays painted behind it.
+                if self.surface.modal.is_none()
+                    || !self
+                        .surface
+                        .texts
+                        .iter()
+                        .any(|t| t.text == "Guia" && !t.behind_modal)
+                {
+                    return Err("O Guia não abriu como diálogo com o título Guia".into());
+                }
                 let total = guide_scripts::functions().to_string();
                 for text in [
-                    "Guia",
                     "Seu primeiro script",
                     "Primeiro script",
                     "return Girar",
@@ -164,7 +173,9 @@ fn native_guide_scripts() {
     let root = std::env::temp_dir().join(format!("oxy-guide-scripts-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("project.oxy.json");
-    let project = oxy_core::editing::blank_project("Guia", SceneKind::TwoD).unwrap();
+    // The top bar shows the project's name above every button: named as a label the flow
+    // clicks (or ending in one), it would take the click.
+    let project = oxy_core::editing::blank_project("Guia de scripts", SceneKind::TwoD).unwrap();
     oxy_core::persistence::save_project(&path, &project).unwrap();
     let report = Arc::new(Mutex::new(Report::default()));
     let shared = report.clone();

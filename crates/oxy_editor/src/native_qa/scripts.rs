@@ -1,5 +1,5 @@
 use super::*;
-use oxy_core::document::Value;
+use oxy_core::document::{Layout, Value};
 
 const DOOR: &str = "scripts/porta.luau";
 const BROKEN: &str = "scripts/quebrado.luau";
@@ -396,6 +396,9 @@ fn native_scripts_viewer() {
     std::fs::write(root.join(DOOR), VIEWED).unwrap();
     let path = root.join("project.oxy.json");
     let mut project = oxy_core::editing::blank_project("Código", SceneKind::ThreeD).unwrap();
+    // A 0.7 project, in folders: opening one of the old layout leaves its notice up until it is
+    // dismissed, over the right end of the dock, where the Console puts its links.
+    project.layout = Layout::Tree;
     let scene = project.start_scene.clone();
     // A tile whose logic is a node that waits for a click, which the test never gives.
     oxy_core::command::apply(
@@ -455,7 +458,8 @@ fn native_scripts_viewer() {
                 // An agent fixes the file while the test runs: the test reloads it and the tab
                 // reads it again.
                 Action::Check("sc7_view_rewrite"),
-                Action::Wait(120),
+                // The scripts' watcher looks every 300 ms and reloads at two equal looks.
+                Action::WaitSeconds(1.5),
                 Action::Click("print(\"Porta consertada\")"),
                 Action::Wait(2),
                 Action::Check("sc7_view_reloaded"),
