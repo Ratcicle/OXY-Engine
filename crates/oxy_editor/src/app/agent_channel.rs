@@ -387,7 +387,7 @@ impl Editor {
                     let root = self.path.as_deref().and_then(std::path::Path::parent);
                     status["project"]["layout"] = json!(query::layout_name(project.layout));
                     if project.layout == Layout::Legacy && root.is_some() {
-                        // The person's next save organizes it in folders.
+                        // The next save, the person's or an agent's, organizes it in folders.
                         status["project"]["conversion_pending"] = json!(true);
                     }
                     // Only oxy_status asks: the other tools read the status to find editors.

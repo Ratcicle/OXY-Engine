@@ -17,6 +17,38 @@ pub(crate) const AGENT_PREFIX: &str = "Agente · ";
 
 const NO_TEST: &str = "Não há teste do jogo em andamento no editor.";
 
+/// What an agent's save says when it organized a project of the old layout in folders and the
+/// editor's undo history started over (the person's Ctrl+Z, as the Console tells them).
+const UNDO_RESTARTED: &str = "Organizing the project in folders restarted the editor's \
+    undo history: the steps before this save named the files by their old paths, so neither the \
+    person's Ctrl+Z nor oxy_undo goes back past it.";
+
+/// The answer to an agent's save of `saved`, kept first as `previous`: what organizing it in
+/// folders did (`converted`) and whether that restarted the undo history, or why it stayed in
+/// the old layout (`kept`).
+fn save_answer(
+    saved: &Path,
+    previous: &Path,
+    converted: Option<Json>,
+    undo_restarted: bool,
+    kept: Option<String>,
+) -> Json {
+    let mut answer = json!({
+        "saved": saved.display().to_string(),
+        "previous_version": previous.display().to_string(),
+    });
+    if let Some(converted) = converted {
+        answer["converted"] = converted;
+    }
+    if undo_restarted {
+        answer["note"] = json!(UNDO_RESTARTED);
+    }
+    if let Some(kept) = kept {
+        answer["warnings"] = json!([kept]);
+    }
+    answer
+}
+
 /// The scripts an agent's batch for the project saved at `path` reads: those of its tree, read
 /// from the disk again, when a command attaches one (see [`command::needs_scripts`]), so a
 /// script the agent just wrote with its own file tools is there; else none. A project never
@@ -501,18 +533,14 @@ impl Editor {
                 .cloned()
                 .unwrap_or_else(|| "Não foi possível salvar.".into()));
         }
-        let mut answer = json!({
-            "saved": path.display().to_string(),
-            "previous_version": backup.display().to_string(),
-        });
         // The first save of a project of the old layout organized it in folders, or why not.
-        if let Some(converted) = self.converted.take() {
-            answer["converted"] = converted;
-        }
-        if let Some(kept) = self.kept_layout.take() {
-            answer["warnings"] = json!([kept]);
-        }
-        Ok(answer)
+        Ok(save_answer(
+            &path,
+            &backup,
+            self.converted.take(),
+            std::mem::take(&mut self.undo_restarted),
+            self.kept_layout.take(),
+        ))
     }
     /// Undo or redo on an agent's request, with the same rules as Ctrl+Z.
     pub(crate) fn agent_undo(&mut self, redo: bool) -> Result<Option<String>, String> {
@@ -603,6 +631,33 @@ mod tests {
     #[test]
     fn agent_messages_carry_the_console_origin() {
         assert!(format!("{AGENT_PREFIX}Criar objeto").starts_with("Agente · "));
+    }
+
+    #[test]
+    fn a_save_that_organizes_the_project_says_the_undo_history_restarted() {
+        let saved = Path::new(r"C:\Jogos\Corrida\project.oxy.json");
+        let previous = Path::new(r"C:\Jogos\Corrida\project.oxy.json.agente.bak");
+        let plain = save_answer(saved, previous, None, false, None);
+        assert_eq!(
+            plain,
+            json!({"saved": r"C:\Jogos\Corrida\project.oxy.json",
+                   "previous_version": r"C:\Jogos\Corrida\project.oxy.json.agente.bak"})
+        );
+        // Organized in folders, with steps to undo before it: the agent hears both.
+        let moved = json!({"summary": "O agente organizou o projeto em pastas ao gravá-lo",
+                           "moved": [{"from": "assets/1.wav", "to": "Sons/Pulo.wav"}]});
+        let organized = save_answer(saved, previous, Some(moved.clone()), true, None);
+        assert_eq!(organized["converted"], moved);
+        assert_eq!(organized["note"], json!(UNDO_RESTARTED));
+        assert!(UNDO_RESTARTED.contains("restarted the editor's undo history"));
+        assert!(organized.get("warnings").is_none());
+        // Organized with nothing to undo before it: nothing restarted, nothing to say.
+        let quiet = save_answer(saved, previous, Some(moved), false, None);
+        assert!(quiet.get("note").is_none());
+        // Kept in the old layout: why, and no note.
+        let kept = save_answer(saved, previous, None, false, Some("Pasta ocupada.".into()));
+        assert_eq!(kept["warnings"], json!(["Pasta ocupada."]));
+        assert!(kept.get("note").is_none() && kept.get("converted").is_none());
     }
 
     #[test]

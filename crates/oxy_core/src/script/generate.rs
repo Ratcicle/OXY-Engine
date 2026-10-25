@@ -503,6 +503,37 @@ mod tests {
         }
     }
 
+    /// AGENTS.md tells where the files made from the table live and how to write them again,
+    /// and names the variable .cargo/config.toml gives cargo for Luau's C++, so a renamed file
+    /// or variable takes its note along.
+    #[test]
+    fn the_agents_notes_name_the_generated_files_and_the_build_variable() {
+        let notes = include_str!("../../../../AGENTS.md");
+        assert!(notes.contains("OXY_UPDATE_API"));
+        assert!(notes.contains("script::generate::tests::the_reference_files_match_the_table"));
+        for (path, _) in references() {
+            let from_root = match path.strip_prefix("../../") {
+                Some(path) => path.to_owned(),
+                None => format!("crates/oxy_core/{path}"),
+            };
+            assert!(notes.contains(&from_root), "{from_root}");
+        }
+        let config = include_str!("../../../../.cargo/config.toml");
+        let variable = config
+            .lines()
+            .filter_map(|line| line.split_once(" = ").map(|(name, _)| name))
+            .find(|name| name.starts_with("CXXSTDLIB_"))
+            .expect("the .cargo/config.toml sets the C++ library of the gnu build");
+        assert!(notes.contains(variable), "{variable}");
+        for text in [
+            "cargo clean -p mlua-sys",
+            "LUAU_CXXFLAGS=/EHsc",
+            "git worktree",
+        ] {
+            assert!(notes.contains(text), "{text}");
+        }
+    }
+
     #[test]
     fn the_definitions_keep_to_the_syntax_both_solvers_read() {
         let text = definitions();

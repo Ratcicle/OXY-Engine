@@ -567,6 +567,15 @@ impl NativeQa {
                 }) {
                     return Err("O Console não diz que o desfazer recomeçou".into());
                 }
+                // The agent hears it too, in the save's answer.
+                if !saved["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("restarted the editor's undo history"))
+                {
+                    return Err(format!(
+                        "A resposta de salvar não diz que o desfazer recomeçou: {saved}"
+                    ));
+                }
                 // What the person's test below must leave as it is.
                 self.after_paint = Some(self.editor.state.clone());
             }

@@ -503,8 +503,8 @@ pub fn definitions() -> Json {
         tool(
             "oxy_status",
             "Lists open OXY editors that allow AI agents (project {name, path, unsaved_changes, \
-             layout: tree|legacy, conversion_pending? (an old project the person's next save \
-             organizes in folders), scripts? {files (the .luau files of its folder), objects \
+             layout: tree|legacy, conversion_pending? (an old project the next save, the \
+             person's or oxy_save, organizes in folders), scripts? {files (the .luau files of its folder), objects \
              (how many attach a script), errors? (what keeps them from running, as oxy_scripts \
              check finds it: a script that does not load, a file an object attaches that the \
              folder lacks), errors_total?, checker}}, active scene, whether the editor is busy \
@@ -584,8 +584,9 @@ pub fn definitions() -> Json {
              children; a part's ID is what \"$N@<id>\" takes after a place_model N. layout: \
              tree (the project folder is the Library: folders [{path, items}] in tree order, \
              paged by offset and limit, with folders_total) or legacy (an old project, all its \
-             assets in assets/; conversion_pending: organized in folders by the person's next \
-             save live, where folder commands wait for it, or by the next write on files); \
+             assets in assets/; conversion_pending: organized in folders by the next save \
+             live, the person's or oxy_save, where folder commands wait for it, or by the next \
+             write on files); \
              scripts [{path, used_by}]: every .luau of the project folder. With folder, what that \
              folder holds instead: {folder, items: [{kind: Folder|Texture|Audio|Model|Script, \
              name, path, items? (a folder's count), id?, state?, problem?, used_by_count?}], \
@@ -1569,7 +1570,11 @@ by default): oxy_status can_save says whether you may now, save_refusal why not.
 unsaved is written, the person's own changes too; the previous file is kept first as \
 project.oxy.json.agente.bak. Refused during a test, while the editor is busy, and for a project \
 that was never saved or is an example copy (saving it asks the person for a folder). Answers \
-{saved, previous_version}. Save only when the person asks or agrees.";
+{saved, previous_version}; a save of a project of the old layout organizes it in folders as the \
+person's first save does, adding converted (what moved) and a note when that restarted the \
+editor's undo history (the steps before named the files by their old paths), or warnings with why \
+it stayed in the old layout. With conversion_pending in oxy_status, tell the person first that \
+the edits so far will stop being undoable. Save only when the person asks or agrees.";
 
 /// Values of oxy_play's action.
 const PLAY_ACTIONS: [&str; 5] = ["start", "stop", "pause", "resume", "input"];
@@ -6694,6 +6699,9 @@ mod tests {
             "agente.bak",
             "can_save",
             "example copy",
+            "converted (what moved)",
+            "restarted the editor's undo history",
+            "tell the person first",
         ] {
             assert!(SAVE_DESCRIPTION.contains(text), "{text}");
         }
@@ -6708,6 +6716,7 @@ mod tests {
             "queued_until?",
             "can_save",
             "Assumir, or Retomar on a paused test",
+            "the person's or oxy_save",
         ] {
             assert!(status.contains(text), "{text}");
         }

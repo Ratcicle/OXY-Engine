@@ -375,6 +375,8 @@ pub struct Editor {
     pub(crate) converted: Option<serde_json::Value>,
     /// Why the last save kept the project in the old layout, for an agent's answer.
     pub(crate) kept_layout: Option<String>,
+    /// The last save organized the project in folders and the undo history started over.
+    pub(crate) undo_restarted: bool,
     pub scene_id: Id,
     pub selected: Option<Id>,
     pub selection: Selection,
@@ -536,6 +538,7 @@ impl Editor {
             lock: None,
             converted: None,
             kept_layout: None,
+            undo_restarted: false,
             scene_id,
             selected: None,
             selection: Selection::default(),
@@ -898,6 +901,7 @@ impl Editor {
         let agent_writing = oxy_core::project_lock::wait_for_agents(&root);
         self.converted = None;
         self.kept_layout = None;
+        self.undo_restarted = false;
         // The project as saved, when the save organized it in folders: what it tells, and
         // whether its assets' names and paths changed.
         let mut organized = None;
@@ -938,6 +942,7 @@ impl Editor {
                     // The edits before it name the files by their old paths.
                     if changed && (self.history.can_undo() || self.history.can_redo()) {
                         self.history.clear();
+                        self.undo_restarted = true;
                         self.log(
                             "O desfazer recomeçou: as edições anteriores citavam os arquivos \
                              pelos nomes antigos.",
