@@ -47,7 +47,7 @@ jobs:
       # engine's errors (Rust) crossing Luau's C++ exceptions to a script's pcall and back, the
       # host's panic barrier and the parkour in Luau played against the 0.6 graph.
       - name: Testar scripts em release
-        run: cargo test -p oxy_core --release --locked --target x86_64-pc-windows-msvc --lib --test integration -- script parkour_ab::
+        run: 'cargo test -p oxy_core --release --locked --target x86_64-pc-windows-msvc --lib --test integration -- script parkour_ab::'
       - name: Testar
         run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
       - name: Gerar ZIP e checksum
