@@ -329,6 +329,8 @@ impl ConsoleLog {
 pub(crate) struct FrameStats {
     pub(crate) visible: bool,
     pub(crate) last_frame: Instant,
+    /// When the frame being drawn started, which its egui time tells.
+    pub(crate) started: Instant,
     pub(crate) interval_ms: f32,
     pub(crate) cpu_ms: f32,
 }
@@ -564,6 +566,7 @@ impl Editor {
             frame: FrameStats {
                 visible: false,
                 last_frame: Instant::now(),
+                started: Instant::now(),
                 interval_ms: 0.,
                 cpu_ms: 0.,
             },
@@ -715,8 +718,11 @@ impl Editor {
                 }
                 if add_recent && report.layout == Layout::Legacy {
                     let path = self.path.clone().expect("Projeto aberto");
-                    self.log(conversion::preview(&path, &self.state.project));
-                    self.notice_last(true);
+                    let told = conversion::preview(&path, &self.state.project);
+                    self.log(told.text);
+                    // What the save will do goes away by itself (the Library's banner keeps
+                    // saying it); why the project stays in the old layout waits to be dismissed.
+                    self.notice_last(!told.informational);
                 }
                 // A file renamed or deleted outside OXY: the project opens, the test and the
                 // export wait for it.
@@ -1834,6 +1840,7 @@ impl eframe::App for Editor {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_started = Instant::now();
+        self.frame.started = frame_started;
         if !self.play.capture || !self.showing_game() {
             oxy_render::input::release_cursor(ctx);
         }

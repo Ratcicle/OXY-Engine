@@ -1709,6 +1709,35 @@ impl NativeQa {
                     "A ação do modelo revelado não ficou inteira entre as linhas",
                 )
             }
+            "old_layout_notice_gone" => {
+                // What the first save of a project of the old layout does went away by itself,
+                // as the timed notices do, uncovering the end of the dock; the Library's banner
+                // and the Console still say it.
+                let shows =
+                    |start: &str| self.surface.texts.iter().any(|t| t.text.starts_with(start));
+                ensure(
+                    !shows("Este projeto está no formato antigo da OXY"),
+                    "O aviso do formato antigo continua na tela",
+                )?;
+                ensure(
+                    shows("Salve o projeto para organizar em pastas"),
+                    "A Biblioteca não mostra a faixa do formato antigo",
+                )?;
+                ensure(
+                    self.editor.console.messages.iter().any(|m| {
+                        m.starts_with("Este projeto está no formato antigo da OXY. Ao salvar")
+                    }),
+                    "O Console não guardou o aviso do formato antigo",
+                )
+            }
+            "old_layout_notice_stays" => ensure(
+                // Why the project stays in the old layout waits to be dismissed.
+                self.surface.texts.iter().any(|t| {
+                    t.text
+                        .starts_with("Este projeto está no formato antigo da OXY e continua nele")
+                }),
+                "O aviso de que o projeto continua no formato antigo sumiu sozinho",
+            ),
             _ => self.check_spatial(label),
         }
     }

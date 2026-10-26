@@ -524,12 +524,16 @@ fn a_folder_with_other_files_stays_in_the_old_layout() {
     assert_eq!(files(&old.root), before);
     assert!(!old.root.join(".oxy").exists());
     let told = preview(&old.root, &old.project);
-    assert!(told.contains("continua nele ao salvar"), "{told}");
-    // The note and the scripts are no reason: without the photos, it says what saving does.
+    assert!(told.text.contains("continua nele ao salvar"), "{told:?}");
+    // Moving the photos is the person's to do: the editor's notice stays until dismissed.
+    assert!(!told.informational);
+    // The note and the scripts are no reason: without the photos, it says what saving does,
+    // only information, which goes away by itself.
     fs::remove_dir_all(old.root.join("Fotos")).unwrap();
     fs::remove_file(old.root.join("assets/fundo.png")).unwrap();
     let told = preview(&old.root, &old.project);
-    assert!(told.contains("Ao salvar, a OXY o organiza em pastas (1 imagem em Imagens/, 3 sons em Sons/, 1 modelo em Modelos/, os scripts ficam onde estão)"), "{told}");
+    assert!(told.text.contains("Ao salvar, a OXY o organiza em pastas (1 imagem em Imagens/, 3 sons em Sons/, 1 modelo em Modelos/, os scripts ficam onde estão)"), "{told:?}");
+    assert!(told.informational);
 }
 
 #[test]
@@ -839,7 +843,8 @@ fn only_a_project_file_named_as_oxy_names_it_is_organized() {
     assert_eq!(files(&old.root), before);
     assert!(!old.root.join(".oxy").exists());
     let told = preview(&other, &old.project);
-    assert!(told.contains("continua nele ao salvar"), "{told}");
+    assert!(told.text.contains("continua nele ao salvar"), "{told:?}");
+    assert!(!told.informational);
 }
 
 #[test]

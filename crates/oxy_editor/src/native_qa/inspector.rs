@@ -349,6 +349,10 @@ fn native_inspector_v031() {
                 Action::Wait(4),
                 Action::Check("dock_reveal_rows"),
                 Action::Screenshot("model-revealed-least-dock.png"),
+                // The notice of the old layout, raised on opening, goes away by itself.
+                Action::WaitSeconds(7.),
+                Action::Check("old_layout_notice_gone"),
+                Action::Screenshot("model-revealed-notice-gone.png"),
                 Action::Key(Key::Z, true),
                 Action::Check("i031_no_model"),
                 Action::Key(Key::Y, true),

@@ -602,6 +602,9 @@ fn native_library_organize() {
         output.clone(),
         vec![
             Action::Wait(6),
+            // The photo keeps the project in the old layout: that notice waits to be dismissed.
+            Action::WaitSeconds(7.5),
+            Action::Check("old_layout_notice_stays"),
             Action::Key(Key::S, true),
             Action::Wait(4),
             Action::Check("lib8o_variant"),

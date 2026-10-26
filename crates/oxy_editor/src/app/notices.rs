@@ -22,6 +22,12 @@ impl Notices {
     pub(super) fn unread(&self) -> usize {
         self.entries.iter().filter(|e| e.unread).count()
     }
+    /// The notice shown at `now`: the last unread one, a timed one only until it expires.
+    fn shown(&self, now: f64) -> Option<usize> {
+        self.entries
+            .iter()
+            .rposition(|e| e.unread && (e.persistent || now < e.expires))
+    }
     fn push(&mut self, text: String, persistent: bool, now: f64) {
         if let Some(entry) = self.entries.iter_mut().find(|e| e.text == text) {
             if now - entry.last_seen > 1. {
@@ -50,8 +56,8 @@ impl Notices {
 impl Editor {
     pub(super) fn notice_last(&mut self, persistent: bool) {
         if let Some(text) = self.console.messages.last() {
-            self.notices
-                .push(text.clone(), persistent, self.context.input(|i| i.time));
+            let now = raised_at(self.context.input(|i| i.time), self.frame.started);
+            self.notices.push(text.clone(), persistent, now);
         }
     }
     /// Notices not yet seen in the Avisos tab.
@@ -116,18 +122,11 @@ impl Editor {
         });
     }
     pub(super) fn notices_ui(&mut self, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
-        let index = self
-            .notices
-            .entries
-            .iter()
-            .rposition(|e| e.unread && (e.persistent || now < e.expires));
-        if let Some(index) = index {
+        let (now, frame) = ctx.input(|i| (i.time, i.predicted_dt));
+        if let Some(index) = self.notices.shown(now) {
             let entry = self.notices.entries[index].clone();
             if !entry.persistent {
-                ctx.request_repaint_after(std::time::Duration::from_secs_f64(
-                    (entry.expires - now).max(0.01),
-                ));
+                ctx.request_repaint_after(until_expiry(entry.expires - now, frame));
             }
             {
                 use crate::theme;
@@ -209,6 +208,18 @@ impl Editor {
         }
     }
 }
+/// The egui time of a notice raised now in the frame whose time is `time`, taken when it
+/// `started`: a file dialog or a project loading earlier in the frame (Abrir projeto…) must not
+/// take a timed notice's seconds.
+fn raised_at(time: f64, started: Instant) -> f64 {
+    time + started.elapsed().as_secs_f64()
+}
+/// The wait for the frame that takes away a timed notice `remaining` seconds from its expiry.
+/// egui brings a timed repaint one predicted frame (`frame`) early; asked for the expiry
+/// itself, the last frame before it would be drawn again and again until it passes.
+fn until_expiry(remaining: f64, frame: f32) -> std::time::Duration {
+    std::time::Duration::from_secs_f64(remaining.max(0.01) + f64::from(frame.max(0.)))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +238,73 @@ mod tests {
             notices.push(format!("Aviso {i}"), false, 300.);
         }
         assert_eq!(notices.entries.len(), 64);
+    }
+
+    /// A timed notice wakes the editor once, at its expiry: egui's repaint comes no earlier, so
+    /// the frames before it are not drawn back to back until the expiry passes.
+    #[test]
+    fn a_timed_notice_wakes_the_editor_at_its_expiry() {
+        let ctx = egui::Context::default();
+        let frame = 1. / 60.;
+        let delay = |remaining: Option<f64>| {
+            let input = egui::RawInput {
+                predicted_dt: frame,
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                if let Some(remaining) = remaining {
+                    ctx.request_repaint_after(until_expiry(remaining, frame));
+                }
+            });
+            output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+        };
+        // The first frames settle.
+        assert!((0..8).any(|_| delay(None) == std::time::Duration::MAX));
+        for remaining in [6.5, 0.5, 0.004] {
+            let after = delay(Some(remaining)).as_secs_f64();
+            assert!(after >= remaining.max(0.01) - 1e-6, "{remaining}: {after}");
+        }
+    }
+
+    /// Opening a project of the old layout tells what its first save will do in a notice that
+    /// goes away by itself, as the other timed notices, while the Library's banner keeps saying
+    /// it; why a project stays in the old layout waits to be dismissed. Both stay in Avisos.
+    #[test]
+    fn the_old_layout_notice_goes_by_itself_unless_the_project_stays_old() {
+        let root = std::env::temp_dir().join(format!("oxy-editor-old-layout-{}", new_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let project = editing::blank_project("Antigo", SceneKind::TwoD).unwrap();
+        for (file, stays) in [(persistence::PROJECT_FILE, false), ("meu.json", true)] {
+            let told = conversion::preview(&root.join(file), &project);
+            assert!(told.text.contains("formato antigo"), "{told:?}");
+            assert_eq!(told.informational, !stays, "{told:?}");
+            let mut notices = Notices::default();
+            // As opening the project raises it.
+            notices.push(told.text, !told.informational, 10.);
+            assert_eq!(notices.shown(16.9), Some(0));
+            assert_eq!(notices.shown(17.1), stays.then_some(0), "{file}");
+            assert_eq!(notices.unread(), 1);
+            assert_eq!(notices.texts().count(), 1);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A notice raised after a file dialog held the frame (Abrir projeto…, then the old layout's
+    /// notice) counts its seconds from when it is raised, not from when the frame started: the
+    /// next frame still shows it, for the whole 7 s.
+    #[test]
+    fn a_notice_raised_late_in_a_frame_keeps_its_seconds() {
+        let held = std::time::Duration::from_secs(9);
+        let Some(started) = Instant::now().checked_sub(held) else {
+            return;
+        };
+        let now = raised_at(10., started);
+        assert!(now >= 19., "{now}");
+        let mut notices = Notices::default();
+        notices.push("Formato antigo".into(), false, now);
+        // The frame after the dialog.
+        assert_eq!(notices.shown(19.02), Some(0));
+        assert_eq!(notices.shown(now + 6.9), Some(0));
+        assert_eq!(notices.shown(now + 7.1), None);
     }
 }

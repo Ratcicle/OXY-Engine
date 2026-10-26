@@ -664,9 +664,18 @@ pub fn plan_all(root: &Path, project: &Project, painted: &HashSet<Id>) -> Result
     Ok(plan)
 }
 
+/// What the editor tells when it opens a project of the old layout ([`preview`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Preview {
+    pub text: String,
+    /// Whether the text only tells what the first save will do; not when the project stays in
+    /// the old layout, for a reason the text gives and the person can take away.
+    pub informational: bool,
+}
+
 /// What the editor tells when it opens `project`, saved at `path` (its folder or its project
 /// file) in the old layout: what its first save will do, or why it will stay in the old layout.
-pub fn preview(path: &Path, project: &Project) -> String {
+pub fn preview(path: &Path, project: &Project) -> Preview {
     let file = project_file(path);
     let root = file.parent().unwrap_or(Path::new("."));
     let planned = match other_name(&file) {
@@ -681,16 +690,22 @@ pub fn preview(path: &Path, project: &Project) -> String {
             } else {
                 format!(" ({})", parts.join(", "))
             };
-            format!(
-                "Este projeto está no formato antigo da OXY. Ao salvar, a OXY o organiza em \
-                 pastas{what}, cada arquivo com o nome que aparece na Biblioteca, e antes guarda \
-                 uma cópia completa dele em .oxy/backup/. Os objetos, os scripts e os nós \
-                 continuam funcionando."
-            )
+            Preview {
+                text: format!(
+                    "Este projeto está no formato antigo da OXY. Ao salvar, a OXY o organiza em \
+                     pastas{what}, cada arquivo com o nome que aparece na Biblioteca, e antes \
+                     guarda uma cópia completa dele em .oxy/backup/. Os objetos, os scripts e os \
+                     nós continuam funcionando."
+                ),
+                informational: true,
+            }
         }
-        Err(why) => {
-            format!("Este projeto está no formato antigo da OXY e continua nele ao salvar: {why}.")
-        }
+        Err(why) => Preview {
+            text: format!(
+                "Este projeto está no formato antigo da OXY e continua nele ao salvar: {why}."
+            ),
+            informational: false,
+        },
     }
 }
 
