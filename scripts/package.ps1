@@ -83,8 +83,7 @@ if ($IncludeEditor) {
 }
 # No runtime DLL goes along: the GNU build links GCC's runtime and Luau's libstdc++ statically
 # (.cargo/config.toml) and the MSVC one the C runtime (+crt-static), as an exported game needs:
-# the export copies the player and only the GCC DLLs found next to it, and none ship.
-# test-portable.ps1 checks what each executable imports.
+# the export copies the player alone. test-portable.ps1 checks what each executable imports.
 # Backups an agent leaves next to a project (project.oxy.json.agente.bak) never ship.
 Get-ChildItem -LiteralPath $stagingPath -Recurse -File -Filter '*.agente.bak' | Remove-Item -Force
 $previousPath = $null

@@ -28,12 +28,6 @@ pub const PLAYER_EXE: &str = if cfg!(windows) {
 } else {
     "oxy_player"
 };
-/// Runtime libraries a GNU build of the player needs, copied with it when they are next to it.
-pub const RUNTIME_DLLS: [&str; 3] = [
-    "libgcc_s_seh-1.dll",
-    "libstdc++-6.dll",
-    "libwinpthread-1.dll",
-];
 /// The file in an exported game's data folder that says which project it is.
 pub const MARKER_FILE: &str = "export.oxy.json";
 const MARKER_FORMAT: u32 = 1;
@@ -735,7 +729,7 @@ impl Drop for Staging {
     }
 }
 
-/// Writes the game into `staging`: the player as `executable` with its runtime libraries, the
+/// Writes the game into `staging`: the player as `executable`, never a DLL lying next to it, the
 /// project and its images, sounds and scripts in data, the licenses, the note and the marker.
 #[expect(
     clippy::disallowed_methods,
@@ -746,15 +740,6 @@ fn stage(request: &ExportRequest, staging: &Path, executable: &str) -> Result<()
     let project = &exported;
     fs::copy(request.player, staging.join(executable))
         .map_err(io_context("Não foi possível copiar o player do jogo"))?;
-    if let Some(folder) = request.player.parent() {
-        for dll in RUNTIME_DLLS {
-            let source = folder.join(dll);
-            if source.is_file() {
-                fs::copy(&source, staging.join(dll))
-                    .map_err(io_context(format!("Não foi possível copiar {dll}")))?;
-            }
-        }
-    }
     let data = staging.join("data");
     fs::create_dir(&data).map_err(io_context("Não foi possível criar a pasta data"))?;
     let document = serde_json::to_vec_pretty(project)
@@ -1008,7 +993,7 @@ mod tests {
     }
 
     /// A saved project with an image, a sound, a painted image and a model, with backups and a
-    /// file it does not use lying in its folder, and a fake player with a runtime library.
+    /// file it does not use lying in its folder, and a fake player.
     struct Fixture {
         base: PathBuf,
         folder: PathBuf,
@@ -1066,7 +1051,6 @@ mod tests {
             fs::create_dir_all(&engine).unwrap();
             let player = engine.join(PLAYER_EXE);
             fs::write(&player, b"player de teste").unwrap();
-            fs::write(engine.join("libwinpthread-1.dll"), b"dll").unwrap();
             let unsaved = HashMap::from([(painted.clone(), png([0, 200, 0, 255]))]);
             Self {
                 base,
@@ -1141,7 +1125,6 @@ mod tests {
             "data/assets/placa.png".into(),
             "data/export.oxy.json".into(),
             "data/project.oxy.json".into(),
-            "libwinpthread-1.dll".into(),
         ];
         expected.extend(LICENSES.iter().map(|(name, _)| format!("licenses/{name}")));
         expected.sort();
@@ -1216,6 +1199,35 @@ mod tests {
         assert_eq!(report.verify.seconds, VERIFY_SECONDS);
         let loaded = persistence::load_project(&folder.join("data")).unwrap();
         assert_eq!(loaded, fixture.project);
+    }
+
+    #[test]
+    fn a_game_never_ships_the_dlls_lying_next_to_the_player() {
+        // GCC's runtime, left by an older build: the player links it statically since 0.7, and
+        // these would go without their licenses.
+        let fixture = Fixture::new("dll");
+        let engine = fixture.player.parent().unwrap();
+        for dll in [
+            "libgcc_s_seh-1.dll",
+            "libstdc++-6.dll",
+            "libwinpthread-1.dll",
+        ] {
+            fs::write(engine.join(dll), b"dll").unwrap();
+        }
+        let destination = fixture.base.join("Jogos");
+        let report = export_with(&fixture.request(&destination, false), checked).unwrap();
+        assert!(report.verify.ok, "{:?}", report.verify);
+        let exported = files(&report.folder);
+        let dlls: Vec<&String> = exported
+            .iter()
+            .filter(|f| f.to_ascii_lowercase().ends_with(".dll"))
+            .collect();
+        assert!(dlls.is_empty(), "{dlls:?}");
+        assert_eq!(report.files, exported.len());
+        assert_eq!(
+            names(&report.folder),
+            ["Corrida Noturna.exe", "LEIA-ME.txt", "data", "licenses"]
+        );
     }
 
     #[test]
