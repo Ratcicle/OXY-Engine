@@ -701,9 +701,11 @@ impl Editor {
                     self.log(AGENT_WAS_WRITING);
                     self.notice_last(true);
                 }
+                // Informational, like the old layout's notice: it goes by itself and stays in the
+                // Console, so it does not cover the end of the bottom dock.
                 if let Some(version) = report.migrated {
                     self.log(format!("Projeto convertido em memória do formato {version}. O original continua intacto. Ao salvar, será criado um backup identificado; versões antigas da engine não abrirão o novo formato."));
-                    self.notice_last(true);
+                    self.notice_last(false);
                 }
                 // What opening fixed in memory, which the next save writes.
                 for fix in &report.fixes {
