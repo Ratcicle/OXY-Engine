@@ -1,0 +1,5 @@
+# OXY writes project files, models and scripts with LF, and tests compare the examples and fixtures
+# with what the engine writes, byte for byte: a Windows checkout must not turn them into CRLF.
+*.oxy.json text eol=lf
+*.modelo.json text eol=lf
+*.luau text eol=lf
