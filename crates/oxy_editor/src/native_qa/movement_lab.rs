@@ -41,7 +41,10 @@ impl NativeQa {
         }
         let rt = self.editor.play.runtime.as_ref().ok_or("Runtime ausente")?;
         if !rt.logs.is_empty() {
-            return Err(format!("{:?}", rt.logs));
+            return Err(format!(
+                "{:?}",
+                rt.logs.iter().map(|l| &l.text).collect::<Vec<_>>()
+            ));
         }
         if label == "lab3d_scale_running" {
             return if count == 50
@@ -145,6 +148,7 @@ fn native_movement_scale_v030() {
                 Action::Click("Parar"),
                 Action::Idle,
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
             ]);
             Ok(Box::new(qa))
@@ -204,6 +208,7 @@ fn native_movement_lab_v030() {
                 Action::Key(Key::Z, true),
                 Action::Check("lab3d_base"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
                 Action::Scroll("HIERARQUIA", 10000.),
                 Action::SelectEntity("Jogador"),

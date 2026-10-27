@@ -1,0 +1,230 @@
+{
+  "oxy": "modelo",
+  "schema_version": 6,
+  "id": "60e92dc5-8192-433a-9a89-d22d84e0b0b6",
+  "entities": [
+    {
+      "id": "f94be754-e11b-41f5-b95a-b23c844d2046",
+      "name": "Checkpoint",
+      "parent": null,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "primitive": null,
+      "dimensions": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "segments": 24,
+      "material": {
+        "color": [
+          0.45,
+          0.7,
+          0.8,
+          1.0
+        ],
+        "texture": null,
+        "nearest": true
+      },
+      "visible": true,
+      "layer": 0,
+      "attributes": {
+        "Ordem": {
+          "Number": 1.0
+        }
+      },
+      "collider": null,
+      "physics3d": {
+        "shape": {
+          "Box": {
+            "size": [
+              6.0,
+              3.0,
+              2.0
+            ]
+          }
+        },
+        "center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "enabled": true,
+        "sensor": true,
+        "filter": {
+          "category": 4,
+          "mask": 2,
+          "blocks_character": true,
+          "blocks_camera": true
+        },
+        "surface": null
+      },
+      "controller": null,
+      "camera": null,
+      "ui": null,
+      "graph": {
+        "nodes": [],
+        "edges": []
+      },
+      "scripts": [
+        {
+          "path": "Pista/checkpoint.luau"
+        }
+      ],
+      "clips": [],
+      "model_source": null
+    },
+    {
+      "id": "71d8d959-bad0-4d64-bf85-b940c29ac42c",
+      "name": "Marco esquerdo",
+      "parent": "f94be754-e11b-41f5-b95a-b23c844d2046",
+      "transform": {
+        "position": [
+          -1.85,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "primitive": "Cube",
+      "primitive_parameters": {
+        "latitude": 8,
+        "height_divisions": 1,
+        "plane_divisions": [
+          1,
+          1
+        ],
+        "wall_fraction": 0.25
+      },
+      "dimensions": [
+        0.15,
+        3.0,
+        0.15
+      ],
+      "segments": 8,
+      "material": {
+        "color": [
+          0.3,
+          0.9,
+          1.0,
+          1.0
+        ],
+        "texture": null,
+        "nearest": true
+      },
+      "visible": true,
+      "layer": 0,
+      "attributes": {},
+      "collider": null,
+      "controller": null,
+      "camera": null,
+      "ui": null,
+      "graph": {
+        "nodes": [],
+        "edges": []
+      },
+      "clips": [],
+      "model_source": null
+    },
+    {
+      "id": "1ac12951-5c03-40f6-bbe6-343a3dd2d459",
+      "name": "Marco direito",
+      "parent": "f94be754-e11b-41f5-b95a-b23c844d2046",
+      "transform": {
+        "position": [
+          1.85,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "primitive": "Cube",
+      "primitive_parameters": {
+        "latitude": 8,
+        "height_divisions": 1,
+        "plane_divisions": [
+          1,
+          1
+        ],
+        "wall_fraction": 0.25
+      },
+      "dimensions": [
+        0.15,
+        3.0,
+        0.15
+      ],
+      "segments": 8,
+      "material": {
+        "color": [
+          0.3,
+          0.9,
+          1.0,
+          1.0
+        ],
+        "texture": null,
+        "nearest": true
+      },
+      "visible": true,
+      "layer": 0,
+      "attributes": {},
+      "collider": null,
+      "controller": null,
+      "camera": null,
+      "ui": null,
+      "graph": {
+        "nodes": [],
+        "edges": []
+      },
+      "clips": [],
+      "model_source": null
+    }
+  ]
+}

@@ -13,9 +13,12 @@ use std::fmt::{self, Write as _};
 
 /// The state in parts, each with its hash. The run's own come first (scene, time, input,
 /// tasks, areas, characters, random, variables.<name> for each game variable, save, audio,
-/// camera), then each object's in scene order: transform, visible, attributes.<name>, document
-/// (its whole document form), character, platform, body (2D movement), animation and behavior
-/// (stopped by an error or by logic).
+/// camera, script_errors), then each object's in scene order: transform, visible,
+/// attributes.<name>, document (its whole document form), character, platform, body (2D
+/// movement), animation, behavior (stopped by an error or by logic), scripts (those a limit
+/// stopped) and script:<path> (the memory of each script, by path). Parts a project without
+/// scripts never has are left out, not written empty, and so is what scripts add to a part
+/// (their tasks, timer numbers, messages, draws and copies).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateDigest {
     pub parts: Vec<StatePart>,
@@ -228,16 +231,39 @@ impl Runtime {
             area_hits,
             serial,
             run,
+            // The project's scripts, as the project itself, and the VM with what each module
+            // hears, a cache of modules.
+            script_sources: _,
+            scripts: _,
+            script_callbacks: _,
+            // Counted from the timer tasks, which are read below.
+            timer_room: _,
+            disabled_scripts,
+            script_memory,
+            messages,
+            // Only within a step.
+            messages_sent: _,
+            messages_by_script: _,
+            // Measured, never state.
+            script_costs: _,
+            // Only within a script's call.
+            in_script_call: _,
+            copies_to_start: _,
+            script_hits: _,
         } = self;
         let RunState {
             seed,
             rolls,
             spawns,
+            script_rolls,
+            script_spawns,
+            timers,
             variables,
             save,
             paused_for,
             audio,
             failures_logged,
+            script_errors,
         } = run;
         let mut digest = StateDigest::default();
         digest.add(None, "scene", |s| {
@@ -266,7 +292,7 @@ impl Runtime {
                 let Task {
                     due,
                     owner,
-                    node,
+                    target,
                     context,
                 } = task;
                 let Context {
@@ -280,9 +306,24 @@ impl Runtime {
                 let hits = hits
                     .as_ref()
                     .map(|hits| sorted(hits.lock().unwrap().iter().cloned()));
-                s.debug(&(
-                    due, owner, node, runs_as, other, activation, outputs, hits, trajectory,
-                ));
+                // A node's task reads as it did before tasks had targets; a script's adds its
+                // own: the script, the function, what it passes and its timer.
+                match target {
+                    TaskTarget::Node(node) => s.debug(&(
+                        due, owner, node, runs_as, other, activation, outputs, hits, trajectory,
+                    )),
+                    TaskTarget::Script(script) => s.debug(&(
+                        due, owner, script, runs_as, other, activation, outputs, hits, trajectory,
+                    )),
+                };
+            }
+            // The last number a script's timer got, which names the next one.
+            if *timers > 0 {
+                s.debug(timers);
+            }
+            // The messages on their way, which become tasks in the next logic phase.
+            if !messages.is_empty() {
+                s.debug(messages);
             }
         });
         digest.add(None, "areas", |s| {
@@ -300,6 +341,9 @@ impl Runtime {
         });
         digest.add(None, "random", |s| {
             s.debug(seed).debug(rolls).debug(spawns);
+            if !script_rolls.is_empty() || !script_spawns.is_empty() {
+                s.debug(script_rolls).debug(script_spawns);
+            }
         });
         // One part per variable, in the order the project declares them, with every key's value.
         for declared in &self.source.variables {
@@ -323,6 +367,10 @@ impl Runtime {
         });
         digest.add(None, "camera", |s| {
             let _ = cameras.write_digest(self.scene(), s);
+        });
+        // The script errors told so far, which no later line repeats; absent without any.
+        digest.add_some(None, "script_errors", |s| {
+            (!script_errors.is_empty()).then(|| write!(s, "{script_errors:?}"))
         });
         for entity in &self.scene().entities {
             let id = Some(&entity.id);
@@ -357,6 +405,22 @@ impl Runtime {
             digest.add_some(id, "behavior", |_| {
                 disabled_behaviors.contains(&entity.id).then_some(Ok(()))
             });
+            digest.add_some(id, "scripts", |s| {
+                if disabled_scripts.is_empty() {
+                    return None;
+                }
+                let stopped: Vec<&String> = disabled_scripts
+                    .range((entity.id.clone(), String::new())..)
+                    .take_while(|(owner, _)| *owner == entity.id)
+                    .map(|(_, path)| path)
+                    .collect();
+                (!stopped.is_empty()).then(|| write!(s, "{stopped:?}"))
+            });
+            for (path, memory) in script_memory.get(&entity.id).into_iter().flatten() {
+                digest.add(id, format!("script:{path}"), |s| {
+                    s.debug(&memory.fields());
+                });
+            }
         }
         digest
     }

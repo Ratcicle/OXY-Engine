@@ -244,16 +244,23 @@ impl Editor {
                         )?;
                         let image = expand_image(source)?;
                         let id = preview.expanded_texture.clone().unwrap_or_else(new_id);
-                        self.state.project.assets.push(Asset {
-                            id: id.clone(),
-                            name: format!(
+                        let (name, path) = oxy_core::persistence::new_asset_file(
+                            &self.state.project,
+                            self.path.as_deref().and_then(std::path::Path::parent),
+                            &id,
+                            &format!(
                                 "{} — atlas ampliado",
                                 self.state
                                     .project
                                     .asset(original)
                                     .map_or("Pintura", |a| a.name.as_str())
                             ),
-                            path: format!("assets/{id}.png"),
+                            AssetKind::Texture,
+                        );
+                        self.state.project.assets.push(Asset {
+                            id: id.clone(),
+                            name,
+                            path,
                             kind: AssetKind::Texture,
                             model: None,
                         });

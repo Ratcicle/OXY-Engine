@@ -349,7 +349,7 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>, Problem> {
 fn set_aside(path: &Path, label: &str, reason: &str) -> (SaveSlot, Vec<String>) {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let aside = path.with_file_name(format!("{name}.{label}-{}.json", new_id()));
-    match fs::rename(path, &aside) {
+    match crate::fs_ops::move_no_replace(path, &aside) {
         Ok(()) => (
             SaveSlot::default(),
             vec![format!(

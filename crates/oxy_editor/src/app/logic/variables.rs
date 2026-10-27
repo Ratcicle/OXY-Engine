@@ -570,6 +570,10 @@ impl Editor {
     /// nothing and says why in the dialog.
     fn apply_variable_command(&mut self, command: Command) -> bool {
         self.finish_history(true);
+        // A rename or a deletion: the scripts tell the names it takes from them.
+        let names = command::renames_script_names(std::slice::from_ref(&command))
+            .then(|| self.script_names_before())
+            .flatten();
         self.history
             .begin(command.label(), &self.state.project, &self.state.images);
         match command::apply(
@@ -580,6 +584,7 @@ impl Editor {
             Ok(_) => {
                 self.finish_history(true);
                 self.logic_ui.variables.error = None;
+                self.warn_script_names(names, &[oxy_core::script::NameKind::Variable]);
                 true
             }
             Err(error) => {

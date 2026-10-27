@@ -211,7 +211,7 @@ fn a_save_starts_the_persistent_variables_before_the_scene_start_logic() {
     assert_eq!(rt.variable(&record, ""), Some(&number(0.)));
     assert_eq!(rt.variable(&timer, ""), Some(&number(0.)));
     // In the order of the variables' IDs.
-    let mut logs = rt.logs.clone();
+    let mut logs: Vec<_> = rt.logs.iter().map(|l| l.text.as_str()).collect();
     logs.sort();
     assert_eq!(
         logs,

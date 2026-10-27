@@ -34,19 +34,50 @@ if ([version]([Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName).Pr
     foreach ($file in @('licenses/cpal-0.18.2.txt','licenses/kenney-skyboxes-cc0.txt','parkour/project.oxy.json')) {
         if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo da 0.6.0 ausente: $file" }
     }
-    # OXY Parkour, opened from the home screen as a copy, needs every file its assets name.
+    # OXY Parkour, opened from the home screen as a copy, needs every file its project names: in
+    # 0.6 (schema 5) the sounds its assets name; from 0.7 (schema 6, in folders) every file of its
+    # register, each model in its own file, and the scripts its objects attach.
     $parkour = [IO.Path]::GetFullPath((Join-Path $package 'parkour'))
     $parkourManifest = Get-Content -LiteralPath (Join-Path $parkour 'project.oxy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($parkourManifest.schema_version -ne 5 -or $parkourManifest.scenes.Count -lt 2) { throw 'O parkour deve ter o menu e a pista, no schema 5.' }
-    foreach ($asset in $parkourManifest.assets) {
-        if ($asset.kind -eq 'Model') { continue }
-        $assetPath = [IO.Path]::GetFullPath((Join-Path $parkour $asset.path))
-        if (!$assetPath.StartsWith($parkour + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Asset do parkour inválido/ausente: $($asset.path)" }
+    if ($parkourManifest.scenes.Count -lt 2) { throw 'O parkour deve ter o menu e a pista.' }
+    function Get-ParkourFile([string]$Relative) {
+        $path = [IO.Path]::GetFullPath((Join-Path $parkour $Relative))
+        if (!$path.StartsWith($parkour + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Arquivo do parkour inválido/ausente: $Relative" }
+        $path
+    }
+    if ($parkourManifest.schema_version -eq 6) {
+        if ($parkourManifest.layout -ne 'Tree') { throw 'O parkour da 0.7 deve estar em pastas.' }
+        foreach ($asset in $parkourManifest.assets) {
+            $file = Get-ParkourFile $asset.path
+            if ($asset.kind -eq 'Model' -and (Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json).oxy -ne 'modelo') { throw "Modelo do parkour inválido: $($asset.path)" }
+        }
+        $scripts = @($parkourManifest.scenes.entities | ForEach-Object { $_.scripts } | Where-Object { $_ } | ForEach-Object { $_.path } | Sort-Object -Unique)
+        if (!$scripts.Count) { throw 'O parkour da 0.7 roda em scripts, e o pacote não tem nenhum.' }
+        foreach ($script in $scripts) { Get-ParkourFile $script | Out-Null }
+        # Scripts run on Luau, through mlua: the 0.7 package carries both licenses.
+        foreach ($file in @('licenses/mlua-0.12.2.txt','licenses/luau-0.740.txt')) {
+            if (!(Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { throw "Arquivo da 0.7.0 ausente: $file" }
+        }
+    } elseif ($parkourManifest.schema_version -eq 5) {
+        foreach ($asset in $parkourManifest.assets) {
+            if ($asset.kind -ne 'Model') { Get-ParkourFile $asset.path | Out-Null }
+        }
+    } else {
+        throw 'O parkour deve estar no schema 5 (0.6) ou 6 (0.7).'
     }
     # Backups an agent or a schema conversion leaves next to a project never ship.
     $backups = @(Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object { $_.Name -like '*.agente.bak' -or $_.Name -like '*.backup.json' })
     if ($backups.Count) { throw "Backups de projeto no pacote: $($backups.Name -join ', ')" }
 }
+# Nor what stays out of a project, anywhere in the package: entries starting with a dot (OXY's
+# .oxy, with the agent's copies and the backups, .vscode, .luaurc).
+$outside = @(Get-ChildItem -LiteralPath $package -Recurse -Force | Where-Object { $_.Name.StartsWith('.') } | ForEach-Object { $_.FullName.Substring($package.Length + 1) })
+if ($outside.Count) { throw "Pastas e arquivos que ficam fora de um projeto no pacote: $($outside -join ', ')" }
+# Luau is C++: the GNU build links its libstdc++ statically (.cargo/config.toml), so GCC's runtime
+# DLLs neither ship nor hide, next to the executables, one that would need them.
+$gccRuntime = '^(libstdc\+\+|libgcc|libwinpthread)'
+$shippedRuntime = @(Get-ChildItem -LiteralPath $package -Recurse -File -Filter '*.dll' | Where-Object { $_.Name -match $gccRuntime })
+if ($shippedRuntime.Count) { throw "Runtime do GCC no pacote: $($shippedRuntime.Name -join ', ')" }
 if (Get-ChildItem -LiteralPath $package -Filter '*.cmd') { throw 'O pacote portátil não deve depender de launchers .cmd.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($editor.FullName)
 if ($version.ProductName -ne 'OXY Engine' -or $version.OriginalFilename -ne 'OXY Engine.exe' -or !$version.ProductVersion) { throw 'Metadados do editor inválidos.' }
@@ -76,26 +107,51 @@ function Assert-PortablePe([string]$Path) {
         $types = for ($i=0; $i -lt $count; $i++) { [BitConverter]::ToUInt32($bytes,$resource+16+8*$i) }
         if (14 -notin $types -or 16 -notin $types) { throw 'Ícone ou metadados não foram incorporados ao PE.' }
     }
-    $importRva = [BitConverter]::ToUInt32($bytes,$optional+120)
-    if (!$importRva) { return }
-    $descriptor = Convert-Rva $importRva
-    while ($true) {
-        $nameRva = [BitConverter]::ToUInt32($bytes,$descriptor+12)
-        if (!$nameRva) { break }
-        $offset = Convert-Rva $nameRva
+    function Read-Name([uint32]$Rva) {
+        $offset = Convert-Rva $Rva
         $end = $offset
         while ($bytes[$end]) { $end++ }
-        $name = [Text.Encoding]::ASCII.GetString($bytes,$offset,$end-$offset)
+        [Text.Encoding]::ASCII.GetString($bytes,$offset,$end-$offset)
+    }
+    $imports = @()
+    $importRva = [BitConverter]::ToUInt32($bytes,$optional+120)
+    if ($importRva) {
+        $descriptor = Convert-Rva $importRva
+        while ($nameRva = [BitConverter]::ToUInt32($bytes,$descriptor+12)) {
+            $imports += Read-Name $nameRva
+            $descriptor += 20
+        }
+    }
+    # A delay-loaded DLL loads at its first call, so it counts as much as an import.
+    $delayRva = [BitConverter]::ToUInt32($bytes,$optional+216)
+    if ($delayRva) {
+        $descriptor = Convert-Rva $delayRva
+        while ($nameRva = [BitConverter]::ToUInt32($bytes,$descriptor+4)) {
+            if (!([BitConverter]::ToUInt32($bytes,$descriptor) -band 1)) { throw "Tabela de carga atrasada em formato antigo: $Path" }
+            $imports += Read-Name $nameRva
+            $descriptor += 32
+        }
+    }
+    $file = [IO.Path]::GetFileName($Path)
+    $strict = $file -in $windowsOnly
+    $names = @($imports | Sort-Object -Unique)
+    $gcc = @($names | Where-Object { $_ -match $gccRuntime })
+    if ($gcc.Count) { throw "$file importa o runtime do GCC: $($gcc -join ', ') (a libstdc++ do Luau deve ser estática, como pede o .cargo/config.toml)" }
+    foreach ($name in $names) {
         $bundled = Test-Path -LiteralPath (Join-Path $package $name)
-        if ($name -match '^(vcruntime|msvcp)\d' -and !$bundled) { throw "Runtime Visual C++ externo: $name" }
-        if (!$bundled -and $name -notmatch '^api-ms-win-' -and !(Test-Path -LiteralPath (Join-Path "$env:SystemRoot/System32" $name))) { throw "DLL não incluída no pacote: $name" }
-        Write-Host "$([IO.Path]::GetFileName($Path)) -> $name"
-        $descriptor += 20
+        $system = $name -match '^api-ms-win-' -or (Test-Path -LiteralPath (Join-Path "$env:SystemRoot/System32" $name) -PathType Leaf)
+        if ($name -match '^(vcruntime|msvcp)\d' -and ($strict -or !$bundled)) { throw "$file importa o runtime Visual C++: $name (compile com +crt-static)" }
+        if ($strict -and ($bundled -or !$system)) { throw "$file importa uma DLL que não é do Windows: $name" }
+        if (!$bundled -and !$system) { throw "DLL não incluída no pacote: $name" }
+        Write-Host "$file -> $name"
     }
 }
-Get-ChildItem -LiteralPath $package -File | Where-Object Extension -In '.exe','.dll' | ForEach-Object { Assert-PortablePe $_.FullName }
-$manifest = Get-Content -LiteralPath (Join-Path $package 'data/project.oxy.json') -Raw | ConvertFrom-Json
-if ($manifest.schema_version -notin @(1,2,3,4,5) -or $manifest.scenes.Count -lt 3) { throw 'As cenas de exemplo devem estar presentes em formato suportado (schema 1 a 5).' }
+# The editor, the player (an exported game's executable) and the MCP server import only
+# Windows' own DLLs: neither GCC's runtime nor Visual C++'s, nor a DLL the package carries.
+$windowsOnly = @('OXY Engine.exe', 'oxy_player.exe', 'oxy-mcp.exe')
+foreach ($binary in Get-ChildItem -LiteralPath $package -File | Where-Object Extension -In '.exe','.dll') { Assert-PortablePe $binary.FullName }
+$manifest = Get-Content -LiteralPath (Join-Path $package 'data/project.oxy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($manifest.schema_version -notin @(1,2,3,4,5,6) -or $manifest.scenes.Count -lt 3) { throw 'As cenas de exemplo devem estar presentes em formato suportado (schema 1 a 6).' }
 foreach ($asset in $manifest.assets) {
     if ($asset.kind -eq 'Model') { continue }
     $data = [IO.Path]::GetFullPath((Join-Path $package 'data'))

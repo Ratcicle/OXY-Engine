@@ -4,14 +4,17 @@
 //! - Per run: survives `change_scene` and dies with the `Runtime` (Parar, a new player run).
 //!   The clock (`time`), activation serials, the host pause, logs and traces with their
 //!   counters, the host queues (`sounds`, `save_requests`, `scene_starts`, `recording`), the
-//!   quit request and `run`, the `RunState` (draws, copy counts, game variables, saved
-//!   progress, time spent in the game pause, music and volumes) that new run-wide state goes
-//!   into. `stop` resets `run`.
+//!   quit request, the scripts' sources with the Luau VM that caches their modules and what
+//!   each module hears (`stop` drops both), what each script file cost (measured, never
+//!   state), and `run`, the `RunState` (draws, copy counts and timer numbers of the graph and
+//!   of scripts, game variables, saved progress, time spent in the game pause, music and
+//!   volumes, script errors told) that new run-wide state goes into. `stop` resets `run`.
 //! - Per scene: cleared in `change_scene` and in `stop`, though `stop` leaves the scene copy
 //!   and its lookups readable (`change_scene` re-reads the copy from `source`). Prepared
 //!   graphs, input in flight, tasks, controller bodies, animations, characters, cameras,
-//!   stopped behaviors, area pairs, activations, hit leases, the game pause, the cursor shown
-//!   by logic and the effect loops (kept with the music in `run`, which `change_scene` ends).
+//!   stopped behaviors and scripts, the scripts' memory and messages, area pairs, activations,
+//!   hit leases, the game pause, the cursor shown by logic and the effect loops (kept with the
+//!   music in `run`, which `change_scene` ends).
 //! - Per object: the entries of per-scene structures keyed by an object, pruned in
 //!   `remove_object` when it goes (the cameras' lazily, at the next presentation), and the
 //!   run's counts of an object made during the run (see `forget_copies`).
@@ -36,6 +39,7 @@ use crate::{
 };
 use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 type HitLease = Arc<Mutex<HashSet<Id>>>;
 use crate::prepared_graph::PreparedGraph;
@@ -46,17 +50,29 @@ mod characters;
 mod game_nodes;
 mod math_nodes;
 mod movement_nodes;
+mod operations;
+mod script_state;
+mod scripts;
 mod state_hash;
 mod transforms;
 pub use characters::SensorCrossing;
 pub use movement_nodes::{SceneQuery, SceneQueryShape};
+pub use operations::ObjectComponent;
+pub use script_state::{SCRIPT_ENTRIES_WARNING, ScriptCost};
+pub use scripts::ScriptErrorCount;
 pub use state_hash::{StateDifference, StateDigest, StatePart};
+pub use transforms::{TransformPart, TransformSpace, look_of, yaw_of};
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const MAX_STEPS: usize = 8;
+/// The logic work of each fixed step, in nodes run and data read (a new runtime's scene start
+/// has its own): the flows left when it runs out go on in the next step.
 pub const MAX_NODE_WORK: usize = 1024;
 /// The longest Esperar sem bloquear waits, in seconds: a day.
 pub const MAX_WAIT: f64 = 86_400.;
+/// Tasks queued at once: past them the queued ones are dropped, and a script's new timer is
+/// refused (the calls still to come of its sequences count as tasks).
+pub(crate) const MAX_TASKS: usize = 16384;
 /// Save requests a host may leave queued before they are folded (see `request_save`).
 const MAX_SAVE_REQUESTS: usize = 64;
 
@@ -102,9 +118,25 @@ pub enum RuntimeEvent {
     Animation {
         object: Id,
         marker: String,
+        /// The name of the clip whose marker it is.
+        clip: String,
     },
     /// The game pause started (true) or ended.
     Pause(bool),
+}
+/// A line of the runtime's log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogLine {
+    pub text: String,
+    /// The script line that wrote it; none for the engine's own lines and the nodes'.
+    pub script: Option<ScriptLocation>,
+}
+/// A line of a script file, which errors and the Console name as `scripts/porta.luau:12`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ScriptLocation {
+    /// The file's path in the project, with forward slashes.
+    pub path: String,
+    pub line: u32,
 }
 #[derive(Clone, Debug)]
 pub struct NodeTrace {
@@ -170,14 +202,32 @@ struct Context {
 struct Task {
     due: f64,
     owner: Id,
-    node: Id,
+    target: TaskTarget,
     context: Context,
+}
+impl Task {
+    fn is_node(&self) -> bool {
+        matches!(self.target, TaskTarget::Node(_))
+    }
+}
+/// What a task runs, for its owner.
+#[derive(Clone, Debug)]
+enum TaskTarget {
+    /// A node of the owner's graph.
+    Node(Id),
+    /// A function of a script the owner attaches: a callback an event calls or a timer's.
+    Script(crate::script::ScriptTask),
 }
 #[derive(Default)]
 struct EventCatalog {
+    /// The events the scene hears, its scripts' included, as the graph names them.
     operations: HashSet<String>,
     /// Scene order; invalidated with the existing event/structural revision.
     owners: Vec<usize>,
+    /// For each of `owners`, the scripts it attaches that hear an event, in its list's order.
+    scripts: Vec<Vec<(Arc<str>, crate::script::Callbacks)>>,
+    /// Whether a script hears on_input, which takes the release of every action.
+    input: bool,
 }
 #[derive(Clone, Copy, Debug, Default)]
 struct BodyState {
@@ -198,6 +248,13 @@ pub(crate) struct RunState {
     /// Copies made so far by each (owner, Criar cópia node), which name the IDs of the next
     /// one (see `spawn_ids`). The seed plays no part.
     spawns: BTreeMap<(Id, Id), u64>,
+    /// The scripts' draws so far, by (owner, script, stream), apart from the graph's: one more
+    /// draw in a script changes no one else's numbers.
+    script_rolls: BTreeMap<(Id, String, String), u64>,
+    /// The scripts' copies so far, by (owner, script).
+    script_spawns: BTreeMap<(Id, String), u64>,
+    /// The last number a script's timer got.
+    timers: u64,
     /// The game variables' values by (variable, key): the empty key is the variable's own
     /// value, which starts at the declared one; a key never written reads the declared value.
     variables: BTreeMap<(Id, String), Value>,
@@ -211,6 +268,9 @@ pub(crate) struct RunState {
     audio: crate::audio::AudioState,
     /// The (owner, node) actions whose failure no one read and the log already told.
     failures_logged: BTreeSet<(Id, Id)>,
+    /// The script errors the log told, by object (empty for a script that did not load) and
+    /// place, with the line told and how many times each happened: a repeat only counts.
+    script_errors: BTreeMap<(Id, scripts::ErrorPlace), (String, u64)>,
 }
 impl RunState {
     /// A run's start: the draws from `seed`, every variable at its declared value.
@@ -237,6 +297,9 @@ pub struct RuntimeOptions {
     /// The progress saved by earlier runs, which starts the persistent game variables before
     /// the scene start logic; none is a fresh install. Hosts read it from disk (see `save`).
     pub save: Option<crate::save::SaveSlot>,
+    /// The project's scripts (see `persistence::load_scripts`); objects attaching one that is
+    /// not here run without it.
+    pub scripts: Arc<crate::script::ScriptSources>,
 }
 
 pub struct Runtime {
@@ -245,7 +308,7 @@ pub struct Runtime {
     index: OnceLock<Result<SceneIndex, String>>,
     graphs: HashMap<Id, Arc<PreparedGraph>>,
     pub paused: bool,
-    pub logs: Vec<String>,
+    pub logs: Vec<LogLine>,
     pub traces: Vec<NodeTrace>,
     /// Lines ever added to `logs` and `traces`, those dropped or taken included: a host that
     /// reads them across frames finds the new ones with [`Runtime::logs_written`].
@@ -304,6 +367,34 @@ pub struct Runtime {
     serial: u64,
     stopped: bool,
     run: RunState,
+    /// The scripts the run's objects attach, as the host gave them.
+    script_sources: Arc<crate::script::ScriptSources>,
+    /// The Luau VM, once a scene attaches a script: a cache of compiled modules, never state.
+    scripts: Option<crate::script::ScriptHost>,
+    /// What each script attached so far hears, by path, with the path its tasks share (none
+    /// for one that did not load, told once); read even while a call holds the VM.
+    script_callbacks: HashMap<String, Option<(Arc<str>, crate::script::Callbacks)>>,
+    /// What the queued script timers hold beyond their tasks, counted by the timers
+    /// themselves.
+    timer_room: Rc<crate::script::TimerRoom>,
+    /// (object, script) pairs a limit of work or memory stopped.
+    disabled_scripts: BTreeSet<(Id, String)>,
+    /// What scripts keep in `self.state`, by object, with each script's in the order of paths.
+    script_memory: BTreeMap<Id, Vec<(Arc<str>, crate::script::Memory)>>,
+    /// Messages sent and not yet delivered, oldest first: the next logic phase delivers them.
+    messages: Vec<crate::script::Message>,
+    /// Messages the scene's scripts sent in this step, and those of each (object, script).
+    messages_sent: usize,
+    messages_by_script: HashMap<(Id, Arc<str>), usize>,
+    /// What each script file cost; measured for the tools.
+    script_costs: script_state::ScriptCosts,
+    /// A script's call holds the VM: copies made meanwhile start their scripts after it.
+    in_script_call: bool,
+    /// The copies made during the call in progress, whose scripts start when it ends.
+    copies_to_start: Vec<HashSet<Id>>,
+    /// The area and the hits of the area event whose script call runs: `first_hit` on that area
+    /// counts in them, as the node's flow does.
+    script_hits: Option<(Id, HitLease)>,
 }
 
 impl Runtime {
@@ -330,6 +421,9 @@ impl Runtime {
         if project.scene(scene_id).is_none() {
             return Err("Cena solicitada não existe.".into());
         }
+        // A script switched off on an object is not there for the run.
+        let project = crate::script::switched_on(project);
+        let project = &*project;
         let mut runtime = Self {
             index: OnceLock::new(),
             graphs: HashMap::new(),
@@ -378,15 +472,30 @@ impl Runtime {
             stopped: false,
             // Before the scene start logic, which may read the variables.
             run: RunState::new(project, options.seed),
+            script_sources: options.scripts,
+            scripts: None,
+            script_callbacks: HashMap::new(),
+            timer_room: Rc::default(),
+            disabled_scripts: BTreeSet::new(),
+            script_memory: BTreeMap::new(),
+            messages: Vec::new(),
+            messages_sent: 0,
+            messages_by_script: HashMap::new(),
+            script_costs: Default::default(),
+            in_script_call: false,
+            copies_to_start: Vec::new(),
+            script_hits: None,
         };
         if let Some(slot) = options.save {
             runtime.load_save(slot);
         }
         runtime.initialize_character_states()?;
         runtime.begin_camera_input(&InputFrame::default());
+        runtime.start_scripts();
         runtime.emit(RuntimeEvent::SceneStart);
         let mut budget = MAX_NODE_WORK;
         runtime.process_tasks(&mut budget);
+        runtime.script_costs.end_step();
         runtime.settle_audio_changes();
         Ok(runtime)
     }
@@ -407,7 +516,7 @@ impl Runtime {
             .as_ref()
             .ok()
     }
-    fn entity(&self, id: &str) -> Option<&crate::document::Entity> {
+    pub(crate) fn entity(&self, id: &str) -> Option<&crate::document::Entity> {
         self.index()?
             .position(id)
             .map(|i| &self.scene().entities[i])
@@ -492,6 +601,9 @@ impl Runtime {
             ("bodies", self.bodies.is_empty()),
             ("animations", self.animations.is_empty()),
             ("disabled_behaviors", self.disabled_behaviors.is_empty()),
+            ("disabled_scripts", self.disabled_scripts.is_empty()),
+            ("script_memory", self.script_memory.is_empty()),
+            ("messages", self.messages.is_empty()),
             ("overlap_pairs", self.overlap_pairs.is_empty()),
             ("area_activations", self.area_activations.is_empty()),
             ("damage_hits", self.damage_hits.is_empty()),
@@ -526,6 +638,11 @@ impl Runtime {
         self.sounds.clear();
         self.animations.clear();
         self.disabled_behaviors.clear();
+        self.disabled_scripts.clear();
+        self.scripts = None;
+        self.script_callbacks.clear();
+        self.script_memory.clear();
+        self.messages.clear();
         self.area_hits.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -618,7 +735,6 @@ impl Runtime {
         }
         self.accumulator = (self.accumulator + elapsed.min(0.25)).min(FIXED_DT * MAX_STEPS as f32);
         let mut steps = 0;
-        let mut budget = MAX_NODE_WORK;
         while self.accumulator + f32::EPSILON >= FIXED_DT && steps < MAX_STEPS {
             let mut frame = InputFrame {
                 held: input.held.clone(),
@@ -634,10 +750,8 @@ impl Runtime {
             if self.cursor_shown {
                 frame.look = [0.; 2];
             }
-            crate::metrics::timed(
-                || self.fixed_step(&frame, &mut budget),
-                |c, ns| c.fixed_step_ns += ns,
-            );
+            crate::metrics::timed(|| self.fixed_step(&frame), |c, ns| c.fixed_step_ns += ns);
+            self.script_costs.end_step();
             self.settle_audio_changes();
             self.accumulator = (self.accumulator - FIXED_DT).max(0.0);
             steps += 1;
@@ -647,8 +761,15 @@ impl Runtime {
     /// One step. In the game pause only the clock, input events, logic and activations run:
     /// the camera, Ao passo, movement, animations and areas wait, and so do waits, whose due
     /// times are in game time. A pause that logic starts in the first logic phase skips the
-    /// world phase of that same step; one it ends takes effect on the next step.
-    fn fixed_step(&mut self, input: &InputFrame, budget: &mut usize) {
+    /// world phase of that same step; one it ends takes effect on the next step. Both logic
+    /// phases share the step's own work budget, so a run does the same at any frame rate.
+    fn fixed_step(&mut self, input: &InputFrame) {
+        let mut budget = MAX_NODE_WORK;
+        if let Some(host) = &self.scripts {
+            host.begin_step();
+        }
+        self.messages_sent = 0;
+        self.messages_by_script.clear();
         self.step_input = input.clone();
         self.query_work = 0;
         self.sounds_before_change = None;
@@ -676,11 +797,11 @@ impl Runtime {
             }
         }
         for action in &input.released {
-            if self.input_mode_used(action, 2) {
+            if self.input_mode_used(action, 2) || self.event_catalog().input {
                 self.emit(RuntimeEvent::InputReleased(action.clone()));
             }
         }
-        crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
+        crate::metrics::timed(|| self.process_tasks(&mut budget), |c, ns| c.tasks_ns += ns);
         if paused || self.game_paused {
             self.collect_activations();
             return;
@@ -714,7 +835,7 @@ impl Runtime {
                 c.character_sensors_ns += ns;
             },
         );
-        crate::metrics::timed(|| self.process_tasks(budget), |c, ns| c.tasks_ns += ns);
+        crate::metrics::timed(|| self.process_tasks(&mut budget), |c, ns| c.tasks_ns += ns);
         self.collect_activations();
     }
     pub fn queue_timed_input(
@@ -745,8 +866,15 @@ impl Runtime {
         self.traces_written
     }
     pub(crate) fn log(&mut self, message: String) {
+        self.log_at(message, None);
+    }
+    /// A log line, with the script line that wrote it.
+    pub(crate) fn log_at(&mut self, message: String, script: Option<ScriptLocation>) {
         self.logs_written += 1;
-        self.logs.push(message);
+        self.logs.push(LogLine {
+            text: message,
+            script,
+        });
         if self.logs.len() > 500 {
             self.logs.drain(..100);
         }
@@ -812,19 +940,25 @@ impl Runtime {
         // own strong leases; completed activations cannot accumulate here.
         self.damage_hits.retain(|_, hits| hits.strong_count() > 0);
     }
+    /// Queues the tasks of `event`: in scene order, each object's graph nodes that hear it and
+    /// then, in the order of its list, its scripts' callbacks.
     pub fn emit(&mut self, event: RuntimeEvent) {
         if self.stopped {
             return;
         }
         let generated_activation = self.next_serial();
         let mut found = Vec::new();
-        for &index in &self.event_catalog().owners {
+        let catalog = self.event_catalog();
+        for (slot, &index) in catalog.owners.iter().enumerate() {
             let entity = &self.scene().entities[index];
             crate::metrics::count(|c| c.event_entity_visits += 1);
-            if self.disabled_behaviors.contains(&entity.id) {
-                continue;
-            }
-            for node in &entity.graph.nodes {
+            // A graph that stopped hears nothing; the object's scripts still do.
+            let nodes: &[Node] = if self.disabled_behaviors.contains(&entity.id) {
+                &[]
+            } else {
+                &entity.graph.nodes
+            };
+            for node in nodes {
                 let matches = match &event {
                     RuntimeEvent::FixedStep => node.operation == "event.step",
                     RuntimeEvent::Movement(record) => {
@@ -860,7 +994,7 @@ impl Runtime {
                     RuntimeEvent::AreaExit { area, .. } => {
                         entity.id == *area && node.operation == "event.area_exit"
                     }
-                    RuntimeEvent::Animation { object, marker } => {
+                    RuntimeEvent::Animation { object, marker, .. } => {
                         entity.id == *object
                             && node.operation == "event.animation"
                             && node.text("marker") == marker
@@ -871,42 +1005,8 @@ impl Runtime {
                     }
                 };
                 if matches {
-                    let (other, activation) = match &event {
-                        RuntimeEvent::Movement(record) => {
-                            (Some(record.object.clone()), generated_activation)
-                        }
-                        RuntimeEvent::AreaEnter {
-                            other, activation, ..
-                        }
-                        | RuntimeEvent::AreaExit {
-                            other, activation, ..
-                        } => (Some(other.clone()), *activation),
-                        RuntimeEvent::Click(id) => (Some(id.clone()), generated_activation),
-                        RuntimeEvent::Animation { object, .. } => {
-                            (Some(object.clone()), generated_activation)
-                        }
-                        _ => (Some(entity.id.clone()), generated_activation),
-                    };
-                    let trajectory = match &event {
-                        RuntimeEvent::Movement(record) => {
-                            Some((record.object.clone(), record.state.trajectory))
-                        }
-                        RuntimeEvent::AreaEnter { other, .. }
-                        | RuntimeEvent::AreaExit { other, .. } => self
-                            .characters
-                            .states
-                            .get(other)
-                            .map(|s| (other.clone(), s.trajectory)),
-                        RuntimeEvent::FixedStep
-                        | RuntimeEvent::Input(_)
-                        | RuntimeEvent::InputHeld(_)
-                        | RuntimeEvent::InputReleased(_) => self
-                            .characters
-                            .states
-                            .get(&entity.id)
-                            .map(|s| (entity.id.clone(), s.trajectory)),
-                        _ => None,
-                    };
+                    let (other, activation, trajectory) =
+                        self.event_context(&event, &entity.id, generated_activation);
                     let values = movement_nodes::event_values(&event, self.game_time())
                         .into_iter()
                         .map(|(key, value)| ((node.id.clone(), key.into()), value))
@@ -914,7 +1014,7 @@ impl Runtime {
                     found.push(Task {
                         due: self.game_time(),
                         owner: entity.id.clone(),
-                        node: node.id.clone(),
+                        target: TaskTarget::Node(node.id.clone()),
                         context: Context {
                             owner: entity.id.clone(),
                             other,
@@ -926,12 +1026,27 @@ impl Runtime {
                     });
                 }
             }
+            self.script_event_tasks(
+                &event,
+                entity,
+                &catalog.scripts[slot],
+                generated_activation,
+                &mut found,
+            );
         }
+        // A graph's flow holds the hits of its activation, and so does a script's call of an
+        // area's event, which `first_hit` counts in.
+        let area_event = matches!(
+            event,
+            RuntimeEvent::AreaEnter { .. } | RuntimeEvent::AreaExit { .. }
+        );
         for task in &mut found {
-            task.context.hits = Some(self.lease(&task.owner, task.context.activation));
+            if task.is_node() || area_event {
+                task.context.hits = Some(self.lease(&task.owner, task.context.activation));
+            }
         }
         self.ready.extend(found);
-        if self.ready.len() + self.waiting.len() > 16384 {
+        if self.ready.len() + self.waiting.len() > MAX_TASKS {
             self.log(
                 "Limite global de tarefas excedido; comportamentos pendentes foram cancelados."
                     .into(),
@@ -939,6 +1054,47 @@ impl Runtime {
             self.ready.clear();
             self.waiting.clear();
         }
+    }
+    /// What a flow of `event` run for `owner` reads as its context object, its activation and
+    /// the character trajectory it hangs on.
+    fn event_context(
+        &self,
+        event: &RuntimeEvent,
+        owner: &Id,
+        generated_activation: u64,
+    ) -> (Option<Id>, u64, Option<(Id, u64)>) {
+        let (other, activation) = match event {
+            RuntimeEvent::Movement(record) => (Some(record.object.clone()), generated_activation),
+            RuntimeEvent::AreaEnter {
+                other, activation, ..
+            }
+            | RuntimeEvent::AreaExit {
+                other, activation, ..
+            } => (Some(other.clone()), *activation),
+            RuntimeEvent::Click(id) => (Some(id.clone()), generated_activation),
+            RuntimeEvent::Animation { object, .. } => (Some(object.clone()), generated_activation),
+            _ => (Some(owner.clone()), generated_activation),
+        };
+        let trajectory = match event {
+            RuntimeEvent::Movement(record) => {
+                Some((record.object.clone(), record.state.trajectory))
+            }
+            RuntimeEvent::AreaEnter { other, .. } | RuntimeEvent::AreaExit { other, .. } => self
+                .characters
+                .states
+                .get(other)
+                .map(|s| (other.clone(), s.trajectory)),
+            RuntimeEvent::FixedStep
+            | RuntimeEvent::Input(_)
+            | RuntimeEvent::InputHeld(_)
+            | RuntimeEvent::InputReleased(_) => self
+                .characters
+                .states
+                .get(owner)
+                .map(|s| (owner.clone(), s.trajectory)),
+            _ => None,
+        };
+        (other, activation, trajectory)
     }
     fn process_tasks(&mut self, budget: &mut usize) {
         if *budget == 0 {
@@ -954,6 +1110,10 @@ impl Runtime {
             }
         }
         self.waiting = future;
+        // After the events and the timers due, the messages sent since the last phase.
+        if !self.messages.is_empty() {
+            self.deliver_messages();
+        }
         while let Some(task) = self.ready.pop_front() {
             // An event of a trajectory that ended, or of a character gone, never runs.
             if task
@@ -969,20 +1129,40 @@ impl Runtime {
             {
                 continue;
             }
-            if self.disabled_behaviors.contains(&task.owner) || self.entity(&task.owner).is_none() {
-                continue;
-            }
-            let owner = task.owner.clone();
-            let node = task.node.clone();
-            let result = self.execute(task, budget);
-            if let Err(error) = result {
-                self.log(format!(
-                    "Objeto {} / nó {}: {error}. Comportamento interrompido.",
-                    owner, node
-                ));
-                self.disabled_behaviors.insert(owner.clone());
-                self.ready.retain(|queued| queued.owner != owner);
-                self.waiting.retain(|queued| queued.owner != owner);
+            match &task.target {
+                TaskTarget::Node(node) => {
+                    if self.disabled_behaviors.contains(&task.owner)
+                        || self.entity(&task.owner).is_none()
+                    {
+                        continue;
+                    }
+                    let owner = task.owner.clone();
+                    let node = node.clone();
+                    let result = self.execute(task, budget);
+                    if let Err(error) = result {
+                        self.log(format!(
+                            "Objeto {} / nó {}: {error}. Comportamento interrompido.",
+                            owner, node
+                        ));
+                        self.disabled_behaviors.insert(owner.clone());
+                        // The graph's tasks: the object's scripts go on.
+                        self.ready
+                            .retain(|queued| queued.owner != owner || !queued.is_node());
+                        self.waiting
+                            .retain(|queued| queued.owner != owner || !queued.is_node());
+                    }
+                }
+                TaskTarget::Script(_) => {
+                    if self.entity(&task.owner).is_none() {
+                        continue;
+                    }
+                    // The step's work for scripts ran out: this task and those after it go on
+                    // in the next step, in their order.
+                    if let Some(task) = self.run_script_task(task) {
+                        self.ready.push_front(task);
+                        break;
+                    }
+                }
             }
             if *budget == 0 {
                 if !self.ready.is_empty() {
@@ -1072,10 +1252,7 @@ impl Runtime {
                 .ok_or("Constante sem valor".into()),
             "attribute.get" => {
                 let target = self.target(graph, node, context, budget, depth + 1)?;
-                self.entity(&target)
-                    .ok_or("Objeto de leitura ausente")?
-                    .attributes
-                    .get(node.text("attribute"))
+                self.attribute(&target, node.text("attribute"))?
                     .cloned()
                     .ok_or_else(|| {
                         format!(
@@ -1121,7 +1298,7 @@ impl Runtime {
                 tasks.push(Task {
                     due: self.game_time() + delay,
                     owner: context.owner.clone(),
-                    node: edge.to_node.clone(),
+                    target: TaskTarget::Node(edge.to_node.clone()),
                     context: context.clone(),
                 });
             }
@@ -1149,7 +1326,10 @@ impl Runtime {
             self.graphs.insert(task.owner.clone(), graph.clone());
             graph
         };
-        let node = graph.node(&task.node).ok_or("Nó não encontrado")?;
+        let TaskTarget::Node(node) = &task.target else {
+            unreachable!("only a node's task reaches execute");
+        };
+        let node = graph.node(node).ok_or("Nó não encontrado")?;
         let mut context = task.context;
         self.traces_written += 1;
         self.traces.push(NodeTrace {
@@ -1200,32 +1380,7 @@ impl Runtime {
             "attribute.set" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let value = self.input_value(&graph, node, "value", &context, budget, 0)?;
-                if !value.is_finite() {
-                    return Err("Novo valor de atributo não finito.".into());
-                }
-                if let Some(id) = value.surface()
-                    && !self.project.surfaces.iter().any(|s| s.id == id)
-                {
-                    return Err("Nova referência de superfície não existe.".into());
-                }
-                if let Value::Object(Some(id)) = &value
-                    && self.entity(id).is_none()
-                {
-                    return Err("Nova referência de atributo não existe".into());
-                }
-                let entity = self
-                    .entity_mut(&target)
-                    .ok_or("Objeto de escrita não existe")?;
-                let old = entity
-                    .attributes
-                    .get(node.text("attribute"))
-                    .ok_or("Crie primeiro o atributo no painel de propriedades")?;
-                if std::mem::discriminant(old) != std::mem::discriminant(&value) {
-                    return Err("Valor incompatível com o tipo do atributo".into());
-                }
-                entity
-                    .attributes
-                    .insert(node.text("attribute").into(), value);
+                self.set_attribute(&target, node.text("attribute"), value)?;
             }
             "action.damage" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
@@ -1233,102 +1388,29 @@ impl Runtime {
                     .input_value(&graph, node, "amount", &context, budget, 0)?
                     .number()
                     .ok_or("Dano precisa ser numérico")?;
-                if !amount.is_finite() || amount < 0.0 {
-                    return Err("Dano deve ser um número não negativo".into());
-                }
+                operations::check_damage(amount)?;
                 let hits = context
                     .hits
                     .as_ref()
                     .ok_or("Ativação sem contexto de acerto")?;
+                // Once per activation and target, unless the node says otherwise.
                 if !node.boolean("once", true) || !hits.lock().unwrap().contains(&target) {
-                    let entity = self
-                        .entity_mut(&target)
-                        .ok_or("Alvo do dano foi removido")?;
-                    let value = entity
-                        .attributes
-                        .get_mut(node.text("attribute"))
-                        .ok_or("Alvo não possui o atributo de dano configurado")?;
-                    if let Value::Number(value) = value {
-                        *value = (*value - amount).max(0.0);
-                    } else {
-                        return Err("Atributo de dano precisa ser numérico".into());
-                    }
+                    self.damage(&target, node.text("attribute"), amount)?;
                     hits.lock().unwrap().insert(target);
                 }
             }
             "action.animation" => {
                 let target = self.target(&graph, node, &context, budget, 0)?;
-                let entity = self.entity(&target).ok_or("Objeto animado ausente")?;
-                let clip = entity
-                    .clips
-                    .iter()
-                    .find(|clip| clip.id == node.text("clip"))
-                    .ok_or("ID de clip não existe no objeto")?;
-                let clip_id = clip.id.clone();
-                if node.boolean("restart", true)
-                    || !self
-                        .animations
-                        .get(&target)
-                        .is_some_and(|player| player.playing && player.clip_id == clip_id)
-                {
-                    self.animations
-                        .insert(target, AnimationPlayer::new(clip_id));
-                }
+                self.play_animation(&target, node.text("clip"), node.boolean("restart", true))?;
             }
             "action.spawn" => {
                 let template = self.target(&graph, node, &context, budget, 0)?;
-                self.physics_dirty = true;
-                self.index.take();
-                self.input_modes.take();
-                self.event_operations.take();
-                let key = (context.owner.clone(), node.id.clone());
-                let count = self.run.spawns.get(&key).copied().unwrap_or(0);
-                let root = self
-                    .scene_mut_internal()
-                    .duplicate_subtree_with(&template, &mut spawn_ids(&key, count))?;
-                self.run.spawns.insert(key, count + 1);
-                // The editor duplicate offset is not part of a runtime spawn's explicit offset.
-                let delta = Vec3::new(
-                    node.number("x", 0.0) as f32 - 0.5,
+                let offset = Vec3::new(
+                    node.number("x", 0.0) as f32,
                     node.number("y", 0.0) as f32,
                     node.number("z", 0.0) as f32,
                 );
-                let descendants: HashSet<_> = self.scene().descendants(&root).into_iter().collect();
-                if let Some(mut recording) = self.recording.take() {
-                    recording.spawned.extend(
-                        self.scene()
-                            .entities
-                            .iter()
-                            .filter(|entity| descendants.contains(&entity.id))
-                            .map(|entity| SpawnedObject {
-                                id: entity.id.clone(),
-                                name: entity.name.clone(),
-                                graph: entity.graph.clone(),
-                            }),
-                    );
-                    self.recording = Some(recording);
-                }
-                let entity = self.entity_mut(&root).unwrap();
-                entity.transform.position =
-                    (Vec3::from(entity.transform.position) + delta).to_array();
-                for entity in self
-                    .scene_mut_internal()
-                    .entities
-                    .iter_mut()
-                    .filter(|entity| descendants.contains(&entity.id))
-                {
-                    for track in entity
-                        .clips
-                        .iter_mut()
-                        .flat_map(|clip| &mut clip.tracks)
-                        .filter(|track| track.target == root)
-                    {
-                        for key in &mut track.keyframes {
-                            key.transform.position =
-                                (Vec3::from(key.transform.position) + delta).to_array();
-                        }
-                    }
-                }
+                let root = self.spawn_copy(&template, offset, (&context.owner, &node.id))?;
                 Arc::make_mut(&mut context.outputs).insert(
                     (node.id.clone(), "created".into()),
                     Value::Object(Some(root)),
@@ -1342,69 +1424,18 @@ impl Runtime {
                 }
             }
             "action.component" => {
+                // The physics view is refreshed even when the target or the component fails.
                 self.physics_dirty = true;
                 let target = self.target(&graph, node, &context, budget, 0)?;
                 let enabled = node.boolean("enabled", true);
-                match node.text("component") {
-                    // The 2D box and the 3D collider or area alike; an old document may have both.
-                    "collider" => {
-                        let entity = self.entity_mut(&target).ok_or("Objeto ausente")?;
-                        if entity.collider.is_none() && entity.physics3d.is_none() {
-                            return Err("Objeto não tem colisor nem área".into());
-                        }
-                        let was = entity.collider.as_ref().is_some_and(|c| c.enabled)
-                            || entity.physics3d.as_ref().is_some_and(|c| c.enabled);
-                        if let Some(collider) = &mut entity.collider {
-                            collider.enabled = enabled;
-                        }
-                        if let Some(collider) = &mut entity.physics3d {
-                            collider.enabled = enabled;
-                        }
-                        // Turned back on, an area starts a new activation that whoever is inside
-                        // enters afresh, even when it was off only within this step. Turned off,
-                        // its occupancy ends without an exit.
-                        if enabled && !was {
-                            self.activate_area(&target);
-                            self.overlap_pairs.retain(|(area, _)| area != &target);
-                            self.characters.forget_area(&target);
-                        }
-                        if !enabled {
-                            self.area_activations.remove(&target); self.area_hits.remove(&target);
-                        }
-                    }
-                    "controller" => self.entity_mut(&target).ok_or("Objeto ausente")?.controller.as_mut().ok_or("Objeto não tem controlador")?.enabled = enabled,
-                    "visible" => self.entity_mut(&target).ok_or("Objeto ausente")?.visible = enabled,
-                    "behavior" => {
-                        if self.entity(&target).is_none() { return Err("Objeto ausente".into()); }
-                        if enabled { self.disabled_behaviors.remove(&target); } else { self.disabled_behaviors.insert(target.clone()); self.waiting.retain(|task| task.owner != target); }
-                    }
-                    "animation" => { if let Some(player) = self.animations.get_mut(&target) { player.playing = enabled; } }
-                    "platform" => self.entity_mut(&target).ok_or("Objeto ausente")?.platform.as_mut().ok_or("Objeto não tem plataforma móvel")?.enabled = enabled,
-                    _ => return Err("Componente desconhecido; use collider/controller/visible/behavior/animation/platform".into()),
-                }
+                let component = ObjectComponent::from_id(node.text("component")).ok_or(
+                    "Componente desconhecido; use collider/controller/visible/behavior/animation/platform",
+                )?;
+                self.set_component_enabled(&target, component, enabled)?;
             }
             "action.scene" => {
                 let scene = self.scene_destination(&graph, node, &context, budget)?;
-                self.change_scene(&scene)?;
-                // A sound played right before the first change of the step is heard; those
-                // of a scene that starts and ends within the step are not, nor its effect
-                // loops, which the change ended.
-                match self.sounds_before_change {
-                    Some(kept) => self.sounds.truncate(kept),
-                    None => self.sounds_before_change = Some(self.sounds.len()),
-                }
-                if let Some(recording) = &mut self.recording {
-                    match self.audio_before_change {
-                        Some(kept) => {
-                            let mut index = 0;
-                            recording.audio.retain(|change| {
-                                index += 1;
-                                index <= kept || change.lasts()
-                            });
-                        }
-                        None => self.audio_before_change = Some(recording.audio.len()),
-                    }
-                }
+                self.change_scene_from_logic(&scene)?;
                 return Ok(());
             }
             _ => {
@@ -1494,6 +1525,12 @@ impl Runtime {
         self.bodies.retain(|owner, _| !ids.contains(owner));
         self.animations.retain(|owner, _| !ids.contains(owner));
         self.disabled_behaviors.retain(|owner| !ids.contains(owner));
+        self.disabled_scripts
+            .retain(|(owner, _)| !ids.contains(owner));
+        if let Some(host) = &self.scripts {
+            host.forget(&ids);
+        }
+        self.forget_script_state(&ids);
         self.overlap_pairs
             .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
         self.damage_hits.retain(|(a, _), hits| {
@@ -1525,7 +1562,12 @@ impl Runtime {
         };
         self.run.rolls.retain(|(owner, _), _| keep(owner));
         self.run.spawns.retain(|(owner, _), _| keep(owner));
+        self.run.script_rolls.retain(|(owner, ..), _| keep(owner));
+        self.run.script_spawns.retain(|(owner, _), _| keep(owner));
         self.run.failures_logged.retain(|(owner, _)| keep(owner));
+        self.run
+            .script_errors
+            .retain(|(owner, _), _| owner.is_empty() || keep(owner));
     }
     pub fn change_scene(&mut self, id: &str) -> Result<(), String> {
         self.index.take();
@@ -1559,6 +1601,9 @@ impl Runtime {
         self.bodies.clear();
         self.animations.clear();
         self.disabled_behaviors.clear();
+        self.disabled_scripts.clear();
+        self.script_memory.clear();
+        self.messages.clear();
         self.overlap_pairs.clear();
         self.area_activations.clear();
         self.damage_hits.clear();
@@ -1583,6 +1628,7 @@ impl Runtime {
         self.query_work = 0;
         self.initialize_character_states()?;
         self.begin_camera_input(&InputFrame::default());
+        self.start_scripts();
         self.emit(RuntimeEvent::SceneStart);
         Ok(())
     }
@@ -1752,6 +1798,7 @@ impl Runtime {
                     events.push(RuntimeEvent::Animation {
                         object: owner.clone(),
                         marker,
+                        clip: clip.name.clone(),
                     });
                 }
                 if clip.looping && (player.time / f64::from(clip.duration)).floor() > previous_cycle
@@ -1937,15 +1984,20 @@ pub fn collider_box(scene: &Scene, id: &str) -> Option<Aabb> {
 /// The IDs of copy number `count` made by the Criar cópia node of `(owner, node)`: each comes
 /// from the ID of the original object, clip or node, so a run that makes the same copies gives
 /// them the same IDs, in any order and whatever the seed. An ID the scene already has is
-/// asked again and salted.
-fn spawn_ids((owner, node): &(Id, Id), count: u64) -> impl FnMut(&str) -> Id {
+/// asked again and salted. `domain` tells who copies: `b"oxy.spawn"` for nodes, another for
+/// scripts, whose `(owner, script)` never meets a node's IDs.
+fn spawn_ids(
+    domain: &'static [u8],
+    (owner, node): &(Id, String),
+    count: u64,
+) -> impl FnMut(&str) -> Id {
     let (owner, node) = (owner.clone(), node.clone());
     let mut salts: HashMap<Id, u64> = HashMap::new();
     move |original: &str| {
         let salt = salts.entry(original.into()).or_insert(0);
         let (count, extra) = (count.to_le_bytes(), salt.to_le_bytes());
         let mut parts = vec![
-            b"oxy.spawn".as_slice(),
+            domain,
             owner.as_bytes(),
             node.as_bytes(),
             &count,
@@ -2207,7 +2259,11 @@ mod tests {
         project.scenes.push(other);
         let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
         let count = |runtime: &Runtime, text: &str| {
-            runtime.logs.iter().filter(|l| l.ends_with(text)).count()
+            runtime
+                .logs
+                .iter()
+                .filter(|l| l.text.ends_with(text))
+                .count()
         };
         let height =
             |runtime: &Runtime| runtime.scene().entity(&faller).unwrap().transform.position[1];
@@ -2264,7 +2320,7 @@ mod tests {
         assert_eq!(count(&runtime, "oculto"), 0);
         let ignored = "Clique ignorado: Escondido está oculto (ele mesmo ou um grupo acima dele).";
         assert!(
-            runtime.logs.iter().any(|l| l == ignored),
+            runtime.logs.iter().any(|l| l.text == ignored),
             "{:?}",
             runtime.logs
         );
@@ -2446,7 +2502,7 @@ mod tests {
             runtime
                 .logs
                 .iter()
-                .any(|line| line.contains(&id) && line.contains("incompatível"))
+                .any(|line| line.text.contains(&id) && line.text.contains("incompatível"))
         );
         assert_eq!(
             runtime.scene().entity(&id).unwrap().attributes["contador"],
@@ -2456,28 +2512,36 @@ mod tests {
     #[test]
     fn task_budget_bounds_large_graph_without_blocking_fixed_steps() {
         let mut project = Project::new("Orçamento");
-        let mut entity = Entity::new("Fluxo longo", None);
-        let start = Node::new("event.click", [0.0; 2]);
-        let mut previous = start.clone();
-        entity.graph.nodes.push(start);
-        for index in 0..MAX_NODE_WORK + 20 {
-            let next = Node::new("debug.message", [index as f32, 0.0]);
-            connect(&mut entity.graph, &previous, "exec", &next, "exec");
-            previous = next.clone();
-            entity.graph.nodes.push(next);
+        // Together longer than the work of the most steps an advance takes, since each step
+        // has its own.
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let mut entity = Entity::new("Fluxo longo", None);
+            let start = Node::new("event.click", [0.0; 2]);
+            let mut previous = start.clone();
+            entity.graph.nodes.push(start);
+            for index in 0..MAX_NODE_WORK * MAX_STEPS / 3 + 20 {
+                let next = Node::new("debug.message", [index as f32, 0.0]);
+                connect(&mut entity.graph, &previous, "exec", &next, "exec");
+                previous = next.clone();
+                entity.graph.nodes.push(next);
+            }
+            ids.push(entity.id.clone());
+            project.scenes[0].entities.push(entity);
         }
-        let id = entity.id.clone();
-        project.scenes[0].entities.push(entity);
         let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
-        runtime.click(&id);
+        for id in &ids {
+            runtime.click(id);
+        }
         runtime.advance(0.2, &InputFrame::default());
         assert_eq!(runtime.pending_tasks(), 1);
         assert!(runtime.time >= f64::from(FIXED_DT) * 7.9);
+        assert_eq!(runtime.traces_written(), (MAX_NODE_WORK * MAX_STEPS) as u64);
         assert!(
             runtime
                 .logs
                 .iter()
-                .any(|line| line.contains("Limite de trabalho"))
+                .any(|line| line.text.contains("Limite de trabalho"))
         );
         runtime.advance(FIXED_DT, &InputFrame::default());
         assert_eq!(runtime.pending_tasks(), 0);

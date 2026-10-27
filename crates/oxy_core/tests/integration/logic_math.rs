@@ -60,7 +60,7 @@ fn eval(operation: &str, params: &[(&str, Value)]) -> Result<Value, String> {
     let runtime = Runtime::new(&project, &project.start_scene).unwrap();
     match runtime.logs.as_slice() {
         [] => Ok(runtime.scene().entity(&id).unwrap().attributes["Resultado"].clone()),
-        [error] => Err(error.clone()),
+        [error] => Err(error.text.clone()),
         logs => panic!("{operation}: {logs:?}"),
     }
 }
@@ -298,7 +298,9 @@ fn time_formats_a_number_read_through_its_port_and_refuses_one_not_finite() {
     runtime.advance(FIXED_DT, &InputFrame::default());
     assert_eq!(runtime.logs.len(), 1, "{:?}", runtime.logs);
     assert!(
-        runtime.logs[0].contains("Segundos precisam ser um número finito"),
+        runtime.logs[0]
+            .text
+            .contains("Segundos precisam ser um número finito"),
         "{:?}",
         runtime.logs
     );
@@ -499,7 +501,8 @@ fn draws_refuse_bounds_without_numbers_and_a_value_read_before_the_draw() {
     let errors = |project: &Project| {
         let mut runtime = seeded(project, 0);
         step(&mut runtime, true);
-        runtime.logs.join("\n")
+        let texts: Vec<_> = runtime.logs.iter().map(|l| l.text.as_str()).collect();
+        texts.join("\n")
     };
     for (draw, message) in [
         (draw_node(2., 1., "real"), "Mínimo 2 maior que o máximo 1"),

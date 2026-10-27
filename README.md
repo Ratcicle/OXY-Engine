@@ -1,6 +1,6 @@
 # OXY Engine
 
-Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcleo. Um mesmo projeto reúne cenas 2D/3D, modelagem por peças e polígonos, pintura de texturas PNG, animação rígida, física de personagem e lógica visual por nós. O editor e o player compartilham egui/eframe 0.33.3 e wgpu 27.0.1.
+Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcleo. Um mesmo projeto reúne cenas 2D/3D, modelagem por peças e polígonos, pintura de texturas PNG, animação rígida, física de personagem e scripts em Luau. O editor e o player compartilham egui/eframe 0.33.3 e wgpu 27.0.1.
 
 ![Editor da OXY Engine com o Laboratório 3D aberto](assets/screenshots/editor.png)
 
@@ -12,26 +12,28 @@ Editor e runtime de jogos desktop escritos em Rust, sem outra engine como núcle
 - **Modelagem** de primitivas paramétricas e malhas poligonais: extrusão, borda interna, corte em loop, bisturi, arredondamento e encaixe.
 - **Pintura** direto na imagem ou na superfície da peça, com atlas UV que preserva os pixels após cortes.
 - **Animação** rígida por peças, com timeline, quadros-chave e eventos.
-- **Lógica visual** por nós, com ações de entrada, variáveis do jogo, progresso salvo entre partidas, menu de pausa feito na lógica e um guia offline com catorze receitas prontas.
+- **Scripts em Luau**, o jeito principal de fazer a lógica: arquivos `.luau` nas pastas do projeto, escritos por você no VS Code (com a extensão luau-lsp e os tipos da API que a OXY prepara) ou por um agente de IA pelo MCP. A OXY anexa os scripts aos objetos, mostra o código e os erros com o arquivo e a linha e recarrega o script no meio do teste. Ações de entrada, variáveis do jogo, progresso salvo e menu de pausa valem para os scripts; a lógica por nós das versões anteriores continua rodando, como legado.
+- **Guia** offline: como escrever scripts, a referência das 175 funções da API e receitas prontas, em script e em nós.
+- **Biblioteca** com as pastas reais do projeto: imagens, sons, modelos e scripts juntos como você quiser, cada arquivo com o nome que você vê; renomear e mover na OXY muda o disco, com Ctrl+Z.
 - **Som** com mixador próprio: música e efeitos em canais, loops com transição e volumes pela lógica.
 - **Personagem 3D** com corpo de movimento configurável, câmeras em primeira/terceira pessoa, plataformas móveis que levam o personagem também quando giram e um laboratório de movimento editável.
 - **Jogos exportados** pelo editor: uma pasta com o executável do jogo (o player, `oxy_player.exe`, com o nome do jogo), os dados e as licenças, para distribuir só o jogo, sem o editor.
-- **OXY Parkour**, um jogo completo em primeira pessoa feito só com os nós e componentes da engine (menu, pista, cronômetro, pausa, recorde salvo e música), que abre como exemplo na tela inicial.
-- **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, testam (com um bot que percorre a fase) e capturam o projeto, ao vivo no editor e com as edições desfazíveis, e criam projetos e exportam o jogo quando você pede. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
+- **OXY Parkour**, um jogo completo em primeira pessoa (menu, pista, cronômetro, pausa, recorde salvo e música) feito com os componentes da engine e 16 scripts em Luau, organizado nas pastas `Pista/`, `Menu/` e `Comum/`, que abre como exemplo na tela inicial.
+- **Agentes de IA** pelo servidor MCP (`oxy-mcp.exe`): leem, editam, escrevem os scripts, testam (com um bot que percorre a fase) e capturam o projeto, ao vivo no editor e com as edições desfazíveis, e criam projetos e exportam o jogo quando você pede. Veja [Agentes de IA (MCP)](docs/agentes-mcp.md).
 
 ## Baixar e abrir
 
 Requisitos: Windows 10/11 x64, driver gráfico atualizado e GPU compatível com DirectX 12 ou Vulkan.
 
 1. Baixe o ZIP da [última Release](https://github.com/Ratcicle/OXY-Engine/releases/latest) e extraia tudo em uma pasta gravável.
-2. Abra **`OXY Engine.exe`**. Mantenha as pastas `data` e `parkour` e as DLLs junto dos executáveis.
+2. Abra **`OXY Engine.exe`**. Mantenha as pastas `data` e `parkour` junto dos executáveis.
 3. Na tela inicial, escolha **Novo projeto**, **Abrir projeto**, **Projeto de exemplo**, **Laboratório 3D · movimento** ou **OXY Parkour**.
 
 Os exemplos abrem como cópias seguras. Projetos recentes e preferências ficam em `%LOCALAPPDATA%/OXY Engine`, fora do projeto.
 
 ## Compilar
 
-Instale Rust **1.92.0** com rustfmt e Clippy, e as ferramentas C++/Windows SDK para MSVC (ou MinGW-w64 completo). Na raiz do repositório:
+Instale Rust **1.92.0** com rustfmt e Clippy, e as ferramentas C++/Windows SDK para MSVC (ou MinGW-w64 completo). O Luau, que roda os scripts, é C++: no MSVC, defina `LUAU_CXXFLAGS=/EHsc` antes de compilar; no MinGW, o `.cargo/config.toml` do repositório já liga a `libstdc++` estática, desde que o cargo rode de dentro do repositório. As demais notas de build estão em [AGENTS.md](AGENTS.md). Na raiz do repositório:
 
 ```powershell
 cargo run --locked -p oxy_editor
@@ -50,11 +52,12 @@ Nesta máquina, `scripts/cargo.ps1` configura o compilador GNU preparado; passe 
 
 | Crate | Papel |
 |---|---|
-| `oxy_core` | Documentos, persistência, migração, geometria, física, runtime e grafo de lógica. Sem GPU nem interface. |
+| `oxy_core` | Documentos, persistência, migração, geometria, física, runtime, scripts em Luau (pelo `mlua`) e grafo de lógica. Sem GPU nem interface. |
 | `oxy_render` | Renderer wgpu, seleção, interface de jogo e tema visual compartilhado. |
 | `oxy_audio` | Som do editor e do player: o dispositivo de saída (cpal) e um mixador próprio. |
 | `oxy_editor` | O editor (`OXY Engine.exe`). |
 | `oxy_player` | O runtime dos jogos (`oxy_player.exe`). |
+| `oxy_mcp` | O servidor MCP para agentes de IA (`oxy-mcp.exe`). |
 
 ## Verificar e distribuir
 
@@ -74,11 +77,11 @@ Para exportar um jogo, use o editor: **Projeto → Exportar jogo…** cria `<Des
 
 Os testes nativos e as medições gravam capturas e relatórios em `target/qa/` (ou na pasta de `OXY_QA_DIR`). Benchmarks e comparações estão descritos em [`benchmarks/README.md`](benchmarks/README.md).
 
-O CI (`ci.yml`) verifica formatação, build, testes e Clippy. `portable-windows.yml` gera o ZIP x64 com SHA-256: artifact em pushes para `main` e anexo de Release em tags `v*` que correspondem à versão do workspace. Não há instalador, atualizador automático ou assinatura digital.
+O CI (`ci.yml`) verifica formatação, build (com o Luau compilado com `/EHsc`), testes e Clippy. `portable-windows.yml` gera o ZIP x64 com SHA-256: artifact em pushes para `main` e anexo de Release em tags `v*` que correspondem à versão do workspace. Não há instalador, atualizador automático ou assinatura digital.
 
 ## Compatibilidade
 
-O formato atual dos projetos é **schema_version 5**, da 0.6. Documentos de versões anteriores são migrados em memória sem mudar IDs; ao salvar, um backup dos bytes originais é criado. Versões futuras ou inválidas são recusadas, e a 0.5.x e versões anteriores não abrem projetos salvos pela 0.6. Os limites de cada ferramenta estão no [guia do editor](docs/guia-do-editor.md#compatibilidade-e-domínio-suportado).
+O formato atual dos projetos é **schema_version 6**, da 0.7, que acrescenta a lista de scripts de cada objeto e organiza o projeto em pastas, com cada modelo num arquivo `.modelo.json`. Documentos de versões anteriores são migrados em memória sem mudar IDs; o primeiro salvamento organiza o projeto em pastas, depois de guardar uma cópia completa dele em `.oxy/backup/`. Versões futuras ou inválidas são recusadas, e a 0.6.x e versões anteriores não abrem projetos salvos pela 0.7. Os limites de cada ferramenta estão no [guia do editor](docs/guia-do-editor.md#compatibilidade-e-domínio-suportado).
 
 ## Licença
 

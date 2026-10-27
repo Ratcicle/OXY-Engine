@@ -693,7 +693,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
         runtime
             .logs
             .iter()
-            .any(|message| message.contains("Energia insuficiente"))
+            .any(|message| message.text.contains("Energia insuficiente"))
     );
     let platform = &project.scenes[0];
     let actor = platform
@@ -769,7 +769,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
         !runtime
             .logs
             .iter()
-            .any(|message| message.contains("interrompido")),
+            .any(|message| message.text.contains("interrompido")),
         "{:?}",
         runtime.logs
     );
@@ -801,7 +801,7 @@ fn validate_demos(project: &Project) -> Result<(), String> {
         !runtime
             .logs
             .iter()
-            .any(|message| message.contains("interrompido")),
+            .any(|message| message.text.contains("interrompido")),
         "{:?}",
         runtime.logs
     );

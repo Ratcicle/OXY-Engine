@@ -12,6 +12,8 @@ impl NativeQa {
             "save_location" => {
                 // Test file routing only: creation and saving still use the ordinary editor.
                 let directory = self.output.join("project");
+                // A new project each run: the last run's files would be files it does not name.
+                let _ = std::fs::remove_dir_all(&directory);
                 std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
                 self.editor.path = Some(directory.join("project.oxy.json"));
             }

@@ -1,8 +1,8 @@
-//! Lógica: the toolbar, the node inspector, input actions, game variables and the visual
-//! logic guide.
+//! Lógica: the toolbar, the node inspector, input actions, game variables and the Guia.
+mod guide;
 mod variables;
 use super::*;
-use crate::graph_ui::{catalog_docked, categories, graph_meta, operation_description};
+use crate::graph_ui::{catalog_docked, graph_meta};
 use crate::icons::{self, Icon};
 use oxy_core::graph::Graph;
 use oxy_core::input_actions;
@@ -13,8 +13,12 @@ pub(super) struct LogicUi {
     pub inputs: bool,
     variables: variables::VariablesUi,
     pub guide: bool,
-    /// Guide page: empty for the first behavior, "recipe:N", "category:Name" or a node.
+    /// Guide page: empty or "script:N" for a page of Scripts, "script-recipe:N", "api:Área" (or
+    /// "api:Área#nome", at that row), the first behavior, "recipes", "recipe:N", "categories",
+    /// "category:Name" or a node.
     pub topic: String,
+    /// The page asks for its row (`api:Área#nome`) to scroll into view, once.
+    jump: bool,
     search: String,
     action_name: String,
     action_key: String,
@@ -192,11 +196,11 @@ impl Editor {
             &mut right,
             Icon::Book,
             "Guia",
-            "Guia de lógica visual e receitas (F1).",
+            "Guia: scripts, receitas, referência da API e nós (F1).",
             false,
             names,
         );
-        icons::register_qa(&right, "Guia de lógica visual", guide.rect);
+        icons::register_qa(&right, "Guia", guide.rect);
         if guide.clicked() {
             self.open_guide("");
         }
@@ -274,6 +278,11 @@ impl Editor {
                             .truncate(),
                         );
                     });
+                // A graph of nodes is the old way: it goes on working, and new logic goes in
+                // scripts.
+                if !graph.nodes.is_empty() && left.available_width() > 120. {
+                    legacy_seal(&mut left);
+                }
                 if left.available_width() > 110. {
                     left.label(
                         egui::RichText::new(graph_meta(graph))
@@ -310,6 +319,7 @@ impl Editor {
         self.studio.playing = false;
         self.logic_ui.guide = true;
         self.logic_ui.topic = topic.into();
+        self.logic_ui.jump = false;
     }
     pub(super) fn logic_dialogs(&mut self, ctx: &egui::Context) {
         if self.logic_ui.inputs {
@@ -479,8 +489,15 @@ impl Editor {
                             )
                             .clicked()
                         {
+                            let names = self.script_names_before();
                             match input_actions::remove(&mut self.state.project, id) {
-                                Ok(()) => self.logic_ui.remove = None,
+                                Ok(()) => {
+                                    self.logic_ui.remove = None;
+                                    self.warn_script_names(
+                                        names,
+                                        &[oxy_core::script::NameKind::Action],
+                                    );
+                                }
                                 Err(e) => self.warn(e),
                             }
                         }
@@ -570,291 +587,28 @@ impl Editor {
             }
         }
     }
-    fn guide_ui(&mut self, ctx: &egui::Context) {
-        use crate::theme;
-        let mut close = false;
-        let mut open_recipe = None;
-        let content = ctx.content_rect();
-        let width = (content.width() - 48.).clamp(160., 880.);
-        let body_height = (content.height() - 190.).clamp(80., 560.);
-        let response = egui::Modal::new("logic_guide".into()).show(ctx, |ui| {
-            ui.set_width(width);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Guia de lógica visual")
-                        .font(theme::medium(15.))
-                        .color(theme::TEXT),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::small(ui, Icon::Close, "Fechar guia", 24.).clicked() {
-                        close = true;
-                    }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.logic_ui.search)
-                            .hint_text("Buscar operação ou assunto")
-                            .desired_width((ui.available_width() - 12.).clamp(80., 260.)),
-                    );
-                });
-            });
-            ui.add_space(6.);
-            if width >= 560. {
-                let nav_width = (width * 0.28).clamp(170., 230.);
-                ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(nav_width, body_height),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("guide_nav")
-                                .max_height(body_height)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| self.guide_nav(ui));
-                        },
-                    );
-                    let (line, _) =
-                        ui.allocate_exact_size(Vec2::new(1., body_height), Sense::hover());
-                    ui.painter().rect_filled(line, 0., theme::BORDER);
-                    ui.add_space(8.);
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), body_height),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            // Each page opens at its top.
-                            egui::ScrollArea::vertical()
-                                .id_salt(("guide_article", self.logic_ui.topic.clone()))
-                                .max_height(body_height)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| open_recipe = self.guide_article(ui));
-                        },
-                    );
-                });
-            } else {
-                egui::ScrollArea::vertical()
-                    .id_salt("guide_all")
-                    .max_height(body_height)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.guide_nav(ui);
-                        ui.separator();
-                        open_recipe = self.guide_article(ui);
-                    });
-            }
-            ui.add_space(8.);
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Fechar guia").clicked() {
-                        close = true;
-                    }
-                });
-            });
-        });
-        if close || response.should_close() {
-            self.logic_ui.guide = false;
-        }
-        if let Some(recipe) = open_recipe {
-            let result = (|| {
-                let project = oxy_core::guide_recipes::load(recipe)?;
-                let path = std::env::temp_dir()
-                    .join(format!("oxy-guide-{}", new_id()))
-                    .join(persistence::PROJECT_FILE);
-                persistence::save_project(&path, &project)?;
-                Ok::<_, String>(path)
-            })();
-            match result {
-                Ok(path) => {
-                    self.logic_ui.guide = false;
-                    self.transition(Transition::Recipe(path));
-                }
-                Err(e) => self.warn(e),
-            }
-        }
-    }
-    /// Guide topics: first behavior, recipes and nodes by category, or search results.
-    fn guide_nav(&mut self, ui: &mut egui::Ui) {
-        ui.spacing_mut().item_spacing.y = 1.;
-        let query = self.logic_ui.search.trim().to_lowercase();
-        let recipes = oxy_core::guide_recipes::recipes();
-        if !query.is_empty() {
-            nav_section(ui, "Resultados");
-            let mut found = false;
-            for (index, recipe) in recipes.iter().enumerate() {
-                if format!("{} {}", recipe.title, recipe.setup)
-                    .to_lowercase()
-                    .contains(&query)
-                {
-                    found = true;
-                    let key = format!("recipe:{index}");
-                    if nav_item(
-                        ui,
-                        recipe.title,
-                        Some("Receita"),
-                        self.logic_ui.topic == key,
-                    )
-                    .clicked()
-                    {
-                        self.logic_ui.topic = key;
-                    }
-                }
-            }
-            for topic in oxy_core::guide::topics() {
-                let op = topic.operation;
-                if format!("{} {} {}", op.label, op.category, topic.purpose)
-                    .to_lowercase()
-                    .contains(&query)
-                {
-                    found = true;
-                    if nav_item(
-                        ui,
-                        op.label,
-                        Some(op.category),
-                        self.logic_ui.topic == op.id,
-                    )
-                    .clicked()
-                    {
-                        self.logic_ui.topic = op.id.into();
-                    }
-                }
-            }
-            if !found {
-                crate::widgets::hint(ui, "Nada encontrado. Tente outro termo.");
-            }
-            return;
-        }
-        if nav_item(
-            ui,
-            "Primeiro comportamento",
-            None,
-            self.logic_ui.topic.is_empty(),
-        )
-        .clicked()
-        {
-            self.logic_ui.topic.clear();
-        }
-        nav_section(ui, "Receitas");
-        for (index, recipe) in recipes.iter().enumerate() {
-            let key = format!("recipe:{index}");
-            if nav_item(ui, recipe.title, None, self.logic_ui.topic == key).clicked() {
-                self.logic_ui.topic = key;
-            }
-        }
-        nav_section(ui, "Nós por categoria");
-        for (category, ops) in categories() {
-            let key = format!("category:{category}");
-            let selected =
-                self.logic_ui.topic == key || ops.iter().any(|op| op.id == self.logic_ui.topic);
-            if nav_item(ui, category, Some(&ops.len().to_string()), selected).clicked() {
-                self.logic_ui.topic = key;
-            }
-        }
-    }
-    /// The page chosen in the guide. Returns the recipe to open, if requested.
-    fn guide_article(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-        let mut open = None;
-        let topic = self.logic_ui.topic.clone();
-        ui.spacing_mut().item_spacing.y = 6.;
-        let recipe = topic
-            .strip_prefix("recipe:")
-            .and_then(|index| index.parse::<usize>().ok())
-            .and_then(|index| {
-                oxy_core::guide_recipes::recipes()
-                    .get(index)
-                    .map(|recipe| (index, recipe))
-            });
-        let category = topic
-            .strip_prefix("category:")
-            .and_then(|name| categories().iter().find(|(category, _)| *category == name));
-        if let Some((index, recipe)) = recipe {
-            kicker(ui, "Receita");
-            heading(ui, recipe.title);
-            // The recipe opens from the top of its page, before the details.
-            if ui
-                .button(format!(
-                    "Abrir cópia da receita: {}",
-                    recipe.title.to_lowercase()
-                ))
-                .clicked()
-            {
-                open = Some(index);
-            }
-            ui.add_space(2.);
-            section(ui, "Preparação", recipe.setup);
-            section(ui, "Conexões e valores", recipe.flow);
-            section(ui, "Resultado esperado", recipe.expected);
-        } else if let Some((category, ops)) = category {
-            kicker(ui, "Nós");
-            heading(ui, category);
-            paragraph(
-                ui,
-                "Escolha um nó para ver propósito, entradas e saídas, parâmetros, exemplo e cuidados. O mesmo texto abre por Ajuda deste nó.",
-            );
-            ui.spacing_mut().item_spacing.y = 1.;
-            for op in ops {
-                if nav_item(ui, op.label, None, false)
-                    .on_hover_text(operation_description(op.id))
-                    .clicked()
-                {
-                    self.logic_ui.topic = op.id.into();
-                }
-            }
-        } else if let Some(topic) = oxy_core::guide::topics()
-            .iter()
-            .find(|t| t.operation.id == topic)
-        {
-            let op = topic.operation;
-            kicker(ui, op.category);
-            heading(ui, op.label);
-            paragraph(ui, topic.purpose);
-            section(ui, "Preparação e contexto", topic.requirements());
-            let ports: Vec<String> = op
-                .inputs
-                .iter()
-                .map(|port| format!("Entrada · {} ({})", port.label, port.kind.label()))
-                .chain(
-                    op.outputs
-                        .iter()
-                        .map(|port| format!("Saída · {} ({})", port.label, port.kind.label())),
-                )
-                .collect();
-            if !ports.is_empty() {
-                section(ui, "Entradas e saídas", &ports.join("\n"));
-            }
-            if !op.params.is_empty() {
-                let params: Vec<_> = op.params.iter().map(|param| param.label).collect();
-                section(ui, "Parâmetros", &params.join("\n"));
-            }
-            section(ui, "Exemplo", topic.example);
-            section(ui, "Cuidados", topic.caution);
-        } else {
-            heading(ui, "Seu primeiro comportamento");
-            for line in oxy_core::guide::FIRST_BEHAVIOR.lines() {
-                match line
-                    .split_once(". ")
-                    .filter(|(number, _)| number.chars().all(|c| c.is_ascii_digit()))
-                {
-                    Some((number, text)) => step(ui, number, text),
-                    None => paragraph(ui, line),
-                }
-            }
-            if ui
-                .button("Abrir cópia da receita: primeira mensagem")
-                .clicked()
-            {
-                open = Some(0);
-            }
-            ui.add_space(4.);
-            ui.separator();
-            ui.label(
-                egui::RichText::new("Execução e dados")
-                    .font(crate::theme::medium(14.))
-                    .color(crate::theme::TEXT),
-            );
-            for line in oxy_core::guide::FOUNDATIONS.lines() {
-                paragraph(ui, line);
-            }
-        }
-        open
-    }
 }
+/// The yellow seal "Nós (legado)" next to the name of an object whose logic is a graph of nodes.
+fn legacy_seal(ui: &mut egui::Ui) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(58, 51, 34))
+        .stroke(egui::Stroke::new(1., Color32::from_rgb(107, 90, 47)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(9, 1))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Nós (legado)")
+                    .size(11.5)
+                    .color(crate::theme::WARNING),
+            );
+        })
+        .response
+        .on_hover_text(
+            "A lógica deste objeto está em nós, o jeito antigo. Ela continua funcionando; a \
+             lógica nova é escrita em scripts.",
+        );
+}
+
 fn dialog_header(ui: &mut egui::Ui, title: &str, subtitle: &str, close: &mut bool) {
     use crate::theme;
     ui.horizontal(|ui| {
@@ -885,118 +639,6 @@ fn column_title(ui: &mut egui::Ui, text: &str, width: f32) {
         crate::theme::medium(10.5),
         crate::theme::TEXT_MUTED,
     );
-}
-fn nav_section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(8.);
-    ui.label(
-        egui::RichText::new(title.to_uppercase())
-            .font(crate::theme::medium(10.5))
-            .color(crate::theme::TEXT_MUTED),
-    );
-    ui.add_space(2.);
-}
-/// Full-width row of the guide navigation, with an optional muted note at the right.
-fn nav_item(
-    ui: &mut egui::Ui,
-    label: &str,
-    trailing: Option<&str>,
-    selected: bool,
-) -> egui::Response {
-    use crate::theme;
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.), Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
-            ui.is_enabled(),
-            selected,
-            label,
-        )
-    });
-    let fill = if selected {
-        theme::ACCENT_SOFT
-    } else if response.hovered() {
-        theme::BG_RAISED
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, 5., fill);
-    let mut right = rect.right() - 8.;
-    if let Some(trailing) = trailing {
-        let galley = ui.painter().layout_no_wrap(
-            trailing.to_owned(),
-            egui::FontId::proportional(11.),
-            theme::TEXT_MUTED,
-        );
-        right -= galley.size().x;
-        ui.painter().galley(
-            egui::pos2(right, rect.center().y - galley.size().y / 2.),
-            galley,
-            theme::TEXT_MUTED,
-        );
-        right -= 8.;
-    }
-    let color = if selected {
-        egui::Color32::WHITE
-    } else {
-        theme::TEXT
-    };
-    ui.painter().with_clip_rect(rect.with_max_x(right)).text(
-        egui::pos2(rect.left() + 8., rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(12.5),
-        color,
-    );
-    response
-}
-fn kicker(ui: &mut egui::Ui, text: &str) {
-    ui.label(
-        egui::RichText::new(text.to_uppercase())
-            .font(crate::theme::medium(10.5))
-            .color(crate::theme::ACCENT_BRIGHT),
-    );
-}
-fn heading(ui: &mut egui::Ui, text: &str) {
-    ui.label(
-        egui::RichText::new(text)
-            .font(crate::theme::medium(17.))
-            .color(crate::theme::TEXT),
-    );
-}
-fn paragraph(ui: &mut egui::Ui, text: &str) {
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(text)
-                .size(12.5)
-                .color(egui::Color32::from_rgb(196, 196, 202)),
-        )
-        .wrap(),
-    );
-}
-fn section(ui: &mut egui::Ui, title: &str, text: &str) {
-    ui.add_space(2.);
-    ui.label(
-        egui::RichText::new(title.to_uppercase())
-            .font(crate::theme::medium(10.5))
-            .color(crate::theme::TEXT_MUTED),
-    );
-    paragraph(ui, text);
-}
-fn step(ui: &mut egui::Ui, number: &str, text: &str) {
-    ui.horizontal_top(|ui| {
-        let (badge, _) = ui.allocate_exact_size(Vec2::splat(20.), Sense::hover());
-        ui.painter()
-            .circle_filled(badge.center(), 9., crate::theme::ACCENT_SOFT);
-        ui.painter().text(
-            badge.center(),
-            egui::Align2::CENTER_CENTER,
-            number,
-            crate::theme::medium(11.),
-            crate::theme::ACCENT_BRIGHT,
-        );
-        paragraph(ui, text);
-    });
 }
 /// Zoom out, the current zoom and zoom in. Drawn right to left inside the toolbar.
 fn zoom_control(ui: &mut egui::Ui, zoom: f32) -> Option<f32> {

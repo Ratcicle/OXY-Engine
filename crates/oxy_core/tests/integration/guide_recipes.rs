@@ -37,19 +37,24 @@ fn all_embedded_recipes_are_valid_editable_documents() {
         ticks(&mut runtime, 3);
         assert_eq!(p, before);
         assert!(
-            !runtime.logs.iter().any(|l| l.contains("interrompido")),
+            !runtime.logs.iter().any(|l| l.text.contains("interrompido")),
             "{:?}",
             runtime.logs
         );
         let json = serde_json::to_vec(&p).unwrap();
         assert_eq!(oxy_core::migration::read(&json).unwrap(), p);
     }
-    // The recipes of the game nodes come in the current format, without warnings.
+    // The recipes of the game nodes come with every node parameter (in the format of the frozen
+    // node registry or later), without warnings.
     for i in [12, 13] {
         let p = guide_recipes::load(i).unwrap();
         let bytes = guide_recipes::recipes()[i].bytes;
         let saved: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-        assert_eq!(saved["schema_version"], oxy_core::document::SCHEMA_VERSION);
+        let version = saved["schema_version"].as_u64().unwrap();
+        assert!(
+            version >= oxy_core::migration::NODE_REGISTRY_SCHEMA,
+            "{version}"
+        );
         let warnings = oxy_core::command::warnings(&p);
         assert!(warnings.is_empty(), "{warnings:?}");
     }
@@ -81,7 +86,11 @@ fn card_spends_only_after_the_condition_and_damage_has_no_hidden_rule() {
     ticks(&mut r, 1);
     assert_eq!(value(&r, 310, "Energia"), Value::Number(1.));
     assert_eq!(value(&r, 311, "Vida"), Value::Number(30.));
-    assert!(r.logs.iter().any(|l| l.contains("Energia insuficiente")));
+    assert!(
+        r.logs
+            .iter()
+            .any(|l| l.text.contains("Energia insuficiente"))
+    );
 }
 #[test]
 fn animation_marker_opens_and_closes_one_activation_per_attack() {
@@ -166,7 +175,7 @@ fn pause_menu_opens_with_the_game_pause_and_resumes_restarts_and_quits() {
     ticks(&mut r, 1);
     assert!(r.quit_requested);
     assert!(
-        !r.logs.iter().any(|l| l.contains("interrompido")),
+        !r.logs.iter().any(|l| l.text.contains("interrompido")),
         "{:?}",
         r.logs
     );
@@ -230,7 +239,11 @@ fn record_is_kept_by_scene_name_and_saved_only_when_it_improves() {
         panic!("Tempo não é texto")
     };
     let line = format!("Recorde mantido, nada foi salvo. Seu tempo: {time}");
-    assert!(r.logs.iter().any(|l| l.ends_with(&line)), "{:?}", r.logs);
+    assert!(
+        r.logs.iter().any(|l| l.text.ends_with(&line)),
+        "{:?}",
+        r.logs
+    );
     // A slower record falls and is saved again.
     let mut slow = SaveSlot {
         exists: true,
@@ -245,7 +258,7 @@ fn record_is_kept_by_scene_name_and_saved_only_when_it_improves() {
     assert_eq!(r.save_requests.len(), 1);
     assert_eq!(placar(&r, "Recorde"), clock(better));
     assert!(
-        !r.logs.iter().any(|l| l.contains("interrompido")),
+        !r.logs.iter().any(|l| l.text.contains("interrompido")),
         "{:?}",
         r.logs
     );

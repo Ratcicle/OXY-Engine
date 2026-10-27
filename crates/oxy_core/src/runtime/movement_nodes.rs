@@ -151,7 +151,9 @@ pub(super) fn event_values(event: &RuntimeEvent, time: f64) -> Vec<(&'static str
     }
 }
 impl Runtime {
-    pub(super) fn inspect_character(
+    /// The state of the 3D character `id`: the one it moves with, or, before its first step,
+    /// the one it would start from.
+    pub fn inspect_character(
         &self,
         id: &str,
     ) -> Result<std::borrow::Cow<'_, CharacterState>, String> {
@@ -173,6 +175,12 @@ impl Runtime {
         state.uniform_scale = scale.x;
         Ok(std::borrow::Cow::Owned(state))
     }
+    /// One value of the state of the 3D character `id`, by the name of the output of Ler
+    /// personagem 3D that gives it (`position`, `relative`, `support`…).
+    pub fn character_value(&self, id: &str, key: &str) -> Result<Value, String> {
+        let state = self.inspect_character(id)?;
+        state_value(&state, key)
+    }
     pub(super) fn event_used(&self, id: &str) -> bool {
         self.event_catalog().operations.contains(id)
     }
@@ -187,8 +195,23 @@ impl Runtime {
                         catalog.operations.insert(node.operation.clone());
                     }
                 }
-                if used {
+                // The scripts loaded that hear something; one that did not load hears nothing.
+                let scripts: Vec<_> = e
+                    .scripts
+                    .iter()
+                    .filter_map(|s| self.script_callbacks.get(&s.path)?.as_ref())
+                    .filter(|(_, callbacks)| !callbacks.is_empty())
+                    .cloned()
+                    .collect();
+                for callback in scripts.iter().flat_map(|(_, callbacks)| callbacks.iter()) {
+                    if let Some(event) = callback.event() {
+                        catalog.operations.insert(event.into());
+                    }
+                    catalog.input |= callback == crate::script::Callback::Input;
+                }
+                if used || !scripts.is_empty() {
                     catalog.owners.push(i);
+                    catalog.scripts.push(scripts);
                 }
             }
             catalog

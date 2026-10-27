@@ -1,11 +1,15 @@
 //! PNG images and WAV sounds imported by AI agents: the editor's Importar without the file
 //! dialog. The source, a file the person pointed to or bytes sent inline, is checked first (its
-//! type, size and header), then copied into the project's assets folder under a new name, as
-//! the editor does; nothing outside that folder is written. One call may import several files
-//! (`paths`), all of them or none. The MCP server imports this way on files and the editor on
-//! its live channel, so both accept and refuse the same sources.
+//! type, size and header), then copied into the project: in the old layout into its assets
+//! folder under a new name, as the editor does; in the tree layout as `<name>.<ext>` in the
+//! folder asked for (the root by default, made when missing), a name an asset of its kind has
+//! refused with a free one suggested, and a file already in the project's tree registered where
+//! it is. Nothing is written over. One call may import several files (`paths`), all of them or
+//! none. The MCP server imports this way on files and the editor on its live channel, so both
+//! accept and refuse the same sources.
 use crate::{
     document::*,
+    names::{self, MAX_NAME_CHARS},
     painting::PaintImage,
     persistence::{self, resolve_asset_path},
 };
@@ -17,8 +21,6 @@ use std::path::{Component, Path, PathBuf, Prefix};
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest content sent inline (`data_base64`), once decoded.
 pub const MAX_INLINE_BYTES: usize = 16 * 1024 * 1024;
-/// Longest asset name kept, in characters.
-const MAX_NAME_CHARS: usize = 80;
 /// Files one call imports at most (`paths`).
 pub const MAX_FILES: usize = 32;
 /// Most bytes the files of one call add up to.
@@ -92,6 +94,10 @@ pub struct ImportRequest {
     /// The scene of `apply_to`, by its ID or name.
     #[serde(default)]
     pub scene: Option<Id>,
+    /// In the tree layout, the folder the file goes to, by its path from the project's folder
+    /// (the root by default), made when missing.
+    #[serde(default)]
+    pub folder: Option<String>,
 }
 
 /// A source read and checked, ready to be copied into a project.
@@ -122,13 +128,33 @@ pub struct Imported {
     pub seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub applied_to: Option<Id>,
+    /// The file was in the project's tree already: registered where it is, nothing copied.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub in_place: bool,
+    /// The folders the import made for the file, each before those inside it.
+    #[serde(skip)]
+    pub made: Vec<String>,
+    /// What the name taken from the file may need: one that reads as an ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// Whether `name` reads as an ID (`1d76fcf6-74c0-40ed-8168-64ef00b254fb`), as the files of the
+/// old layout are named.
+fn reads_as_id(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => *b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        })
 }
 
 impl ImportRequest {
     /// The request from the tool's arguments, with what can be checked without reading files:
     /// one source, an absolute local path to a .png or .wav, a kind that agrees with it.
     pub fn parse(args: &Json) -> Result<Self, String> {
-        let request: Self = serde_json::from_value(args.clone())
+        let mut request: Self = serde_json::from_value(args.clone())
             .map_err(|e| format!("Importação inválida: {e}"))?;
         match (&request.path, &request.data_base64) {
             (Some(_), Some(_)) => return Err("Informe path ou data_base64, não os dois.".into()),
@@ -160,6 +186,12 @@ impl ImportRequest {
         }
         if request.apply_to.is_some() && request.kind() == Some(ImportKind::Audio) {
             return Err("apply_to só vale para imagens: um som toca pelo nó action.sound.".into());
+        }
+        // The root is where a file goes without a folder ("" or "/" name it).
+        if let Some(folder) = &request.folder
+            && folder_parts(folder)?.is_empty()
+        {
+            request.folder = None;
         }
         Ok(request)
     }
@@ -291,7 +323,7 @@ impl ImportBatch {
                 listed: false,
             });
         };
-        const ENTRY: &str = "{path, name?, kind?, apply_to?}";
+        const ENTRY: &str = "{path, name?, kind?, apply_to?, folder?}";
         let Json::Array(paths) = paths else {
             return Err(format!(
                 "paths precisa ser uma lista de arquivos: caminhos ou {ENTRY}."
@@ -299,7 +331,7 @@ impl ImportBatch {
         };
         for (key, value) in args.as_object().into_iter().flatten() {
             match key.as_str() {
-                "paths" | "scene" => {}
+                "paths" | "scene" | "folder" => {}
                 _ if value.is_null() => {}
                 "path" | "data_base64" => {
                     return Err("Informe path, data_base64 ou paths, só um deles.".into());
@@ -328,10 +360,9 @@ impl ImportBatch {
                 let mut fields = match entry {
                     Json::String(path) => serde_json::json!({ "path": path }),
                     Json::Object(map) => {
-                        if let Some(key) = map
-                            .keys()
-                            .find(|k| !matches!(k.as_str(), "path" | "name" | "kind" | "apply_to"))
-                        {
+                        if let Some(key) = map.keys().find(|k| {
+                            !matches!(k.as_str(), "path" | "name" | "kind" | "apply_to" | "folder")
+                        }) {
                             return Err(file_error(
                                 i,
                                 format!("campo `{key}` desconhecido; cada arquivo é {ENTRY}"),
@@ -351,6 +382,12 @@ impl ImportBatch {
                 };
                 if let Some(scene) = args.get("scene").filter(|scene| !scene.is_null()) {
                     fields["scene"] = scene.clone();
+                }
+                // The folder beside paths is each file's that names none.
+                if let Some(folder) = args.get("folder").filter(|folder| !folder.is_null())
+                    && fields.get("folder").is_none_or(Json::is_null)
+                {
+                    fields["folder"] = folder.clone();
                 }
                 ImportRequest::parse(&fields).map_err(|error| file_error(i, error))
             })
@@ -534,15 +571,53 @@ pub fn apply_texture(entity: &mut Entity, asset: &str, size: Option<[u32; 2]>) {
     }
 }
 
+/// What an import makes in the project, told right before it is made (see
+/// [`crate::journal::Creating`]): a folder, or the file of the asset `id` at `path`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Making<'a> {
+    Folder(&'a str),
+    File { path: &'a str, id: &'a str },
+}
+
+/// Why a folder of an import is refused in the old layout.
+const LEGACY_FOLDER: &str = "Este projeto ainda está no formato antigo, sem pastas, e os recursos \
+    vão para a pasta assets: importe sem folder (a gravação organiza o projeto em pastas, com uma \
+    cópia completa antes) e depois leve o arquivo para a pasta com oxy_apply move";
+
+/// The parts of the folder path `text`, each a name Windows keeps and none starting with a dot.
+fn folder_parts(text: &str) -> Result<Vec<String>, String> {
+    let text = text.trim().replace('\\', "/");
+    let text = text.trim_matches('/');
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    text.split('/')
+        .map(|part| names::check_name(part).map_err(|why| format!("folder inválido: {why}")))
+        .collect()
+}
+
 /// Copies `source` into the project in `root` and adds the asset, applied to the request's
 /// `apply_to` in its `scene`, by ID or name (`scene` by default). The project is validated
-/// before it changes; on failure it is left as it was and no file stays behind.
+/// before it changes; on failure it is left as it was and no file or folder stays behind.
 pub fn import(
     project: &mut Project,
     root: &Path,
     scene: &str,
     request: &ImportRequest,
     source: &ImportSource,
+) -> Result<Imported, String> {
+    import_with(project, root, scene, request, source, &mut |_| Ok(()))
+}
+
+/// [`import`], calling `before` with each folder and file it makes right before it makes it
+/// (see [`crate::journal::Creating`]); nothing is made when it fails.
+pub fn import_with(
+    project: &mut Project,
+    root: &Path,
+    scene: &str,
+    request: &ImportRequest,
+    source: &ImportSource,
+    before: &mut dyn FnMut(Making) -> Result<(), String>,
 ) -> Result<Imported, String> {
     let found = project.find_scene(request.scene.as_deref().unwrap_or(scene), "scene")?;
     if let Some(target) = &request.apply_to {
@@ -560,39 +635,287 @@ pub fn import(
         }
     }
     let scene = found.id.clone();
+    let tree = project.layout == Layout::Tree;
+    if !tree && request.folder.is_some() {
+        return Err(LEGACY_FOLDER.into());
+    }
     let mut copy = project.clone();
-    let id = persistence::store_asset(
-        &mut copy,
-        root,
-        &source.bytes,
-        source.name.clone(),
-        source.kind.asset(),
-    )
-    .map_err(|e| e.to_string())?;
-    let path = copy.asset(&id).map(|a| a.path.clone()).unwrap_or_default();
     let size = source.image.as_ref().map(|i| [i.width, i.height]);
+    let inside = match (&request.path, tree) {
+        (Some(path), true) => inside_tree(root, Path::new(path.trim())),
+        _ => None,
+    };
+    let (id, name, path, made, in_place) = match inside {
+        Some(relative) => {
+            let id = in_place(&mut copy, root, &relative, request, source.kind)?;
+            let asset = copy.asset(&id).expect("registered");
+            (
+                id.clone(),
+                asset.name.clone(),
+                asset.path.clone(),
+                Vec::new(),
+                true,
+            )
+        }
+        None => {
+            let (folder, missing) = if tree {
+                folder_of(root, request.folder.as_deref().unwrap_or_default())?
+            } else {
+                (String::new(), Vec::new())
+            };
+            if tree {
+                free_name(&copy, root, &folder, request, source)?;
+            }
+            let made = make_folders(root, &missing, before)?;
+            let stored = persistence::store_asset_in(
+                &mut copy,
+                root,
+                &source.bytes,
+                source.name.clone(),
+                source.kind.asset(),
+                &folder,
+                &mut |path, id| before(Making::File { path, id }),
+            );
+            let id = match stored {
+                Ok(id) => id,
+                Err(error) => {
+                    remove_folders(root, &made);
+                    return Err(error.to_string());
+                }
+            };
+            let (name, path) = copy
+                .asset(&id)
+                .map(|a| (a.name.clone(), a.path.clone()))
+                .unwrap_or_default();
+            (id, name, path, made, false)
+        }
+    };
     if let Some(target) = &request.apply_to
         && let Some(entity) = copy.scene_mut(&scene).and_then(|s| s.entity_mut(target))
     {
         apply_texture(entity, &id, size);
     }
     if let Err(error) = validate_project(&copy) {
-        if let Ok(file) = resolve_asset_path(root, &path) {
+        if !in_place && let Ok(file) = resolve_asset_path(root, &path) {
             let _ = std::fs::remove_file(file);
         }
+        remove_folders(root, &made);
         return Err(error);
     }
     *project = copy;
+    // People find assets by name: one taken from a file named like an ID tells nothing.
+    let warning = (request.name.is_none() && reads_as_id(&name)).then(|| {
+        format!(
+            "o nome {name} veio do nome do arquivo e parece um ID; dê um nome que a pessoa \
+             reconheça com rename_asset (ou importe com name)"
+        )
+    });
     Ok(Imported {
         asset: id,
-        name: source.name.clone(),
+        name,
         kind: source.kind,
         path,
         width: size.map(|s| s[0]),
         height: size.map(|s| s[1]),
         seconds: source.seconds,
         applied_to: request.apply_to.clone(),
+        in_place,
+        made,
+        warning,
     })
+}
+
+/// The path from the project's folder `root` of the file `source`, when it is inside it.
+fn inside_tree(root: &Path, source: &Path) -> Option<String> {
+    let root = real(&normalized(root));
+    let source = real(&normalized(source));
+    let inside = source.strip_prefix(&root).ok()?;
+    let parts: Option<Vec<&str>> = inside
+        .components()
+        .map(|c| c.as_os_str().to_str())
+        .collect();
+    Some(parts?.join("/")).filter(|path| !path.is_empty())
+}
+
+/// Registers the file `relative`, already in the project's tree, as it is: the asset that has
+/// it, or a new one named after it. Answers its ID. A name or folder other than the file's is
+/// refused (renaming and moving are oxy_apply's), and so is a file the tree leaves out.
+fn in_place(
+    project: &mut Project,
+    root: &Path,
+    relative: &str,
+    request: &ImportRequest,
+    kind: ImportKind,
+) -> Result<Id, String> {
+    if crate::project_tree::presence(root, relative) != crate::project_tree::Presence::Present {
+        return Err(format!(
+            "O arquivo {relative} está na pasta do projeto, mas fica fora da Biblioteca (numa \
+             pasta que começa com ponto, num atalho ou noutro projeto); leve-o para uma pasta do \
+             projeto antes"
+        ));
+    }
+    let relative = names::disk_case(root, relative).map_err(|e| e.to_string())?;
+    let id = match project
+        .assets
+        .iter()
+        .find(|a| !a.path.is_empty() && names::same_name(&a.path, &relative))
+    {
+        Some(asset) if asset.kind != kind.asset() => {
+            return Err(format!(
+                "O arquivo {relative} já é {} do projeto",
+                persistence::kind_label(asset.kind)
+            ));
+        }
+        Some(asset) => asset.id.clone(),
+        None => {
+            let name = persistence::name_of(&relative, kind.asset())
+                .ok_or_else(|| format!("O arquivo {relative} não termina em .png nem em .wav"))?;
+            let id = new_id();
+            project.assets.push(Asset {
+                id: id.clone(),
+                name,
+                path: relative.clone(),
+                kind: kind.asset(),
+                model: None,
+            });
+            id
+        }
+    };
+    let asset = project.asset(&id).expect("registered");
+    if let Some(name) = &request.name
+        && name.trim() != asset.name
+    {
+        return Err(format!(
+            "O arquivo {relative} já está no projeto como {}, e o nome é o do arquivo: para \
+             mudá-lo, use oxy_apply rename_asset",
+            asset.name
+        ));
+    }
+    if let Some(folder) = &request.folder {
+        let parent = relative.rsplit_once('/').map_or("", |(folder, _)| folder);
+        if !names::same_name(folder.trim().trim_matches(['/', '\\']), parent) {
+            return Err(format!(
+                "O arquivo {relative} já está no projeto; para levá-lo a outra pasta, use \
+                 oxy_apply move"
+            ));
+        }
+    }
+    Ok(id)
+}
+
+/// The folder `text` of the project at `root` in the disk's case, with the folders on its way
+/// that are missing, each before those inside it; refused when a part names a file, a link or
+/// another project, where what is written would be outside the tree.
+fn folder_of(root: &Path, text: &str) -> Result<(String, Vec<String>), String> {
+    let mut current = String::new();
+    let mut missing: Vec<String> = Vec::new();
+    for part in folder_parts(text)? {
+        let next = crate::journal::join(&current, &part);
+        let next = names::disk_case(root, &next).unwrap_or(next);
+        names::check_path(&next).map_err(|why| format!("folder inválido: {why}"))?;
+        if missing.is_empty() {
+            let place = resolve_asset_path(root, &next).map_err(|e| e.to_string())?;
+            match std::fs::symlink_metadata(&place) {
+                Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
+                Ok(_) => return Err(format!("{next} já existe e não é uma pasta do projeto")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing.push(next.clone());
+                }
+                Err(error) => return Err(format!("Não foi possível ler a pasta {next}: {error}")),
+            }
+            if let Some(why) = crate::project_tree::outside_reason(root, &format!("{next}/x")) {
+                return Err(format!("A pasta {next} fica fora do projeto: {why}"));
+            }
+        } else {
+            missing.push(next.clone());
+        }
+        current = next;
+    }
+    Ok((current, missing))
+}
+
+/// Makes the folders `missing` of the project at `root`, each before those inside it, `before`
+/// told of each first. Answers them; none stays when one fails.
+fn make_folders(
+    root: &Path,
+    missing: &[String],
+    before: &mut dyn FnMut(Making) -> Result<(), String>,
+) -> Result<Vec<String>, String> {
+    let mut made: Vec<String> = Vec::new();
+    for folder in missing {
+        let done = before(Making::Folder(folder)).and_then(|()| {
+            let place = resolve_asset_path(root, folder).map_err(|e| e.to_string())?;
+            crate::fs_ops::create_dir_new(&place)
+                .map_err(|e| format!("Não foi possível criar a pasta {folder}: {e}"))
+        });
+        if let Err(error) = done {
+            remove_folders(root, &made);
+            return Err(error);
+        }
+        made.push(folder.clone());
+    }
+    Ok(made)
+}
+
+/// Takes away the folders `made` (each before those inside it) when they are still empty.
+fn remove_folders(root: &Path, made: &[String]) {
+    for folder in made.iter().rev() {
+        if let Ok(place) = resolve_asset_path(root, folder) {
+            let _ = crate::fs_ops::remove_empty_dir(&place);
+        }
+    }
+}
+
+/// Refuses the name the file of `source` takes in the folder `folder` of the tree layout when an
+/// asset of its kind has it or a file has its path, suggesting a free one; a name the request
+/// gives that Windows would not keep is refused with why.
+fn free_name(
+    project: &Project,
+    root: &Path,
+    folder: &str,
+    request: &ImportRequest,
+    source: &ImportSource,
+) -> Result<(), String> {
+    let kind = source.kind.asset();
+    let wanted = match &request.name {
+        Some(name) => names::check_name(name).map_err(|why| format!("Nome inválido: {why}"))?,
+        None => source.name.clone(),
+    };
+    let (free, path) =
+        persistence::new_asset_file_in(project, Some(root), "", &wanted, kind, folder);
+    let fallback = if kind == AssetKind::Texture {
+        "Imagem"
+    } else {
+        "Som"
+    };
+    if free == names::fitted_name(&wanted, fallback) {
+        return Ok(());
+    }
+    let taken = project
+        .assets
+        .iter()
+        .find(|a| a.kind == kind && a.name.trim().to_lowercase() == wanted.to_lowercase())
+        .map_or_else(
+            || {
+                let extension = path.rsplit('.').next().unwrap_or_default();
+                format!(
+                    "o arquivo {}",
+                    crate::journal::join(folder, &format!("{wanted}.{extension}"))
+                )
+            },
+            |other| {
+                format!(
+                    "{} \"{}\" ({})",
+                    persistence::kind_label(kind),
+                    other.name,
+                    other.path
+                )
+            },
+        );
+    Err(format!(
+        "Já existe {taken}: o nome é único por tipo no projeto e a OXY não grava por cima; passe \
+         outro name ({free} está livre)"
+    ))
 }
 
 /// Imports every file of `batch`, read as `sources`, as [`import`] does one: all of them, in
@@ -604,10 +927,22 @@ pub fn import_batch(
     batch: &ImportBatch,
     sources: &[ImportSource],
 ) -> Result<Vec<Imported>, String> {
+    import_batch_with(project, root, scene, batch, sources, &mut |_| Ok(()))
+}
+
+/// [`import_batch`], calling `before` before each file is written (see [`import_with`]).
+pub fn import_batch_with(
+    project: &mut Project,
+    root: &Path,
+    scene: &str,
+    batch: &ImportBatch,
+    sources: &[ImportSource],
+    before: &mut dyn FnMut(Making) -> Result<(), String>,
+) -> Result<Vec<Imported>, String> {
     let mut copy = project.clone();
     let mut imported = Vec::new();
     for (i, (request, source)) in batch.requests.iter().zip(sources).enumerate() {
-        match import(&mut copy, root, scene, request, source) {
+        match import_with(&mut copy, root, scene, request, source, before) {
             Ok(done) => imported.push(done),
             Err(error) => {
                 remove_copies(root, &imported);
@@ -619,12 +954,16 @@ pub fn import_batch(
     Ok(imported)
 }
 
-/// Takes away the files `imported` copied into the project in `root`, when the project that
-/// names them is not saved after all.
+/// Takes away the files `imported` copied into the project in `root`, and the folders made for
+/// them once empty, when the project that names them is not saved after all; a file registered
+/// where it was stays.
 pub fn remove_copies(root: &Path, imported: &[Imported]) {
-    for imported in imported {
-        if let Ok(file) = resolve_asset_path(root, &imported.path) {
+    for imported in imported.iter().rev() {
+        if !imported.in_place
+            && let Ok(file) = resolve_asset_path(root, &imported.path)
+        {
             let _ = std::fs::remove_file(file);
         }
+        remove_folders(root, &imported.made);
     }
 }

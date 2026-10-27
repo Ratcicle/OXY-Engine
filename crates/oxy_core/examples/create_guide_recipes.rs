@@ -1,4 +1,6 @@
 //! Deterministic preparation only. Recipes are normal saved projects, embedded by the offline guide.
+//! The recipes in Luau (examples/guia-scripts) are copies of 02, 03 and 04 with the same objects,
+//! changed only through the MCP: this does not write them.
 use oxy_core::{
     animation::*,
     document::*,

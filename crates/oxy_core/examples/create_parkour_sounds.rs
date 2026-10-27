@@ -1,5 +1,7 @@
 //! Preparation only: synthesizes the original sounds and music of the parkour example
-//! (`examples/parkour`) as 16-bit mono 44.1 kHz WAVs in the folder given as the first argument.
+//! (`examples/parkour`) as 16-bit mono 44.1 kHz WAVs in the folder given as the first argument,
+//! each at the path and with the name the parkour's Library has (`Comum/Música.wav`,
+//! `Pista/Pulo.wav`…).
 //! Every sound is built from tones, envelopes and filtered noise; the noise comes from a
 //! fixed-seed generator, so every run writes the same bytes. The music is one period of a
 //! periodic signal: notes that ring past the end of the loop wrap around to its start, which is
@@ -345,27 +347,31 @@ fn main() -> Result<(), String> {
         .nth(1)
         .ok_or("uso: create_parkour_sounds <pasta de saída>")?;
     let folder = Path::new(&folder);
-    std::fs::create_dir_all(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
     let music = to_pcm(&music());
+    // Where the parkour keeps each sound, with the name the Library shows.
     let sounds: [(&str, Vec<i16>); 9] = [
-        ("musica.wav", music),
-        ("clique.wav", to_pcm(&edges(click()))),
-        ("pulo.wav", to_pcm(&edges(jump()))),
-        ("pouso.wav", to_pcm(&edges(land()))),
-        ("checkpoint.wav", to_pcm(&edges(checkpoint()))),
-        ("queda.wav", to_pcm(&edges(fall()))),
-        ("chegada.wav", to_pcm(&edges(finish()))),
-        ("bip.wav", to_pcm(&edges(beep()))),
-        ("largada.wav", to_pcm(&edges(start()))),
+        ("Comum/Música.wav", music),
+        ("Comum/Clique.wav", to_pcm(&edges(click()))),
+        ("Pista/Pulo.wav", to_pcm(&edges(jump()))),
+        ("Pista/Pouso.wav", to_pcm(&edges(land()))),
+        ("Pista/Checkpoint.wav", to_pcm(&edges(checkpoint()))),
+        ("Pista/Queda.wav", to_pcm(&edges(fall()))),
+        ("Pista/Chegada.wav", to_pcm(&edges(finish()))),
+        ("Pista/Bipe.wav", to_pcm(&edges(beep()))),
+        ("Pista/Largada.wav", to_pcm(&edges(start()))),
     ];
     let mut total = 0;
     for (file, pcm) in &sounds {
-        let bytes = write_wav(&folder.join(file), pcm)?;
+        let path = folder.join(file);
+        let parent = path.parent().expect("a file inside a folder");
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?;
+        let bytes = write_wav(&path, pcm)?;
         total += bytes;
         let seconds = pcm.len() as f64 / rate();
-        println!("{file:<15} {seconds:>7.3} s {bytes:>9} bytes");
+        println!("{file:<22} {seconds:>7.3} s {bytes:>9} bytes");
     }
-    println!("{:<15} {:>7} {total:>11} bytes", "total", "");
+    println!("{:<22} {:>7} {total:>11} bytes", "total", "");
     // The loop point: the step across it next to the steps on each side.
     let loop_pcm = &sounds[0].1;
     let last = loop_pcm.len() - 1;

@@ -18,6 +18,7 @@ use crate::{
     input_actions::{self, every_entity, every_holder},
     movement_presets::{self, MovementPreset, PresetCamera, PresetOptions},
     physics3d::{CollisionGeometry, CollisionShape},
+    script::{self, NameKind, ScriptRef, ScriptSources},
     spatial::{self, FitShape},
     surface::{self, SurfaceMaterial, SurfacePreset, VelocitySpace},
     variables,
@@ -27,6 +28,46 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+
+mod tree;
+pub(crate) use tree::follow_files;
+pub use tree::{Entry as TreeEntry, TreeView};
+
+/// What a batch, an undo or a redo whose file operations failed halfway says of those that
+/// stayed done.
+pub(crate) const KEPT: &str = "Os arquivos que já tinham mudado ficaram onde estão, e o projeto \
+    acompanha onde eles estão";
+
+/// What a command of the project's tree names, telling apart items that share a name: an
+/// asset's kind, or a script (a `.luau` file, by its path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemKind {
+    Texture,
+    Audio,
+    Model,
+    Script,
+}
+impl ItemKind {
+    /// The kind of asset it is; none for a script.
+    pub fn asset(self) -> Option<AssetKind> {
+        match self {
+            Self::Texture => Some(AssetKind::Texture),
+            Self::Audio => Some(AssetKind::Audio),
+            Self::Model => Some(AssetKind::Model),
+            Self::Script => None,
+        }
+    }
+    /// The kind of file it is in the project's tree.
+    pub fn file(self) -> crate::project_tree::FileKind {
+        use crate::project_tree::FileKind;
+        match self {
+            Self::Texture => FileKind::Image,
+            Self::Audio => FileKind::Sound,
+            Self::Model => FileKind::Model,
+            Self::Script => FileKind::Script,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Dimension {
@@ -361,7 +402,9 @@ pub enum Command {
     },
     /// Saves an object and everything under it as a model asset that any scene can place, or,
     /// with `replace` (a model's ID or name), as the new content of that model, which keeps its
-    /// ID. Placements already made are copies and stay as they are.
+    /// ID. Placements already made are copies and stay as they are. In the tree layout a new
+    /// model's file is `<folder>/<name>.modelo.json` (the root by default; a folder missing is
+    /// made), written by the next save.
     SaveModel {
         #[serde(default)]
         scene: Option<Id>,
@@ -371,9 +414,15 @@ pub enum Command {
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         replace: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "folder_or_root"
+        )]
+        folder: Option<String>,
     },
-    /// Places a copy of a model (its ID or name). Position is relative to the parent. The root
-    /// keeps the name it was saved with unless `name` is given.
+    /// Places a copy of a model (its ID, name or file's path). Position is relative to the
+    /// parent. The root keeps the name it was saved with unless `name` is given.
     PlaceModel {
         #[serde(default)]
         scene: Option<Id>,
@@ -385,20 +434,51 @@ pub enum Command {
         #[serde(default)]
         name: Option<String>,
     },
-    /// Renames an asset of any kind (its ID or name; `kind` tells apart assets of different
-    /// kinds that share a name). Its ID, and its file, stay.
+    /// Renames an asset of any kind (its ID, name or path; `kind` tells apart items of
+    /// different kinds that share a name). Its ID stays. In the tree layout the name is the
+    /// file's: the file is renamed in its folder, and a script (`kind` Script, by its path) too,
+    /// with the objects that attach it following; in the old layout only the name changes.
     RenameAsset {
         asset: Id,
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        kind: Option<AssetKind>,
+        kind: Option<ItemKind>,
     },
     /// Removes an asset from the project, refused while anything uses it (see
-    /// [`editing::asset_uses`]); its file stays in the project folder, as the editor leaves it.
+    /// [`editing::asset_uses`]). In the tree layout its file goes to the project's trash (undo
+    /// brings it back), and a script (`kind` Script, by its path) too, refused while objects
+    /// attach it unless `detach` takes it off them; in the old layout the file stays.
     DeleteAsset {
         asset: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        kind: Option<AssetKind>,
+        kind: Option<ItemKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detach: Option<bool>,
+    },
+    /// Makes the folder `path` of the project's tree (`Pista/Sons`), with the folders on its way.
+    CreateFolder {
+        path: String,
+    },
+    /// Renames the folder `folder`; what is inside goes with it, and every reference follows.
+    RenameFolder {
+        folder: String,
+        name: String,
+    },
+    /// Moves files and folders (`items`: paths, or assets by ID or name, `kind` telling apart
+    /// those that share a name) into the folder `to` ("" is the project's root); every reference
+    /// follows. A name taken there is refused, never written over.
+    Move {
+        items: Vec<String>,
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<ItemKind>,
+    },
+    /// Deletes the folder `folder`: what it holds (subfolders whole, files of any kind) goes up
+    /// to the project's root, a name taken there numbered ("Pulo 2"), the files Windows makes
+    /// in folders (Thumbs.db, desktop.ini) go to the project's trash, and the empty folder goes.
+    /// No asset is deleted.
+    DeleteFolder {
+        folder: String,
     },
     RenameEntity {
         #[serde(default)]
@@ -507,6 +587,47 @@ pub enum Command {
         margin: Option<f32>,
         #[serde(default)]
         shape: Option<FitShape>,
+    },
+    /// Attaches the script `path` (a `.luau` file of the project's tree, by its path from the
+    /// project's folder, as `Pista/porta.luau`, in the case the disk has: `pista/porta.luau`
+    /// attaches it so, with a warning) to the object, at `index` of its list of scripts
+    /// (default the end), and gives the object, with their defaults, the attributes the script
+    /// declares in `Module.attributes` that it lacks (decision Q6 of 0.7). An attribute it has
+    /// keeps its value, whatever its type; one of another type than the declared, or declared
+    /// with two types by its scripts, is warned about. Attaching a script the object has moves
+    /// it to `index`, when given, and only creates the declared attributes still missing. Needs
+    /// the project's scripts (see [`apply_with_scripts`]).
+    AttachScript {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Takes the script `path` off the object; the attributes it declared stay.
+    DetachScript {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        path: String,
+    },
+    /// Switches the script `path` of the object on or off: off, the object keeps it in its list
+    /// but the game runs the object without it.
+    SetScriptEnabled {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
+        path: String,
+        enabled: bool,
+    },
+    /// Takes the object's whole logic graph off (its nodes and their links), as converting an
+    /// object from nodes to scripts needs: a command apart from the legacy node commands, whose
+    /// contract is frozen since 0.7. The object's scripts, attributes and components stay.
+    ClearLogic {
+        #[serde(default)]
+        scene: Option<Id>,
+        entity: Id,
     },
     /// Writes a movement profile's values into a 3D character (see
     /// [`crate::character::PROFILE_FIELDS`]); they stay editable.
@@ -709,6 +830,10 @@ impl Command {
             Self::PlaceModel { .. } => "Colocar modelo",
             Self::RenameAsset { .. } => "Renomear recurso",
             Self::DeleteAsset { .. } => "Excluir recurso",
+            Self::CreateFolder { .. } => "Criar pasta",
+            Self::RenameFolder { .. } => "Renomear pasta",
+            Self::Move { .. } => "Mover para pasta",
+            Self::DeleteFolder { .. } => "Excluir pasta",
             Self::RenameEntity { .. } => "Renomear objeto",
             Self::SetParent { .. } => "Mudar pai",
             Self::SetTransform { .. } => "Transformar objeto",
@@ -720,6 +845,11 @@ impl Command {
             Self::AddComponent { .. } => "Adicionar componente",
             Self::RemoveComponent { .. } => "Remover componente",
             Self::FitCollider { .. } => "Ajustar colisor",
+            Self::AttachScript { .. } => "Anexar script",
+            Self::DetachScript { .. } => "Remover script",
+            Self::SetScriptEnabled { enabled: true, .. } => "Ligar script",
+            Self::SetScriptEnabled { .. } => "Desligar script",
+            Self::ClearLogic { .. } => "Tirar a lógica de nós",
             Self::ApplyMovementProfile { .. } => "Aplicar perfil de movimento",
             Self::UpdateEntity { .. } => "Editar objeto",
             Self::AddNode { .. } => "Adicionar nó",
@@ -763,6 +893,10 @@ pub struct Applied {
     /// ([`Placeholder::Copied`]).
     #[serde(skip)]
     pub copies: Vec<Arc<CopyMap>>,
+    /// The attributes attach_script gave the object, by name: those its script declares that
+    /// the object lacked.
+    #[serde(skip)]
+    pub attributes: Vec<String>,
 }
 
 /// Which command of a batch, as errors and warnings name it: its index, counted from 0 as
@@ -797,17 +931,75 @@ impl std::fmt::Display for CommandError {
 impl std::error::Error for CommandError {}
 
 /// Applies `commands` in order as one atomic batch. Commands without a scene use
-/// `default_scene`. On success the project is replaced; on failure it is unchanged.
+/// `default_scene`. On success the project is replaced; on failure it is unchanged. A project
+/// whose scripts a command needs takes [`apply_with_scripts`].
 pub fn apply(
     project: &mut Project,
     default_scene: &str,
     commands: &[Command],
 ) -> Result<Vec<Applied>, CommandError> {
+    apply_with_scripts(project, default_scene, commands, &ScriptSources::default())
+}
+
+/// [`apply`] with the project's scripts (see `persistence::load_scripts`), which attach_script
+/// attaches, reading what they declare. The commands of the project's tree that move files need
+/// the project's folder: see [`plan_with_files`].
+pub fn apply_with_scripts(
+    project: &mut Project,
+    default_scene: &str,
+    commands: &[Command],
+    scripts: &ScriptSources,
+) -> Result<Vec<Applied>, CommandError> {
+    let (draft, applied) = plan(project, default_scene, commands, scripts, None)?;
+    *project = draft;
+    Ok(applied)
+}
+
+/// Plans `commands` as [`apply`] would apply them, on `view`, the project's tree as read from
+/// its folder: renaming, moving and deleting files and folders change the view, and the file
+/// operations they need are left in it ([`TreeView::files`]), with attach_script reading the
+/// scripts where the batch put them. Answers the project as the batch leaves it, which takes
+/// the place of `project` only once the operations are done on the disk (see
+/// [`crate::journal::run`]); nothing is touched here.
+pub fn plan_with_files(
+    project: &Project,
+    default_scene: &str,
+    commands: &[Command],
+    view: &mut TreeView,
+) -> Result<(Project, Vec<Applied>), CommandError> {
+    plan(
+        project,
+        default_scene,
+        commands,
+        &ScriptSources::default(),
+        Some(view),
+    )
+}
+
+/// Whether `commands` need the folder of `project` read ([`TreeView`]): those of the tree
+/// (renaming and deleting an asset only in the tree layout, where its file changes), and
+/// attach_script, which reads the scripts.
+pub fn needs_files(project: &Project, commands: &[Command]) -> bool {
+    needs_scripts(commands)
+        || commands
+            .iter()
+            .any(|command| tree::needs_folder(command) || tree::handles(command, project))
+}
+
+fn plan(
+    project: &Project,
+    default_scene: &str,
+    commands: &[Command],
+    scripts: &ScriptSources,
+    mut view: Option<&mut TreeView>,
+) -> Result<(Project, Vec<Applied>), CommandError> {
     let mut draft = project.clone();
     let mut applied: Vec<Applied> = Vec::with_capacity(commands.len());
     let mut checks: Vec<(usize, Check)> = Vec::new();
     // Nodes added without a position: (scene, object, node).
     let mut unplaced: Vec<(Id, Id, Id)> = Vec::new();
+    // The last command that renamed, moved or deleted each item scripts may name.
+    let mut took: BTreeMap<(NameKind, Id), usize> = BTreeMap::new();
     for (index, command) in commands.iter().enumerate() {
         let fail = |message: String| CommandError {
             index,
@@ -815,6 +1007,7 @@ pub fn apply(
             message,
         };
         let command = resolve_placeholders(command, &applied, &draft).map_err(fail)?;
+        let command = resolve_names(&command, &draft, default_scene).map_err(fail)?;
         // Copies take the logic as it is laid out.
         if matches!(
             command,
@@ -825,15 +1018,46 @@ pub fn apply(
         ) {
             lay_out(&mut draft, &unplaced);
         }
+        // A model saved in a folder: the folder as the disk has it, made when missing.
+        let command = match (&command, view.as_deref_mut()) {
+            (
+                Command::SaveModel {
+                    folder: Some(_), ..
+                },
+                Some(view),
+            ) => tree::save_model_in(&draft, &command, default_scene, view).map_err(fail)?,
+            (
+                Command::SaveModel {
+                    folder: Some(_), ..
+                },
+                None,
+            ) if draft.layout == Layout::Tree => {
+                return Err(fail(tree::NO_FOLDER.into()));
+            }
+            _ => command,
+        };
         let mut raised = Vec::new();
         let mut copies = Vec::new();
-        let created = apply_one(
-            &mut draft,
-            default_scene,
-            &command,
-            &mut raised,
-            &mut copies,
-        )
+        let mut told = Vec::new();
+        let had = attach_target(&draft, &command, default_scene);
+        let kinds = renaming(&command);
+        let named = (!kinds.is_empty()).then(|| script::names_by_id(&draft, kinds));
+        let created = match view.as_deref_mut() {
+            Some(view) if tree::handles(&command, &draft) => {
+                tree::apply(&mut draft, &command, view).map(|lines| {
+                    told = lines;
+                    Vec::new()
+                })
+            }
+            view => apply_one(
+                &mut draft,
+                default_scene,
+                &command,
+                &mut raised,
+                &mut copies,
+                view.map_or(scripts, |view| &view.scripts),
+            ),
+        }
         .map_err(|message| fail(placed(&draft, &command, default_scene, message)))?;
         match &command {
             Command::AddNode {
@@ -862,12 +1086,40 @@ pub fn apply(
             _ => {}
         }
         validate_project(&draft).map_err(|e| fail(e.to_string()))?;
+        if let Some(named) = named {
+            let now = script::names_by_id(&draft, kinds);
+            for (item, name) in named {
+                if now.get(&item) != Some(&name) {
+                    took.insert(item, index);
+                }
+            }
+        }
         for check in raised {
             // The last layout of an object's logic is the one whose wires stay.
             if let Check::LongWires { scene, entity, .. } = &check {
                 checks.retain(|(_, earlier)| {
                     !matches!(earlier, Check::LongWires { scene: s, entity: e, .. }
                         if s == scene && e == entity)
+                });
+            }
+            // The last attach to an object read what all its scripts declare.
+            if let Check::DeclaredAttributes { scene, entity, .. } = &check {
+                checks.retain(|(_, earlier)| {
+                    !matches!(earlier, Check::DeclaredAttributes { scene: s, entity: e, .. }
+                        if s == scene && e == entity)
+                });
+            }
+            // A script attached again to an object tells its callbacks once.
+            if let Check::UnheardCallbacks {
+                scene,
+                entity,
+                path,
+                ..
+            } = &check
+            {
+                checks.retain(|(_, earlier)| {
+                    !matches!(earlier, Check::UnheardCallbacks { scene: s, entity: e, path: p, .. }
+                        if s == scene && e == entity && p == path)
                 });
             }
             checks.push((index, check));
@@ -882,12 +1134,31 @@ pub fn apply(
                 .map(|id| found.get(id.as_str()).cloned())
                 .collect()
         };
+        let op = command.op();
+        let warnings = told
+            .into_iter()
+            .map(|line| format!("{}: {line}", which(index, &op)))
+            .collect();
+        // The attributes attach_script gave the object.
+        let attributes = had
+            .and_then(|(scene, entity, keys)| {
+                let e = draft.scene(&scene)?.entity(&entity)?;
+                Some(
+                    e.attributes
+                        .keys()
+                        .filter(|name| !keys.contains(*name))
+                        .cloned()
+                        .collect(),
+                )
+            })
+            .unwrap_or_default();
         applied.push(Applied {
-            op: command.op(),
+            op,
             created,
             names,
-            warnings: Vec::new(),
+            warnings,
             copies,
+            attributes,
         });
     }
     lay_out(&mut draft, &unplaced);
@@ -900,8 +1171,135 @@ pub fn apply(
                 .push(format!("{}: {message}", which(index, &command.op)));
         }
     }
-    *project = draft;
-    Ok(applied)
+    let scripts = view.as_deref().map_or(scripts, |view| &view.scripts);
+    lint_attached(&draft, commands, scripts, &mut applied);
+    warn_broken_citations(project, &draft, commands, scripts, &took, &mut applied);
+    Ok((draft, applied))
+}
+
+/// The object an attach_script command attaches to, as (scene, object), with the attributes it
+/// has before the command.
+fn attach_target(
+    project: &Project,
+    command: &Command,
+    default: &str,
+) -> Option<(Id, Id, BTreeSet<String>)> {
+    let Command::AttachScript { scene, entity, .. } = command else {
+        return None;
+    };
+    let scene = scene_id(project, scene, default).ok()?;
+    let e = project.scene(&scene)?.entity(entity)?;
+    let keys = e.attributes.keys().cloned().collect();
+    Some((scene, e.id.clone(), keys))
+}
+
+/// The kinds of names of the project `command` may take away from the scripts that give them
+/// as literal texts: renaming or deleting what has them (delete_folder renames a file whose
+/// name the root has), or moving a model, which `scene.spawn_model` finds by its file too.
+fn renaming(command: &Command) -> &'static [NameKind] {
+    use NameKind as K;
+    match command {
+        Command::RenameAsset { .. }
+        | Command::DeleteAsset { .. }
+        | Command::DeleteFolder { .. } => &[K::Sound, K::Model],
+        Command::Move { .. } | Command::RenameFolder { .. } => &[K::Model],
+        Command::RenameScene { .. } | Command::DeleteScene { .. } => &[K::Scene],
+        Command::UpdateVariable { name: Some(_), .. } | Command::DeleteVariable { .. } => {
+            &[K::Variable]
+        }
+        Command::RenameInputAction { .. } | Command::DeleteInputAction { .. } => &[K::Action],
+        Command::UpdateSurface { name: Some(_), .. } | Command::DeleteSurface { .. } => {
+            &[K::Surface]
+        }
+        _ => &[],
+    }
+}
+
+/// Whether a command of `commands` renames or deletes a sound, a model, a scene, a game
+/// variable, an input action or a surface, which scripts may give by name, or moves a model:
+/// hosts pass the project's scripts then, for the batch to warn of the names it takes from
+/// them.
+pub fn renames_script_names(commands: &[Command]) -> bool {
+    commands.iter().any(|command| !renaming(command).is_empty())
+}
+
+/// Adds the names the scripts of `scripts` give that `before` had and `after`, the project as
+/// the batch left it, no longer has (see [`script::broken_citations`]) to the command that took
+/// each away: the last that renamed, moved or deleted what the name found (`took`), else the
+/// last that could.
+fn warn_broken_citations(
+    before: &Project,
+    after: &Project,
+    commands: &[Command],
+    scripts: &ScriptSources,
+    took: &BTreeMap<(NameKind, Id), usize>,
+    applied: &mut [Applied],
+) {
+    let mut kinds: Vec<NameKind> = Vec::new();
+    for kind in commands.iter().flat_map(|command| renaming(command)) {
+        if !kinds.contains(kind) {
+            kinds.push(*kind);
+        }
+    }
+    if kinds.is_empty() || scripts.files.is_empty() {
+        return;
+    }
+    for broken in script::broken_citations(before, after, scripts, &kinds) {
+        let script::BrokenCitation { kind, id, warning } = broken;
+        let by = id.and_then(|id| took.get(&(kind, id)).copied());
+        let Some(index) = by.or_else(|| {
+            commands
+                .iter()
+                .rposition(|command| renaming(command).contains(&kind))
+        }) else {
+            continue;
+        };
+        let command = &mut applied[index];
+        let label = which(index, &command.op);
+        command.warnings.push(format!("{label}: {warning}"));
+    }
+}
+
+/// Adds to the last attach_script of `commands` that attached each script the lint of the
+/// names it gives (see [`script::lint`]), against `project` as the batch left it.
+fn lint_attached(
+    project: &Project,
+    commands: &[Command],
+    scripts: &ScriptSources,
+    applied: &mut [Applied],
+) {
+    let mut last: Vec<(String, usize)> = Vec::new();
+    for (index, command) in commands.iter().enumerate() {
+        let Command::AttachScript { path, .. } = command else {
+            continue;
+        };
+        let Some(path) = script::normalize_path(path)
+            .ok()
+            .and_then(|given| scripts.known(&given).map(str::to_owned))
+        else {
+            continue;
+        };
+        last.retain(|(attached, _)| *attached != path);
+        last.push((path, index));
+    }
+    if last.is_empty() {
+        return;
+    }
+    let warnings = script::lint(
+        scripts,
+        last.iter().map(|(path, _)| path.as_str()),
+        Some(project),
+    );
+    for (path, index) in &last {
+        let command = &mut applied[*index];
+        let label = which(*index, &command.op);
+        command.warnings.extend(
+            warnings
+                .iter()
+                .filter(|warning| warning.path == *path)
+                .map(|warning| format!("{label}: {warning}")),
+        );
+    }
 }
 
 /// Lays out the nodes `unplaced` ((scene, object, node)) with [`graph::arrange`], each object's
@@ -957,6 +1355,35 @@ enum Check {
         nodes: Option<Vec<Id>>,
         split: bool,
     },
+    /// attach_script attached a script to an object: what each script it attaches declares in
+    /// `Module.attributes`, by path, as they loaded, which may give one attribute two types or
+    /// another type than the object's.
+    DeclaredAttributes {
+        scene: Id,
+        entity: Id,
+        declared: Vec<(String, script::Declared)>,
+    },
+    /// attach_script attached `path`, whose declared attributes could not be read (`error`: it
+    /// does not load, or its `Module.attributes` is no table of defaults).
+    UnreadScript {
+        scene: Id,
+        entity: Id,
+        path: String,
+        error: String,
+    },
+    /// attach_script was given `given`, the script `path` in another case, and attached `path`,
+    /// in the case the disk has.
+    ScriptCase { given: String, path: String },
+    /// attach_script attached `path`, which defines `callbacks`, some of which may never run on
+    /// the object (see [`script::unheard_callbacks`]).
+    UnheardCallbacks {
+        scene: Id,
+        entity: Id,
+        path: String,
+        callbacks: Vec<&'static str>,
+    },
+    /// What a command tells as it is.
+    Note(String),
 }
 impl Check {
     /// The warning, when what was checked is still so in `project`.
@@ -1148,6 +1575,104 @@ impl Check {
                     listed.join("; ")
                 ))
             }
+            Self::DeclaredAttributes {
+                scene,
+                entity,
+                declared,
+            } => {
+                let e = project.scene(scene)?.entity(entity)?;
+                // The declarations of the scripts the object still attaches.
+                let attached: Vec<&(String, script::Declared)> = declared
+                    .iter()
+                    .filter(|(path, _)| e.scripts.iter().any(|s| s.path == *path))
+                    .collect();
+                let names: BTreeSet<&str> = attached
+                    .iter()
+                    .flat_map(|(_, attributes)| attributes.iter().map(|(name, _)| name.as_str()))
+                    .collect();
+                let same =
+                    |a: &Value, b: &Value| std::mem::discriminant(a) == std::mem::discriminant(b);
+                let mut found = Vec::new();
+                for name in names {
+                    let by: Vec<(&str, &Value)> = attached
+                        .iter()
+                        .filter_map(|(path, attributes)| {
+                            let (_, value) = attributes.iter().find(|(n, _)| n == name)?;
+                            Some((path.as_str(), value))
+                        })
+                        .collect();
+                    let first = by[0].1;
+                    let held = e.attributes.get(name);
+                    if by.iter().any(|(_, value)| !same(value, first)) {
+                        let listed: Vec<String> = by
+                            .iter()
+                            .map(|(path, value)| format!("{path}: {}", script::value_kind(value)))
+                            .collect();
+                        let kept = match held {
+                            Some(value) => format!(
+                                "o atributo ficou como estava ({})",
+                                script::value_kind(value)
+                            ),
+                            None => "o objeto não tem o atributo".into(),
+                        };
+                        found.push(format!(
+                            "os scripts declaram o atributo {name} com tipos diferentes ({}); \
+                             {kept}",
+                            listed.join("; ")
+                        ));
+                    } else if let Some(value) = held
+                        && !same(value, first)
+                    {
+                        let paths: Vec<&str> = by.iter().map(|(path, _)| *path).collect();
+                        let verb = if paths.len() == 1 {
+                            "declara"
+                        } else {
+                            "declaram"
+                        };
+                        found.push(format!(
+                            "o atributo {name} é {}, mas {} o {verb} como {}; o atributo ficou \
+                             como estava",
+                            script::value_kind(value),
+                            paths.join(" e "),
+                            script::value_kind(first)
+                        ));
+                    }
+                }
+                (!found.is_empty()).then(|| format!("{}: {}", e.name, found.join("; ")))
+            }
+            Self::UnreadScript {
+                scene,
+                entity,
+                path,
+                error,
+            } => {
+                let e = project.scene(scene)?.entity(entity)?;
+                e.scripts.iter().any(|s| s.path == *path).then(|| {
+                    format!(
+                        "{}: os atributos que {path} declara não foram criados ({error}); \
+                         corrija o script e anexe-o de novo para criá-los",
+                        e.name
+                    )
+                })
+            }
+            Self::ScriptCase { given, path } => Some(format!(
+                "o script {given} está no disco como {path}, e foi anexado assim"
+            )),
+            Self::UnheardCallbacks {
+                scene,
+                entity,
+                path,
+                callbacks,
+            } => {
+                let scene = project.scene(scene)?;
+                let e = scene.entity(entity)?;
+                if !e.scripts.iter().any(|s| s.path == *path) {
+                    return None;
+                }
+                let told = script::unheard_callbacks(e, scene.kind, path, callbacks);
+                (!told.is_empty()).then(|| told.join("; "))
+            }
+            Self::Note(text) => Some(text.clone()),
         }
     }
 }
@@ -1210,9 +1735,231 @@ pub fn apply_and_report(
     default_scene: &str,
     commands: &[Command],
 ) -> Result<Json, CommandError> {
+    apply_and_report_with_scripts(project, default_scene, commands, &ScriptSources::default())
+}
+
+/// [`apply_and_report`] with the project's scripts, as [`apply_with_scripts`] takes them.
+pub fn apply_and_report_with_scripts(
+    project: &mut Project,
+    default_scene: &str,
+    commands: &[Command],
+    scripts: &ScriptSources,
+) -> Result<Json, CommandError> {
     let before = batch_warnings(project);
-    let applied = apply(project, default_scene, commands)?;
+    let applied = apply_with_scripts(project, default_scene, commands, scripts)?;
     Ok(report(project, &applied, &before))
+}
+
+/// What [`apply_on_files`] did: the batch's answer ([`report`], with `moved`, `trashed` and
+/// `rewritten` when files moved; see [`add_files`]) and the file operations, for the undo
+/// history.
+#[derive(Clone, Debug)]
+pub struct OnFiles {
+    pub report: Json,
+    pub files: Vec<crate::edit_history::FileOp>,
+}
+
+/// Why [`apply_on_files`] failed.
+#[derive(Clone, Debug)]
+pub struct FilesError {
+    pub message: String,
+    /// The file operations that stayed done (undoing them failed too, see
+    /// [`crate::journal::RunError`]), which the project now follows: a step of the undo history
+    /// of their own. None, mostly: then nothing changed.
+    pub kept: Vec<crate::edit_history::FileOp>,
+}
+impl std::fmt::Display for FilesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl From<FilesError> for String {
+    fn from(error: FilesError) -> Self {
+        error.message
+    }
+}
+
+/// Applies `commands` to `project`, saved in the folder `root`, as the editor live and the
+/// agents' tools on files do: the batch is planned on the project's tree read from the disk
+/// (see [`plan_with_files`]), its file operations are done as the step `label` (journaled in
+/// `known`, see [`crate::journal::run`], and undone when one fails), and only then the project
+/// changes. Nothing changes when anything fails, but when undoing the operations failed too:
+/// then the project follows the files that stayed moved ([`FilesError::kept`]). A batch that
+/// needs no file ([`needs_files`]) reads none, but the scripts when it renames or deletes a
+/// name they may give ([`renames_script_names`]), to warn of it.
+pub fn apply_on_files(
+    project: &mut Project,
+    default_scene: &str,
+    commands: &[Command],
+    root: &std::path::Path,
+    known: &mut crate::persistence::KnownFiles,
+    label: &str,
+) -> Result<OnFiles, FilesError> {
+    let failed = |message: String| FilesError {
+        message,
+        kept: Vec::new(),
+    };
+    let before = batch_warnings(project);
+    if !needs_files(project, commands) {
+        // The scripts tell the names they give that the batch takes away, when they can be read.
+        let scripts = if renames_script_names(commands) {
+            crate::persistence::load_scripts(root).unwrap_or_default()
+        } else {
+            ScriptSources::default()
+        };
+        let applied = apply_with_scripts(project, default_scene, commands, &scripts)
+            .map_err(|e| failed(e.to_string()))?;
+        return Ok(OnFiles {
+            report: report(project, &applied, &before),
+            files: Vec::new(),
+        });
+    }
+    let mut view = TreeView::read(root).map_err(|e| failed(e.to_string()))?;
+    let (draft, applied) = plan_with_files(project, default_scene, commands, &mut view)
+        .map_err(|e| failed(e.to_string()))?;
+    let files = view.files().to_vec();
+    let ops: Vec<crate::fs_ops::Op> = files.iter().map(|file| file.forward()).collect();
+    if let Err(error) = crate::journal::run(root, known, label, &ops) {
+        if error.kept == 0 {
+            return Err(failed(format!("{error}. Nada foi alterado.")));
+        }
+        let kept = files[..error.kept].to_vec();
+        follow_files(project, &kept);
+        return Err(FilesError {
+            message: format!("{error}. {KEPT}."),
+            kept,
+        });
+    }
+    *project = draft;
+    let mut answer = report(project, &applied, &before);
+    add_files(&mut answer, &files);
+    Ok(OnFiles {
+        report: answer,
+        files,
+    })
+}
+
+/// The scripts whose `require` `files` wrote again to find what moved, each where the last of
+/// them left it, once; none for one a later operation sent to the project's trash.
+pub fn rewritten(files: &[crate::edit_history::FileOp]) -> Vec<String> {
+    use crate::{edit_history::FileOp, journal, names};
+    let mut found: Vec<String> = Vec::new();
+    for (at, file) in files.iter().enumerate() {
+        let FileOp::Write { path, .. } = file else {
+            continue;
+        };
+        let mut now = Some(path.clone());
+        for later in &files[at + 1..] {
+            now = match (now, later) {
+                (Some(path), FileOp::Move { from, to }) => match journal::under(&path, from) {
+                    Some(rest) => Some(journal::join(to, rest)),
+                    None => Some(path),
+                },
+                (Some(path), FileOp::Trash { from, .. }) if names::same_name(&path, from) => None,
+                (now, _) => now,
+            };
+        }
+        if let Some(path) = now
+            && !found.iter().any(|known| names::same_name(known, &path))
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Adds to a [`report`] what `files` did on the disk: `created_folders` and `removed_folders`,
+/// `moved` ([{from, to}], folders and files moved or renamed), `trashed` (the files sent to the
+/// project's trash) and `rewritten` (see [`rewritten`]).
+pub fn add_files(report: &mut Json, files: &[crate::edit_history::FileOp]) {
+    use crate::edit_history::FileOp;
+    let moved: Vec<Json> = files
+        .iter()
+        .filter_map(|file| match file {
+            FileOp::Move { from, to } => Some(json!({"from": from, "to": to})),
+            _ => None,
+        })
+        .collect();
+    let trashed: Vec<&str> = files
+        .iter()
+        .filter_map(|file| match file {
+            FileOp::Trash { from, .. } => Some(from.as_str()),
+            _ => None,
+        })
+        .collect();
+    let rewritten = rewritten(files);
+    let folders = |made: bool| -> Vec<&str> {
+        files
+            .iter()
+            .filter_map(|file| match file {
+                FileOp::CreateDir { path } if made => Some(path.as_str()),
+                FileOp::RemoveDir { path } if !made => Some(path.as_str()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (made, removed) = (folders(true), folders(false));
+    if !made.is_empty() {
+        report["created_folders"] = json!(made);
+    }
+    if !removed.is_empty() {
+        report["removed_folders"] = json!(removed);
+    }
+    if !moved.is_empty() {
+        report["moved"] = json!(moved);
+    }
+    if !trashed.is_empty() {
+        report["trashed"] = json!(trashed);
+    }
+    if !rewritten.is_empty() {
+        report["rewritten"] = json!(rewritten);
+    }
+}
+
+/// Adds `warnings` to those of a [`report`], which gets the list when it had none.
+pub fn add_warnings(report: &mut Json, warnings: Vec<String>) {
+    if warnings.is_empty() {
+        return;
+    }
+    match report.get_mut("warnings").and_then(Json::as_array_mut) {
+        Some(listed) => listed.extend(warnings.into_iter().map(Json::from)),
+        None => report["warnings"] = json!(warnings),
+    }
+}
+
+/// Why renaming or deleting a script waits: the old layout, until its first save organizes the
+/// project in folders, or a project that has no folder yet.
+fn script_files_need(project: &Project) -> &'static str {
+    if project.layout == Layout::Legacy {
+        tree::LEGACY
+    } else {
+        tree::NO_FOLDER
+    }
+}
+
+/// Whether `commands` need a project in folders: those of folders, a model saved in a folder,
+/// renaming or deleting a script. On files an agent's batch with one organizes a project of the
+/// old layout in folders first.
+pub fn needs_tree_layout(commands: &[Command]) -> bool {
+    let script = |asset: &str, kind: &Option<ItemKind>| {
+        *kind == Some(ItemKind::Script) || asset.trim().to_ascii_lowercase().ends_with(".luau")
+    };
+    commands.iter().any(|command| {
+        tree::needs_folder(command)
+            || match command {
+                Command::RenameAsset { asset, kind, .. }
+                | Command::DeleteAsset { asset, kind, .. } => script(asset, kind),
+                _ => false,
+            }
+    })
+}
+
+/// Whether a command of `commands` needs the project's scripts (see [`apply_with_scripts`]):
+/// hosts read the folder only then.
+pub fn needs_scripts(commands: &[Command]) -> bool {
+    commands
+        .iter()
+        .any(|command| matches!(command, Command::AttachScript { .. }))
 }
 
 /// The names of the `wanted` IDs in `project`: scenes, objects of scenes and models, nodes
@@ -1286,6 +2033,15 @@ pub fn report(project: &Project, applied: &[Applied], before: &[Warning]) -> Jso
         })
         .collect();
     let mut result = json!({"created": created});
+    let attributes: Map<String, Json> = applied
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !a.attributes.is_empty())
+        .map(|(index, a)| (index.to_string(), json!(a.attributes)))
+        .collect();
+    if !attributes.is_empty() {
+        result["attributes_created"] = Json::Object(attributes);
+    }
     let known: HashSet<&str> = before
         .iter()
         .flat_map(|w| w.about.iter().map(String::as_str))
@@ -1530,6 +2286,15 @@ pub fn batch_warnings(project: &Project) -> Vec<Warning> {
         });
     }
     found
+}
+
+/// A command's folder, none for the project's root ("" or "/"), where it goes without one.
+fn folder_or_root<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let folder = Option::<String>::deserialize(deserializer)?;
+    Ok(folder.filter(|folder| !folder.trim().trim_matches(['/', '\\']).trim().is_empty()))
 }
 
 /// Parses a JSON array (or a single object) of commands.
@@ -1914,6 +2679,63 @@ fn resolve_placeholders(
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
+/// Whether `command` takes objects by name: all but the legacy node commands, whose contract is
+/// frozen since 0.7 and takes IDs.
+fn takes_names(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::AddNode { .. }
+            | Command::RemoveNode { .. }
+            | Command::SetNodeParams { .. }
+            | Command::Connect { .. }
+            | Command::Disconnect { .. }
+            | Command::ArrangeLogic { .. }
+    )
+}
+
+/// Replaces the objects `command` names by name in its `entity`, `ids` and `parent` with their
+/// IDs, as agents give them in the other tools: a text that no object of the project has as its
+/// ID and that is the name (any case, without the spaces around it) of exactly one object of
+/// the scene the command looks in (`to_scene` for copy_entities' parent). A name several objects
+/// there share is refused with their IDs and where each is; one no object there has stays, for
+/// the command's own refusal, which says where an object of that name is.
+fn resolve_names(command: &Command, project: &Project, default: &str) -> Result<Command, String> {
+    if !takes_names(command) {
+        return Ok(command.clone());
+    }
+    let mut value = serde_json::to_value(command).map_err(|e| e.to_string())?;
+    let own = value["scene"].as_str().unwrap_or(default).to_owned();
+    let mut changed = false;
+    for key in ["entity", "ids", "parent"] {
+        let looked_in = match command {
+            Command::CopyEntities { to_scene, .. } if key == "parent" => to_scene.as_str(),
+            _ => own.as_str(),
+        };
+        // A scene that does not exist is the command's own refusal.
+        let Ok(scene) = project.find_scene(looked_in, "scene") else {
+            continue;
+        };
+        let texts: Vec<&mut Json> = match value.get_mut(key) {
+            Some(Json::Array(items)) => items.iter_mut().collect(),
+            Some(text @ Json::String(_)) => vec![text],
+            _ => continue,
+        };
+        for text in texts {
+            let Json::String(given) = text else { continue };
+            let is_id = project.scenes.iter().any(|s| s.entity(given).is_some());
+            if is_id || scene.entities_named(given).is_empty() {
+                continue;
+            }
+            *given = scene.find_entity(given, key)?.id.clone();
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(command.clone());
+    }
+    serde_json::from_value(value).map_err(|e| e.to_string())
+}
+
 /// The scene of a command: `scene` by its ID or name, `default` when absent.
 fn scene_id(project: &Project, scene: &Option<Id>, default: &str) -> Result<Id, String> {
     scene_named(project, scene.as_deref().unwrap_or(default), "scene")
@@ -1966,10 +2788,55 @@ fn placed(project: &Project, command: &Command, default: &str, message: String) 
             "{} não existe na cena {} (a do comando); ele está na cena {}: passe scene",
             e.name, scene.name, other.name
         ),
-        None => format!(
-            "Objeto {id} não existe na cena {} (a do comando) nem em outra cena do projeto",
-            scene.name
-        ),
+        // A name: of objects of other scenes (see `resolve_names`), of one of this scene looked
+        // for in another, or given to a legacy node command, which takes IDs.
+        None => {
+            let legacy = !takes_names(command);
+            let (own, others): (Vec<_>, Vec<_>) = project
+                .scenes
+                .iter()
+                .flat_map(|s| s.entities_named(id).into_iter().map(move |e| (s, e)))
+                .partition(|(s, _)| s.id == scene.id);
+            match (own.as_slice(), others.as_slice()) {
+                ([(_, e)], _) if legacy => format!(
+                    "{} é o nome de um objeto da cena {}; os comandos de nós (legado) pedem o ID \
+                     dele: {}",
+                    e.name, scene.name, e.id
+                ),
+                ([(_, e)], _) => {
+                    format!("{} não existe na cena em que o comando o procura", e.name)
+                }
+                ([_, _, ..], _) => scene.find_entity(id, "entity").err().unwrap_or(message),
+                ([], [(other, e)]) if legacy => format!(
+                    "{} é o nome de um objeto da cena {}, e não da {} (a do comando); os comandos \
+                     de nós (legado) pedem o ID dele ({}) e a cena dele em scene",
+                    e.name, other.name, scene.name, e.id
+                ),
+                ([], [(other, e)]) => format!(
+                    "{} não existe na cena {} (a do comando); ele está na cena {}: passe scene",
+                    e.name, scene.name, other.name
+                ),
+                ([], []) => format!(
+                    "Objeto {id} não existe na cena {} (a do comando) nem em outra cena do projeto",
+                    scene.name
+                ),
+                ([], many) => format!(
+                    "{id} não existe na cena {} (a do comando); outras cenas têm {} objetos com \
+                     esse nome: {}{}",
+                    scene.name,
+                    many.len(),
+                    many.iter()
+                        .map(|(s, e)| format!("{} (cena {})", e.id, s.name))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if legacy {
+                        "; os comandos de nós (legado) pedem o ID e a cena do objeto em scene"
+                    } else {
+                        ": passe scene"
+                    }
+                ),
+            }
+        }
     }
 }
 fn check_entities(scene: &Scene, ids: &[Id]) -> Result<(), String> {
@@ -2097,7 +2964,13 @@ fn find_asset(project: &Project, asset: &str, kind: Option<AssetKind>) -> Result
             asset_kind(kind).1
         )
     };
-    if let Some(found) = project.asset(asset) {
+    let path = asset.trim().replace('\\', "/");
+    if let Some(found) = project.asset(asset).or_else(|| {
+        project
+            .assets
+            .iter()
+            .find(|a| !a.path.is_empty() && crate::names::same_name(&a.path, &path))
+    }) {
         return match kind {
             Some(kind) if kind != found.kind => Err(other_kind(&[found], kind)),
             _ => Ok(found.id.clone()),
@@ -2139,7 +3012,32 @@ fn find_asset(project: &Project, asset: &str, kind: Option<AssetKind>) -> Result
         many => {
             let kinds: BTreeSet<&str> = many.iter().map(|a| asset_kind(a.kind).0).collect();
             // Of different kinds, the kind tells them apart; of one kind, only the ID does,
-            // which the message leaves to oxy_project: images and sounds by their files.
+            // which the message leaves to oxy_project: images and sounds by their files. In a
+            // project in folders the path of the file tells any of them apart.
+            if project.layout == Layout::Tree {
+                let mut listed: Vec<String> = many
+                    .iter()
+                    .map(|a| format!("{} ({}, {})", a.name, asset_kind(a.kind).0, a.path))
+                    .collect();
+                first_ten(&mut listed);
+                let kinds = if kinds.len() == many.len() {
+                    format!(
+                        "kind ({}) ou ",
+                        many.iter()
+                            .map(|a| format!("{:?}", a.kind))
+                            .collect::<Vec<_>>()
+                            .join(" ou ")
+                    )
+                } else {
+                    String::new()
+                };
+                return Err(format!(
+                    "\"{}\" é o nome de {} recursos: {}; passe {kinds}o caminho do arquivo",
+                    asset.trim(),
+                    many.len(),
+                    listed.join(", ")
+                ));
+            }
             if kinds.len() == many.len() {
                 Err(format!(
                     "\"{}\" é o nome de {} recursos: {}; passe kind ({})",
@@ -2169,6 +3067,28 @@ fn find_asset(project: &Project, asset: &str, kind: Option<AssetKind>) -> Result
             }
         }
     }
+}
+
+/// Refuses deleting the asset `id` while anything uses it, naming the uses.
+fn refuse_used(project: &Project, id: &str) -> Result<(), String> {
+    let mut uses = editing::asset_references(project, id);
+    if uses.is_empty() {
+        return Ok(());
+    }
+    let removed = project.asset(id).unwrap();
+    first_ten(&mut uses);
+    // A placement keeps its pieces as they are; deleting its root takes them away.
+    let placements = if removed.kind == AssetKind::Model {
+        " (as colocações do modelo saem com delete_entities das raízes listadas)"
+    } else {
+        ""
+    };
+    Err(format!(
+        "Não é possível excluir {} {}, que ainda está em uso; tire estes usos antes{placements}:\n{}",
+        asset_kind(removed.kind).2,
+        removed.name,
+        uses.join("\n")
+    ))
 }
 
 /// Links `edges` in the logic of `entity` in `scene`, in order; the first one refused fails
@@ -2321,6 +3241,7 @@ fn apply_one(
     command: &Command,
     checks: &mut Vec<Check>,
     copies: &mut Vec<Arc<CopyMap>>,
+    scripts: &ScriptSources,
 ) -> Result<Vec<Id>, String> {
     use Command as C;
     match command {
@@ -2482,7 +3403,11 @@ fn apply_one(
             entity,
             name,
             replace,
+            folder,
         } => {
+            if folder.is_some() && project.layout == Layout::Legacy {
+                return Err(tree::LEGACY.into());
+            }
             let id = scene_id(project, scene, default)?;
             let replaced = replace
                 .as_deref()
@@ -2523,7 +3448,7 @@ fn apply_one(
                     let map = project.replace_model_mapped(&model, &id, entity, name)?;
                     (model, map)
                 }
-                None => project.save_model_mapped(&id, entity, name)?,
+                None => project.save_model_mapped_in(&id, entity, name, folder.as_deref())?,
             };
             copies.push(Arc::new(map));
             Ok(vec![model])
@@ -2548,12 +3473,18 @@ fn apply_one(
             Ok(pieces)
         }
         C::RenameAsset { asset, name, kind } => {
-            let id = find_asset(project, asset, *kind)?;
+            if *kind == Some(ItemKind::Script) {
+                return Err(script_files_need(project).into());
+            }
+            let id = find_asset(project, asset, kind.and_then(ItemKind::asset))?;
             let name = name.trim();
             if name.is_empty() {
                 return Err("Informe um nome para o recurso".into());
             }
             let renamed = project.asset(&id).unwrap();
+            if project.layout == Layout::Tree && renamed.name != name {
+                return Err(crate::document::renaming_files(&renamed.name));
+            }
             // Assets are found by name, which two of a kind would share.
             if let Some(other) = project.assets.iter().find(|a| {
                 a.id != id
@@ -2570,29 +3501,19 @@ fn apply_one(
             renamed.name = name.to_owned();
             Ok(vec![])
         }
-        C::DeleteAsset { asset, kind } => {
-            let id = find_asset(project, asset, *kind)?;
-            let mut uses = editing::asset_references(project, &id);
-            if !uses.is_empty() {
-                let removed = project.asset(&id).unwrap();
-                first_ten(&mut uses);
-                // A placement keeps its pieces as they are; deleting its root takes them away.
-                let placements = if removed.kind == AssetKind::Model {
-                    " (as colocações do modelo saem com delete_entities das raízes listadas)"
-                } else {
-                    ""
-                };
-                return Err(format!(
-                    "Não é possível excluir {} {}, que ainda está em uso; tire estes usos \
-                     antes{placements}:\n{}",
-                    asset_kind(removed.kind).2,
-                    removed.name,
-                    uses.join("\n")
-                ));
+        C::DeleteAsset { asset, kind, .. } => {
+            if *kind == Some(ItemKind::Script) {
+                return Err(script_files_need(project).into());
             }
+            let id = find_asset(project, asset, kind.and_then(ItemKind::asset))?;
+            refuse_used(project, &id)?;
             editing::remove_asset(project, &id)?;
             Ok(vec![])
         }
+        C::CreateFolder { .. }
+        | C::RenameFolder { .. }
+        | C::Move { .. }
+        | C::DeleteFolder { .. } => Err(tree::NO_FOLDER.into()),
         C::RenameEntity {
             scene,
             entity,
@@ -2781,6 +3702,133 @@ fn apply_one(
         } => {
             let id = scene_id(project, scene, default)?;
             authoring::remove(entity_mut(scene_mut(project, &id), entity)?, *component)?;
+            Ok(vec![])
+        }
+        C::AttachScript {
+            scene,
+            entity,
+            path,
+            index,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let given = script::normalize_path(path)?;
+            // The path in the case the disk has, as it is kept.
+            let Some(path) = scripts.known(&given).map(str::to_owned) else {
+                return Err(scripts.absent(&given));
+            };
+            if path != given {
+                checks.push(Check::ScriptCase {
+                    given,
+                    path: path.clone(),
+                });
+            }
+            // A Superfície declared by name is the project's of that name.
+            let surfaces = project.surfaces.clone();
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let at = e.scripts.iter().position(|s| s.path == path);
+            let last = e.scripts.len() - usize::from(at.is_some());
+            if let Some(index) = *index
+                && index > last
+            {
+                return Err(format!(
+                    "index {index} fica fora da lista de scripts de {} (de 0 a {last})",
+                    e.name
+                ));
+            }
+            let attached = match at {
+                Some(at) => e.scripts.remove(at),
+                None => ScriptRef::new(path.clone()),
+            };
+            e.scripts
+                .insert(index.unwrap_or(at.unwrap_or(last)), attached);
+            // What every script of the object declares, for the warnings when the batch ends;
+            // only the one attached gives the attributes it declares.
+            let paths: Vec<String> = e.scripts.iter().map(|s| s.path.clone()).collect();
+            let mut declared = Vec::new();
+            for (each, result) in
+                script::declared_attributes(scripts, &surfaces, paths.iter().map(String::as_str))
+            {
+                match result {
+                    Ok(attributes) => {
+                        if each == path {
+                            for (name, default) in &attributes {
+                                e.attributes
+                                    .entry(name.clone())
+                                    .or_insert_with(|| default.clone());
+                            }
+                        }
+                        declared.push((each.to_owned(), attributes));
+                    }
+                    Err(error) if each == path => checks.push(Check::UnreadScript {
+                        scene: id.clone(),
+                        entity: e.id.clone(),
+                        path: path.clone(),
+                        error: error.to_string(),
+                    }),
+                    // Told where it is attached, or by the project's checks when it is missing.
+                    Err(_) => {}
+                }
+            }
+            // Callbacks that would never run on it, told when the batch ends: a later command
+            // may give it the area.
+            if let Some((_, Ok(outline))) = script::outlines(scripts, [path.as_str()]).pop() {
+                checks.push(Check::UnheardCallbacks {
+                    scene: id.clone(),
+                    entity: e.id.clone(),
+                    path: path.clone(),
+                    callbacks: outline.callbacks,
+                });
+            }
+            checks.push(Check::DeclaredAttributes {
+                scene: id,
+                entity: e.id.clone(),
+                declared,
+            });
+            Ok(vec![])
+        }
+        C::ClearLogic { scene, entity } => {
+            let id = scene_id(project, scene, default)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            if e.graph.nodes.is_empty() {
+                checks.push(Check::Note(format!(
+                    "{} não tinha lógica de nós; nada mudou nele",
+                    e.name
+                )));
+            }
+            e.graph = graph::Graph::default();
+            Ok(vec![])
+        }
+        C::DetachScript {
+            scene,
+            entity,
+            path,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            // A path saved before a rule of names came is still taken off.
+            let path = script::normal_form(path)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let Some(at) = e.scripts.iter().position(|s| s.path == path) else {
+                return Err(format!("{} não tem o script {path}", e.name));
+            };
+            e.scripts.remove(at);
+            Ok(vec![])
+        }
+        C::SetScriptEnabled {
+            scene,
+            entity,
+            path,
+            enabled,
+        } => {
+            let id = scene_id(project, scene, default)?;
+            let path = script::normal_form(path)?;
+            let e = entity_mut(scene_mut(project, &id), entity)?;
+            let name = e.name.clone();
+            let script = e
+                .scripts
+                .iter_mut()
+                .find(|s| s.path == path)
+                .ok_or_else(|| format!("{name} não tem o script {path}"))?;
+            script.enabled = *enabled;
             Ok(vec![])
         }
         C::FitCollider {
@@ -3441,7 +4489,7 @@ fn flat(shape: Primitive) -> bool {
 
 /// Shapes go only to scenes of their kind, as create_entity requires; validation checks the
 /// components.
-fn check_kind(entities: &[Entity], kind: SceneKind, scene: &str) -> Result<(), String> {
+pub(crate) fn check_kind(entities: &[Entity], kind: SceneKind, scene: &str) -> Result<(), String> {
     let wanted = kind == SceneKind::TwoD;
     for e in entities {
         let two_d = match (e.primitive, &e.mesh) {
@@ -3627,7 +4675,8 @@ fn copy_entities(
     Ok((created, map))
 }
 
-/// A model asset by ID or, when no asset has that ID, by name (ignoring case).
+/// A model asset by ID, else by the path of its file (`Pista/Checkpoint.modelo.json`, with or
+/// without the extension), else by name (ignoring case).
 pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
     if let Some(asset) = project.asset(model) {
         return if asset.kind == AssetKind::Model && asset.model.is_some() {
@@ -3635,6 +4684,16 @@ pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
         } else {
             Err(format!("O recurso {} não é um modelo", asset.name))
         };
+    }
+    let path = model.trim().replace('\\', "/");
+    let with_extension = format!("{path}{}", crate::model_file::EXTENSION);
+    if let Some(asset) = project.assets.iter().find(|a| {
+        a.kind == AssetKind::Model
+            && !a.path.is_empty()
+            && (crate::names::same_name(&a.path, &path)
+                || path.contains('/') && crate::names::same_name(&a.path, &with_extension))
+    }) {
+        return Ok(asset.id.clone());
     }
     let wanted = model.trim().to_lowercase();
     let named: Vec<&Asset> = project
@@ -3649,7 +4708,11 @@ pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
                 .assets
                 .iter()
                 .filter(|a| a.kind == AssetKind::Model)
-                .map(|a| format!("{} ({})", a.name, a.id))
+                // A model's file tells it apart in a project in folders, its ID in an old one.
+                .map(|a| match a.path.as_str() {
+                    "" => format!("{} ({})", a.name, a.id),
+                    path => format!("{} ({path})", a.name),
+                })
                 .collect();
             Err(if models.is_empty() {
                 format!(
@@ -3663,6 +4726,15 @@ pub(crate) fn find_model(project: &Project, model: &str) -> Result<Id, String> {
                 )
             })
         }
+        many if many.iter().all(|a| !a.path.is_empty()) => Err(format!(
+            "{} modelos se chamam \"{}\" ({}); passe o caminho do arquivo de um deles",
+            many.len(),
+            model.trim(),
+            many.iter()
+                .map(|a| a.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
         many => Err(format!(
             "{} modelos se chamam \"{}\"; use o ID",
             many.len(),

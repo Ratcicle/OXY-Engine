@@ -708,7 +708,7 @@ fn platform_discontinuity_detaches_without_launch_and_diagnostics_are_bounded() 
     );
     // The character it dropped reports it, naming the platform.
     assert_eq!(
-        rt.logs,
+        rt.logs.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
         [format!(
             "Personagem {BODY}: Apoio em Chão liberado sem herdar velocidade, porque a \
              plataforma girou rápido demais, mudou de escala ou saltou de posição."
@@ -853,7 +853,11 @@ fn a_character_on_the_seam_of_turning_planks_is_warned_once_per_platform() {
             // Once per platform that dropped the character: the group, named as such, or
             // each plank.
             if grouped {
-                assert_eq!(rt.logs, [warning("Ponte")], "{case}");
+                assert_eq!(
+                    rt.logs.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+                    [warning("Ponte")],
+                    "{case}"
+                );
             } else {
                 assert!(
                     !rt.logs.is_empty()
@@ -861,7 +865,7 @@ fn a_character_on_the_seam_of_turning_planks_is_warned_once_per_platform() {
                         && rt
                             .logs
                             .iter()
-                            .all(|l| *l == warning("Tábua A") || *l == warning("Tábua B")),
+                            .all(|l| l.text == warning("Tábua A") || l.text == warning("Tábua B")),
                     "{case}: {:?}",
                     rt.logs
                 );

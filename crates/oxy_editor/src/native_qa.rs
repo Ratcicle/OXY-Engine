@@ -9,9 +9,13 @@ mod cuts;
 mod direct;
 mod export;
 mod final_flow;
+mod focus;
+mod guide_scripts;
 mod input_guide;
 mod inspector;
 mod layout;
+mod library;
+mod library_dialogs;
 mod mesh;
 mod modeling;
 mod movement;
@@ -21,6 +25,7 @@ mod pause;
 mod physics;
 mod portable;
 mod recipes;
+mod scripts;
 mod spatial;
 mod ux;
 mod variables;
@@ -68,6 +73,12 @@ enum Action {
     HoldSeconds(Key, f32),
     RelativeLook(Vec2),
     Wait(usize),
+    /// Waits wall-clock time without input: egui's tooltips and the scripts' watcher count
+    /// seconds, not frames.
+    WaitSeconds(f32),
+    /// Leaves the open bottom dock this tall, as the person dragging its edge would; the tab
+    /// it shows keeps it within its heights.
+    DockHeight(f32),
     Card,
     Resize(Vec2),
     ResizePhysical(Vec2),
@@ -96,6 +107,11 @@ enum Action {
     PanZoom,
     WheelZoom(f32),
     CollapseEntity(&'static str),
+    /// Presses on the control registered for QA as the first label and moves to the second,
+    /// holding the button: the next actions see the drag over its target.
+    DragHold(&'static str, &'static str),
+    /// Releases the button held by DragHold where the pointer is.
+    Release,
     ReopenProject,
     Idle,
 }
@@ -110,6 +126,8 @@ struct Report {
 struct TextTarget {
     text: String,
     rect: Rect,
+    /// Painted below the open modal's layer: egui sends it no clicks.
+    behind_modal: bool,
 }
 #[derive(Default)]
 struct Surface {
@@ -124,6 +142,44 @@ struct Surface {
     gizmo_x: Option<Pos2>,
     gizmo_uniform: Option<Pos2>,
     gizmo_z: Option<Pos2>,
+    /// The open bottom dock as egui keeps it (the collapsed dock is a panel of its own).
+    dock: Option<Rect>,
+}
+
+/// The middle of the text `label` names on `surface` (only on the logic canvas with
+/// `only_canvas`; `logic` when the Lógica tab shows). An open modal receives the clicks, so its
+/// controls win over the same text behind it, whatever its geometry. Logic nodes repeat
+/// parameter values that the inspector edits: a control outside the graph wins over the same
+/// text drawn on the canvas. Then the highest one wins.
+fn pick_text(surface: &Surface, label: &str, only_canvas: bool, logic: bool) -> Option<Pos2> {
+    let in_canvas = |target: &TextTarget| {
+        surface
+            .canvas
+            .is_some_and(|canvas| canvas.contains(target.rect.center()))
+    };
+    // The modal's own controls are never the graph's, even drawn over it.
+    let on_canvas = |target: &TextTarget| {
+        logic && (surface.modal.is_none() || target.behind_modal) && in_canvas(target)
+    };
+    surface
+        .texts
+        .iter()
+        .filter(|target| {
+            let text = target.text.trim_start_matches("• ");
+            text == label
+                || text.ends_with(&format!(" {label}"))
+                || text
+                    .strip_suffix(" · 2D")
+                    .or_else(|| text.strip_suffix(" · 3D"))
+                    == Some(label)
+        })
+        .filter(|target| !only_canvas || in_canvas(target))
+        .min_by(|a, b| {
+            (a.behind_modal, !only_canvas && on_canvas(a))
+                .cmp(&(b.behind_modal, !only_canvas && on_canvas(b)))
+                .then(a.rect.top().total_cmp(&b.rect.top()))
+        })
+        .map(|target| target.rect.center())
 }
 
 struct IdleProbe {
@@ -174,11 +230,19 @@ struct NativeQa {
     paint_faces: Option<(u32, u32)>,
     paint_uploads: u64,
     held_until: Option<(Key, Instant)>,
+    /// Until when WaitSeconds waits.
+    rest_until: Option<Instant>,
     click_candidate: Option<(&'static str, Pos2, Instant)>,
     /// Whether the game held the cursor in the last frame.
     cursor_captured: bool,
     /// The editor sees its window without focus, as when the person works in another window.
     unfocused: bool,
+    /// Whether the editor was last told its window has the focus (egui's WindowFocused).
+    told_focused: bool,
+    /// The game time when the flow took the focus away.
+    focus_time: Option<f64>,
+    /// The folder of the project the flow checks, kept once the editor leaves it.
+    qa_root: Option<PathBuf>,
 }
 
 impl NativeQa {
@@ -262,6 +326,8 @@ impl NativeQa {
             Action::Key(Key::Y, true),
             Action::Check("paint_redo"),
             Action::Key(Key::S, true),
+            // The first save of the old example organizes it in folders, as the person chooses.
+            Action::Click("Organizar e salvar"),
             Action::Check("saved_roundtrip"),
             Action::Check("texture_controls_baseline"),
             Action::OptionalClick("Pintar"),
@@ -269,6 +335,7 @@ impl NativeQa {
             Action::Click("Localizar na biblioteca"),
             Action::Key(Key::Escape, false),
             Action::DeleteTextureAsset,
+            Action::Click("Excluir…"),
             // A new egui window is measured invisibly on its first frame.
             Action::Wait(4),
             Action::Check("texture_reference_blocked"),
@@ -490,9 +557,13 @@ impl NativeQa {
             paint_faces: None,
             paint_uploads: 0,
             held_until: None,
+            rest_until: None,
             click_candidate: None,
             cursor_captured: false,
             unfocused: false,
+            told_focused: true,
+            focus_time: None,
+            qa_root: None,
         }
     }
 
@@ -511,52 +582,18 @@ impl NativeQa {
     }
 
     fn find(&self, label: &str, canvas: bool) -> Option<Pos2> {
-        // An open modal receives the clicks, so its controls win over the same text
-        // behind it. Logic nodes repeat parameter values that the inspector edits: a
-        // control outside the graph wins over the same text drawn on the canvas.
-        let behind_modal = |target: &TextTarget| {
-            self.surface
-                .modal
-                .is_some_and(|modal| !modal.contains(target.rect.center()))
-        };
-        let on_canvas = |target: &TextTarget| {
-            self.editor.tab == crate::app::Tab::Logic
-                && self
-                    .surface
-                    .canvas
-                    .is_some_and(|canvas| canvas.contains(target.rect.center()))
-        };
-        self.surface
-            .texts
-            .iter()
-            .filter(|target| {
-                let text = target.text.trim_start_matches("• ");
-                text == label
-                    || text.ends_with(&format!(" {label}"))
-                    || text
-                        .strip_suffix(" · 2D")
-                        .or_else(|| text.strip_suffix(" · 3D"))
-                        == Some(label)
-            })
-            .filter(|target| {
-                !canvas
-                    || self
-                        .surface
-                        .canvas
-                        .is_some_and(|canvas| canvas.contains(target.rect.center()))
-            })
-            .min_by(|a, b| {
-                (behind_modal(a), !canvas && on_canvas(a))
-                    .cmp(&(behind_modal(b), !canvas && on_canvas(b)))
-                    .then(a.rect.top().total_cmp(&b.rect.top()))
-            })
-            .map(|target| target.rect.center())
-            .or_else(|| {
-                (!canvas)
-                    .then(|| self.editor.qa_icon_rect(label))
-                    .flatten()
-                    .map(|r| r.center())
-            })
+        pick_text(
+            &self.surface,
+            label,
+            canvas,
+            self.editor.tab == crate::app::Tab::Logic,
+        )
+        .or_else(|| {
+            (!canvas)
+                .then(|| self.editor.qa_icon_rect(label))
+                .flatten()
+                .map(|r| r.center())
+        })
     }
 
     fn click(&mut self, position: Pos2) {
@@ -685,6 +722,21 @@ impl NativeQa {
         if label.starts_with("pause_") {
             return self.check_pause(label);
         }
+        if label.starts_with("lib8") {
+            return self.check_library_dialogs(label);
+        }
+        if label.starts_with("lib7_") {
+            return self.check_library(label);
+        }
+        if label.starts_with("sc7_") {
+            return self.check_scripts(label);
+        }
+        if label.starts_with("gs7_") {
+            return self.check_guide_scripts(label);
+        }
+        if label.starts_with("fc7_") {
+            return self.check_focus(label);
+        }
         let ensure = |condition: bool, message: &str| {
             if condition {
                 Ok(())
@@ -767,6 +819,36 @@ impl NativeQa {
                         .filter(|a| a.kind == oxy_core::document::AssetKind::Audio)
                         .all(|a| root.join(&a.path).is_file()),
                     "A cópia do parkour ficou sem os sons",
+                )?;
+                // The parkour is in folders and runs on scripts: the copy takes every file of
+                // the folders (sounds and models in their files) and every script of the tree,
+                // each at its path, and nothing that stays out of a project.
+                ensure(
+                    project.layout == oxy_core::document::Layout::Tree
+                        && project.assets.iter().all(|a| root.join(&a.path).is_file()),
+                    "A cópia do parkour não está nas pastas do exemplo",
+                )?;
+                let scripts =
+                    oxy_core::persistence::load_scripts(&root).map_err(|e| e.to_string())?;
+                let attached = oxy_core::script::attached_paths(project);
+                ensure(
+                    !attached.is_empty()
+                        && scripts.unreadable.is_empty()
+                        && attached.iter().all(|path| scripts.files.contains_key(path)),
+                    "A cópia do parkour ficou sem os scripts",
+                )?;
+                let outside = portable::outside_project(&root).map_err(|e| e.to_string())?;
+                if !outside.is_empty() {
+                    return Err(format!(
+                        "{label}: a cópia do parkour levou o que fica fora do projeto: {}",
+                        outside.join(", ")
+                    ));
+                }
+                // Already in folders: an example's copy saves in a new folder as it is, and
+                // "Organizar o projeto em pastas" never opens for it.
+                ensure(
+                    !self.editor.organize_first(),
+                    "Salvar a cópia do parkour pediria para organizá-la em pastas",
                 )
             }
             "home_recent" => ensure(
@@ -1561,6 +1643,101 @@ impl NativeQa {
                 }
                 Ok(())
             }
+            "dock_least" => {
+                // The person dragged the dock to its least height on the Console: lower than two
+                // of the Library's rows of 24 points under what it draws above them.
+                let dock = self.surface.dock.ok_or("A doca não foi desenhada")?;
+                let chrome = self
+                    .editor
+                    .qa_library_chrome()
+                    .ok_or("A Biblioteca não mediu o que fica acima das linhas")?;
+                ensure(
+                    self.editor.dock_open()
+                        && self.editor.dock.tab == crate::app::DockTab::Console
+                        && dock.height() < chrome + 2. * 24.,
+                    &format!(
+                        "A doca deveria estar aberta no Console, mais baixa que duas linhas sob \
+                         {chrome} pt: {}",
+                        dock.height()
+                    ),
+                )
+            }
+            "dock_reveal_rows" => {
+                // A reveal in the Library from there (Salvar hierarquia como modelo, in a project
+                // of the old layout): the dock grows to keep two of the Library's rows of 24
+                // points under the old layout's banner and the chips, the revealed model's row
+                // with its action among them.
+                let dock = self.surface.dock.ok_or("A doca não foi desenhada")?;
+                ensure(
+                    self.editor.dock_open() && self.editor.dock.tab == crate::app::DockTab::Library,
+                    "A revelação não abriu a Biblioteca",
+                )?;
+                let banner = self
+                    .surface
+                    .texts
+                    .iter()
+                    .find(|t| {
+                        t.text
+                            .starts_with("Salve o projeto para organizar em pastas")
+                            && dock.contains(t.rect.center())
+                    })
+                    .ok_or("A Biblioteca não mostra a faixa do formato antigo")?;
+                let chrome = self
+                    .editor
+                    .qa_library_chrome()
+                    .ok_or("A Biblioteca não mediu o que fica acima das linhas")?;
+                let rows = dock.top() + chrome;
+                ensure(
+                    rows > banner.rect.bottom(),
+                    "A medida do que fica acima das linhas deixou a faixa de fora",
+                )?;
+                ensure(
+                    dock.height() + 0.5 >= chrome + 2. * 24.,
+                    &format!(
+                        "A doca ficou com {} pt, sem duas linhas sob {chrome} pt",
+                        dock.height()
+                    ),
+                )?;
+                let action = self
+                    .surface
+                    .texts
+                    .iter()
+                    .find(|t| t.text == "Colocar na cena")
+                    .ok_or("A linha do modelo revelado não aparece")?;
+                ensure(
+                    action.rect.top() >= rows - 0.5 && action.rect.bottom() <= dock.bottom(),
+                    "A ação do modelo revelado não ficou inteira entre as linhas",
+                )
+            }
+            "old_layout_notice_gone" => {
+                // What the first save of a project of the old layout does went away by itself,
+                // as the timed notices do, uncovering the end of the dock; the Library's banner
+                // and the Console still say it.
+                let shows =
+                    |start: &str| self.surface.texts.iter().any(|t| t.text.starts_with(start));
+                ensure(
+                    !shows("Este projeto está no formato antigo da OXY"),
+                    "O aviso do formato antigo continua na tela",
+                )?;
+                ensure(
+                    shows("Salve o projeto para organizar em pastas"),
+                    "A Biblioteca não mostra a faixa do formato antigo",
+                )?;
+                ensure(
+                    self.editor.console.messages.iter().any(|m| {
+                        m.starts_with("Este projeto está no formato antigo da OXY. Ao salvar")
+                    }),
+                    "O Console não guardou o aviso do formato antigo",
+                )
+            }
+            "old_layout_notice_stays" => ensure(
+                // Why the project stays in the old layout waits to be dismissed.
+                self.surface.texts.iter().any(|t| {
+                    t.text
+                        .starts_with("Este projeto está no formato antigo da OXY e continua nele")
+                }),
+                "O aviso de que o projeto continua no formato antigo sumiu sozinho",
+            ),
             _ => self.check_spatial(label),
         }
     }
@@ -1626,6 +1803,44 @@ impl NativeQa {
                     modifiers: Modifiers::NONE,
                 }]);
                 description = "Pan e zoom reais no viewport".into();
+            }
+            Action::DragHold(from, to) => {
+                let source = self
+                    .editor
+                    .qa_icon_rect(from)
+                    .ok_or_else(|| format!("Origem do arrasto ausente: {from}"))?
+                    .center();
+                let target = self
+                    .editor
+                    .qa_icon_rect(to)
+                    .map(|rect| rect.center())
+                    .or_else(|| self.find(to, false))
+                    .ok_or_else(|| format!("Destino do arrasto ausente: {to}"))?;
+                self.events.push_back(vec![Event::PointerMoved(source)]);
+                self.events.push_back(vec![Event::PointerButton {
+                    pos: source,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                }]);
+                for index in 1..=8 {
+                    self.events.push_back(vec![Event::PointerMoved(
+                        source.lerp(target, index as f32 / 8.),
+                    )]);
+                }
+                description = format!("Arrastar e segurar: {from} → {to}");
+            }
+            Action::Release => {
+                let at = ctx
+                    .input(|i| i.pointer.latest_pos())
+                    .ok_or("Nenhum arrasto segurado")?;
+                self.events.push_back(vec![Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                }]);
+                description = "Soltar o arrasto".into();
             }
             Action::CollapseEntity(label) => {
                 self.entity_position(label)
@@ -1813,12 +2028,13 @@ impl NativeQa {
                     .ok_or("Recurso selecionado ausente")?;
                 self.find("Biblioteca", false)
                     .ok_or("Biblioteca não visível")?;
-                let delete = self
+                let row = self
                     .editor
-                    .qa_icon_rect(&format!("Excluir {}", asset.name))
+                    .qa_icon_rect(&format!("Recurso: {}", asset.name))
                     .ok_or("Localizar na biblioteca não revelou o recurso")?;
-                self.click(delete.center());
-                description = "Excluir recurso pelo cartão de sua própria textura".into();
+                // The row's menu; the next action clicks its Excluir….
+                self.click_with(row.center(), PointerButton::Secondary, Modifiers::NONE);
+                description = "Abrir o menu da linha da própria textura na Biblioteca".into();
             }
             Action::Click(label) | Action::OptionalClick(label) => {
                 let Some(position) = self.find(label, false) else {
@@ -1899,6 +2115,22 @@ impl NativeQa {
             Action::Wait(frames) => {
                 self.wait = frames;
                 description = format!("Reproduzir {frames} quadros sem entrada");
+            }
+            Action::WaitSeconds(seconds) => {
+                self.rest_until = Some(Instant::now() + Duration::from_secs_f32(seconds));
+                description = format!("Esperar {seconds} s de relógio sem entrada");
+            }
+            Action::DockHeight(height) => {
+                if !self.editor.dock_open() {
+                    return Err("A doca está recolhida".into());
+                }
+                let id = egui::Id::new("dock");
+                let mut state = egui::containers::panel::PanelState::load(ctx, id)
+                    .ok_or("A doca aberta não foi desenhada")?;
+                state.rect.min.y = state.rect.max.y - height;
+                ctx.data_mut(|data| data.insert_persisted(id, state));
+                self.wait = 4;
+                description = format!("Arrastar a borda da doca até {height} pt de altura");
             }
             Action::Card => {
                 let position = self
@@ -2209,6 +2441,11 @@ impl eframe::App for NativeQa {
             })
             .unwrap_or_default();
         input.events.extend(scripted);
+        // As winit tells a change of focus: egui lets go of the keys it held.
+        if self.told_focused == self.unfocused {
+            self.told_focused = !self.unfocused;
+            input.events.push(Event::WindowFocused(self.told_focused));
+        }
         input.focused = !self.unfocused;
         input.hovered_files.clear();
         input.dropped_files.clear();
@@ -2329,6 +2566,13 @@ impl eframe::App for NativeQa {
             }]);
             self.held_until = None;
         }
+        if let Some(deadline) = self.rest_until {
+            if Instant::now() < deadline {
+                ctx.request_repaint();
+                return;
+            }
+            self.rest_until = None;
+        }
         if let Some(idle) = &mut self.idle {
             if Instant::now() < idle.deadline {
                 // Real input (the pointer over the window, focus changes) is not a repaint
@@ -2410,12 +2654,37 @@ impl eframe::App for NativeQa {
 }
 
 fn capture_surface(ctx: &egui::Context) -> Surface {
-    let shapes = ctx.graphics(|graphics| graphics.clone().drain(&[], &Default::default()));
+    let modal = ctx.memory(|m| m.top_modal_layer().and_then(|layer| m.area_rect(layer.id)));
+    // With a modal open, egui sends clicks only to its layer and those above it (its popups and
+    // tooltips), as `Memory::is_above_modal_layer` tells: their shapes are taken apart from
+    // the rest, which is behind it whatever its geometry.
+    let front: Vec<egui::LayerId> = if modal.is_some() {
+        ctx.memory(|m| {
+            m.layer_ids()
+                .filter(|layer| m.is_above_modal_layer(*layer))
+                .collect()
+        })
+    } else {
+        Vec::new()
+    };
+    let (shapes, front_shapes) = ctx.graphics(|graphics| {
+        let mut graphics = graphics.clone();
+        let mut front_shapes: Vec<egui::epaint::ClippedShape> = Vec::new();
+        for layer in &front {
+            if let Some(list) = graphics.get_mut(*layer) {
+                front_shapes.extend(std::mem::take(list).all_entries().cloned());
+            }
+        }
+        (graphics.drain(&[], &Default::default()), front_shapes)
+    });
     let mut surface = Surface {
-        modal: ctx.memory(|m| m.top_modal_layer().and_then(|layer| m.area_rect(layer.id))),
+        modal,
+        dock: egui::containers::panel::PanelState::load(ctx, egui::Id::new("dock"))
+            .map(|state| state.rect),
         ..Default::default()
     };
-    fn inspect(shape: &egui::Shape, clip: Rect, surface: &mut Surface) {
+    /// `in_modal`: from the open modal's layer or one above it.
+    fn inspect(shape: &egui::Shape, clip: Rect, in_modal: bool, surface: &mut Surface) {
         match shape {
             egui::Shape::Text(text) => {
                 let rect = text.visual_bounding_rect().intersect(clip);
@@ -2423,15 +2692,18 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
                     surface.texts.push(TextTarget {
                         text: text.galley.text().to_owned(),
                         rect,
+                        behind_modal: surface.modal.is_some() && !in_modal,
                     });
                 }
             }
             egui::Shape::Vec(shapes) => {
                 for shape in shapes {
-                    inspect(shape, clip, surface);
+                    inspect(shape, clip, in_modal, surface);
                 }
             }
-            egui::Shape::Rect(rect) if rect.fill == crate::theme::BG_BASE => {
+            // The logic canvas is behind any modal: a dialog's own frames of that fill (the
+            // segmented controls') are not it.
+            egui::Shape::Rect(rect) if rect.fill == crate::theme::BG_BASE && !in_modal => {
                 surface.canvas = Some(rect.rect.intersect(clip))
             }
             egui::Shape::Rect(rect)
@@ -2496,7 +2768,10 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
         }
     }
     for shape in shapes {
-        inspect(&shape.shape, shape.clip_rect, &mut surface);
+        inspect(&shape.shape, shape.clip_rect, false, &mut surface);
+    }
+    for shape in front_shapes {
+        inspect(&shape.shape, shape.clip_rect, true, &mut surface);
     }
     if let Some(canvas) = surface.canvas {
         surface.ports.retain(|point| canvas.contains(*point));
@@ -2504,6 +2779,10 @@ fn capture_surface(ctx: &egui::Context) -> Surface {
     surface
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "QA copies its fixtures into folders of its own"
+)]
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {
@@ -2576,4 +2855,66 @@ fn native_editor_workflow() {
             .unwrap_or("Janela fechada antes do fim")
     );
     assert_eq!(report.screenshots.len(), 14);
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+
+    fn text(text: &str, min: [f32; 2], max: [f32; 2], behind_modal: bool) -> TextTarget {
+        TextTarget {
+            text: text.into(),
+            rect: Rect::from_min_max(min.into(), max.into()),
+            behind_modal,
+        }
+    }
+
+    /// Preferências do editor over the Lógica at 920 × 600 and 80%: the logic toolbar's zoom
+    /// reads 100% under the dialog, inside its rectangle, and the dialog's Escala chip sits in a
+    /// frame painted as the canvas is; the chip is what a click on 100% means.
+    #[test]
+    fn the_modal_s_control_wins_over_the_same_text_under_it() {
+        let surface = Surface {
+            texts: vec![
+                text("100%", [725., 66.6], [757.5, 76.6], true),
+                text("100%", [730., 128.4], [755., 138.4], false),
+                text("Restaurar 100%", [660., 855.9], [755., 865.9], false),
+            ],
+            canvas: Some(Rect::from_min_max([0., 40.].into(), [1150., 750.].into())),
+            modal: Some(Rect::from_min_max([330., 57.].into(), [820., 693.].into())),
+            ..Default::default()
+        };
+        assert_eq!(
+            pick_text(&surface, "100%", false, true),
+            Some(Pos2::new(742.5, 133.4))
+        );
+    }
+
+    /// Without a modal, a control outside the graph wins over the same text on the canvas, and
+    /// then the highest one.
+    #[test]
+    fn without_a_modal_the_graph_loses_then_the_highest_wins() {
+        let surface = Surface {
+            texts: vec![
+                text("Andar", [100., 50.], [140., 60.], false),
+                text("Andar", [1200., 300.], [1240., 310.], false),
+                text("Andar", [1200., 400.], [1240., 410.], false),
+            ],
+            canvas: Some(Rect::from_min_max([0., 40.].into(), [1100., 800.].into())),
+            ..Default::default()
+        };
+        assert_eq!(
+            pick_text(&surface, "Andar", false, true),
+            Some(Pos2::new(1220., 305.))
+        );
+        assert_eq!(
+            pick_text(&surface, "Andar", true, true),
+            Some(Pos2::new(120., 55.))
+        );
+        // Off the Lógica, the canvas is no reason to lose.
+        assert_eq!(
+            pick_text(&surface, "Andar", false, false),
+            Some(Pos2::new(120., 55.))
+        );
+    }
 }

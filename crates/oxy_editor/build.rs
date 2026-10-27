@@ -1,3 +1,7 @@
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the icon goes to the build's own output folder"
+)]
 fn main() {
     // Cargo uses SemVer (three numeric fields); Windows/UI retain the patch label.
     let version = std::env::var("CARGO_PKG_VERSION")

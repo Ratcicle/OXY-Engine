@@ -1,0 +1,8 @@
+# Luau (through mlua) is C++. On the local gnu toolchain its libstdc++ is linked statically, so
+# no executable imports libstdc++-6.dll and the exported game runs outside the development PATH.
+# The target-specific name never reaches MSVC. luau0-src reads it without rerun-if-env-changed:
+# after changing it, run `cargo clean -p mlua-sys` (and with --release). Cargo finds this file
+# from the current folder, so run it from inside the repository; scripts/cargo.ps1 does not
+# change folder, so call it from the root.
+[env]
+CXXSTDLIB_x86_64_pc_windows_gnu = "static:-bundle=stdc++"

@@ -237,20 +237,21 @@ fn a_sound_played_right_before_a_scene_change_is_kept() {
         "{sounds:?}"
     );
 
-    // A scene that restarts itself as it starts runs until the work budget of the update runs
+    // A scene that restarts itself as it starts runs until the work budget of the step runs
     // out. The beep that started the loop is heard, and at most the one of the scene running at
     // the end; those of the scenes that started and ended within the step are not.
     let project = beep_then_restart(true);
     let mut runtime = Runtime::new(&project, &project.start_scene).unwrap();
     for update in 0..4 {
-        // The host takes the sounds once per update (a frame of up to MAX_STEPS steps).
+        // The host takes the sounds once per update (a frame of up to MAX_STEPS steps, each
+        // with its own budget and so its own two beeps at most).
         let starts = std::mem::take(&mut runtime.scene_starts);
         let sounds = std::mem::take(&mut runtime.sounds);
         assert!(
             starts.len() > 2,
             "update {update}: the scene keeps restarting"
         );
-        assert!(sounds.len() <= 2, "update {update}: {sounds:?}");
+        assert!(sounds.len() <= 2 * MAX_STEPS, "update {update}: {sounds:?}");
         runtime.advance(FIXED_DT * MAX_STEPS as f32, &InputFrame::default());
     }
 }
@@ -704,7 +705,7 @@ fn effect_loops_stop_at_32_with_an_error() {
         runtime
             .logs
             .iter()
-            .any(|l| l.contains("Já há 32 sons em loop nos efeitos")),
+            .any(|l| l.text.contains("Já há 32 sons em loop nos efeitos")),
         "{:?}",
         runtime.logs
     );

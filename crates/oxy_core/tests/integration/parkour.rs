@@ -295,7 +295,7 @@ fn thin_sensor_crossing_emits_enter_then_exit_and_routes_both_nodes() {
     assert!(events[0].entered && !events[1].entered);
     assert!(events[0].path_time < events[1].path_time);
     assert_eq!(rt.logs.len(), 2, "{:?}", rt.logs);
-    assert!(rt.logs[0].ends_with("ENTROU") && rt.logs[1].ends_with("SAIU"));
+    assert!(rt.logs[0].text.ends_with("ENTROU") && rt.logs[1].text.ends_with("SAIU"));
     rt.advance(FIXED_DT, &InputFrame::default());
     assert!(rt.sensor_events().is_empty());
     rt.scene_mut()
@@ -420,7 +420,7 @@ fn sensor_activation_survives_waits_but_ended_history_and_removed_handles_do_not
     // Removing the followed character now preserves the last safe camera view
     // and reports the missing target once; physics/task diagnostics stay empty.
     assert_eq!(rt.logs.len(), 1, "{:?}", rt.logs);
-    assert!(rt.logs[0].starts_with("Câmera "), "{:?}", rt.logs);
+    assert!(rt.logs[0].text.starts_with("Câmera "), "{:?}", rt.logs);
 }
 
 #[test]
@@ -524,7 +524,7 @@ fn exit_node_also_works_for_legacy_2d_without_creating_3d_world() {
     rt.scene_mut().entity_mut(BODY).unwrap().transform.position[0] = 10.;
     rt.advance(FIXED_DT, &InputFrame::default());
     assert_eq!(rt.logs.len(), 1);
-    assert!(rt.logs[0].ends_with("Saiu no 2D"));
+    assert!(rt.logs[0].text.ends_with("Saiu no 2D"));
     assert!(rt.physics_world().is_none());
     rt.advance(FIXED_DT, &InputFrame::default());
     assert_eq!(rt.logs.len(), 1);

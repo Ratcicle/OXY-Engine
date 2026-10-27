@@ -8,6 +8,7 @@ use oxy_core::{
     asset_import::{self, ImportBatch, ImportKind},
     command::{self, Command},
     headless::{self, InputEvent},
+    script_files,
 };
 use serde_json::{Value as Json, json};
 
@@ -15,6 +16,56 @@ use serde_json::{Value as Json, json};
 pub(crate) const AGENT_PREFIX: &str = "Agente · ";
 
 const NO_TEST: &str = "Não há teste do jogo em andamento no editor.";
+
+/// What an agent's save says when it organized a project of the old layout in folders and the
+/// editor's undo history started over (the person's Ctrl+Z, as the Console tells them).
+const UNDO_RESTARTED: &str = "Organizing the project in folders restarted the editor's \
+    undo history: the steps before this save named the files by their old paths, so neither the \
+    person's Ctrl+Z nor oxy_undo goes back past it.";
+
+/// The answer to an agent's save of `saved`, kept first as `previous`: what organizing it in
+/// folders did (`converted`) and whether that restarted the undo history, or why it stayed in
+/// the old layout (`kept`).
+fn save_answer(
+    saved: &Path,
+    previous: &Path,
+    converted: Option<Json>,
+    undo_restarted: bool,
+    kept: Option<String>,
+) -> Json {
+    let mut answer = json!({
+        "saved": saved.display().to_string(),
+        "previous_version": previous.display().to_string(),
+    });
+    if let Some(converted) = converted {
+        answer["converted"] = converted;
+    }
+    if undo_restarted {
+        answer["note"] = json!(UNDO_RESTARTED);
+    }
+    if let Some(kept) = kept {
+        answer["warnings"] = json!([kept]);
+    }
+    answer
+}
+
+/// The scripts an agent's batch for the project saved at `path` reads: those of its tree, read
+/// from the disk again, when a command attaches one (see [`command::needs_scripts`]), so a
+/// script the agent just wrote with its own file tools is there; else none. A project never
+/// saved has no folder for them.
+fn agent_scripts(path: Option<&Path>, commands: &[Command]) -> Result<ScriptSources, String> {
+    if !command::needs_scripts(commands) {
+        return Ok(ScriptSources::default());
+    }
+    match path.and_then(Path::parent) {
+        Some(root) => persistence::load_scripts(root).map_err(|error| error.to_string()),
+        None => Err(
+            "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; \
+             salve-o antes de anexar um script."
+                .into(),
+        ),
+    }
+}
 
 impl PlaySession {
     /// The game time the inputs an agent sent still wait until, when some wait.
@@ -84,28 +135,175 @@ impl Editor {
             [one] => format!("Agente: {}", one.label()),
             many => format!("Agente: {} comandos", many.len()),
         };
+        let root = self.project_root();
+        // A project never saved has no folder: attaching a script is refused, and the tree's
+        // commands say they need one.
+        let scripts = match root {
+            Some(_) => ScriptSources::default(),
+            None => agent_scripts(None, commands)?,
+        };
+        // A script or a file the agent just wrote, moved or deleted with its own tools is
+        // where the batch looks for it.
+        if root.is_some() && command::needs_files(&self.state.project, commands) {
+            self.scan_project();
+        }
+        let known = root.as_deref().map(|root| {
+            persistence::missing_scripts(&self.state.project, root).unwrap_or_default()
+        });
         self.history
-            .begin(label, &self.state.project, &self.state.images);
-        match command::apply_and_report(&mut self.state.project, &self.scene_id, commands) {
-            Ok(report) => {
-                if let Err(error) = self
-                    .history
-                    .commit(&self.state.project, &mut self.state.images)
-                {
+            .begin(label.clone(), &self.state.project, &self.state.images);
+        let applied = match &root {
+            Some(root) => command::apply_on_files(
+                &mut self.state.project,
+                &self.scene_id,
+                commands,
+                root,
+                &mut self.known_files,
+                &label,
+            )
+            .map(|done| (done.report, done.files)),
+            None => command::apply_and_report_with_scripts(
+                &mut self.state.project,
+                &self.scene_id,
+                commands,
+                &scripts,
+            )
+            .map(|report| (report, Vec::new()))
+            .map_err(|error| command::FilesError {
+                message: error.to_string(),
+                kept: Vec::new(),
+            }),
+        };
+        match applied {
+            Ok((mut report, files)) => {
+                if let (Some(root), Some(known)) = (&root, &known) {
+                    let added =
+                        persistence::added_script_warnings(known, &self.state.project, root);
+                    command::add_warnings(&mut report, added);
+                }
+                let moved = !files.is_empty();
+                // The scripts whose `require` the batch rewrote on the disk are told, as an
+                // agent's script writes are.
+                let rewritten = command::rewritten(&files);
+                let followed = files.clone();
+                if let Err(error) = self.history.commit_with_files(
+                    &self.state.project,
+                    &mut self.state.images,
+                    files,
+                ) {
                     self.log(error);
+                }
+                if moved {
+                    self.rebase_scan();
+                    self.script_status.look_again();
+                    // The Library and the code tab follow what the agent moved.
+                    self.follow_moves(&followed, false);
                 }
                 for command in commands {
                     self.log(format!("{AGENT_PREFIX}{}", command.label()));
                 }
+                for path in rewritten {
+                    self.log(format!(
+                        "{AGENT_PREFIX}Script {path} alterado (require atualizados)"
+                    ));
+                }
+                // Whoever writes the scripts in VS Code gets the API's types.
+                if let Some(root) = root.as_deref().filter(|_| command::needs_scripts(commands)) {
+                    match script_files::setup_vscode_when_due(root) {
+                        Ok(Some(setup)) => {
+                            report["vscode"] = setup.json();
+                            for line in setup.console() {
+                                self.log(format!("{AGENT_PREFIX}{line}"));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => command::add_warnings(&mut report, vec![error]),
+                    }
+                }
                 self.after_external_edit();
                 Ok(report)
             }
-            Err(error) => {
-                self.history
-                    .cancel(&mut self.state.project, &mut self.state.images);
-                let message = error.to_string();
+            Err(command::FilesError { message, kept }) => {
+                self.keep_files_or_cancel(kept);
                 self.log(format!("{AGENT_PREFIX}{message}"));
                 Err(message)
+            }
+        }
+    }
+    /// Ends the step begun for a batch that failed: cancelled, or, when files stayed moved
+    /// because undoing them failed too (the document follows them), kept with them, so undoing
+    /// puts them back.
+    pub(crate) fn keep_files_or_cancel(&mut self, kept: Vec<oxy_core::edit_history::FileOp>) {
+        if kept.is_empty() {
+            self.history
+                .cancel(&mut self.state.project, &mut self.state.images);
+            return;
+        }
+        if let Err(error) =
+            self.history
+                .commit_with_files(&self.state.project, &mut self.state.images, kept)
+        {
+            self.log(error);
+        }
+        self.rebase_scan();
+        self.after_external_edit();
+    }
+    /// An agent's oxy_scripts on the project open in the editor, whose folder holds its scripts.
+    /// The disk is the truth: a write is no undo step, waits for nothing and reaches a test
+    /// running through its watcher; writes and setting VS Code up are told in the Console.
+    /// Renaming and deleting a script are an agent's batch of the project's commands.
+    pub(crate) fn agent_script_files(&mut self, params: &Json) -> Result<Json, String> {
+        if self.home.visible {
+            return Err("Nenhum projeto aberto no editor.".into());
+        }
+        let request = script_files::Request::parse(params)?;
+        let root = self
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_owned);
+        // Renaming and deleting are the project's commands: one undo step, the objects and the
+        // `require` following.
+        let taken = |folder: &str, name: &str| {
+            root.as_deref()
+                .is_some_and(|root| script_files::taken_in(root, folder, name))
+        };
+        if let Some(commands) = request.commands(&taken) {
+            let commands = command::parse(&Json::Array(commands?))?;
+            let mut report = self
+                .execute_agent(&commands)
+                .map_err(|error| script_files::without_command(&error))?;
+            request.add_to(&mut report);
+            return Ok(report);
+        }
+        let Some(root) = root else {
+            return Err(
+                "O projeto ainda não foi salvo numa pasta, onde ficam os seus scripts; peça \
+                 para a pessoa salvá-lo antes."
+                    .into(),
+            );
+        };
+        let project = Some(&self.state.project);
+        match script_files::answer(&root, project, &request, &mut self.agent_scripts_kept) {
+            Ok(answer) => {
+                if let script_files::Request::Write { path, .. } = &request {
+                    // The Scripts card, the Hierarchy and the code tab see what it wrote.
+                    self.script_status.look_again();
+                    // Written through OXY: undoing a move of the file takes its new stamp.
+                    if self.known_files.stamp(path).is_some() {
+                        self.known_files.note_stamp(&root, path);
+                    }
+                }
+                for line in answer.console {
+                    self.log(format!("{AGENT_PREFIX}{line}"));
+                }
+                Ok(answer.json)
+            }
+            Err(error) => {
+                if matches!(request, script_files::Request::Write { .. }) {
+                    self.log(format!("{AGENT_PREFIX}{error}"));
+                }
+                Err(error)
             }
         }
     }
@@ -140,26 +338,52 @@ impl Editor {
             1 => "Agente: Importar recurso".to_owned(),
             count => format!("Agente: Importar {count} recursos"),
         };
+        // What changed outside OXY is told before the walk takes the import's files.
+        self.scan_project();
         self.history
-            .begin(label, &self.state.project, &self.state.images);
-        match asset_import::import_batch(&mut self.state.project, &root, scene, batch, &sources) {
+            .begin(label.clone(), &self.state.project, &self.state.images);
+        // In a project in folders each folder and file it makes goes with the step (see
+        // `journal::Creating`).
+        let mut creating = (self.state.project.layout == Layout::Tree)
+            .then(|| oxy_core::journal::Creating::new(&root, &mut self.known_files, &label));
+        let imported = asset_import::import_batch_with(
+            &mut self.state.project,
+            &root,
+            scene,
+            batch,
+            &sources,
+            &mut |making| creating.as_mut().map_or(Ok(()), |c| c.before(making)),
+        );
+        let files = creating
+            .map(|creating| creating.finish(imported.is_ok()))
+            .unwrap_or_default();
+        match imported {
             Ok(imported) => {
                 for (done, source) in imported.iter().zip(sources) {
                     if let Some(image) = source.image {
                         self.state.images.insert(done.asset.clone(), image);
                     }
                 }
-                if let Err(error) = self
-                    .history
-                    .commit(&self.state.project, &mut self.state.images)
-                {
+                let made = !files.is_empty();
+                if let Err(error) = self.history.commit_with_files(
+                    &self.state.project,
+                    &mut self.state.images,
+                    files,
+                ) {
                     self.log(error);
                 }
+                if made {
+                    self.rebase_scan();
+                }
                 for done in &imported {
-                    self.log(format!(
-                        "{AGENT_PREFIX}Recurso importado como cópia local: {}",
-                        done.name
-                    ));
+                    self.log(if done.in_place {
+                        format!("{AGENT_PREFIX}Recurso registrado onde está: {}", done.path)
+                    } else {
+                        format!(
+                            "{AGENT_PREFIX}Recurso importado como cópia local: {}",
+                            done.name
+                        )
+                    });
                 }
                 self.after_external_edit();
                 for done in &imported {
@@ -286,6 +510,10 @@ impl Editor {
     /// Saves for an agent, as Ctrl+S does, everything unsaved included, after keeping the
     /// file as it was before this save as project.oxy.json.agente.bak (the MCP server on files
     /// keeps the one from before its session's first write).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the agent's copy of the project file is OXY's own, kept fresh at each save"
+    )]
     pub(crate) fn agent_save(&mut self) -> Result<Json, String> {
         if let Some(reason) = self.save_refusal() {
             return Err(reason.into());
@@ -305,10 +533,14 @@ impl Editor {
                 .cloned()
                 .unwrap_or_else(|| "Não foi possível salvar.".into()));
         }
-        Ok(json!({
-            "saved": path.display().to_string(),
-            "previous_version": backup.display().to_string(),
-        }))
+        // The first save of a project of the old layout organized it in folders, or why not.
+        Ok(save_answer(
+            &path,
+            &backup,
+            self.converted.take(),
+            std::mem::take(&mut self.undo_restarted),
+            self.kept_layout.take(),
+        ))
     }
     /// Undo or redo on an agent's request, with the same rules as Ctrl+Z.
     pub(crate) fn agent_undo(&mut self, redo: bool) -> Result<Option<String>, String> {
@@ -324,7 +556,9 @@ impl Editor {
         if label.is_none() {
             return Ok(None);
         }
-        self.undo(redo);
+        // Moving files back can be refused (a file open in another program, one changed
+        // outside OXY): the agent hears it.
+        self.undo_step(redo)?;
         self.log(format!(
             "{AGENT_PREFIX}{} {}",
             if redo { "Refazer" } else { "Desfazer" },
@@ -397,6 +631,83 @@ mod tests {
     #[test]
     fn agent_messages_carry_the_console_origin() {
         assert!(format!("{AGENT_PREFIX}Criar objeto").starts_with("Agente · "));
+    }
+
+    #[test]
+    fn a_save_that_organizes_the_project_says_the_undo_history_restarted() {
+        let saved = Path::new(r"C:\Jogos\Corrida\project.oxy.json");
+        let previous = Path::new(r"C:\Jogos\Corrida\project.oxy.json.agente.bak");
+        let plain = save_answer(saved, previous, None, false, None);
+        assert_eq!(
+            plain,
+            json!({"saved": r"C:\Jogos\Corrida\project.oxy.json",
+                   "previous_version": r"C:\Jogos\Corrida\project.oxy.json.agente.bak"})
+        );
+        // Organized in folders, with steps to undo before it: the agent hears both.
+        let moved = json!({"summary": "O agente organizou o projeto em pastas ao gravá-lo",
+                           "moved": [{"from": "assets/1.wav", "to": "Sons/Pulo.wav"}]});
+        let organized = save_answer(saved, previous, Some(moved.clone()), true, None);
+        assert_eq!(organized["converted"], moved);
+        assert_eq!(organized["note"], json!(UNDO_RESTARTED));
+        assert!(UNDO_RESTARTED.contains("restarted the editor's undo history"));
+        assert!(organized.get("warnings").is_none());
+        // Organized with nothing to undo before it: nothing restarted, nothing to say.
+        let quiet = save_answer(saved, previous, Some(moved), false, None);
+        assert!(quiet.get("note").is_none());
+        // Kept in the old layout: why, and no note.
+        let kept = save_answer(saved, previous, None, false, Some("Pasta ocupada.".into()));
+        assert_eq!(kept["warnings"], json!(["Pasta ocupada."]));
+        assert!(kept.get("note").is_none() && kept.get("converted").is_none());
+    }
+
+    #[test]
+    fn only_a_batch_that_attaches_a_script_reads_the_folder() {
+        let root = std::env::temp_dir().join(format!("oxy-editor-agent-scripts-{}", new_id()));
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(root.join("scripts/porta.luau"), "return {}\n").unwrap();
+        let path = root.join(persistence::PROJECT_FILE);
+        let door = new_id();
+        let attach = [Command::AttachScript {
+            scene: None,
+            entity: door.clone(),
+            path: "scripts/porta.luau".into(),
+            index: None,
+        }];
+        let detach = [Command::DetachScript {
+            scene: None,
+            entity: door,
+            path: "scripts/porta.luau".into(),
+        }];
+        let read = agent_scripts(Some(&path), &attach).unwrap();
+        assert_eq!(
+            read.files.keys().collect::<Vec<_>>(),
+            ["scripts/porta.luau"]
+        );
+        assert!(
+            agent_scripts(Some(&path), &detach)
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        // A project never saved has no folder: attaching is refused, the rest goes on.
+        let error = agent_scripts(None, &attach).unwrap_err();
+        assert!(error.contains("ainda não foi salvo"), "{error}");
+        assert!(agent_scripts(None, &detach).unwrap().files.is_empty());
+        // A file that cannot be read keeps none of the others from the batch: attaching it says
+        // why; and a script the agent wrote in any folder is read at once.
+        std::fs::write(root.join("scripts/binario.luau"), [0xff, 0xfe]).unwrap();
+        std::fs::create_dir_all(root.join("Pista")).unwrap();
+        std::fs::write(root.join("Pista/marco.luau"), "return {}\n").unwrap();
+        let read = agent_scripts(Some(&path), &attach).unwrap();
+        assert_eq!(
+            read.files.keys().collect::<Vec<_>>(),
+            ["Pista/marco.luau", "scripts/porta.luau"]
+        );
+        assert_eq!(
+            read.absent("scripts/binario.luau"),
+            "o script scripts/binario.luau não é texto UTF-8"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

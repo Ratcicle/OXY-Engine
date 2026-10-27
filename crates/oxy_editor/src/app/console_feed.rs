@@ -6,6 +6,7 @@
 //! stops. The Console panel itself is unchanged.
 use super::*;
 use oxy_core::query::{ConsoleOrigin, ConsoleQuery};
+use oxy_core::runtime::{LogLine, ScriptLocation};
 use serde_json::{Value as Json, json};
 use std::collections::{HashSet, VecDeque};
 
@@ -29,6 +30,8 @@ struct Line {
     text: String,
     warning: bool,
     source: Option<Source>,
+    /// The script line a game line came from.
+    script: Option<ScriptLocation>,
 }
 
 pub(crate) struct ConsoleFeed {
@@ -66,7 +69,14 @@ fn unseen<T>(kept: &[T], written: u64, seen: u64) -> &[T] {
 }
 
 impl ConsoleFeed {
-    fn push(&mut self, origin: ConsoleOrigin, text: String, warning: bool, source: Option<Source>) {
+    fn push(
+        &mut self,
+        origin: ConsoleOrigin,
+        text: String,
+        warning: bool,
+        source: Option<Source>,
+        script: Option<ScriptLocation>,
+    ) {
         self.last_seq += 1;
         let (list, kept) = if origin == ConsoleOrigin::Logica {
             (&mut self.logic, LOGIC_KEPT)
@@ -79,6 +89,7 @@ impl ConsoleFeed {
             text,
             warning,
             source,
+            script,
         });
         while list.len() > kept {
             list.pop_front();
@@ -100,9 +111,23 @@ impl ConsoleFeed {
         let written = console.written();
         for message in unseen(&console.messages, written, self.editor_seen) {
             let warning = warnings.contains(message.as_str());
+            // The script line a message names, as a reload that failed names it.
+            let script = oxy_core::script::location_in(message);
             match message.strip_prefix(agent::AGENT_PREFIX) {
-                Some(text) => self.push(ConsoleOrigin::Agente, text.to_owned(), warning, None),
-                None => self.push(ConsoleOrigin::Editor, message.clone(), warning, None),
+                Some(text) => self.push(
+                    ConsoleOrigin::Agente,
+                    text.to_owned(),
+                    warning,
+                    None,
+                    script,
+                ),
+                None => self.push(
+                    ConsoleOrigin::Editor,
+                    message.clone(),
+                    warning,
+                    None,
+                    script,
+                ),
             }
         }
         self.editor_seen = written;
@@ -116,22 +141,7 @@ impl ConsoleFeed {
         };
         let written = rt.logs_written();
         for line in unseen(&rt.logs, written, self.game_seen) {
-            // "[object / node] message" from debug.message, or a node's error: the IDs go
-            // to their own fields.
-            match oxy_core::headless::node_line(line) {
-                Some((object, node, message)) => self.push(
-                    ConsoleOrigin::Jogo,
-                    message.to_owned(),
-                    false,
-                    Some(Source {
-                        object: object.to_owned(),
-                        name: name(object),
-                        node: Some(node.to_owned()),
-                        operation: None,
-                    }),
-                ),
-                None => self.push(ConsoleOrigin::Jogo, line.clone(), false, None),
-            }
+            self.copy_log(line, name);
         }
         self.game_seen = written;
         let written = rt.traces_written();
@@ -155,10 +165,31 @@ impl ConsoleFeed {
                         node: Some(trace.node.clone()),
                         operation: Some(trace.operation.clone()),
                     }),
+                    None,
                 );
             }
         }
         self.logic_seen = written;
+    }
+    /// A play test's log line, with the script line it came from. "[object / node] message"
+    /// from debug.message, or a node's error: the IDs go to their own fields.
+    fn copy_log(&mut self, line: &LogLine, name: impl Fn(&str) -> String) {
+        let script = line.script.clone();
+        match oxy_core::headless::node_line(&line.text) {
+            Some((object, node, message)) => self.push(
+                ConsoleOrigin::Jogo,
+                message.to_owned(),
+                false,
+                Some(Source {
+                    object: object.to_owned(),
+                    name: name(object),
+                    node: Some(node.to_owned()),
+                    operation: None,
+                }),
+                script,
+            ),
+            None => self.push(ConsoleOrigin::Jogo, line.text.clone(), false, None, script),
+        }
     }
     /// The lines `query` asks for, oldest first, with `last_seq` for the next read, `session`,
     /// and `omitted` when the limit left older ones out.
@@ -194,6 +225,9 @@ impl ConsoleFeed {
                     if let Some(operation) = &source.operation {
                         entry["operation"] = json!(operation);
                     }
+                }
+                if let Some(script) = &line.script {
+                    entry["script"] = json!(script);
                 }
                 entry
             })
@@ -236,7 +270,7 @@ mod tests {
     fn feed(lines: &[(ConsoleOrigin, &str)]) -> ConsoleFeed {
         let mut feed = ConsoleFeed::default();
         for (origin, text) in lines {
-            feed.push(*origin, (*text).into(), false, None);
+            feed.push(*origin, (*text).into(), false, None, None);
         }
         feed
     }
@@ -342,6 +376,7 @@ mod tests {
                     node: Some("no".into()),
                     operation: Some("event.step".into()),
                 }),
+                None,
             );
         }
         let all = feed.answer(&ConsoleQuery::parse(&json!({"limit": 10_000})).unwrap());
@@ -352,7 +387,7 @@ mod tests {
         assert_eq!(lines[1]["operation"], "event.step");
         assert_eq!(lines[1]["node"], "no");
         feed.clear();
-        feed.push(ConsoleOrigin::Editor, "Depois".into(), true, None);
+        feed.push(ConsoleOrigin::Editor, "Depois".into(), true, None, None);
         let after = feed.answer(&ConsoleQuery::parse(&json!({})).unwrap());
         assert_eq!(
             after["lines"],
@@ -401,6 +436,38 @@ mod tests {
                 {"seq": 1002, "origin": "editor", "text": "Depois"},
             ])
         );
+    }
+
+    #[test]
+    fn editor_and_agent_lines_name_the_script_line_they_point_at() {
+        let mut feed = ConsoleFeed::default();
+        let mut console = ConsoleLog {
+            messages: Vec::new(),
+            dropped: 0,
+        };
+        console.push(
+            "Script não recarregado: Pista/porta.luau:12: erro de sintaxe. O teste segue com a \
+             versão anterior."
+                .into(),
+        );
+        console.push(format!(
+            "{}Comando 0 (attach_script, o 1º do lote): Pista/porta.luau:3: audio.play: …",
+            agent::AGENT_PREFIX
+        ));
+        console.push("Script recarregado: Pista/porta.luau (1 objeto)".into());
+        feed.copy_console(&console, &HashSet::new());
+        let read = feed.answer(&ConsoleQuery::parse(&json!({})).unwrap());
+        let lines = read["lines"].as_array().unwrap();
+        assert_eq!(
+            lines[0]["script"],
+            json!({"path": "Pista/porta.luau", "line": 12})
+        );
+        assert_eq!(lines[1]["origin"], "agente");
+        assert_eq!(
+            lines[1]["script"],
+            json!({"path": "Pista/porta.luau", "line": 3})
+        );
+        assert!(lines[2].get("script").is_none(), "no line to open");
     }
 
     #[test]
@@ -458,5 +525,30 @@ mod tests {
             runtime.logs_written() + runtime.traces_written()
         );
         assert!(runtime.logs_written() >= 9, "{}", runtime.logs_written());
+    }
+
+    #[test]
+    fn game_lines_keep_the_script_line_they_came_from() {
+        let mut feed = ConsoleFeed::default();
+        let name = |id: &str| id.to_owned();
+        let line = |text: &str, script: Option<ScriptLocation>| LogLine {
+            text: text.into(),
+            script,
+        };
+        feed.copy_log(&line("Abriu", None), name);
+        let script = ScriptLocation {
+            path: "scripts/porta.luau".into(),
+            line: 12,
+        };
+        feed.copy_log(&line("Porta aberta", Some(script)), name);
+        let read = feed.answer(&ConsoleQuery::parse(&json!({})).unwrap());
+        assert_eq!(
+            read["lines"],
+            json!([
+                {"seq": 1, "origin": "jogo", "text": "Abriu"},
+                {"seq": 2, "origin": "jogo", "text": "Porta aberta",
+                 "script": {"path": "scripts/porta.luau", "line": 12}},
+            ])
+        );
     }
 }

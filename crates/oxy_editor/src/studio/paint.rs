@@ -2,7 +2,7 @@
 use super::PaintTool;
 use crate::app::Editor;
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
-use oxy_core::{document::*, painting::PaintImage};
+use oxy_core::{document::*, painting::PaintImage, persistence};
 
 impl Editor {
     fn texture_id(&self) -> Option<Id> {
@@ -36,6 +36,12 @@ impl Editor {
             })
             .count()
     }
+    /// The name and path a new image called `name` gets, its file written at the next save (see
+    /// `persistence::new_asset_file`).
+    fn new_texture_file(&self, id: &str, name: &str) -> (String, String) {
+        let root = self.path.as_deref().and_then(std::path::Path::parent);
+        persistence::new_asset_file(&self.state.project, root, id, name, AssetKind::Texture)
+    }
     fn create_texture(&mut self, size: u32) {
         let Some(entity_id) = self.selected.clone() else {
             return;
@@ -51,10 +57,11 @@ impl Editor {
         match PaintImage::new(size, size, [235, 231, 218, 255]) {
             Ok(image) => {
                 self.state.images.insert(id.clone(), image);
+                let (name, path) = self.new_texture_file(&id, &name);
                 self.state.project.assets.push(Asset {
                     id: id.clone(),
                     name,
-                    path: format!("assets/{id}.png"),
+                    path,
                     kind: AssetKind::Texture,
                     model: None,
                 });
@@ -91,10 +98,11 @@ impl Editor {
             .asset(id)
             .map(|a| format!("{} (cópia)", a.name))
             .unwrap_or("Textura independente".into());
+        let (name, path) = self.new_texture_file(&copy, &name);
         self.state.project.assets.push(Asset {
             id: copy.clone(),
             name,
-            path: format!("assets/{copy}.png"),
+            path,
             kind: AssetKind::Texture,
             model: None,
         });

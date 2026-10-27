@@ -248,6 +248,8 @@ fn native_inspector_v031() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let output = oxy_core::qa::output_dir("v0.3.1/inspector");
     let folder = output.join("project");
+    // The model file the last run saved would be a file the new project does not name.
+    let _ = std::fs::remove_dir_all(&folder);
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");
     let mut p = Project::new("Inspetor e responsabilidades");
@@ -334,11 +336,23 @@ fn native_inspector_v031() {
                 Action::Check("i031_before_parent"),
                 Action::Reparent("Peça de teste", "Grupo de teste"),
                 Action::Check("i031_parent"),
+                // The person left the dock at its least height on the Console; saving a model
+                // reveals it in the Library, which keeps rows under the old layout's banner.
+                Action::Click("Console"),
+                Action::DockHeight(110.),
+                Action::Check("dock_least"),
                 Action::SelectEntity("Grupo de teste"),
                 Action::ContextEntity("Grupo de teste"),
                 Action::Check("i031_context"),
                 Action::Click("Salvar hierarquia como modelo"),
                 Action::Check("i031_model"),
+                Action::Wait(4),
+                Action::Check("dock_reveal_rows"),
+                Action::Screenshot("model-revealed-least-dock.png"),
+                // The notice of the old layout, raised on opening, goes away by itself.
+                Action::WaitSeconds(7.),
+                Action::Check("old_layout_notice_gone"),
+                Action::Screenshot("model-revealed-notice-gone.png"),
                 Action::Key(Key::Z, true),
                 Action::Check("i031_no_model"),
                 Action::Key(Key::Y, true),
@@ -355,6 +369,7 @@ fn native_inspector_v031() {
                 Action::Key(Key::Y, true),
                 Action::Check("i031_original"),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
             ]);
             Ok(Box::new(qa))

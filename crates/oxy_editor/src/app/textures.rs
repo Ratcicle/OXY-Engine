@@ -50,12 +50,25 @@ impl Editor {
         let image = self.state.images.get(id).ok_or("Textura ausente")?.clone();
         let source = self.state.project.asset(id).ok_or("Recurso ausente")?;
         let copy = new_id();
-        let name = format!("{} (cópia)", source.name);
+        let root = self.path.as_deref().and_then(std::path::Path::parent);
+        // Beside the original; its file is made at the next save.
+        let folder = source
+            .path
+            .rsplit_once('/')
+            .map_or("", |(folder, _)| folder);
+        let (name, path) = persistence::new_asset_file_in(
+            &self.state.project,
+            root,
+            &copy,
+            &format!("{} (cópia)", source.name),
+            AssetKind::Texture,
+            folder,
+        );
         self.state.project.assets.push(Asset {
             id: copy.clone(),
             name,
             kind: AssetKind::Texture,
-            path: format!("assets/{copy}.png"),
+            path,
             model: None,
         });
         self.state.images.insert(copy.clone(), image);
@@ -101,8 +114,7 @@ impl Editor {
                 match self.copy_texture_asset(&id) { Ok(copy)=>next=Some(copy),Err(e)=>self.log(e) }
             }
             if ui.button("Localizar na biblioteca").clicked() {
-                // Filtering by name keeps the card in view without depending on scrolling.
-                self.asset_ui.search=self.state.project.asset(&id).map(|a|a.name.clone()).unwrap_or_default();
+                // The Library opens the folder of the image and selects its row.
                 self.asset_ui.locate=Some(id.clone()); self.compact_panel=CompactPanel::Library;
                 self.show_dock(DockTab::Library);
             }
@@ -113,78 +125,6 @@ impl Editor {
             }
         } else {
             entity.material.texture = next;
-        }
-    }
-    pub(super) fn asset_delete_dialog(&mut self, ctx: &egui::Context) {
-        let Some(id) = self.asset_ui.delete.clone() else {
-            return;
-        };
-        let Some(asset) = self.state.project.asset(&id).cloned() else {
-            self.asset_ui.delete = None;
-            return;
-        };
-        let references = editing::asset_references(&self.state.project, &id);
-        use crate::widgets;
-        let mut close = false;
-        let mut delete = false;
-        let response = egui::Modal::new("asset_delete".into()).show(ctx, |ui| {
-            ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 460.));
-            let title = if references.is_empty() {
-                format!("Excluir “{}”?", asset.name)
-            } else {
-                format!("Não é possível excluir “{}”", asset.name)
-            };
-            close = widgets::dialog_header(ui, &title);
-            if references.is_empty() {
-                widgets::hint(
-                    ui,
-                    "O recurso será retirado da biblioteca. O arquivo original no disco é \
-                     preservado para permitir desfazer com segurança.",
-                );
-            } else {
-                widgets::hint(
-                    ui,
-                    "Este recurso ainda está em uso. Remova os vínculos antes de excluí-lo.",
-                );
-                ui.add_space(4.);
-                egui::ScrollArea::vertical()
-                    .max_height(240.)
-                    .show(ui, |ui| {
-                        for reference in &references {
-                            // "Scope → Object: use", as listed by editing::asset_references.
-                            let (place, usage) = reference
-                                .split_once(": ")
-                                .unwrap_or((reference.as_str(), ""));
-                            let (scope, object) = place.split_once(" → ").unwrap_or(("", place));
-                            let detail = [scope, usage]
-                                .into_iter()
-                                .filter(|s| !s.is_empty())
-                                .collect::<Vec<_>>()
-                                .join(" · ");
-                            widgets::reference_row(ui, crate::icons::Icon::Object, object, &detail);
-                        }
-                    });
-            }
-            widgets::dialog_footer(ui, |ui| {
-                if references.is_empty() {
-                    delete = widgets::danger_button(ui, "Excluir recurso", true).clicked();
-                }
-                close |= widgets::secondary_button(ui, "Cancelar").clicked();
-            });
-        });
-        if delete {
-            match editing::remove_asset(&mut self.state.project, &id) {
-                Ok(()) => {
-                    self.state.images.remove(&id);
-                    self.renderer.clear_texture_override(&id);
-                    self.play.game_ui.clear_texture_override(&id);
-                    self.asset_ui.thumbnail = None;
-                    self.asset_ui.delete = None;
-                }
-                Err(error) => self.log(error),
-            }
-        } else if close || response.should_close() {
-            self.asset_ui.delete = None;
         }
     }
 }

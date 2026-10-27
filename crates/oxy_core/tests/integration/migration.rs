@@ -124,7 +124,8 @@ fn schema_4_without_once(project: &Project) -> Vec<u8> {
 
 #[test]
 fn schema_4_nodes_get_the_registry_parameters_they_lack_and_keep_their_own() {
-    assert_eq!(SCHEMA_VERSION, 5);
+    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(migration::NODE_REGISTRY_SCHEMA, 5);
     let project = spikes();
     let (converted, from) = migration::read_report(&schema_4_without_once(&project)).unwrap();
     assert_eq!(from, Some(4));
@@ -159,7 +160,7 @@ fn a_diagnostic_message_from_before_its_value_input_reads_and_runs_unchanged() {
     });
     logic.graph.nodes = vec![start, message];
     project.scenes[0].entities.push(logic);
-    for schema in [4, 5] {
+    for schema in [4, 5, 6] {
         let mut json = serde_json::to_value(&project).unwrap();
         json["schema_version"] = schema.into();
         let converted = migration::read(&serde_json::to_vec(&json).unwrap()).unwrap();
@@ -168,7 +169,11 @@ fn a_diagnostic_message_from_before_its_value_input_reads_and_runs_unchanged() {
         assert_eq!(node.params.keys().collect::<Vec<_>>(), ["message"]);
         let runtime = oxy_core::runtime::Runtime::new(&converted, &converted.start_scene).unwrap();
         assert_eq!(runtime.logs.len(), 1, "{:?}", runtime.logs);
-        assert!(runtime.logs[0].ends_with("] Olá"), "{:?}", runtime.logs);
+        assert!(
+            runtime.logs[0].text.ends_with("] Olá"),
+            "{:?}",
+            runtime.logs
+        );
     }
 }
 
@@ -192,7 +197,7 @@ fn unknown_operations_are_left_for_validation_to_report() {
 }
 
 #[test]
-fn schema_4_file_is_kept_on_load_and_its_first_save_writes_5_with_a_backup() {
+fn schema_4_file_is_kept_on_load_and_its_first_save_writes_6_with_a_backup() {
     let root = std::env::temp_dir().join(format!("oxy-migration-4-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
     let file = root.join(persistence::PROJECT_FILE);
@@ -205,7 +210,7 @@ fn schema_4_file_is_kept_on_load_and_its_first_save_writes_5_with_a_backup() {
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     persistence::save_project(&file, &loaded).unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    assert_eq!(saved["schema_version"], 5);
+    assert_eq!(saved["schema_version"], 6);
     assert_eq!(
         saved
             .pointer("/scenes/0/entities/0/graph/nodes/0/params/once")
@@ -238,13 +243,57 @@ fn schema_4_file_is_kept_on_load_and_its_first_save_writes_5_with_a_backup() {
 }
 
 #[test]
-fn schema_5_documents_round_trip_unchanged() {
+fn schema_5_file_is_kept_on_load_and_its_first_save_writes_6_with_a_backup() {
+    // How a format-5 project runs after format 6 is pinned by the parkour's finish state
+    // (scripts_format.rs); here, what the files hold.
+    let project = spikes();
+    // The file 0.6 saves for it: the same text, with the version it wrote.
+    let current = serde_json::to_vec_pretty(&project).unwrap();
+    let bytes = String::from_utf8(current.clone())
+        .unwrap()
+        .replacen("\"schema_version\": 6,", "\"schema_version\": 5,", 1)
+        .into_bytes();
+    assert_ne!(bytes, current);
+    let root = std::env::temp_dir().join(format!("oxy-migration-5-to-6-{}", new_id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join(persistence::PROJECT_FILE);
+    std::fs::write(&file, &bytes).unwrap();
+    let (loaded, from) = persistence::load_project_lazy_report(&file).unwrap();
+    assert_eq!((&loaded, from), (&project, Some(5)));
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    // Saving writes the original but for the version, and keeps the original in a backup.
+    persistence::save_project(&file, &loaded).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), current);
+    let backups: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p != &file)
+        .collect();
+    assert_eq!(backups.len(), 1);
+    let name = backups[0].file_name().unwrap().to_string_lossy();
+    assert!(
+        name.starts_with("project.oxy.json.schema-5.") && name.ends_with(".backup.json"),
+        "{name}"
+    );
+    assert_eq!(std::fs::read(&backups[0]).unwrap(), bytes);
+    assert_eq!(
+        persistence::load_project_lazy_report(&file).unwrap(),
+        (project, None)
+    );
+    persistence::save_project(&file, &loaded).unwrap();
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn schema_6_documents_round_trip_unchanged() {
     let project = spikes();
     let bytes = serde_json::to_vec_pretty(&project).unwrap();
     let (read, from) = migration::read_report(&bytes).unwrap();
     assert_eq!((&read, from), (&project, None));
     assert_eq!(serde_json::to_vec_pretty(&read).unwrap(), bytes);
-    let root = std::env::temp_dir().join(format!("oxy-migration-5-{}", new_id()));
+    let root = std::env::temp_dir().join(format!("oxy-migration-6-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
     let file = root.join(persistence::PROJECT_FILE);
     std::fs::write(&file, &bytes).unwrap();
@@ -255,49 +304,53 @@ fn schema_5_documents_round_trip_unchanged() {
 }
 
 #[test]
-fn schema_5_nodes_are_not_filled_and_a_missing_parameter_is_refused() {
-    // Only older files are filled: a current file without a parameter is broken, not old.
-    let mut json: serde_json::Value =
-        serde_json::from_slice(&schema_4_without_once(&spikes())).unwrap();
-    json["schema_version"] = 5.into();
-    let bytes = serde_json::to_vec_pretty(&json).unwrap();
-    let (read, from) = migration::read_report(&bytes).unwrap();
-    assert_eq!(from, None);
-    assert!(
-        !read.scenes[0].entities[0].graph.nodes[0]
-            .params
-            .contains_key("once")
-    );
-    let error = validate_project(&read).unwrap_err();
-    assert!(
-        error.contains("parâmetro obrigatório ausente once"),
-        "{error}"
-    );
-    let root = std::env::temp_dir().join(format!("oxy-migration-5-incompleto-{}", new_id()));
-    std::fs::create_dir_all(&root).unwrap();
-    let file = root.join(persistence::PROJECT_FILE);
-    std::fs::write(&file, &bytes).unwrap();
-    assert!(persistence::load_project(&file).is_err());
-    assert_eq!(std::fs::read(&file).unwrap(), bytes);
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
-    std::fs::remove_dir_all(root).unwrap();
+fn schema_5_and_6_nodes_are_not_filled_and_a_missing_parameter_is_refused() {
+    // Only files older than the frozen registry are filled: a later file without a parameter
+    // is broken, not old.
+    for schema in [5, 6] {
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&schema_4_without_once(&spikes())).unwrap();
+        json["schema_version"] = schema.into();
+        let bytes = serde_json::to_vec_pretty(&json).unwrap();
+        let (read, from) = migration::read_report(&bytes).unwrap();
+        assert_eq!(from, (schema < 6).then_some(schema));
+        assert!(
+            !read.scenes[0].entities[0].graph.nodes[0]
+                .params
+                .contains_key("once")
+        );
+        let error = validate_project(&read).unwrap_err();
+        assert!(
+            error.contains("parâmetro obrigatório ausente once"),
+            "{error}"
+        );
+        let root =
+            std::env::temp_dir().join(format!("oxy-migration-{schema}-incompleto-{}", new_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join(persistence::PROJECT_FILE);
+        std::fs::write(&file, &bytes).unwrap();
+        assert!(persistence::load_project(&file).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]
-fn documents_newer_than_5_are_refused_and_never_overwritten() {
+fn documents_newer_than_6_are_refused_and_never_overwritten() {
     let mut json = serde_json::to_value(spikes()).unwrap();
-    json["schema_version"] = 6.into();
+    json["schema_version"] = 7.into();
     let bytes = serde_json::to_vec_pretty(&json).unwrap();
     let error = migration::read(&bytes).unwrap_err();
     assert!(matches!(
         error,
-        migration::MigrationError::UnsupportedVersion { found: 6 }
+        migration::MigrationError::UnsupportedVersion { found: 7 }
     ));
     assert_eq!(
         error.to_string(),
-        "Versão de projeto 6 incompatível; esta OXY Engine lê 1 a 5. O arquivo foi preservado."
+        "Versão de projeto 7 incompatível; esta OXY Engine lê 1 a 6. O arquivo foi preservado."
     );
-    let root = std::env::temp_dir().join(format!("oxy-migration-6-{}", new_id()));
+    let root = std::env::temp_dir().join(format!("oxy-migration-7-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
     let file = root.join(persistence::PROJECT_FILE);
     std::fs::write(&file, &bytes).unwrap();

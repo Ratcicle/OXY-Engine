@@ -7,15 +7,24 @@ mod pause_menu;
 const QUIT_LINE: &str = "O jogo pediu para sair; o teste foi encerrado.";
 
 impl NativeQa {
-    /// The status chip of the test in the top bar: Jogando, Pausado, Pausa do jogo or Agente
-    /// jogando.
+    /// The status chip of the test in the top bar: Jogando, Jogando · fora de foco, Pausado,
+    /// Pausa do jogo or Agente jogando.
     pub(super) fn test_chip(&self) -> Option<&str> {
         self.surface
             .texts
             .iter()
             .filter(|t| t.rect.max.y <= crate::theme::TOPBAR_HEIGHT)
             .map(|t| t.text.as_str())
-            .find(|text| ["Jogando", "Pausado", "Pausa do jogo", "Agente jogando"].contains(text))
+            .find(|text| {
+                [
+                    "Jogando",
+                    "Jogando · fora de foco",
+                    "Pausado",
+                    "Pausa do jogo",
+                    "Agente jogando",
+                ]
+                .contains(text)
+            })
     }
     pub(super) fn check_pause(&mut self, label: &str) -> Result<(), String> {
         let visible = |text: &str| self.surface.texts.iter().any(|t| t.text == text);
@@ -37,7 +46,10 @@ impl NativeQa {
         let (paused, game_paused) =
             runtime.map_or((false, false), |rt| (rt.paused, rt.game_paused()));
         let fired = runtime.map_or(0, |rt| {
-            rt.logs.iter().filter(|l| l.ends_with("] disparo")).count()
+            rt.logs
+                .iter()
+                .filter(|l| l.text.ends_with("] disparo"))
+                .count()
         });
         let state = format!(
             "teste pausado {paused}, jogo pausado {game_paused}, captura {capture}, mouse preso \

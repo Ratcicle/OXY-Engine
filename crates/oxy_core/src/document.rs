@@ -8,7 +8,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 pub type Id = String;
 /// The IDs a copy took: each original object, node and animation (and scene) to its copy.
 pub type CopyMap = HashMap<Id, Id>;
@@ -317,6 +317,9 @@ pub struct Entity {
     pub camera: Option<Camera>,
     pub ui: Option<UiElement>,
     pub graph: Graph,
+    /// The scripts the object runs, in this order; left out of the document while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<crate::script::ScriptRef>,
     pub clips: Vec<Clip>,
     pub model_source: Option<Id>,
 }
@@ -348,6 +351,7 @@ impl Entity {
             camera: None,
             ui: None,
             graph: Graph::default(),
+            scripts: Vec::new(),
             clips: Vec::new(),
             model_source: None,
         }
@@ -740,18 +744,42 @@ pub enum AssetKind {
     Audio,
     Model,
 }
+/// An image, a sound or a model of the project: its file by `path` (from the project's folder,
+/// with `/`), found by `id` everywhere else. In the tree layout its name is the file's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Asset {
     pub id: Id,
     pub name: String,
     pub path: String,
     pub kind: AssetKind,
+    /// A model's pieces. The project file of the tree layout leaves them in the model's own file
+    /// (see `crate::model_file`), and a model whose file could not be read has none; everywhere
+    /// else (memory, history, live channel, exported game) they are here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<Vec<Entity>>,
+}
+/// How a project keeps its files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Layout {
+    /// Formats 1 to 5 and the development format 6: images and sounds as `assets/<id>`, models
+    /// inside the project file. Never written: a project file without `layout` is this one.
+    #[default]
+    Legacy,
+    /// The project's folder is the Library: files named as the Library shows them, in any
+    /// folder, models in their own files, and the project file only the register of IDs.
+    Tree,
+}
+impl Layout {
+    pub fn is_legacy(&self) -> bool {
+        *self == Self::Legacy
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Layout::is_legacy")]
+    pub layout: Layout,
     pub id: Id,
     pub name: String,
     pub start_scene: Id,
@@ -889,6 +917,7 @@ impl Project {
         let scene = Scene::new("Cena 2D", SceneKind::TwoD);
         Self {
             schema_version: SCHEMA_VERSION,
+            layout: Layout::Legacy,
             id: new_id(),
             name: name.into(),
             start_scene: scene.id.clone(),
@@ -982,6 +1011,16 @@ impl Project {
             .iter()
             .find(|a| a.kind == AssetKind::Model && a.name.trim().to_lowercase() == wanted)
     }
+    /// The model whose file is `path` (`Pista/Torre.modelo.json`), in any case and with either
+    /// slash, as `scene.spawn_model` finds a model its name does not.
+    pub fn model_at(&self, path: &str) -> Option<&Asset> {
+        let path = path.trim().replace('\\', "/");
+        self.assets.iter().find(|a| {
+            a.kind == AssetKind::Model
+                && !a.path.is_empty()
+                && crate::names::same_name(&a.path, &path)
+        })
+    }
     /// `name` or, when a model has it, the first of "name 2", "name 3"… no model has.
     pub fn free_model_name(&self, name: &str) -> String {
         let name = name.trim();
@@ -1012,6 +1051,17 @@ impl Project {
         entity_id: &str,
         name: impl Into<String>,
     ) -> Result<(Id, CopyMap), String> {
+        self.save_model_mapped_in(scene_id, entity_id, name, None)
+    }
+    /// [`Self::save_model_mapped`] with the model's file in the folder `folder` of the tree
+    /// layout (a path from the project's folder in the disk's case; the root when none).
+    pub fn save_model_mapped_in(
+        &mut self,
+        scene_id: &str,
+        entity_id: &str,
+        name: impl Into<String>,
+        folder: Option<&str>,
+    ) -> Result<(Id, CopyMap), String> {
         let name = name.into();
         if let Some(other) = self.model_named(&name) {
             return Err(format!(
@@ -1019,12 +1069,13 @@ impl Project {
                 other.name, other.id
             ));
         }
+        let path = self.new_model_path(&name, folder.unwrap_or_default())?;
         let (pieces, map) = self.model_pieces(scene_id, entity_id)?;
         let id = new_id();
         self.assets.push(Asset {
             id: id.clone(),
             name,
-            path: String::new(),
+            path,
             kind: AssetKind::Model,
             model: Some(pieces),
         });
@@ -1052,6 +1103,12 @@ impl Project {
                 other.name, other.id
             ));
         }
+        if self.layout == Layout::Tree
+            && let Some(asset) = self.asset(model)
+            && asset.name != name
+        {
+            return Err(renaming_files(&asset.name));
+        }
         let (pieces, map) = self.model_pieces(scene_id, entity_id)?;
         let asset = self
             .assets
@@ -1068,6 +1125,31 @@ impl Project {
             return Err(error);
         }
         Ok(map)
+    }
+    /// Where a new model called `name` keeps its pieces: inside the project file in the old
+    /// layout, in the file `<folder>/<name>.modelo.json` in the tree layout (at the project's
+    /// root when `folder` is empty; written by the next save, only created), refusing a name
+    /// Windows would not keep and a file another asset has.
+    fn new_model_path(&self, name: &str, folder: &str) -> Result<String, String> {
+        if self.layout == Layout::Legacy {
+            return Ok(String::new());
+        }
+        let name = crate::names::check_name(name)
+            .map_err(|reason| format!("Nome de modelo inválido: {reason}"))?;
+        let path = crate::journal::join(folder, &format!("{name}{}", crate::model_file::EXTENSION));
+        crate::names::check_path(&path)
+            .map_err(|reason| format!("Nome de modelo inválido: {reason}"))?;
+        if let Some(other) = self
+            .assets
+            .iter()
+            .find(|a| crate::names::same_name(&a.path, &path))
+        {
+            return Err(format!(
+                "Já existe o arquivo {}, do recurso {}; escolha outro nome",
+                other.path, other.name
+            ));
+        }
+        Ok(path)
     }
     /// The pieces a model of the object `entity_id` of `scene_id` holds: copies of it and
     /// everything under it with new IDs, its root at the origin and without a parent, none of
@@ -1116,20 +1198,45 @@ impl Project {
         asset_id: &str,
         scene_id: &str,
     ) -> Result<(Id, CopyMap), String> {
+        self.instantiate_model_with(asset_id, scene_id, &mut |_| new_id())
+    }
+    /// [`Self::instantiate_model_mapped`] with the copies' IDs from `ids`, which gets the ID of
+    /// each piece, clip and node of the model (and the model's own for a group it adds): asked
+    /// again when an ID it gave is taken in the scene, as [`Scene::duplicate_subtree_with`].
+    pub fn instantiate_model_with(
+        &mut self,
+        asset_id: &str,
+        scene_id: &str,
+        ids: &mut dyn FnMut(&str) -> Id,
+    ) -> Result<(Id, CopyMap), String> {
         let mut model = self
             .asset(asset_id)
             .and_then(|a| a.model.clone())
             .ok_or("Modelo não encontrado")?;
-        let map: HashMap<_, _> = model.iter().map(|e| (e.id.clone(), new_id())).collect();
-        let map = remap_entities(&mut model, &map)?;
+        let scene = self.scene(scene_id).ok_or("Cena não encontrada")?;
+        let taken: HashSet<&str> = scene.entities.iter().map(|e| e.id.as_str()).collect();
+        let mut given = HashSet::new();
+        let mut free = |original: &str, name: &str| {
+            (0..64)
+                .map(|_| ids(original))
+                .find(|new| !taken.contains(new.as_str()) && given.insert(new.clone()))
+                .ok_or_else(|| format!("Sem ID livre para a cópia de {name}"))
+        };
+        let mut map = HashMap::new();
+        for piece in &model {
+            map.insert(piece.id.clone(), free(&piece.id, &piece.name)?);
+        }
+        let several = model.iter().filter(|e| e.parent.is_none()).count() != 1;
+        let group_id = several.then(|| free(asset_id, "Modelo")).transpose()?;
+        let map = remap_entities_with(&mut model, &map, ids)?;
         let mut roots: Vec<_> = model
             .iter()
             .filter(|e| e.parent.is_none())
             .map(|e| e.id.clone())
             .collect();
-        if roots.len() != 1 {
-            let group = Entity::new("Modelo", None);
-            let group_id = group.id.clone();
+        if let Some(group_id) = group_id {
+            let mut group = Entity::new("Modelo", None);
+            group.id = group_id.clone();
             for e in &mut model {
                 if e.parent.is_none() {
                     e.parent = Some(group_id.clone())
@@ -1149,6 +1256,20 @@ impl Project {
         Ok((root, map))
     }
 }
+/// Why an asset of a project of the tree layout keeps its name here: it is its file's, which
+/// rename_asset renames with the project's folder at hand.
+pub(crate) fn renaming_files(name: &str) -> String {
+    format!(
+        "Num projeto em pastas, o nome de um recurso é o nome do arquivo dele, que só \
+         rename_asset renomeia, na pasta do projeto; o recurso continua se chamando \"{name}\""
+    )
+}
+/// Checks the structure of `project`: IDs, references, numbers and the pieces of every model it
+/// has (see [`validate_model`]). The paths of its assets are not checked here: a path saved that
+/// the rules of names refuse, or a file that is missing, is told on the asset when the project
+/// opens (see `crate::persistence::open_project`), and playing or exporting refuse it while it
+/// is used. In the tree layout a model may lack its pieces (its file could not be read); in the
+/// old one they are inside the project file.
 pub fn validate_project(project: &Project) -> Result<(), String> {
     if project
         .collision_groups
@@ -1188,13 +1309,64 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
         }
     }
     crate::variables::validate_all(&project.variables, &mut identifiers)?;
-    for entity in project.scenes.iter().flat_map(|s| &s.entities).chain(
-        project
-            .assets
-            .iter()
-            .filter_map(|a| a.model.as_deref())
-            .flatten(),
-    ) {
+    validate_surface_references(project.scenes.iter().flat_map(|s| &s.entities), &surfaces)?;
+    for asset in &project.assets {
+        if asset.id.is_empty() || !identifiers.insert(asset.id.clone()) {
+            return Err("Identificador de asset vazio ou duplicado".into());
+        }
+        if asset.kind == AssetKind::Model
+            && asset.model.is_none()
+            && project.layout == Layout::Legacy
+        {
+            return Err(format!("Modelo {} não contém peças", asset.name));
+        }
+    }
+    let assets: HashMap<_, _> = project.assets.iter().map(|a| (a.id.as_str(), a)).collect();
+    for scene in &project.scenes {
+        if scene.id.is_empty() || !identifiers.insert(scene.id.clone()) {
+            return Err("Identificador de cena vazio ou duplicado".into());
+        }
+        validate_scene(scene, &assets)?;
+        for e in &scene.entities {
+            if !identifiers.insert(e.id.clone()) {
+                return Err(format!("Identificador de objeto duplicado: {}", e.name));
+            }
+        }
+        validate_action_references(project, &scene.entities, None)?;
+    }
+    for asset in &project.assets {
+        validate_model(project, asset)?;
+    }
+    Ok(())
+}
+/// Checks the pieces of the model `asset` against `project`: what a scene's objects must be
+/// (as in a 3D scene), the surfaces they name, and the scenes, sounds and variables their logic
+/// names. A model without pieces passes. Opening a project of the tree layout makes a model that
+/// fails it unavailable, and the project opens all the same.
+pub fn validate_model(project: &Project, asset: &Asset) -> Result<(), String> {
+    let Some(model) = &asset.model else {
+        return Ok(());
+    };
+    let surfaces: HashSet<&str> = project.surfaces.iter().map(|s| s.id.as_str()).collect();
+    validate_surface_references(model.iter(), &surfaces)?;
+    let assets: HashMap<_, _> = project.assets.iter().map(|a| (a.id.as_str(), a)).collect();
+    let scene = Scene {
+        id: asset.id.clone(),
+        name: asset.name.clone(),
+        kind: SceneKind::ThreeD,
+        background: None,
+        entities: model.clone(),
+    };
+    validate_scene(&scene, &assets)?;
+    validate_action_references(project, model, Some(&asset.name))
+}
+/// Checks that the surfaces `entities` name (their bodies, colliders, attributes and nodes) are
+/// in `surfaces`.
+fn validate_surface_references<'a>(
+    entities: impl Iterator<Item = &'a Entity>,
+    surfaces: &HashSet<&str>,
+) -> Result<(), String> {
+    for entity in entities {
         if let Some(id) = entity
             .character3d
             .as_ref()
@@ -1217,56 +1389,6 @@ pub fn validate_project(project: &Project) -> Result<(), String> {
                     entity.name
                 ));
             }
-        }
-    }
-    let assets: HashMap<_, _> = project.assets.iter().map(|a| (a.id.as_str(), a)).collect();
-    for asset in &project.assets {
-        if asset.id.is_empty() || !identifiers.insert(asset.id.clone()) {
-            return Err("Identificador de asset vazio ou duplicado".into());
-        }
-        let path = std::path::Path::new(&asset.path);
-        if !asset.path.is_empty()
-            && (path.is_absolute()
-                || path.components().any(|c| {
-                    matches!(
-                        c,
-                        std::path::Component::ParentDir | std::path::Component::Prefix(_)
-                    )
-                })
-                || asset.path.contains(':'))
-        {
-            return Err(format!(
-                "Asset {} deve usar caminho relativo seguro",
-                asset.name
-            ));
-        }
-        if asset.kind == AssetKind::Model && asset.model.is_none() {
-            return Err(format!("Modelo {} não contém peças", asset.name));
-        }
-    }
-    for scene in &project.scenes {
-        if scene.id.is_empty() || !identifiers.insert(scene.id.clone()) {
-            return Err("Identificador de cena vazio ou duplicado".into());
-        }
-        validate_scene(scene, &assets)?;
-        for e in &scene.entities {
-            if !identifiers.insert(e.id.clone()) {
-                return Err(format!("Identificador de objeto duplicado: {}", e.name));
-            }
-        }
-        validate_action_references(project, &scene.entities, None)?;
-    }
-    for asset in &project.assets {
-        if let Some(model) = &asset.model {
-            let scene = Scene {
-                id: asset.id.clone(),
-                name: asset.name.clone(),
-                kind: SceneKind::ThreeD,
-                background: None,
-                entities: model.clone(),
-            };
-            validate_scene(&scene, &assets)?;
-            validate_action_references(project, model, Some(&asset.name))?;
         }
     }
     Ok(())
@@ -1423,6 +1545,7 @@ fn validate_scene(scene: &Scene, assets: &HashMap<&str, &Asset>) -> Result<(), S
         e.graph
             .validate(&owned_ids)
             .map_err(|error| format!("Lógica de {}: {error}", e.name))?;
+        crate::script::validate(&e.scripts).map_err(|error| format!("{}: {error}", e.name))?;
     }
     Ok(())
 }
@@ -1703,21 +1826,38 @@ mod tests {
             loaded.scenes[1].shown_background(),
             Background::Color(Background::DARK)
         );
-        // A checkout may turn the file's line endings into CRLF; the rest is compared as is.
-        let example = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../examples/parkour/project.oxy.json"),
-        )
-        .unwrap()
-        .replace("\r\n", "\n");
-        let parkour: Project = serde_json::from_str(&example).unwrap();
-        assert!(
-            parkour
-                .scenes
-                .iter()
-                .all(|s| s.background == Some(Background::Sky))
-        );
-        assert_eq!(serde_json::to_string_pretty(&parkour).unwrap(), example);
+        // A checkout may turn the file's line endings into CRLF; the rest is compared as is. The
+        // parkour of 0.6 is format 5, and format 6 leaves out the empty pieces of its images
+        // and sounds; the one that ships is format 6, in folders.
+        for (path, empty) in [
+            (
+                "tests/fixtures/parkour-0.6/project.oxy.json",
+                Some(",\n      \"model\": null"),
+            ),
+            ("../../examples/parkour/project.oxy.json", None),
+        ] {
+            let mut example = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path),
+            )
+            .unwrap()
+            .replace("\r\n", "\n");
+            let parkour: Project = serde_json::from_str(&example).unwrap();
+            assert!(
+                parkour
+                    .scenes
+                    .iter()
+                    .all(|s| s.background == Some(Background::Sky)),
+                "{path}"
+            );
+            if let Some(empty) = empty {
+                example = example.replace(empty, "");
+            }
+            assert_eq!(
+                serde_json::to_string_pretty(&parkour).unwrap(),
+                example,
+                "{path}"
+            );
+        }
 
         p.scenes[0].background = Some(Background::Color([0.25, 0.5, 0.75, 1.]));
         p.scenes[1].background = Some(Background::Sky);
@@ -1800,7 +1940,13 @@ mod tests {
             kind: AssetKind::Texture,
             model: None,
         });
-        assert!(validate_project(&p).is_err());
+        // A saved path is told on its asset when the project opens, never its error; no file
+        // is ever read outside the project's folder.
+        validate_project(&p).unwrap();
+        assert!(
+            crate::persistence::resolve_asset_path(std::path::Path::new("."), &p.assets[0].path)
+                .is_err()
+        );
         p.assets.clear();
         let mut e = Entity::new("e", None);
         e.attributes

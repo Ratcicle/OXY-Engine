@@ -126,6 +126,29 @@ fn bundled_example(exe: &Path, example: Example) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+/// Copies the example whose project file is `source` to a new temporary folder, which the home
+/// screen opens, and answers the copy's project file. The copy is independent from the
+/// beginning, so even asset imports cannot write into the distributed or repository example:
+/// in folders, as a copy of a project of the old layout is written, with every script of the
+/// tree, and without what stays out of a project (entries starting with a dot, backups).
+fn copy_example(source: &Path) -> Result<PathBuf, String> {
+    let (project, _) = persistence::open_project(source)?;
+    let root = source.parent().ok_or("Exemplo sem pasta de origem")?;
+    let mut images = TextureCache::default();
+    images.configure(root, &project);
+    let copy = std::env::temp_dir()
+        .join(format!("oxy-example-{}", new_id()))
+        .join(persistence::PROJECT_FILE);
+    oxy_core::conversion::save_copy(
+        &copy,
+        &project,
+        &mut images,
+        root,
+        &mut persistence::KnownFiles::default(),
+    )?;
+    Ok(copy)
+}
+
 impl Editor {
     pub(super) fn remember_project(&mut self) {
         if let Some(path) = self.path.as_ref().and_then(|p| p.canonicalize().ok()) {
@@ -145,20 +168,7 @@ impl Editor {
             ));
             return;
         };
-        // Work in an independent temporary bundle from the beginning, so even
-        // asset imports cannot write into the distributed or repository example.
-        let result = (|| {
-            let project = persistence::load_project_lazy(&source)?;
-            let root = source.parent().ok_or("Exemplo sem pasta de origem")?;
-            let mut images = TextureCache::default();
-            images.configure(root, &project);
-            let copy = std::env::temp_dir()
-                .join(format!("oxy-example-{}", new_id()))
-                .join(persistence::PROJECT_FILE);
-            persistence::save_cached_copy(&copy, &project, &mut images, root)?;
-            Ok::<_, String>(copy)
-        })();
-        let copy = match result {
+        let copy = match copy_example(&source) {
             Ok(copy) => copy,
             Err(error) => {
                 self.home.error = Some(error);
@@ -218,14 +228,7 @@ impl Editor {
                                 self.show_dock(DockTab::Console);
                             }
                         }
-                        if widgets::icon_text_button(
-                            ui,
-                            Icon::Book,
-                            "Guia de lógica visual",
-                            false,
-                            false,
-                        )
-                        .clicked()
+                        if widgets::icon_text_button(ui, Icon::Book, "Guia", false, false).clicked()
                         {
                             self.open_guide("");
                         }
@@ -841,6 +844,56 @@ mod tests {
                 "{}",
                 example.source
             );
+        }
+    }
+    #[test]
+    fn examples_open_as_copies_in_folders_and_the_parkour_with_its_scripts() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for example in [SAMPLE, PARKOUR] {
+            let source = repository
+                .join(example.source)
+                .join(persistence::PROJECT_FILE);
+            let original = std::fs::read(&source).unwrap();
+            let copy = copy_example(&source).unwrap();
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            let root = copy.parent().unwrap();
+            let (project, report) = persistence::open_project(&copy).unwrap();
+            assert_eq!(project.layout, oxy_core::document::Layout::Tree);
+            assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+            assert!(project.assets.iter().all(|a| root.join(&a.path).is_file()));
+            // Nothing that stays out of a project goes, even when the example has it (OXY's own
+            // folder, the VS Code files, an agent's backup): only the project and its folders.
+            let mut folders = vec![root.to_owned()];
+            while let Some(folder) = folders.pop() {
+                for entry in std::fs::read_dir(folder).unwrap() {
+                    let path = entry.unwrap().path();
+                    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                    assert!(
+                        !name.starts_with('.') && !name.starts_with("project.oxy.json."),
+                        "{}: {name}",
+                        example.source
+                    );
+                    if path.is_dir() {
+                        folders.push(path);
+                    }
+                }
+            }
+            let scripts = persistence::load_scripts(root).unwrap();
+            let attached = oxy_core::script::attached_paths(&project);
+            assert!(scripts.unreadable.is_empty(), "{:?}", scripts.unreadable);
+            assert!(attached.iter().all(|path| scripts.files.contains_key(path)));
+            if example.folder == PARKOUR.folder {
+                // The parkour is in folders already and runs on scripts, every one of them
+                // copied as the example has it.
+                let theirs = persistence::load_scripts(source.parent().unwrap()).unwrap();
+                assert!(!attached.is_empty());
+                assert_eq!(scripts, theirs);
+                assert_eq!(
+                    persistence::load_project_lazy(&source).unwrap(),
+                    persistence::load_project_lazy(&copy).unwrap()
+                );
+            }
+            std::fs::remove_dir_all(root).unwrap();
         }
     }
     #[test]

@@ -15,6 +15,10 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
+      # Luau is C++ with exceptions and cc passes no /EH flag to MSVC by itself; cc writes each
+      # compiler command to the build script output, which the step below checks.
+      LUAU_CXXFLAGS: /EHsc
+      CC_ENABLE_DEBUG_OUTPUT: 1
     steps:
       - uses: actions/checkout@v7
         with:
@@ -25,6 +29,9 @@ jobs:
         run: cargo fmt --all --check
       - name: Compilação
         run: cargo build --workspace --locked
+      - name: Luau compilado com /EHsc
+        shell: pwsh
+        run: ./scripts/check-luau-ehsc.ps1 -BuildDirectory target/debug/build
       - name: Testes sem janela
         run: cargo test --workspace --locked
       - name: Invariantes e contadores (sem limites de tempo)

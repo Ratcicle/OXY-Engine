@@ -12,25 +12,39 @@ use std::io::{BufRead, Write};
 
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "OXY Engine is a desktop game editor (Rust). A project has scenes \
-(2D or 3D); a scene is a flat list of objects with parent links; objects have a transform, an \
-optional shape, material, attributes, components (colliders, character, platform, camera \
-control, 2D movement), a logic graph of nodes and animation clips. Start with oxy_status, then \
-oxy_project and oxy_scene; when the person wants a new game, oxy_new_project creates its project \
-(on files) in the folder they name. Read oxy_catalog before building logic. Reads are compact \
-JSON with floats rounded to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): \
-long lists come in pages (limit, offset, next_offset), oxy_entity \
-summarizes logic and geometry unless asked in full, and world positions and boxes (oxy_scene \
-fields, oxy_entity) measure distances across parent groups. Edit only through oxy_apply \
-(atomic batches, validated with the editor's own rules) and oxy_import (PNG and WAV files the \
-person points you to). When the project is open in the editor your edits appear live and the \
-person can undo them; the person saves there, and you never save unless they enabled it (Permitir \
-que agentes salvem: oxy_status can_save) and ask or agree, then with oxy_save. After changes, \
-check them with oxy_simulate and oxy_screenshot; oxy_play runs a test in the editor for the \
-person to watch, without taking their mouse. Export the game (oxy_export) only when the person \
-asks, to the folder they name. When the person tested the game in the editor, oxy_console has \
-what that test logged. Messages from the engine are in Portuguese; answer the \
-person in their language.";
+const INSTRUCTIONS: &str = "OXY Engine is a desktop game editor (Rust). A project has scenes (2D \
+or 3D); a scene is a flat list of objects with parent links; objects have a transform, an optional \
+shape, material, attributes, components (colliders, character, platform, camera control, 2D \
+movement), a logic graph of nodes and animation clips. Start with oxy_status, then oxy_project and \
+oxy_scene; when the person wants a new game, oxy_new_project creates its project (on files) in the \
+folder they name. Game logic is Luau scripts: .luau files in any folder of the project folder \
+(folders starting with '.' are outside), named by their path from it (Pista/porta.luau); read \
+the API you need in oxy_catalog (api) first, write and check them with oxy_scripts (or your file \
+tools), require modules with require(\"@project/Folder/name\"), attach them with oxy_apply \
+attach_script and test with oxy_simulate (script_errors, check_vm_reset); their errors come as \
+<path>.luau:LINE, and oxy_scripts vscode sets VS Code up for the person. The logic node graph is \
+legacy (frozen since 0.7) and still runs: oxy_catalog nodes lists its nodes; clear_logic takes an \
+object's graph off once a script does its work. Reads are compact JSON with floats rounded \
+to 4 decimals (4 significant digits below 1; under 0.00001 they read 0): long lists come in pages \
+(limit, offset, next_offset), oxy_entity summarizes logic and geometry unless asked in full, and \
+world positions and boxes (oxy_scene fields, oxy_entity) measure distances across parent groups. \
+Edit the project only through oxy_apply (atomic batches, validated with the editor's own rules) \
+and oxy_import (PNG and WAV files the person points you to). In a project in folders (oxy_project \
+layout: tree) the project folder is the Library: .png, .wav, <Name>.modelo.json and .luau files in \
+any folder, named after their files (unique per kind); oxy_project lists folders and scripts, and \
+with folder what one holds. Move, rename and delete files and folders with oxy_apply (create_folder, \
+move, rename_asset…) or oxy_scripts rename/delete, never with your file tools, so references and \
+require follow. On files, your first write to a \
+project of the old layout (images and sounds as assets/<id>) organizes it in folders (Sons/, \
+Imagens/, Modelos/, scripts where they are, a full copy in .oxy/backup); the answer's converted \
+says what moved: tell the person. When the project is open in the \
+editor your edits appear live and the person can undo them; the person saves there, and you never \
+save unless they enabled it (Permitir que agentes salvem: oxy_status can_save) and ask or agree, \
+then with oxy_save. After changes, check them with oxy_simulate and oxy_screenshot; oxy_play runs \
+a test in the editor for the person to watch, without taking their mouse. Export the game \
+(oxy_export) only when the person asks, to the folder they name. When the person tested the game \
+in the editor, oxy_console has what that test logged. Messages from the engine are in Portuguese; \
+answer the person in their language.";
 
 fn handle(tools: &mut tools::Tools, request: &Json) -> Option<Json> {
     let id = request.get("id").cloned()?;
@@ -143,7 +157,7 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(
-            names.contains(&"oxy_apply".to_owned()) && names.len() == 20,
+            names.contains(&"oxy_apply".to_owned()) && names.len() == 21,
             "{names:?}"
         );
         assert!(names.contains(&"oxy_play".to_owned()) && names.contains(&"oxy_save".to_owned()));
@@ -154,6 +168,11 @@ mod tests {
         assert!(instructions.contains("can_save") && instructions.contains("oxy_play"));
         assert!(instructions.contains("oxy_export) only when the person asks"));
         assert!(instructions.contains("oxy_new_project creates its project"));
+        assert!(instructions.contains("oxy_scripts") && instructions.contains("attach_script"));
+        assert!(instructions.contains("oxy_scripts vscode sets VS Code up"));
+        // The project folder is the Library: files move through OXY, so references follow.
+        assert!(instructions.contains("the project folder is the Library"));
+        assert!(instructions.contains("never with your file tools, so references and require"));
         let call = handle(
             &mut tools,
             &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -305,6 +324,34 @@ mod tests {
             "oxy_save",
             json!({"project": "C:/ao-vivo/project.oxy.json"}),
         );
+        // Scripts reach the editor, which writes them and tells its Console.
+        let written = echo(
+            "oxy_scripts",
+            json!({"project": "C:/ao-vivo/project.oxy.json", "action": "write",
+                   "path": "scripts/porta.luau", "text": "return {}\n"}),
+        );
+        assert_eq!(
+            (&written["method"], &written["params"]),
+            (
+                &json!("scripts"),
+                &json!({"action": "write", "path": "scripts/porta.luau", "text": "return {}\n"})
+            )
+        );
+        // Renaming reaches it too, which runs it as its commands on its project's folder.
+        let renamed = echo(
+            "oxy_scripts",
+            json!({"project": "C:/ao-vivo/project.oxy.json", "action": "rename",
+                   "path": "scripts/porta.luau", "to": "Pista/portao.luau"}),
+        );
+        assert_eq!(
+            (&renamed["method"], &renamed["params"]),
+            (
+                &json!("scripts"),
+                &json!({"action": "rename", "path": "scripts/porta.luau",
+                        "to": "Pista/portao.luau"})
+            )
+        );
+
         assert_eq!(
             (&save["method"], &save["params"]),
             (&json!("save"), &json!({}))
@@ -335,6 +382,12 @@ mod tests {
             .call("oxy_entity", &json!({"id": "a", "geometry": "toda"}))
             .unwrap_err();
         assert!(error.contains("geometry inválido"), "{error}");
+        for args in [
+            json!({"action": "apagar"}),
+            json!({"action": "write", "path": "../fora.luau", "text": ""}),
+        ] {
+            assert!(tools.call("oxy_scripts", &args).is_err(), "{args}");
+        }
         let output = tools
             .call(
                 "oxy_apply",
@@ -365,6 +418,11 @@ mod tests {
         assert_eq!(
             methods.iter().filter(|m| *m == "entity").count(),
             1,
+            "{methods:?}"
+        );
+        assert_eq!(
+            methods.iter().filter(|m| *m == "scripts").count(),
+            2,
             "{methods:?}"
         );
         let result: Json = serde_json::from_str(&output.text).unwrap();
@@ -398,7 +456,11 @@ mod tests {
                 ]}),
             )
             .unwrap();
-        assert!(applied.text.contains("agente.bak"), "{}", applied.text);
+        assert!(
+            applied.text.contains("agente") && applied.text.contains("project.oxy.json.bak"),
+            "{}",
+            applied.text
+        );
         let saved = persistence::load_project(&file).unwrap();
         assert_eq!(saved.scenes[0].entities.len(), 1);
         let simulated = tools
@@ -449,15 +511,29 @@ mod tests {
         let saved: Json = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(saved["schema_version"], SCHEMA_VERSION);
         assert_eq!(
-            std::fs::read(file.with_extension("json.agente.bak")).unwrap(),
+            std::fs::read(dir.join(".oxy/agente/project.oxy.json.bak")).unwrap(),
             original
         );
-        let backup = std::fs::read_dir(&dir)
+        // Organized in folders on the way, the project as it was is in the full copy, and no
+        // backup of the format is left beside it.
+        assert_eq!(saved["layout"], "Tree");
+        let copy = std::fs::read_dir(dir.join(".oxy/backup"))
             .unwrap()
             .map(|e| e.unwrap().path())
-            .find(|p| p.to_string_lossy().contains(".schema-4."))
+            .find(|p| p.to_string_lossy().contains("antes-das-pastas-"))
             .unwrap();
-        assert_eq!(std::fs::read(backup).unwrap(), original);
+        assert_eq!(
+            std::fs::read(copy.join(persistence::PROJECT_FILE)).unwrap(),
+            original
+        );
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().all(|name| !name.contains(".schema-")),
+            "{names:?}"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

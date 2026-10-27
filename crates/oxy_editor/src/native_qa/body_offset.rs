@@ -166,6 +166,25 @@ impl NativeQa {
                     return Err("Overlay difere da consulta física".into());
                 }
             }
+            "patch_saved" => {
+                // 0.7 (aa29b20, tree design §2.8 and §7): the first save of a project of the old
+                // layout organizes it in folders; nothing else of the document changes, the
+                // offset painted above included. The project has no assets: only its layout
+                // changes, written here by hand, not by the conversion this saved with.
+                let painted = self.after_paint.as_ref().ok_or("Sem o documento editado")?;
+                if self.editor.state.project.layout != Layout::Tree {
+                    return Err("Salvar não organizou o projeto em pastas".into());
+                }
+                let mut expected = painted.clone();
+                expected.project.layout = Layout::Tree;
+                if self.editor.state != expected {
+                    return Err(
+                        "Salvar e reabrir mudou o documento além de organizá-lo em pastas".into(),
+                    );
+                }
+                // What Play/Stop must leave as it is: the document as saved.
+                self.after_paint = Some(self.editor.state.clone());
+            }
             "patch_stopped" => {
                 if self.editor.state != *self.after_paint.as_ref().unwrap() {
                     return Err("Play/Stop alterou documento".into());
@@ -204,6 +223,8 @@ fn native_body_offset_v0331() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let output = oxy_core::qa::output_dir("v0.3.3.1/patch");
     let folder = output.join("project");
+    // A new project each run: the last run's backups and organized files are not this one's.
+    let _ = std::fs::remove_dir_all(&folder);
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("project.oxy.json");
     let mut p = Project::new("Deslocamento físico e navegação");
@@ -293,7 +314,9 @@ fn native_body_offset_v0331() {
                 Action::Check("patch_restored"),
                 Action::Key(Key::Escape, false),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::ReopenProject,
+                Action::Check("patch_saved"),
                 Action::Click("Visualização"),
                 Action::Click("Colisores"),
                 Action::Key(Key::Escape, false),

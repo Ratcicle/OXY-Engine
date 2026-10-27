@@ -166,7 +166,9 @@ impl GameUi {
                         .asset(id)
                         .ok_or_else(|| format!("Imagem de interface ausente: {id}"))
                         .and_then(|asset| {
-                            let image = image::open(root.join(&asset.path))
+                            let image = oxy_core::names::resolve(root, &asset.path)
+                                .map_err(|error| error.to_string())
+                                .and_then(|path| image::open(path).map_err(|e| e.to_string()))
                                 .map_err(|error| format!("Imagem {}: {error}", asset.name))?;
                             let limit = ui.ctx().input(|input| input.max_texture_side);
                             if image.width().max(image.height()) as usize > limit {

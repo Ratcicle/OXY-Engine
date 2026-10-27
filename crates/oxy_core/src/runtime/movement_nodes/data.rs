@@ -21,24 +21,17 @@ impl Runtime {
         };
         let value = match node.operation.as_str() {
             "input.read" => Value::Bool(match output {
-                "pressed" => self.step_input.pressed(node.text("action")),
-                "held" => self.step_input.held(node.text("action")),
-                "released" => self.step_input.released.contains(node.text("action")),
+                "pressed" => self.input_pressed(node.text("action")),
+                "held" => self.input_held(node.text("action")),
+                "released" => self.input_released(node.text("action")),
                 _ => return Err("Saída de entrada ausente".into()),
             }),
             "input.axes" => match output {
-                "look" => Value::Vector2(self.step_input.look),
-                "wheel" => Value::Number(f64::from(self.step_input.wheel)),
+                "look" => Value::Vector2(self.input_look().to_array()),
+                "wheel" => Value::Number(f64::from(self.input_wheel())),
                 "movement" => {
                     let target = self.target(graph, node, context, budget, depth + 1)?;
-                    let actions = &self
-                        .entity(&target)
-                        .and_then(|e| e.character3d.as_ref())
-                        .ok_or("Escolha o personagem cujas ações formam este eixo.")?
-                        .actions;
-                    Value::Vector2(
-                        crate::character::movement_axis(&self.step_input, actions).to_array(),
-                    )
+                    Value::Vector2(self.input_movement(&target)?.to_array())
                 }
                 _ => return Err("Eixo de entrada ausente".into()),
             },
@@ -49,62 +42,36 @@ impl Runtime {
             }),
             "character.state" => {
                 let id = self.target(graph, node, context, budget, depth + 1)?;
-                let state = self.inspect_character(&id)?;
-                state_value(&state, output)?
+                self.character_value(&id, output)?
             }
             "transform.read" => {
                 let id = self.target(graph, node, context, budget, depth + 1)?;
-                let e = self.entity(&id).ok_or("Objeto ausente")?;
-                let (position, rotation) = match node.text("space") {
-                    "local" => (Vec3::from(e.transform.position), e.transform.quaternion()),
-                    "world" => {
-                        let world = self.scene().world_matrix(&id)?;
-                        let (origin, r, _) = crate::physics3d::world_pose(world)?;
-                        // The pivot, as Properties shows it and Mover / girar / escalar
-                        // objeto places it; a 3D character's origin, where Teleportar com
-                        // segurança puts it.
-                        let p = if e.character3d.is_some() {
-                            origin
-                        } else {
-                            world.transform_point3(Vec3::from(e.transform.pivot))
-                        };
-                        (p, r)
+                let space = match node.text("space") {
+                    "local" => TransformSpace::Local,
+                    "world" => TransformSpace::World,
+                    _ => {
+                        self.entity(&id).ok_or("Objeto ausente")?;
+                        return Err("Espaço deve ser Local ou Mundo".into());
                     }
-                    _ => return Err("Espaço deve ser Local ou Mundo".into()),
                 };
+                let (position, rotation) = self.object_pose(&id, space)?;
                 let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
                 match output {
                     "position" => Value::Vector3(position.to_array()),
                     "rotation" => Value::Vector3([x.to_degrees(), y.to_degrees(), z.to_degrees()]),
-                    "yaw" => {
-                        let d = rotation * -Vec3::Z;
-                        Value::Number(f64::from((-d.x).atan2(-d.z).to_degrees()))
-                    }
+                    "yaw" => Value::Number(f64::from(yaw_of(rotation * -Vec3::Z))),
                     _ => return Err("Saída de transformação ausente".into()),
                 }
             }
             "surface.get" => {
                 let id = self.target(graph, node, context, budget, depth + 1)?;
-                Value::Surface(
-                    self.entity(&id)
-                        .and_then(|e| {
-                            e.character3d
-                                .as_ref()
-                                .map(|c| &c.body.surface)
-                                .or_else(|| e.physics3d.as_ref().map(|c| &c.surface))
-                        })
-                        .ok_or("Objeto não possui forma física 3D")?
-                        .clone(),
-                )
+                Value::Surface(self.object_surface(&id)?)
             }
             "camera.read" => {
                 let forward = self.camera_orientation()? * -Vec3::Z;
                 match output {
                     "camera" => Value::Object(self.active_camera().map(str::to_owned)),
-                    "look" => Value::Vector2([
-                        (-forward.x).atan2(-forward.z).to_degrees(),
-                        forward.y.clamp(-1., 1.).asin().to_degrees(),
-                    ]),
+                    "look" => Value::Vector2(look_of(forward)),
                     "forward" => Value::Vector3(forward.to_array()),
                     "mode" => Value::Text(
                         match self.active_camera().and_then(|id| self.camera_mode(id)) {
@@ -224,8 +191,7 @@ impl Runtime {
             }
             "vector.direction" => {
                 let target = self.target(graph, node, context, budget, depth + 1)?;
-                let (_, rotation, _) =
-                    crate::physics3d::world_pose(self.scene().world_matrix(&target)?)?;
+                let rotation = self.world_rotation(&target)?;
                 let v = input("value", budget)?
                     .vector3()
                     .ok_or("Direção exige Vetor3")?;

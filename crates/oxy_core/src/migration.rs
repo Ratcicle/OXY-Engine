@@ -2,6 +2,10 @@
 use crate::document::{Project, SCHEMA_VERSION};
 use std::path::{Path, PathBuf};
 
+/// The schema whose node parameters are the registry's: the node registry is frozen since 0.7,
+/// so only older documents lack parameters, and a later one that lacks some is broken.
+pub const NODE_REGISTRY_SCHEMA: u64 = 5;
+
 /// Why a document could not be read or converted. Messages are shown to the user as-is.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
@@ -74,16 +78,34 @@ pub fn read_report(bytes: &[u8]) -> Result<(Project, Option<u32>), MigrationErro
     if version < 4 {
         for_each_entity_list(&mut value, migrate_movement)?;
     }
-    if version < u64::from(SCHEMA_VERSION) {
+    if version < NODE_REGISTRY_SCHEMA {
         // Registry-driven: every older document gets the node parameters added since.
         for_each_entity_list(&mut value, fill_node_params)?;
-        value["schema_version"] = SCHEMA_VERSION.into();
     }
+    // 5 to 6 adds the objects' scripts, which documents leave out while there are none.
+    value["schema_version"] = SCHEMA_VERSION.into();
     let project = serde_json::from_value(value).map_err(MigrationError::InvalidDocument)?;
     Ok((
         project,
         (version < u64::from(SCHEMA_VERSION)).then_some(version as u32),
     ))
+}
+/// Converts the pieces of a model kept in its own file, written in the format `version`, as
+/// [`read_report`] converts the pieces of a model inside a project file of that format.
+pub fn migrate_pieces(version: u64, pieces: &mut serde_json::Value) -> Result<(), MigrationError> {
+    if !(1..=u64::from(SCHEMA_VERSION)).contains(&version) {
+        return Err(MigrationError::UnsupportedVersion { found: version });
+    }
+    if version == 1 {
+        migrate_entities(pieces);
+    }
+    if version < 4 {
+        migrate_movement(pieces)?;
+    }
+    if version < NODE_REGISTRY_SCHEMA {
+        fill_node_params(pieces)?;
+    }
+    Ok(())
 }
 /// Runs `migrate` on the entity list of every scene, then on the pieces of every model.
 fn for_each_entity_list(
@@ -213,6 +235,9 @@ fn migrate_entities(value: &mut serde_json::Value) {
 
 /// Prepare a permanent source-manifest backup in the same transaction as the save.
 /// IDs, relative paths and source bytes are kept verbatim. Never overwrites a backup.
+/// A change of layout keeps a full copy of the project instead (see `crate::conversion`), and a
+/// future migration's backup covers every file its first save rewrites because of it: a 6 to 7
+/// that changed the models' pieces would keep each `.modelo.json` too.
 pub fn backup(path: &Path) -> Result<Option<(PathBuf, Vec<u8>)>, MigrationError> {
     if !path.is_file() {
         return Ok(None);

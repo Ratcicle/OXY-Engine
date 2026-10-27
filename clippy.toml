@@ -1,0 +1,8 @@
+# Both replace a file at the target without asking (a name in another case, an empty folder,
+# a short 8.3 name included), which loses what someone else put there. The project tree moves
+# and copies through oxy_core::fs_ops, which only creates; the few places that own their target
+# say so with #[expect(clippy::disallowed_methods, reason = "...")].
+disallowed-methods = [
+    { path = "std::fs::rename", reason = "replaces the target silently; use oxy_core::fs_ops::move_no_replace" },
+    { path = "std::fs::copy", reason = "replaces the target silently; use oxy_core::fs_ops::copy_new" },
+]

@@ -5,6 +5,10 @@ use crate::theme;
 use crate::widgets;
 use egui::{Align, Layout, RichText, UiBuilder};
 
+/// The Pausado chip's tooltip when the test paused because the window lost the focus.
+const FOCUS_PAUSE: &str = "Pausado porque a OXY perdeu o foco. Para seguir jogando enquanto usa \
+    outra janela, ligue em Preferências do editor › Teste.";
+
 const MODES: [(Tab, &str); 3] = [
     (Tab::Scene, "Cena"),
     (Tab::Studio, "Estúdio"),
@@ -93,6 +97,7 @@ impl Editor {
                 self.import(AssetKind::Audio);
                 ui.close();
             }
+            self.trash_menu_item(ui);
             ui.separator();
             if ui.button("Tela inicial").clicked() {
                 self.pause();
@@ -159,19 +164,12 @@ impl Editor {
     }
     fn toolbar_right(&mut self, ui: &mut egui::Ui, compact: bool) {
         ui.add_space(4.);
-        icons::menu_button(
-            ui,
-            Icon::Help,
-            "Ajuda",
-            "Ajuda e guia de lógica visual (F1)",
-            false,
-            |ui| {
-                if ui.button("Guia de lógica visual").clicked() {
-                    self.open_guide("");
-                    ui.close();
-                }
-            },
-        );
+        icons::menu_button(ui, Icon::Help, "Ajuda", "Ajuda e Guia (F1)", false, |ui| {
+            if ui.button("Guia").clicked() {
+                self.open_guide("");
+                ui.close();
+            }
+        });
         ui.add_space(4.);
         let Some((paused, game_paused)) = self
             .play
@@ -212,7 +210,7 @@ impl Editor {
         if !compact {
             // Painted at the buttons' exact height; a Frame would stretch to the bar. The test's
             // pause wins over the game's: Retomar returns to the game's menu. A test an agent
-            // plays says so while it runs.
+            // plays says so while it runs, and so does one going on without the focus.
             let (text, fill, border, color) = if paused {
                 (
                     "Pausado",
@@ -236,7 +234,11 @@ impl Editor {
                 )
             } else {
                 (
-                    "Jogando",
+                    if self.play.unfocused {
+                        "Jogando · fora de foco"
+                    } else {
+                        "Jogando"
+                    },
                     Color32::from_rgb(58, 46, 26),
                     Color32::from_rgb(87, 70, 31),
                     theme::WARNING,
@@ -257,6 +259,10 @@ impl Editor {
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text)
             });
+            // Its advice, while it still applies.
+            if paused && self.play.focus_paused && !self.preferences.play_unfocused {
+                response.on_hover_text(FOCUS_PAUSE);
+            }
             ui.painter().rect(
                 rect,
                 6.,
@@ -364,6 +370,10 @@ impl Editor {
                     {
                         ui.add_space(8.);
                         ui.add(egui::Label::new(muted(format!("Selecionado: {name}"))).truncate());
+                    }
+                    if let Some(place) = self.library_status() {
+                        ui.add_space(8.);
+                        ui.add(egui::Label::new(muted(place)).truncate());
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(muted(

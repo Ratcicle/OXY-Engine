@@ -5,6 +5,10 @@ mod checks;
 #[test]
 #[ignore = "Native WGPU overlay regression; isolated application input"]
 #[cfg(target_os = "windows")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "QA copies its fixtures into folders of its own"
+)]
 fn native_spatial_workflow() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
     let output = oxy_core::qa::output_dir("v0.3.1/spatial");
@@ -130,6 +134,7 @@ fn native_spatial_workflow() {
                 Action::Check("spatial_redo"),
                 Action::Key(Key::W, false),
                 Action::Key(Key::S, true),
+                Action::Click("Organizar e salvar"),
                 Action::Check("saved_roundtrip"),
                 Action::Resize(Vec2::new(920., 600.)),
                 Action::Wait(3),

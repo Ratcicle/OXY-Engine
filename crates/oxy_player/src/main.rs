@@ -9,6 +9,7 @@ use oxy_core::{
     export, persistence, random,
     runtime::{Runtime, RuntimeOptions},
     save::{self, SaveRequest, SaveSlot},
+    script,
 };
 use oxy_render::{CameraState, GameUi, Renderer};
 use std::{
@@ -241,15 +242,29 @@ impl Player {
         let seed = uuid::Uuid::new_v4().as_u64_pair().1 & random::MAX_SEED;
         let mut notes = Vec::new();
         let saves = self.saves.clone();
+        let root = self.root.clone();
         let loaded = persistence::load_project(&self.path)
             .map_err(String::from)
             .and_then(|project| {
+                // The game's scripts, the tree of its project's folder (data in an exported
+                // game); none is read when no object attaches one.
+                let scripts = if script::any_attached(&project) {
+                    persistence::load_scripts(&root).map_err(String::from)?
+                } else {
+                    Default::default()
+                };
                 // The progress is read before the run, which starts from it.
                 let (progress, problems) = load_progress_in(saves, &project);
                 notes = problems;
+                notes.extend(
+                    script::absent_by_file(&project, &scripts)
+                        .into_iter()
+                        .map(|(line, _)| line),
+                );
                 let options = RuntimeOptions {
                     seed,
                     save: progress.as_ref().map(|(_, slot)| slot.clone()),
+                    scripts: Arc::new(scripts),
                     ..Default::default()
                 };
                 Runtime::with_options(&project, &project.start_scene, options)
@@ -534,7 +549,7 @@ impl eframe::App for Player {
                             }
                             if let Some(runtime) = &self.runtime {
                                 for log in &runtime.logs {
-                                    ui.label(log);
+                                    ui.label(&log.text);
                                 }
                             }
                         });
@@ -711,6 +726,76 @@ fn progress_is_stored_once_per_frame_and_starts_the_next_run() {
     std::fs::remove_dir_all(folder).unwrap();
 }
 
+/// A player of the project saved in `folder`, without a window or sound, keeping its progress
+/// there.
+#[cfg(test)]
+fn windowless(folder: &Path) -> Player {
+    Player {
+        path: folder.join(persistence::PROJECT_FILE),
+        root: folder.to_owned(),
+        runtime: None,
+        renderer: None,
+        game_ui: GameUi::new(),
+        error: None,
+        diagnostics: Vec::new(),
+        last_update: Instant::now(),
+        last_size: Vec2::ZERO,
+        show_diagnostics: false,
+        saves: Some(folder.join("progresso")),
+        progress: None,
+        mixer: Mixer::silent(),
+        check: None,
+    }
+}
+
+#[test]
+fn a_reload_runs_the_scripts_next_to_the_project() {
+    use oxy_core::{
+        document::{Entity, Value, new_id},
+        script::ScriptRef,
+    };
+    let folder = std::env::temp_dir().join(format!("oxy-player-scripts-{}", new_id()));
+    std::fs::create_dir_all(folder.join("scripts")).unwrap();
+    std::fs::write(
+        folder.join("scripts/contador.luau"),
+        "local M = {}\nfunction M.on_start(self) self.attr.Vezes += 1 end\nreturn M\n",
+    )
+    .unwrap();
+    let mut project = Project::new("Scripts");
+    let mut counter = Entity::new("Contador", None);
+    counter.attributes.insert("Vezes".into(), Value::Number(0.));
+    counter.scripts = vec![ScriptRef::new("scripts/contador.luau")];
+    let id = counter.id.clone();
+    project.scenes[0].entities.push(counter);
+    persistence::save_project(&folder.join(persistence::PROJECT_FILE), &project).unwrap();
+    let mut player = windowless(&folder);
+    let times = |player: &Player| {
+        player
+            .runtime
+            .as_ref()
+            .unwrap()
+            .scene()
+            .entity(&id)
+            .unwrap()
+            .attributes["Vezes"]
+            .clone()
+    };
+    player.reload();
+    assert_eq!(player.error, None);
+    assert!(player.diagnostics.is_empty(), "{:?}", player.diagnostics);
+    assert_eq!(times(&player), Value::Number(1.));
+    // A script taken away: the game opens and runs without it, and the diagnostics name it.
+    std::fs::remove_file(folder.join("scripts/contador.luau")).unwrap();
+    player.reload();
+    assert_eq!(player.error, None);
+    assert_eq!(
+        player.diagnostics,
+        ["Contador: o script scripts/contador.luau não existe na pasta do projeto"]
+    );
+    assert_eq!(times(&player), Value::Number(0.));
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
 #[test]
 fn a_reload_silences_the_old_run() {
     use oxy_core::{
@@ -754,22 +839,7 @@ fn a_reload_silences_the_old_run() {
     project.scenes[0].entities.push(speaker);
     let path = folder.join(persistence::PROJECT_FILE);
     persistence::save_project(&path, &project).unwrap();
-    let mut player = Player {
-        path,
-        root: folder.clone(),
-        runtime: None,
-        renderer: None,
-        game_ui: GameUi::new(),
-        error: None,
-        diagnostics: Vec::new(),
-        last_update: Instant::now(),
-        last_size: Vec2::ZERO,
-        show_diagnostics: false,
-        saves: Some(folder.join("progresso")),
-        progress: None,
-        mixer: Mixer::silent(),
-        check: None,
-    };
+    let mut player = windowless(&folder);
     player.reload();
     assert_eq!(player.error, None);
     // A frame plays it.

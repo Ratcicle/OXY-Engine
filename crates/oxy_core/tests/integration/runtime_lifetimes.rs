@@ -284,7 +284,7 @@ fn animation_markers_of_one_step_are_emitted_in_scene_order() {
             let messages: Vec<_> = rt
                 .logs
                 .iter()
-                .filter_map(|line| line.rsplit(' ').next())
+                .filter_map(|line| line.text.rsplit(' ').next())
                 .collect();
             assert_eq!(messages, order, "{:?}", rt.logs);
         }
