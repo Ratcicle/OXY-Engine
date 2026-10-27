@@ -2,7 +2,7 @@
 
 Resumo de cada versão. Os relatórios completos, com testes, capturas e medições, ficam em [`docs/`](docs/); as capturas de versões anteriores continuam acessíveis pelas tags do repositório.
 
-## 0.7.0 — (data a definir no lançamento)
+## 0.7.0 — 2026-10-27
 
 - **Scripts em Luau:** a lógica do jogo passa a ser escrita em Luau, em arquivos `.luau` de qualquer pasta do projeto, que os objetos anexam. É o caminho principal da lógica para todos os jogos da OXY: quem escreve é um agente de IA, pelo MCP, ou uma pessoa, no VS Code; a OXY anexa, roda, mostra os erros e recarrega. Um script serve a vários objetos, cada um com os seus valores em atributos. O Luau 0.740 roda pelo `mlua` 0.12.2, sem JIT, numa máquina virtual (VM) criada só quando a cena tem um script: um projeto só com nós joga como na 0.6 (a única mudança nos nós é o limite de trabalho por passo, abaixo).
   - **Caixa de areia:** nada de disco, rede, relógio do computador ou sorteio fora da engine. Os globais são só de leitura e recusam um nome desconhecido com o mais parecido, e o módulo fica congelado depois de carregar.
@@ -53,7 +53,8 @@ Resumo de cada versão. Os relatórios completos, com testes, capturas e mediç�
   - O Guia abre em Scripts, e as catorze receitas em nós ficam em **Nós (legado)**.
   - O `oxy_catalog` sem opções traz a API dos scripts; os nós vêm com `nodes: true`.
   - Um projeto novo precisa de uma pasta vazia, porque a pasta do projeto vira a Biblioteca.
-  - O pacote não leva mais DLLs ao lado dos executáveis.
+  - O pacote e os jogos exportados não levam mais DLLs ao lado dos executáveis.
+  - Os avisos de projeto em formato antigo e de projeto convertido de formato somem sozinhos depois de alguns segundos e continuam no Console; a faixa amarela da Biblioteca segue lembrando que o primeiro salvamento organiza o projeto em pastas.
 
 ## 0.6.0 — 2026-10-17
 
